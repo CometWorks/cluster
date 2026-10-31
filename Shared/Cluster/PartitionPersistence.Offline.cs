@@ -23,7 +23,7 @@ namespace ClusterPlugin;
 /// T-0193 OFFLINE PARTITIONS, the owner's half (Plan/Partitioning.md §3.6). A partition this node owns is
 /// taken offline - hosted by no node at all - once it has been quiet for <c>offline.graceSeconds</c>:
 ///
-///   * every member is a grid, floating object or inventory bag whose physics is static or SLEEPING and
+///   * every member is a grid, floating object or inventory bag whose physics is static or at rest, with no self-propulsion (the legacy sleep gate is switchable), and
 ///     not moving (requirement 2); a character, missile or meteor member keeps it online;
 ///   * no online player's body or controlled grid is in it, no client is routed to it, and no seat in it
 ///     holds the body of a client attached to this node, joined or still joining (requirement 1, T-0233);
@@ -39,7 +39,7 @@ namespace ClusterPlugin;
 /// catalogued newest save of an unowned partition, which retention keeps and replication copies. Any
 /// refusal or failure thaws the members and the partition simply stays online.
 ///
-/// Energy and production do not progress while offline (requirement 3, a deliberate v1 concession). The
+/// Modeled energy and production are credited to object builders on wake from pre-freeze profiles. The
 /// antennas and respawn points captured at the freeze ride the offline row (requirement 6 and the spawn
 /// trigger); the World Authority republishes them for as long as the partition is offline.
 /// </summary>
@@ -160,6 +160,7 @@ internal sealed partial class PartitionPersistence
 
 		HashSet<ulong> owned;
 		lock (m_owned) owned = m_owned.Keys.ToHashSet();
+		var remote = RemoteUse.Capture(partitions);
 		HashSet<ulong> routed = m_partitions.ClientPartitions(partitions).Select(x => x.Partition).ToHashSet();
 		HashSet<long> anchors = OnlinePlayerAnchors(out List<Vector3D> localPlayers);
 		HashSet<long> attached = MyPlayerCollectionPatch.AttachedIdentities();
@@ -173,10 +174,24 @@ internal sealed partial class PartitionPersistence
 		foreach (PartitionManager.Partition partition in partitions)
 		{
 			if (!m_onlineSince.ContainsKey(partition.Id)) m_onlineSince[partition.Id] = now;
-			string blocker = OfflineBlocker(partition, now, owned, routed, anchors, attached, players, localPlayers, quiet, minOnline);
+			bool profiled = true;
+			// Profile quiet groups during grace, even when a moving sibling blocks the partition.
+			if (!partition.HasPending && !partition.Members.Any(ClusterRuntime.IsFrozen) && owned.Contains(partition.Id)
+				&& !remote.ContainsKey(partition.Id) && !routed.Contains(partition.Id)
+				&& !partition.Members.Any(anchors.Contains)
+				&& !players.Any(p => p.IsWithinDistance(partition.Sphere.Center.X, partition.Sphere.Center.Y, partition.Sphere.Center.Z,
+					Math.Pow(partition.Sphere.Radius + quiet, 2)))
+				&& !localPlayers.Any(p => Vector3D.DistanceSquared(p, partition.Sphere.Center) <= Math.Pow(partition.Sphere.Radius + quiet, 2)))
+			{
+				try { profiled = OfflineCompensation.Prepare(partition); }
+				catch (Exception e) { profiled = false; m_offlineLastRefusal = "profiling: " + SecretRedactor.Redact(e.Message); }
+			}
+			string blocker = remote.ContainsKey(partition.Id) ? "remote" : OfflineBlocker(partition, now, owned, routed, anchors, attached, players, localPlayers, quiet, minOnline);
+			if (blocker == null && !profiled) blocker = "profiling";
 			if (blocker != null)
 			{
-				m_offlineQuietSince.Remove(partition.Id);
+				if (blocker == "profiling") m_offlineQuietSince.TryAdd(partition.Id, now);
+				else m_offlineQuietSince.Remove(partition.Id);
 				string key = blocker.Split(':')[0];
 				blockers[key] = blockers.GetValueOrDefault(key) + 1;
 				continue;
@@ -267,6 +282,8 @@ internal sealed partial class PartitionPersistence
 		if (entity is MyCharacter character) return OfflineCharacterBlocker(character);
 		if (entity is not (MyCubeGrid or MyFloatingObject or MyInventoryBagEntity)) return "type:" + entity.GetType().Name;
 		if (entity.MarkedForClose || !entity.InScene) return "closing";
+		if (entity is MyCubeGrid grid && ClusterConfig.GetBool("offline.velocityReadiness"))
+			return OfflineCompensation.Readiness(grid);
 		MyPhysicsComponentBase physics = entity.Physics;
 		if (physics == null || physics.IsStatic) return null;
 		if (physics.IsActive) return "awake";
@@ -376,7 +393,7 @@ internal sealed partial class PartitionPersistence
 		if (stop && entities.Any(entity => PluginOfflineService.Blocker(entity.EntityId) != null)) return null;
 		if (!stop)
 		{
-			if (clients.Any(client => client.Partition == partition.Id)) return null;
+			if (clients.Any(client => client.Partition == partition.Id) || RemoteUse.Capture(new[] { partition }).ContainsKey(partition.Id)) return null;
 			HashSet<long> anchors = OnlinePlayerAnchors(out _);
 			HashSet<long> attached = MyPlayerCollectionPatch.AttachedIdentities();
 			// T-0292: a fast partition is moving whatever Havok says (a warp teleports it with zero velocity):
@@ -421,6 +438,8 @@ internal sealed partial class PartitionPersistence
 			RespawnPoints = JsonSerializer.Serialize(respawns),
 			Npc = npc,
 			Grids = grids,
+			OfflineGameFrame = save.Profiles?.FirstOrDefault()?.FrozenFrame,
+			ProfileSummary = save.Profiles?.Select(p => new { p.Group, p.Confidence, p.Unknowns }).ToArray(),
 			Drain = true,
 		};
 	}
@@ -468,6 +487,7 @@ internal sealed partial class PartitionPersistence
 		var frozen = new Dictionary<long, DrainFrozenState>();
 		try
 		{
+			OfflineProfile[] profiles = OfflineCompensation.CaptureFor(partition);
 			foreach (MyEntity entity in entities)
 			{
 				ClusterRuntime.MarkFrozen(entity.EntityId, freezeId);
@@ -483,7 +503,7 @@ internal sealed partial class PartitionPersistence
 				return new[] { volume.Center.X, volume.Center.Y, volume.Center.Z, volume.Radius };
 			}).ToArray();
 			long bytes = PartitionManager.EstimatedSnapshotBytes(partition);
-			PendingSave save = QueueCapture(partition, "Final", waitForSlot: false, frozen: frozen)
+			PendingSave save = QueueCapture(partition, "Final", waitForSlot: false, frozen: frozen, profiles: profiles)
 				?? throw new InvalidOperationException("the save queue is full");
 			m_offlining = new OfflineTransition
 			{
@@ -598,6 +618,8 @@ internal sealed partial class PartitionPersistence
 			RespawnPoints = JsonSerializer.Serialize(transition.RespawnPoints),
 			transition.Npc,
 			transition.Grids,
+			OfflineGameFrame = transition.Save.Profiles?.FirstOrDefault()?.FrozenFrame,
+			ProfileSummary = transition.Save.Profiles?.Select(p => new { p.Group, p.Confidence, p.Unknowns }).ToArray(),
 		};
 		ulong partition = transition.Partition;
 		transition.Post = Task.Run(() =>
@@ -702,6 +724,7 @@ internal sealed partial class PartitionPersistence
 			postAttempts = m_offlining.PostAttempts,
 			ageMs = (long)(DateTime.UtcNow - m_offlining.StartedUtc).TotalMilliseconds,
 		},
+		compensation = OfflineCompensation.Status(),
 		blockers = m_offlineBlockers,
 		quiet = m_offlineQuietSince.Select(x => new { partition = x.Key, seconds = (long)(DateTime.UtcNow - x.Value).TotalSeconds }).ToArray(),
 	};

@@ -63,7 +63,8 @@ internal sealed record PartitionInfo(
     [property: JsonPropertyName("fastSpeed")] double FastSpeed = 0,
     // #1354: the partition's NPC grids, for the cluster-wide NPC census (NpcCensus.cs). Null from a node
     // that predates the field.
-    [property: JsonPropertyName("npc")] NpcGrid[]? Npc = null);
+    [property: JsonPropertyName("npc")] NpcGrid[]? Npc = null,
+    [property: JsonPropertyName("remoteUsers")] ulong[]? RemoteUsers = null);
 
 internal sealed record PartitionSphere(
     [property: JsonPropertyName("x")] double X,

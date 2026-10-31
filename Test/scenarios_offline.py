@@ -271,3 +271,105 @@ def _character(api) -> dict | None:
 SCENARIOS_OFFLINE = {
     "P1-OFF-SEATED-JOIN": (p1_off_seated_join, "a mid-join client's seated partition stays online (T-0233)", "3"),
 }
+
+
+# SE-346: these use the existing real-client RC/terminal fixture and the production sweep/load.
+# They deliberately do not label the unavailable multi-client/planet differential fixtures as passing.
+def _call_fixture(bench, *, pb=False):
+    api = _join(bench)
+    bench.cluster.post("/automatic/pause")
+    for node in _nodes(bench):
+        if node != "wa-1":
+            _put_config(bench, node, {"offline.enabled": "false"})
+    identity = _client_identity(bench)
+    fixture = bench.cluster.node("node-1", f"/rc-test-ensure?owner={identity}", "POST")
+    grid, block, relay = fixture["grid"], fixture["block"], fixture["relay"]
+    partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 90)
+    _require(bench, "remote fixture has an owned partition", bool(partition), json.dumps(fixture))
+    # Suit broadcasting is an explicit player action in vanilla.
+    for _ in range(8):
+        characters = bench.cluster.node("node-1", "/characters").get("characters") or []
+        if any(r.get("radioOn") for r in characters if identity in (r.get("controllingIdentity"), r.get("identityOwner"))):
+            break
+        api.key("O")
+        time.sleep(2)
+    addresses = None
+    if pb:
+        addresses = [bench.cluster.node("node-1", f"/igc-test-add-pb?grid={g}", "POST")["address"] for g in (relay, grid)]
+    for node in _nodes(bench):
+        _put_config(bench, node, {"offline.wakeMeters": "0", "offline.leadSeconds": "0", "offline.quietMeters": "0"})
+    _put_config(bench, "node-1", {"offline.enabled": "true", "offline.minOnlineSeconds": "0", "offline.graceSeconds": "0", "offline.settleFrames": "0"})
+    row = _poll(lambda: _offline_row(bench, partition), 120)
+    _require(bench, "station reached the durable offline table", bool(row), str(partition))
+    bench.record("call-up-before", row)
+    return api, grid, block, partition, addresses
+
+
+def _offline_row(bench, partition):
+    try:
+        return bench.cluster.get(f"/registry/partitions/offline?partition={partition}")
+    except Exception:  # 404 is the expected answer after a load completed
+        return None
+
+
+def _remote_presence(bench, partition):
+    report = bench.cluster.node("node-1", "/partitions")
+    return next((p.get("remoteUsers") for p in report.get("partitions", []) if p.get("id") == partition), [])
+
+
+def p2_off_call_terminal(bench):
+    api, grid, block, partition, _ = _call_fixture(bench)
+    started = time.monotonic()
+    opened = api.open_remote_terminal(grid, timeout=120)
+    latency = time.monotonic() - started
+    bench.record("call-up-terminal", opened)
+    _require(bench, "real client opened the woken remote terminal", opened.get("screenOpen") is True and opened.get("connected") is True, json.dumps(opened))
+    _require(bench, "call-up loads onto the caller's node", _owner_of(bench, grid) == ("node-1", partition))
+    _require(bench, "terminal pin becomes remote presence", bool(_poll(lambda: _remote_presence(bench, partition), 15)))
+    # Outlast two sweep passes; the fixture's zero grace would otherwise offline it again.
+    time.sleep(12)
+    bench.check("open terminal remains online", _offline_row(bench, partition) is None)
+    status = bench.cluster.node("node-1", "/offline")
+    bench.record("call-up-status", status)
+    bench.check("wake ran through shared compensation", bool(status.get("owner", {}).get("compensation", {}).get("results")))
+    api.close_remote_terminal()
+    _require(bench, "closing removes remote presence", bool(_poll(lambda: not _remote_presence(bench, partition), 15)))
+    _require(bench, "closed remote terminal station can offline again", bool(_poll(lambda: _offline_row(bench, partition), 60)))
+    bench.exercised(grid=grid, block=block, partition=partition, latencySeconds=latency,
+                    proof="terminal/caller-node/pin/sweep/close/shared-wake; no large-station benchmark")
+
+
+def p2_off_call_rc(bench):
+    api, grid, block, partition, _ = _call_fixture(bench)
+    taken = api.take_remote_control(grid, block, timeout=120)
+    bench.record("call-up-control", taken)
+    _require(bench, "real client takes the offline remote control", taken.get("controlledByMe") is True, json.dumps(taken))
+    _require(bench, "remote control loaded onto caller node", _owner_of(bench, grid) == ("node-1", partition))
+    time.sleep(12)
+    bench.check("controlled partition stays online", _offline_row(bench, partition) is None)
+    status = bench.cluster.node("node-1", f"/rc-test-status?block={block}")
+    bench.check("server agrees on the remote controller", status.get("controlled") is True)
+    bench.cluster.node("node-1", f"/rc-test-release?block={block}", "POST")
+    bench.exercised(grid=grid, block=block, partition=partition,
+                    limitation="station fixture proves take and presence; dynamic drone driving still needs its acceptance fixture")
+
+
+def p2_off_call_igc(bench):
+    api, grid, block, partition, addresses = _call_fixture(bench, pb=True)
+    source, target = addresses
+    # Let the endpoint deletion propagate, then exercise the real IGC send API through the test plugin.
+    time.sleep(5)
+    sent = bench.cluster.node("node-1", f"/igc-test-unicast?source={source}&addressee={target}&tag=offline-no-wake&data=probe", "POST")
+    bench.record("call-up-igc", sent)
+    bench.check("unicast to offline PB returns false", sent.get("sent") is False)
+    time.sleep(5)
+    row = _offline_row(bench, partition)
+    bench.check("IGC leaves target offline without a load demand", bool(row) and not row.get("LoadRequestedNode"), json.dumps(row))
+    bench.exercised(grid=grid, block=block, partition=partition, source=source, target=target)
+
+
+SCENARIOS_OFFLINE.update({
+    "P2-OFF-CALL-TERMINAL": (p2_off_call_terminal, "offline radio terminal, caller-node wake, pin and sweep lifecycle", "3"),
+    "P2-OFF-CALL-RC": (p2_off_call_rc, "offline radio control take and presence (dynamic-drive fixture pending)", "3"),
+    "P2-OFF-CALL-IGC": (p2_off_call_igc, "offline IGC remains a no-wake delivery failure", "3"),
+})

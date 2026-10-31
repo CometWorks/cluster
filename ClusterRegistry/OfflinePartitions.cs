@@ -39,6 +39,8 @@ internal sealed class OfflinePartition
     public string? RespawnPoints { get; set; }
     public string OfflineBy { get; set; } = string.Empty;
     public DateTimeOffset OfflineAt { get; set; }
+    public long? OfflineGameFrame { get; set; }
+    public System.Text.Json.JsonElement? ProfileSummary { get; set; }
     public string? LoadRequestedNode { get; set; }
     public DateTimeOffset? LoadRequestedAt { get; set; }
     public string? LoadReason { get; set; }
@@ -60,6 +62,8 @@ internal sealed record OfflineRequest(ulong Partition, string Node, long Epoch, 
     /// of a release - the Final is already written and the entities already closed, so a refusal means the
     /// node releases the partition unowned as before.</summary>
     public bool Drain { get; init; }
+    public long? OfflineGameFrame { get; init; }
+    public System.Text.Json.JsonElement? ProfileSummary { get; init; }
 
     /// <summary>#1354: the NPC grids among the members. Null from a node that predates the field.</summary>
     public NpcGrid[]? Npc { get; init; }
@@ -159,6 +163,8 @@ internal sealed partial class GatewayRegistry
                 throw new RegistryConflictException($"Partition {request.Partition} is retired");
             if (_state.Handovers.Values.Any(x => x.Partition == request.Partition && x.State is HandoverState.Begun or HandoverState.Active))
                 throw new RegistryConflictException($"Partition {request.Partition} has a handover in flight; refusing offline");
+            if (!(request.Drain && ShuttingDown) && HasRemoteUse(request.Partition))
+                throw new RegistryConflictException($"Partition {request.Partition} has remote-use; refusing offline");
             var saveId = new SaveId(request.Partition, request.Generation, request.Sequence);
             if (!_state.Saves.TryGetValue(Key(saveId), out SaveRegistration? save) || save.PendingDelete || !Reachable(save))
                 throw new RegistryConflictException($"Partition {request.Partition} save {Key(saveId)} is not catalogued with a usable holder; refusing offline");
@@ -187,6 +193,8 @@ internal sealed partial class GatewayRegistry
                 Grids = request.Grids,
                 OfflineBy = request.Node,
                 OfflineAt = now,
+                OfflineGameFrame = request.OfflineGameFrame,
+                ProfileSummary = request.ProfileSummary,
             };
             _state.OfflinePartitions[request.Partition] = row;
             _state.OfflineRevision++;
@@ -248,6 +256,11 @@ internal sealed partial class GatewayRegistry
             IReadOnlyCollection<string> draining = DrainingNodes?.Invoke() ?? [];
             string? target = node != null && CanTakeOfflineLoad(node, now, draining) ? node : FreeOfflineTarget(row, node, now, draining);
             if (target == null) return "no-target";
+            // Deliberate call-ups race for one unsplittable partition. Keep the first live target
+            // until its demand expires; a second requester must use ordinary conflict-checked pull.
+            if (row.LoadReason is "remote" or "laser" && row.LoadRequestedNode is { } reserved && reserved != target && row.LoadRequestedAt is { } reservedAt
+                && now - reservedAt < OfflineLoadRequestTtl && CanTakeOfflineLoad(reserved, now, draining))
+                return "requested:" + reserved;
             bool changed = row.LoadRequestedNode != target || row.LoadRequestedAt is not { } at || now - at >= TimeSpan.FromSeconds(10);
             if (!changed) return "requested:" + target;
             bool first = row.LoadRequestedNode == null || row.LoadRequestedAt is not { } last || now - last >= OfflineLoadRequestTtl;
@@ -756,6 +769,10 @@ internal sealed partial class DirectGateway
                         throw new RegistryConflictException($"Partition {request.Partition} is routed to connected client {client}; refusing offline");
                     routedPartitions[routedPartition] = client;
                 }
+            NodeRegistration? offering = _registry.Nodes().FirstOrDefault(n => n.Node == request.Node);
+            if (offering?.ControlEndpoint == null || GetPartitions(StripScheme(offering.ControlEndpoint)).Partitions
+                .Any(p => p.Id == request.Partition && p.RemoteUsers is { Length: > 0 }) || _registry.HasRemoteUse(request.Partition))
+                throw new RegistryConflictException($"Partition {request.Partition} has remote-use; refusing offline");
             if (MigrationTarget(request.Partition) is { } pinned)
                 throw new RegistryConflictException($"Partition {request.Partition} is pinned for migration to {pinned}; refusing offline");
             if (OfflineGeometryRefusal(request, routedPartitions) is { } refusal)

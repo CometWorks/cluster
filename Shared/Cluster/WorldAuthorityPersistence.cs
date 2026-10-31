@@ -265,7 +265,7 @@ internal sealed class WorldAuthorityPersistence
 			if (m_active != null) return false;
 			save = new PendingSave(checked((uint)ClusterRuntime.AuthorityGeneration), ++m_sequence, kind, checkpoint, commandLedger,
 				ClusterRuntime.CatalogClusterMilliseconds(), CharacterRegistryService.PersistedRecord(),
-				TimeOfDayService.PersistedRecord(), shipStorage, adminSafeZones, contracts, promotions) { LedgerOrder = ledgerOrder };
+				TimeOfDayService.PersistedRecord(), shipStorage, adminSafeZones, contracts, OfflineRateCache.PersistedRecord(), promotions) { LedgerOrder = ledgerOrder };
 			m_active = save;
 		}
 		m_saves.Add(save);
@@ -307,7 +307,7 @@ internal sealed class WorldAuthorityPersistence
 	{
 		save.File = GlobalSaveFile.Write(save.Checkpoint, save.Generation, save.Sequence,
 			save.Kind == "Final" ? (byte)2 : (byte)0, save.ClusterTime, save.CommandLedger, save.CharacterRecord,
-			save.TimeOfDayRecord, save.ShipStorageRecord, save.AdminSafeZonesRecord, save.ContractRecord, promotionRecord: save.PromotionRecord);
+			save.TimeOfDayRecord, save.ShipStorageRecord, save.AdminSafeZonesRecord, save.ContractRecord, save.OfflineRatesRecord, save.PromotionRecord);
 		// T-0340: the gateway host's save store when the registry said so at registration, else m_root/saves as always.
 		save.Path = ClusterProtocol.HostSaveStore.GlobalSave(ClusterRuntime.HostStore ? ClusterRuntime.SaveRoot() : Path.Combine(m_root, "saves"),
 			save.Generation, save.Sequence);
@@ -403,7 +403,7 @@ internal sealed class WorldAuthorityPersistence
 	private sealed record PendingSave(uint Generation, uint Sequence, string Kind, MyObjectBuilder_Checkpoint Checkpoint,
 		string CommandLedger, long ClusterTime, string CharacterRecord = null, string TimeOfDayRecord = null,
 		string ShipStorageRecord = null, string AdminSafeZonesRecord = null, string ContractRecord = null,
-		string PromotionRecord = null)
+		string OfflineRatesRecord = null, string PromotionRecord = null)
 	{
 		public byte[] File { get; set; }
 		public string Path { get; set; }

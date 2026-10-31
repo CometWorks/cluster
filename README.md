@@ -46,6 +46,7 @@ building, Magnetar registration, CLI controls, release packaging and debugging.
 
 - [Manual deployment and development](Docs/ManualDeployment.md)
 - [Client diagnostics](Docs/Gateway/ClientDiagnostics.md)
+- [Offline compensation and call-ups](Docs/OfflinePartitions.md) — implementation draft and acceptance gaps
 - [Managed deployment preparation and executor leases](Docs/Gateway/ManagedDeployment.md)
 - [Release packages and bench archives](Docs/Gateway/DeploymentArchive.md)
 - [Versioning](Docs/Versioning.md)

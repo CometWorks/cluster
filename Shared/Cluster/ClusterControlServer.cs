@@ -1142,6 +1142,46 @@ internal sealed partial class ClusterControlServer
 				return;
 			}
 
+			if (context.Request.HttpMethod == "POST" && path.EndsWith("/profiles/cache/clear", StringComparison.OrdinalIgnoreCase))
+			{
+				string result = OfflineRateCache.Clear(context.Request.QueryString["key"]);
+				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
+				return;
+			}
+			if (context.Request.HttpMethod == "GET" && path.EndsWith("/profiles", StringComparison.OrdinalIgnoreCase))
+			{
+				ulong partition = ulong.Parse(context.Request.QueryString["partition"] ?? throw new ArgumentException("Missing partition"), CultureInfo.InvariantCulture);
+				bool online = Invoke(() => m_partitions.Evaluate().Any(p => p.Id == partition));
+				string result = online ? Invoke(() => JsonSerializer.Serialize(OfflineCompensation.Profiles(partition, m_partitions), OfflineProfile.Json))
+					: Encoding.UTF8.GetString(m_persistence.ReadOfflineFinal(partition).Profiles ?? Encoding.UTF8.GetBytes("[]"));
+				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
+				return;
+			}
+			if (context.Request.HttpMethod == "POST" && (path.EndsWith("/trigger/compensate-dry-run", StringComparison.OrdinalIgnoreCase)
+				|| path.EndsWith("/compensate-dry-run", StringComparison.OrdinalIgnoreCase)))
+			{
+				double hours = double.Parse(context.Request.QueryString["hours"] ?? throw new ArgumentException("Missing hours"), CultureInfo.InvariantCulture);
+				if (!double.IsFinite(hours) || hours < 0 || hours > 168) throw new ArgumentException("hours must be between 0 and 168");
+				PartitionSaveFile.Parsed source;
+				if (context.Request.HasEntityBody)
+				{
+					// Same bounded admission as other admin file uploads; no path supplied by a caller is opened.
+					const int limit = 512 * 1024 * 1024;
+					if (context.Request.ContentLength64 > limit) throw new ArgumentException("Save upload exceeds 512 MiB");
+					using var stream = new MemoryStream();
+					byte[] chunk = new byte[65536]; int read;
+					while ((read = context.Request.InputStream.Read(chunk, 0, chunk.Length)) > 0)
+					{
+						if (stream.Length + read > limit) throw new ArgumentException("Save upload exceeds 512 MiB");
+						stream.Write(chunk, 0, read);
+					}
+					source = PartitionSaveFile.Read(stream.ToArray());
+				}
+				else source = m_persistence.ReadOfflineFinal(ulong.Parse(context.Request.QueryString["partition"] ?? throw new ArgumentException("Missing partition"), CultureInfo.InvariantCulture));
+				string result = Invoke(() => JsonSerializer.Serialize(OfflineCompensation.DryRun(source, hours), OfflineProfile.Json));
+				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
+				return;
+			}
 			// Orchestration.md 11.2: run a scheduled maintenance task now. POST because it mutates; the
 			// admin-token gate above already covers it.
 			if (context.Request.HttpMethod == "POST" && path.Contains("/trigger/", StringComparison.OrdinalIgnoreCase))
@@ -1209,7 +1249,7 @@ internal sealed partial class ClusterControlServer
 			}
 			if (context.Request.HttpMethod == "GET" && path.EndsWith("/offline", StringComparison.OrdinalIgnoreCase))
 			{
-				string result = Invoke(() => JsonSerializer.Serialize(new { owner = m_persistence.OfflineStatus(), cluster = OfflinePartitionService.Status() }));
+				string result = Invoke(() => JsonSerializer.Serialize(new { owner = m_persistence.OfflineStatus(), cluster = OfflinePartitionService.Status(), callUps = RemotePullService.Status() }, OfflineProfile.Json));
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 				return;
 			}

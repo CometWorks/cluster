@@ -96,6 +96,7 @@ public static class WorldAuthorityCheckpointPatch
 		AdminSafeZones.RestoreRecord(bundle.AdminSafeZonesRecord);
 		ContractLedger.RestoreRecord(bundle.ContractRecord);
 		PromotionService.RestoreRecord(bundle.PromotionRecord);
+		OfflineRateCache.Restore(bundle.OfflineRatesRecord);
 		checkpointSizeInBytes = checked((ulong)parsed.Body.LongLength);
 		Restored = true;
 		Console.WriteLine("[ClusterPlugin] global save restored generation=" + generation + " sequence=" + sequence);

@@ -348,6 +348,7 @@ internal static partial class SelfTest
         ("split-keeps-input-id", TestSplitKeepsInputId),
         ("topology-transfer", TestTopologyTransfer),
         ("offline-partitions", TestOfflinePartitions),
+        ("remote-use", TestRemoteUse),
         ("npc-census", TestNpcCensus),
         ("offline-grids", TestOfflineGrids),
         ("drain-offline", TestDrainOffline),

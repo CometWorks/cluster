@@ -18,7 +18,9 @@ namespace ClusterPlugin;
 
 internal static class PartitionSaveFile
 {
-	private const ushort Version = 1;
+	private const ushort LegacyVersion = 1;
+	private const ushort ProfileVersion = 2;
+	internal const int MaximumProfileBytes = 16 * 1024 * 1024;
 	private const int HeaderLength = 100;
 	private const int TrailerLength = 16;
 	private const byte None = 0;
@@ -57,11 +59,24 @@ internal static class PartitionSaveFile
 		return entities;
 	}
 
-	public static byte[] Write(ulong partitionId, uint generation, uint sequence, byte kind, BoundingSphereD sphere, bool anchored, int entityCount, byte[] body, long clusterTime)
+	public static byte[] Write(ulong partitionId, uint generation, uint sequence, byte kind, BoundingSphereD sphere, bool anchored, int entityCount, byte[] body, long clusterTime, byte[] profiles = null)
 	{
 		if (body == null || entityCount < 0)
 		{
 			throw new ArgumentException("Invalid partition body or entity count");
+		}
+
+		ushort version = LegacyVersion;
+		if (profiles is { Length: > 0 })
+		{
+			if (profiles.Length > MaximumProfileBytes) throw new InvalidDataException("Offline profile section exceeds its limit");
+			byte[] combined = new byte[checked(8 + body.Length + profiles.Length)];
+			BinaryPrimitives.WriteInt32LittleEndian(combined, body.Length);
+			body.CopyTo(combined, 4);
+			BinaryPrimitives.WriteInt32LittleEndian(combined.AsSpan(4 + body.Length), profiles.Length);
+			profiles.CopyTo(combined, 8 + body.Length);
+			body = combined;
+			version = ProfileVersion;
 		}
 
 		// T-0147: a partition body on the lattice world is ~15 MB, and every array this size is a
@@ -88,7 +103,7 @@ internal static class PartitionSaveFile
 				storedBody = scratch.AsSpan(0, storedLength);
 			}
 			byte[] file = new byte[HeaderLength + storedBody.Length + TrailerLength];
-			WriteHeader(file, partitionId, generation, sequence, kind, compression, sphere, anchored, entityCount, storedBody.Length, body.Length, clusterTime);
+			WriteHeader(file, partitionId, generation, sequence, kind, compression, sphere, anchored, entityCount, storedBody.Length, body.Length, clusterTime, version);
 			storedBody.CopyTo(file.AsSpan(HeaderLength));
 			BinaryPrimitives.WriteUInt64LittleEndian(file.AsSpan(HeaderLength + storedBody.Length), Checksum(file.AsSpan(0, HeaderLength)));
 			BinaryPrimitives.WriteUInt64LittleEndian(file.AsSpan(HeaderLength + storedBody.Length + 8), Checksum(storedBody));
@@ -101,12 +116,12 @@ internal static class PartitionSaveFile
 	}
 
 	private static void WriteHeader(byte[] file, ulong partitionId, uint generation, uint sequence, byte kind, byte compression, BoundingSphereD sphere,
-		bool anchored, int entityCount, long storedLength, long bodyLength, long clusterTime)
+		bool anchored, int entityCount, long storedLength, long bodyLength, long clusterTime, ushort version)
 	{
 		using MemoryStream stream = new MemoryStream(file, 0, HeaderLength, writable: true);
 		using BinaryWriter writer = new BinaryWriter(stream);
 		writer.Write(new byte[] { (byte)'M', (byte)'P', (byte)'S', (byte)'1' });
-		writer.Write(Version);
+		writer.Write(version);
 		writer.Write((ushort)HeaderLength);
 		writer.Write(partitionId);
 		writer.Write(generation);
@@ -211,7 +226,8 @@ internal static class PartitionSaveFile
 		{
 			throw new InvalidDataException("Partition save magic is not MPS1");
 		}
-		if (reader.ReadUInt16() != Version || reader.ReadUInt16() != HeaderLength)
+		ushort version = reader.ReadUInt16();
+		if ((version != LegacyVersion && version != ProfileVersion) || reader.ReadUInt16() != HeaderLength)
 		{
 			throw new InvalidDataException("Unsupported partition save version");
 		}
@@ -261,7 +277,19 @@ internal static class PartitionSaveFile
 		{
 			throw new InvalidDataException("Partition save uncompressed length mismatch");
 		}
-		return new Parsed(id, generation, sequence, kind, sphere, anchored, entityCount, clusterTime, bodyChecksum, body);
+		byte[] profiles = null;
+		if (version == ProfileVersion)
+		{
+			if (body.Length < 8) throw new InvalidDataException("Truncated partition sections");
+			int entitiesLength = BinaryPrimitives.ReadInt32LittleEndian(body);
+			if (entitiesLength < 0 || entitiesLength > body.Length - 8) throw new InvalidDataException("Invalid entity section length");
+			int profileLength = BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(4 + entitiesLength));
+			if (profileLength <= 0 || profileLength > MaximumProfileBytes || profileLength != body.Length - entitiesLength - 8)
+				throw new InvalidDataException("Invalid profile section length");
+			profiles = body.AsSpan(8 + entitiesLength, profileLength).ToArray();
+			body = body.AsSpan(4, entitiesLength).ToArray();
+		}
+		return new Parsed(id, generation, sequence, kind, sphere, anchored, entityCount, clusterTime, bodyChecksum, body) { Profiles = profiles };
 	}
 
 	public static void ValidateEnvelope(Parsed save, ulong partitionId, uint generation, uint? sequence = null)
@@ -316,5 +344,8 @@ internal static class PartitionSaveFile
 	public static ulong BodyChecksum(byte[] body) => Checksum(body);
 
 	/// <summary>Body is null when the record came from ReadHeader.</summary>
-	internal sealed record Parsed(ulong PartitionId, uint Generation, uint Sequence, byte Kind, BoundingSphereD Sphere, bool Anchored, int EntityCount, long ClusterTime, ulong BodyChecksum, byte[] Body);
+	internal sealed record Parsed(ulong PartitionId, uint Generation, uint Sequence, byte Kind, BoundingSphereD Sphere, bool Anchored, int EntityCount, long ClusterTime, ulong BodyChecksum, byte[] Body)
+	{
+		public byte[] Profiles { get; init; }
+	}
 }

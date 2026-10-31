@@ -438,6 +438,7 @@ public static class ClusterRuntime
 		OfflinePartitionService.Install();
 		if (IsClustered) NpcCensusService.Install();   // #1354: the census slots for mod-mes; unset on a plain server
 		RemotePullService.Install();
+		OfflineRateCache.Install();
 		MyGlobalEventsPatch.Install();
 		MyPirateAntennasPatch.Install();
 		MySessionComponentContainerDropSystemPatch.Install();
@@ -1016,6 +1017,9 @@ public static class ClusterRuntime
 		// Measurement only, one ratio read per tick while an import is recovering. See ImportRecoveryProbe.
 		ImportRecoveryProbe.Update();
 		AntennaGraphService.Update();
+		LaserCallUpService.Update();
+		OfflineRateCache.Update();
+		OfflineCompensation.UpdateObservations();
 		ShipAntennaService.Update();   // T-0186, no-op unless CLUSTER_SHIP_ANTENNA_RULE is set (default off)
 		RespawnRegistryService.Update();
 		IgcEndpointRegistryService.Update();

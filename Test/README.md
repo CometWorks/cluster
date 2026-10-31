@@ -148,3 +148,20 @@ deployment: `regular_nodes`, `world_template`, `split_step` (a MagnetarWorld fix
 `to-handover`) and `administrators`. Register it in a module's `SCENARIOS_*` table under its
 `TestPlan.md` id; `run_suite.py` refuses to run while any plan id has neither a runner nor a
 recorded reason.
+
+## Offline wake draft checks
+
+`Docs/OfflinePartitions.md` records SE-346/SE-347's exact acceptance matrix and limitations.
+The detached check runs without a package or game:
+
+```sh
+dotnet run --project Tools/OfflineCompensationCheck -c Release -p:RunPostBuildEvent=Never
+```
+
+Run it from the repository root. Registry policy sections are `remote-use` and
+`offline-partitions`. Native `P2-OFF-CALL-TERMINAL`, `P2-OFF-CALL-RC` and
+`P2-OFF-CALL-IGC` require the normal doctor/isolated-package contract; they have not been
+validated on THE-RIG. The RC station runner does not cover dynamic drone driving.
+Other T-OC/P2-OFF-CALL fixtures are explicit gaps in `coverage.py`, not aliases to synthetic
+proofs. Do not claim differential game, GUI, crash-injection or frame/traffic benchmarks from
+model/container checks.
