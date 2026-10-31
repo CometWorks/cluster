@@ -16,6 +16,7 @@ using Sandbox.Game.Entities.Cube;
 using Sandbox.Game.World;
 using VRage;
 using VRage.Game;
+using VRage.Game.ModAPI;
 using VRage.Game.Entity;
 using VRage.Game.ObjectBuilders.ComponentSystem;
 using VRage.Game.ObjectBuilders.Components.Beacon;
@@ -257,6 +258,21 @@ internal static partial class OfflineCompensation
 				case "Engine": var engine = (MyObjectBuilder_FueledPowerProducer)block; writes.Add(() => engine.Capacity = (float)store.Amount); break;
 				case "Jump": var jump = (MyObjectBuilder_JumpDrive)block; writes.Add(() => jump.StoredPower = (float)store.Amount); break;
 			}
+		}
+		foreach (var source in after.Sources.Where(s => s.FuelTickFrames > 0))
+		{
+			var block = blocks[source.Block];
+			var timer = block.ComponentContainer?.Components.Select(c => c.Component).OfType<MyObjectBuilder_TimerComponent>().SingleOrDefault()
+				?? throw new InvalidDataException("Reactor fuel timer missing");
+			uint counter = checked((uint)(Math.Floor(source.FuelElapsedFrames / 100) * 100));
+			uint tick = checked((uint)source.FuelTickFrames);
+			var grid = before.Members.Select(id => (MyObjectBuilder_CubeGrid)entities[id]).Single(g => g.CubeBlocks.Contains(block));
+			writes.Add(() =>
+			{
+				timer.FramesFromLastTrigger = counter; timer.TimerTickInFrames = tick;
+				if (source.FuelTier2AfterFrames < 0 && source.FuelTickFrames == source.FuelTier2TickFrames)
+					grid.PlayerPresenceTier = MyUpdateTiersPlayerPresence.Tier2;
+			});
 		}
 		foreach (var production in after.Production.Where(p => !p.Refinery))
 		{

@@ -100,7 +100,8 @@ internal static class OfflineModel
 			{
 				var source = profile.Sources[i];
 				if (source.Storage >= 0) storageRate[source.Storage] -= output[i] * source.StorageCost;
-				foreach (var fuel in source.Fuel) Change(profile, changes, fuel, -(decimal)output[i] * fuel.Amount);
+				if (source.FuelTickFrames == 0)
+					foreach (var fuel in source.Fuel) Change(profile, changes, fuel, -(decimal)output[i] * fuel.Amount);
 			}
 			for (int i = 0; i < storageRate.Length; i++)
 			{
@@ -109,6 +110,13 @@ internal static class OfflineModel
 				if (store.Kind == "Battery" && storageRate[i] > 0) storageRate[i] *= store.RechargeEfficiency;
 			}
 			double step = duration - elapsed;
+			for (int i = 0; i < profile.Sources.Count; i++)
+			{
+				var source = profile.Sources[i];
+				if (source.FuelTickFrames <= 0) continue;
+				if (maximum[i] > 0) step = Math.Min(step, Math.Max(1, source.FuelTickFrames - source.FuelElapsedFrames));
+				if (source.FuelTier2AfterFrames > Epsilon) step = Math.Min(step, source.FuelTier2AfterFrames);
+			}
 			if (profile.SunPeriodFrames > 0 && profile.Sources.Any(s => s.Curve is { Length: > 1 }))
 			{
 				int count = profile.Sources.Where(s => s.Curve is { Length: > 1 }).Max(s => s.Curve.Length);
@@ -177,7 +185,7 @@ internal static class OfflineModel
 			{
 				var source = profile.Sources[i];
 				if (source.Resource == Electricity) result.ProducerEnergyMWh[source.Block] = result.ProducerEnergyMWh.GetValueOrDefault(source.Block) + output[i] * step / 216000;
-				foreach (var fuel in source.Fuel)
+				foreach (var fuel in source.Fuel.Where(_ => source.FuelTickFrames == 0))
 				{
 					if (!result.ProducerFuelConsumed.TryGetValue(source.Block, out var consumed)) result.ProducerFuelConsumed[source.Block] = consumed = [];
 					consumed[fuel.Item] = consumed.GetValueOrDefault(fuel.Item) + (decimal)(output[i] * step) * fuel.Amount;
@@ -188,6 +196,31 @@ internal static class OfflineModel
 			for (int i = 0; i < charging.Length; i++)
 				if (profile.Storage[i].Resource == Electricity) result.StorageInputEnergyMWh[profile.Storage[i].Block] = result.StorageInputEnergyMWh.GetValueOrDefault(profile.Storage[i].Block) + charging[i] * step / 216000;
 			foreach (var change in changes) Add(inventories[change.Key.Inventory], change.Key.Item, change.Value * (decimal)step);
+			for (int i = 0; i < profile.Sources.Count; i++)
+			{
+				var source = profile.Sources[i];
+				if (source.FuelTickFrames <= 0) continue;
+				if (source.FuelTier2AfterFrames >= 0)
+				{
+					source.FuelTier2AfterFrames = Math.Max(0, source.FuelTier2AfterFrames - step);
+					if (source.FuelTier2AfterFrames <= Epsilon)
+					{ source.FuelTickFrames = source.FuelTier2TickFrames; source.FuelTier2AfterFrames = -1; }
+				}
+				if (maximum[i] <= 0) continue; // Native timer pauses without working fuel.
+				source.FuelElapsedFrames += step;
+				if (source.FuelElapsedFrames + Epsilon < source.FuelTickFrames) continue;
+				// MyReactor consumes the last distributed output times the whole timer,
+				// not the integral of all outputs since its previous settlement.
+				if (output[i] > 0) foreach (var fuel in source.Fuel)
+				{
+					decimal debit = Math.Min(Available(profile, fuel), Math.Max(.000001m,
+						decimal.Round((decimal)(output[i] * source.FuelElapsedFrames) * fuel.Amount, 6, MidpointRounding.AwayFromZero)));
+					Transfer(profile, fuel, -debit);
+					if (!result.ProducerFuelConsumed.TryGetValue(source.Block, out var consumed)) result.ProducerFuelConsumed[source.Block] = consumed = [];
+					consumed[fuel.Item] = consumed.GetValueOrDefault(fuel.Item) + debit;
+				}
+				source.FuelElapsedFrames = 0;
+			}
 			for (int i = 0; i < storageRate.Length; i++)
 			{
 				var store = profile.Storage[i];
@@ -486,6 +519,11 @@ internal static class OfflineModel
 				throw new InvalidDataException("Invalid offline reservoir");
 		foreach (var source in p.Sources)
 			if (!double.IsFinite(source.Maximum) || source.Maximum < 0 || source.Storage < -1 || source.Storage >= p.Storage.Count
+				|| !double.IsFinite(source.FuelTickFrames) || source.FuelTickFrames < 0 || source.FuelTickFrames > 21600000
+				|| !double.IsFinite(source.FuelElapsedFrames) || source.FuelElapsedFrames < 0 || source.FuelElapsedFrames > 21600000
+				|| !double.IsFinite(source.FuelTier2AfterFrames) || source.FuelTier2AfterFrames < -1
+				|| !double.IsFinite(source.FuelTier2TickFrames) || source.FuelTier2TickFrames < 0
+				|| source.FuelTier2AfterFrames >= 0 && source.FuelTier2TickFrames <= 0
 				|| source.PowerSink < -1 || source.PowerSink >= p.Sinks.Count || !double.IsFinite(source.StorageCost) || source.StorageCost < 0
 				|| !double.IsFinite(source.IdlePower) || source.IdlePower < 0 && source.IdlePower != -1 || !double.IsFinite(source.OperationalPower) || source.OperationalPower < 0
 				|| source.Curve?.Any(v => !double.IsFinite(v) || v < 0 || v > 1) == true) throw new InvalidDataException("Invalid offline source");

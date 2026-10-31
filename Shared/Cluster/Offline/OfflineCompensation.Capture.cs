@@ -18,6 +18,7 @@ using SpaceEngineers.Game.Entities.Blocks.SafeZone;
 using SpaceEngineers.Game.EntityComponents.Blocks;
 using VRage;
 using VRage.Game;
+using VRage.Game.ModAPI;
 using VRage.Game.Entity;
 using VRage.Game.ObjectBuilders.Components.Beacon;
 using VRage.Utils;
@@ -215,6 +216,11 @@ internal static partial class OfflineCompensation
 				foreach (var port in sources)
 				{
 					port.Kind = "Reactor"; port.Maximum = enabled ? reactor.MaxOutput : 0;
+					port.FuelTickFrames = reactor.m_timer?.TimerTickInFrames ?? 0;
+					port.FuelElapsedFrames = reactor.m_timer?.FramesFromLastTrigger ?? 0;
+					port.FuelTier2TickFrames = reactor.GetTimerTime(2);
+					if (reactor.CubeGrid.PlayerPresenceTier == MyUpdateTiersPlayerPresence.Tier1)
+						port.FuelTier2AfterFrames = reactor.CubeGrid.GridSystems.TieredUpdateSystem.m_playerPresenceTierTimer;
 					foreach (var fuel in reactor.BlockDefinition.FuelInfos)
 						port.Fuel.Add(Material(block, fuel.FuelId, (decimal)(fuel.ConsumptionPerSecond_Items / Math.Max(0.000001, reactor.BlockDefinition.MaxPowerOutput) / 60), reactor.GetInventory(), false));
 				}

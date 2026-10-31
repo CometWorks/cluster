@@ -75,6 +75,10 @@ internal sealed class OfflineSource
 	public double StorageCost;
 	// Inventory material expended by one resource-unit of output for one frame.
 	public List<OfflineMaterial> Fuel = [];
+	// Native reactor settlement samples delivered output at its timer boundary.
+	// Zero keeps the continuous behavior of profiles captured by older packages.
+	public double FuelTickFrames, FuelElapsedFrames, FuelTier2TickFrames;
+	public double FuelTier2AfterFrames = -1;
 	public int PowerSink = -1;
 	// A gas producer's one electrical sink follows delivered gas, shared by all
 	// its output ports. -1 preserves the captured constant demand of older profiles.

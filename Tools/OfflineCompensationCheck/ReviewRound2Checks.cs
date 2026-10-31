@@ -145,5 +145,31 @@ foreach (int mode in new[] { 0, 1, 2 })
     Check(result.ConsumerEnergyMWh[1]==0, "native disabled production requests no power");
 }
 
+{
+    var p = new OfflineProfile { ClockFrameSeconds=1.0/60 };
+    p.Items["fuel"]=new() { Volume=1, Mass=1 };
+    p.Inventories.Add(new() { MaxVolume=1000, MaxMass=1000, Stacks=[new() { Item="fuel", Amount=1000 }] });
+    p.Sinks.Add(new() { Block=1, Resource=E, Required=1 });
+    p.Sources.Add(new() { Block=2, Resource=E, Maximum=10, FuelTickFrames=60,
+        Fuel=[new() { Item="fuel", Amount=1, Inventories=[0] }] });
+    var r=OfflineModel.Simulate(p,30,1000);
+    Check(OfflineModel.Amount(p.Inventories[0],"fuel")==1000 && p.Sources[0].FuelElapsedFrames==30,
+        "native reactor retains unpaid partial timer phase and delivered energy");
+    p.Sinks[0].Required=.1;
+    r=OfflineModel.Simulate(p,60,1000);
+    Check(OfflineModel.Amount(p.Inventories[0],"fuel")==994 && r.ProducerFuelConsumed[2]["fuel"]==6,
+        "native reactor samples current output for the whole settlement interval");
+    p.Sinks[0].Required=1; p.Sources[0].FuelTier2AfterFrames=30; p.Sources[0].FuelTier2TickFrames=120;
+    OfflineModel.Simulate(p,180,1000);
+    Check(OfflineModel.Amount(p.Inventories[0],"fuel")==874 && p.Sources[0].FuelTickFrames==120
+        && p.Sources[0].FuelElapsedFrames==0 && p.Sources[0].FuelTier2AfterFrames==-1,
+        "native tier change preserves timer phase before its longer settlement");
+    p.Inventories[0].Stacks[0].Amount=1;
+    r=OfflineModel.Simulate(p,420,1000);
+    Check(OfflineModel.Amount(p.Inventories[0],"fuel")==0 && r.ProducerFuelConsumed[2]["fuel"]==1
+        && Math.Abs(r.ConsumerEnergyMWh[1]-120d/216000)<1e-12,
+        "native sampled fuel exhaustion clamps real stock and stops later power");
+}
+
 }
 }
