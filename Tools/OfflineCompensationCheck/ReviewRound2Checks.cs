@@ -103,5 +103,24 @@ foreach (bool adaptible in new[] { false, true })
         $"Q3 native positive-partial/zero/full working predicate power={power}, adaptible={adaptible}");
 }
 
+// Native distributor dispatches paired reservoir sources before ordinary priority
+// groups. In particular a forced-discharge battery suppresses even solar output.
+foreach (int mode in new[] { 0, 1, 2 })
+{
+    var p = new OfflineProfile { ClockFrameSeconds = 1.0/60 };
+    p.Sinks.Add(new() { Block=4, Resource=E, Required=.2 });
+    p.Storage.Add(new() { Block=1, Resource=E, Kind="Battery", Amount=1, Capacity=3,
+        Pair=true, Enabled=true, Mode=mode, MaxInput=12, InputConversion=1.0/216000, RechargeEfficiency=.8 });
+    p.Sources.Add(new() { Block=1, Resource=E, Kind="Battery", Priority=2, Group="Battery",
+        Maximum=mode==1?0:12, Storage=0, StorageCost=1.0/216000 });
+    p.Sources.Add(new() { Block=2, Resource=E, Kind="Environmental", Priority=1, Group="SolarPanels", Maximum=.16 });
+    p.Sources.Add(new() { Block=3, Resource=E, Kind="Reactor", Priority=3, Group="Reactors", Maximum=15 });
+    var result = OfflineModel.Simulate(p,60,10000);
+    Check(Math.Abs(result.ProducerEnergyMWh.GetValueOrDefault(1)-(mode==1?0:.2/3600))<1e-10,
+        $"native paired battery dispatch precedes ordinary generators, mode={mode}");
+    if(mode==2) Check(result.ProducerEnergyMWh.GetValueOrDefault(2)==0 && result.ProducerEnergyMWh.GetValueOrDefault(3)==0,
+        "native forced discharge suppresses unused solar/reactor rather than curtailing the battery");
+}
+
 }
 }

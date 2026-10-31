@@ -79,7 +79,7 @@ OfflineResult Run(OfflineProfile p, long frames) => OfflineModel.Simulate(p, p.S
 }
 // Empty/full events and charge loss, solar-first source order, no self-charging.
 {
-    var p = Base(); var battery = Reservoir(p, 0, 1, 12); p.Storage[0].Mode = 1; p.Storage[0].RechargeEfficiency = 0.8;
+    var p = Base(); var battery = Reservoir(p, 0, 1, 12); p.Storage[0].Mode = 1; p.Sources[0].Maximum = 0; p.Storage[0].RechargeEfficiency = 0.8;
     battery.Maximum = 0;
     p.Sources.Add(new() { Resource = E, Group = "solar", Priority = 1, Maximum = 2 });
     p.Sinks.Add(new() { Resource = E, Group = "lights", Required = 1 });
@@ -107,7 +107,7 @@ OfflineResult Run(OfflineProfile p, long frames) => OfflineModel.Simulate(p, p.S
 }
 // T-OC-03 model proof: environmental breakpoint integration and disabled rotation.
 {
-    var p = Base(); Reservoir(p, 0, 10, 12); p.Storage[0].Mode = 1;
+    var p = Base(); Reservoir(p, 0, 10, 12); p.Storage[0].Mode = 1; p.Sources[0].Maximum = 0;
     p.Sources.Add(new() { Resource = E, Priority = 1, Group = "sun", Maximum = 1, Curve = [1, 0] });
     p.SunPeriodFrames = 120; Run(p, 240); Near(p.Storage[0].Amount, 120.0 / 216000, "two cycles, half lit");
 }

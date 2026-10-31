@@ -41,6 +41,7 @@ internal static class OfflineTestRoutes
     private static readonly ManualResetEventSlim CaptureRelease = new(true);
     private static long adminPreflightPartition, adminReleasePartition;
     private static int adminPreflightEntered, adminReleaseEntered;
+    private static object adminReleaseProof;
     private static readonly ManualResetEventSlim AdminPreflightRelease = new(true), AdminSourceRelease = new(true);
 
     public static void Register()
@@ -56,10 +57,26 @@ internal static class OfflineTestRoutes
             if (held > 0 && (preflight || context.Request.QueryString["partition"] == held.ToString(System.Globalization.CultureInfo.InvariantCulture)))
             {
                 if (preflight) { Interlocked.Exchange(ref adminPreflightPartition, 0); Volatile.Write(ref adminPreflightEntered, 1); }
-                else { Interlocked.Exchange(ref adminReleasePartition, 0); Volatile.Write(ref adminReleaseEntered, 1); }
+                else
+                {
+                    adminReleaseProof = TestRoutes.OnGameThread(() =>
+                    {
+                        var persistence = (PartitionPersistence)AccessTools.Field(typeof(ClusterRuntime), "m_persistence").GetValue(null);
+                        var partitions = (PartitionManager)AccessTools.Field(typeof(ClusterRuntime), "m_partitions").GetValue(null);
+                        var members = partitions.Peek((ulong)held).Members;
+                        bool frozen = members.Any(ClusterRuntime.IsFrozen);
+                        uint generation = persistence.OwnedGeneration((ulong)held);
+                        bool refused = false;
+                        try { MaintenanceTriggers.Run("profile", partitions, persistence, (ulong)held); }
+                        catch (InvalidOperationException error) { refused = error.Message.Contains("non-frozen ownership"); }
+                        return new { frozen, generation, refused };
+                    });
+                    Volatile.Write(ref adminReleaseEntered, 1);
+                }
                 ThreadPool.QueueUserWorkItem(_ =>
                 {
                     (preflight ? AdminPreflightRelease : AdminSourceRelease).Wait(TimeSpan.FromSeconds(25));
+                    if (!preflight) Interlocked.Exchange(ref adminReleasePartition, 0);
                     ClusterControlServer.Handle(context);
                 });
                 return true;
@@ -98,7 +115,8 @@ internal static class OfflineTestRoutes
         });
         TestRoutes.Add("POST", "/offline-test-admin-hold", context =>
         {
-            long partition = TestRoutes.Long(context, "partition");
+            long partition = long.Parse(TestRoutes.Query(context, "partition", "0"));
+            if (partition < 0) throw new ArgumentOutOfRangeException(nameof(partition));
             bool preflight = TestRoutes.Query(context, "phase", "preflight") == "preflight";
             var signal = preflight ? AdminPreflightRelease : AdminSourceRelease;
             if (partition == 0) signal.Set(); else signal.Reset();
@@ -113,7 +131,7 @@ internal static class OfflineTestRoutes
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => new
             {
                 preflightEntered = Volatile.Read(ref adminPreflightEntered) != 0,
-                releaseEntered = Volatile.Read(ref adminReleaseEntered) != 0,
+                releaseEntered = Volatile.Read(ref adminReleaseEntered) != 0, proof = Volatile.Read(ref adminReleaseProof),
                 frozen = ClusterRuntime.IsFrozen(grid), generation = ((PartitionPersistence)AccessTools.Field(typeof(ClusterRuntime), "m_persistence").GetValue(null)).OwnedGeneration(partition)
             }));
         });

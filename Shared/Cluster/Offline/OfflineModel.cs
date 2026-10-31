@@ -278,7 +278,10 @@ internal static class OfflineModel
 			}
 			void Dispatch(double needed, bool limitStorage)
 			{
-				foreach (var group in sources.GroupBy(i => (p.Sources[i].Priority, p.Sources[i].Group)).OrderBy(g => g.Key.Priority))
+				// Native RecomputeResourceDistributionPartial dispatches its paired
+				// reservoirs before ordinary source priority groups, even before solar.
+				foreach (var group in sources.GroupBy(i => p.Sources[i].Storage >= 0 && p.Storage[p.Sources[i].Storage].Pair
+					? (Priority: int.MinValue, Group: "") : (p.Sources[i].Priority, p.Sources[i].Group)).OrderBy(g => g.Key.Priority))
 				{
 					double Capacity(int i) => limitStorage && p.Sources[i].Storage >= 0 && p.Storage[p.Sources[i].Storage].Pair ? output[i] : maximum[i];
 					double capacity = group.Sum(Capacity);
