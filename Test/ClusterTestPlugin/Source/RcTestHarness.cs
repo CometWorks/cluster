@@ -130,7 +130,7 @@ public static class RcTestHarness
 		};
 	}
 
-	private static MyCubeGrid SpawnStation(string name, Vector3D position, long ownerId, bool withRemoteControl, bool dynamic = false)
+	internal static MyCubeGrid SpawnStation(string name, Vector3D position, long ownerId, bool withRemoteControl, bool dynamic = false)
 	{
 		var antenna = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_RadioAntenna>("LargeBlockRadioAntenna");
 		antenna.Min = new SerializableVector3I(0, 0, 0);

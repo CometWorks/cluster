@@ -865,12 +865,21 @@ def t_oc_10(bench):
     _survival_template(bench)
     logs, error = run_mod_world(bench, None)
     _require(bench, "staged mod world starts natively", error is None, str(error))
-    api = bench.start_client(CLIENT_ID)
-    bench.wait_spawned(CLIENT_ID)
-    bench.ensure_gameplay_focus(CLIENT_ID)
-    api, grid, _, partition, _ = _call_fixture(bench, api=api, production=True)
+    # This assertion needs real mod bytes, a captured Final and native recovery,
+    # not a player. A fake Workshop id cannot be downloaded by a stock client.
+    for node in ("node-1", "node-2"):
+        _put_config(bench, node, {"offline.enabled": "false", "offline.quietMeters": "0", "offline.wakeMeters": "0",
+                                "offline.leadSeconds": "0", "offline.settleFrames": "0"})
+    owner = bench.cluster.node("node-1", "/identity-test-create?name=offline-content-owner", "POST")["identityId"]
+    grid = bench.cluster.node("node-1", f"/offline-test-station?owner={owner}", "POST")["grid"]
+    bench.cluster.node("node-1", f"/offline-test-production?grid={grid}", "POST")
+    partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 90)
+    _require(bench, "modded production fixture has an owned partition", bool(partition))
+    _put_config(bench, "node-1", {"offline.enabled": "true", "offline.minOnlineSeconds": "0", "offline.graceSeconds": "0"})
+    _require(bench, "modded production Final is durably offline", bool(_poll(lambda: _offline_row(bench, partition), 120)))
     profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
     bench.record("changed-mod-original-profiles", profiles)
+    _put_config(bench, "node-1", {"offline.enabled": "false"})
     bench.cluster.kill(slot="node-2")
     mod = bench.run_root / "node-2-data/Mods" / PROBE_NAME / "Data/Scripts/ClusterLocalModProbe/Probe.cs"
     original = mod.read_text()

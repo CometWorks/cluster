@@ -38,6 +38,14 @@ internal static class OfflineTestRoutes
 
     public static void Register()
     {
+        TestRoutes.Add("POST", "/offline-test-station", context =>
+        {
+            long owner = TestRoutes.Long(context, "owner");
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => new
+            {
+                grid = RcTestHarness.SpawnStation("offline-native-station", new Vector3D(20000, 20000, 0), owner, withRemoteControl: true).EntityId,
+            }));
+        });
         TestRoutes.Add("POST", "/offline-test-zone", context =>
         {
             long grid = TestRoutes.Long(context, "grid");
