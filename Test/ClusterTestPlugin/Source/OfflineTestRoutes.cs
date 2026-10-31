@@ -28,6 +28,11 @@ internal static class OfflineTestRoutes
 
     public static void Register()
     {
+        TestRoutes.Add("POST", "/offline-test-rate-fixtures", context =>
+        {
+            long owner = TestRoutes.Long(context, "owner");
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => RcTestHarness.RateFixtures(owner)));
+        });
         TestRoutes.Add("POST", "/offline-test-cache", context =>
         {
             string key = TestRoutes.Query(context, "key");
@@ -56,7 +61,7 @@ internal static class OfflineTestRoutes
         });
         TestRoutes.Add("POST", "/offline-test-recovery", context =>
         {
-            long grid = TestRoutes.Long(context, "grid"), ms = TestRoutes.Long(context, "ms");
+            long grid = TestRoutes.Long(context, "grid"), ms = long.Parse(TestRoutes.Query(context, "ms"), System.Globalization.CultureInfo.InvariantCulture);
             if (grid == 0 || ms is < 0 or > 45000) throw new ArgumentOutOfRangeException("grid/ms");
             // Patch on the game thread so it cannot race a running compensation invocation.
             TestRoutes.OnGameThread(() =>
@@ -85,6 +90,19 @@ internal static class OfflineTestRoutes
         var grid = (MyCubeGrid)MyEntities.GetEntityById(id);
         if (mode == "no-relay")
             foreach (var antenna in grid.GetFatBlocks<MyRadioAntenna>()) antenna.Enabled = false;
+        else if (mode == "stay-online")
+        {
+            var gyro = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Gyro>("LargeBlockGyro");
+            gyro.Min = new SerializableVector3I(2, 0, 0); gyro.GyroOverride = true;
+            grid.AddBlock(gyro, false);
+        }
+        else if (mode == "short-radio")
+        {
+            var antenna = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_RadioAntenna>("LargeBlockRadioAntenna");
+            antenna.Min = new SerializableVector3I(3, 0, 0); antenna.Owner = grid.BigOwners.FirstOrDefault();
+            antenna.Enabled = true; antenna.EnableBroadcasting = true; antenna.BroadcastRadius = 1000;
+            grid.AddBlock(antenna, false);
+        }
         else if (mode == "hostile")
         {
             long hostile = MySession.Static.Players.CreateNewIdentity("Offline hostile fixture", initialPlayer: true).IdentityId;

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import math
+from concurrent.futures import ThreadPoolExecutor
 import os
 import re
 import signal
@@ -533,6 +534,105 @@ def offline_cache_durability(bench):
     bench.exercised(waKilledBeforeFinal=True, localClearJournaled=True, proof="native authority command journal/replacement; production cache reuse remains separate")
 
 
+def _denied_call(bench, api, grid, partition, label):
+    before = bench.cluster.node("node-1", "/offline")["callUps"]["outcomes"].get("refused-reach", 0)
+    answer = api.open_remote_terminal(grid, timeout=4)
+    bench.record(label + "-answer", answer)
+    _require(bench, label + ": authenticated client actually sent an absent-grid request", answer.get("replicationRequests", 0) > 0)
+    outcomes = bench.cluster.node("node-1", "/offline")["callUps"]["outcomes"]
+    row = _offline_row(bench, partition)
+    bench.check(label + ": server admission refuses and leaves the row offline", outcomes.get("refused-reach", 0) > before
+                and bool(row) and not row.get("LoadRequestedNode") and not answer.get("screenOpen"), json.dumps({"row": row, "outcomes": outcomes}))
+
+
+def p2_off_call_deny(bench):
+    api, grid, _, partition, _ = _call_fixture(bench, hostile=True)
+    _denied_call(bench, api, grid, partition, "hostile-owner")
+    _put_config(bench, "node-1", {"offline.enabled": "false"})
+    identity = _client_identity(bench)
+    fresh = bench.cluster.node("node-1", f"/rc-test-ensure?owner={identity}", "POST")
+    grid = fresh["grid"]
+    partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 90)
+    _require(bench, "friendly no-relay fixture has ownership", bool(partition))
+    bench.cluster.node("node-1", f"/offline-test-options?grid={fresh['relay']}&mode=no-relay", "POST")
+    _put_config(bench, "node-1", {"offline.enabled": "true"})
+    _require(bench, "friendly no-relay target reached offline", bool(_poll(lambda: _offline_row(bench, partition), 90)))
+    time.sleep(3)
+    _denied_call(bench, api, grid, partition, "no-relay")
+
+
+def p2_off_call_rate(bench):
+    api, _, _, _, _ = _call_fixture(bench)
+    _put_config(bench, "node-1", {"offline.enabled": "false"})
+    identity = _client_identity(bench)
+    fixtures = bench.cluster.node("node-1", f"/offline-test-rate-fixtures?owner={identity}", "POST")
+    bench.record("rate-twenty-fixtures", fixtures)
+    target_ids = {f["grid"] for f in fixtures}
+    # All owners may offline: an ordinary balancer move must not invalidate this admission fixture.
+    for node in ("node-1", "node-2"):
+        _put_config(bench, node, {"offline.enabled": "true", "offline.minOnlineSeconds": "0", "offline.graceSeconds": "0", "offline.settleFrames": "0"})
+    def rows():
+        return bench.cluster.get("/registry/partitions/offline").get("Rows", [])
+    offline = _poll(lambda: (lambda rs: rs if target_ids <= {m for r in rs for m in r.get("Members", [])} else None)(rows()), 240, 2)
+    _require(bench, "twenty distinct reachable targets are durably offline", bool(offline))
+    before = bench.cluster.node("node-1", "/offline")["callUps"]
+    started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        replies = list(pool.map(lambda f: api.open_remote_terminal(f["grid"], timeout=3), fixtures))
+    duration = time.monotonic() - started
+    after = bench.cluster.node("node-1", "/offline")["callUps"]
+    bench.record("rate-client-requests", {"seconds": duration, "replies": replies, "before": before, "after": after})
+    _require(bench, "twenty real client requests ran inside one rate window", duration < 60 and all(r.get("replicationRequests", 0) > 0 for r in replies))
+    refused = after["outcomes"].get("refused-rate", 0) - before["outcomes"].get("refused-rate", 0)
+    bench.check("concurrent call-ups enforce one pending admission", refused >= 19 and after["pending"] <= 1, json.dumps(after))
+    bench.exercised(authenticatedRequests=20, concurrentPendingLimit=True,
+                    limitation="concurrent burst proves one pending; six successive completions/minute remains a separate rate-window leg")
+
+
+def p2_off_call_laser(bench):
+    _join(bench)
+    owner = _client_identity(bench)
+    for node in _nodes(bench):
+        _put_config(bench, node, {"offline.enabled": "false", "offline.wakeMeters": "0", "offline.leadSeconds": "0", "offline.quietMeters": "0"})
+    source = bench.cluster.node("node-1", f"/igc-test-ensure-laser-at?owner={owner}&name=offline-laser-source&x=0&y=20000&z=0", "POST")
+    target = bench.cluster.node("node-2", f"/igc-test-ensure-laser-at?owner={owner}&name=offline-laser-target&x=20000&y=20000&z=0", "POST")
+    source_grid, target_grid = source["grid"], target["grid"]
+    # The static source remains online by the normal self-propulsion gate, not an offline bypass.
+    bench.cluster.node("node-1", f"/offline-test-options?grid={source_grid}&mode=stay-online", "POST")
+    partition = _poll(lambda: (_owner_of(bench, target_grid) or (None, None))[1], 90)
+    _require(bench, "laser target has a partition", bool(partition))
+    target_state = bench.cluster.node("node-2", f"/igc-test-laser-status?grid={target_grid}")
+    bench.record("laser-target-before", target_state)
+    def enable(node):
+        _put_config(bench, node, {"offline.enabled": "true", "offline.minOnlineSeconds": "0", "offline.graceSeconds": "0", "offline.settleFrames": "0"})
+    def connected():
+        s = bench.cluster.node("node-1", f"/igc-test-laser-status?grid={source_grid}")
+        t = bench.cluster.node("node-1", f"/igc-test-laser-status?grid={target_grid}") if _owner_of(bench, target_grid) else {}
+        return {"source": s, "target": t} if s.get("state") == "connected" and t.get("state") == "connected" else None
+    enable("node-2")
+    _require(bench, "laser id target is durably offline", bool(_poll(lambda: _offline_row(bench, partition), 90)))
+    bench.record("laser-id-request", bench.cluster.node("node-1", f"/igc-test-laser-connect?grid={source_grid}&target={target['laser']}", "POST"))
+    paired = _poll(connected, 150, 2)
+    _require(bench, "id wake loads onto source node and establishes both real lasers", bool(paired) and _owner_of(bench, target_grid) == ("node-1", partition))
+    bench.record("laser-id-connected", paired)
+    enable("node-1")
+    _require(bench, "established far end can offline", bool(_poll(lambda: _offline_row(bench, partition), 90)))
+    time.sleep(12)
+    s = bench.cluster.node("node-1", f"/igc-test-laser-status?grid={source_grid}")
+    row = _offline_row(bench, partition)
+    bench.check("established proxy link stays connected without waking", s.get("state") == "connected" and bool(row) and not row.get("LoadRequestedNode"), json.dumps({"source": s, "offline": row}))
+    bench.cluster.node("node-1", f"/igc-test-laser-idle?grid={source_grid}", "POST")
+    # The per-source minute limit is real wall time; do not bypass it for the GPS arm.
+    time.sleep(60)
+    x, y, z = target_state["head"]
+    bench.record("laser-gps-request", bench.cluster.node("node-1", f"/igc-test-laser-gps?grid={source_grid}&x={x}&y={y}&z={z}", "POST"))
+    paired = _poll(connected, 150, 2)
+    _require(bench, "GPS wake establishes both real lasers", bool(paired))
+    bench.record("laser-gps-connected", paired)
+    bench.exercised(idWake=True, gpsWake=True, establishedNoWake=True,
+                    limitation="explicit radio-chain relay-behind-offline-laser assertion remains separate")
+
+
 SCENARIOS_OFFLINE.update({
     "P2-OFF-CALL-TERMINAL": (p2_off_call_terminal, "offline radio terminal, caller-node wake, pin and sweep lifecycle", "3"),
     "P2-OFF-CALL-RC": (p2_off_call_rc, "offline dynamic drone radio control, raw client driving and presence", "3"),
@@ -540,4 +640,7 @@ SCENARIOS_OFFLINE.update({
     "T-OC-07": (t_oc_07, "real PB/timer/ejector Block and Freeze policies through shared wake", "3"),
     "T-OC-09": (t_oc_09, "actual shared-apply crash, immutable-Final retry and post-Final no-repeat recovery", "3"),
     "OFF-CACHE-DURABILITY": (offline_cache_durability, "WA-local cache clear journal and pre-Final replacement (R8)", "3"),
+    "P2-OFF-CALL-DENY": (p2_off_call_deny, "authenticated hostile-owner and missing-relay requests do not wake", "3"),
+    "P2-OFF-CALL-RATE": (p2_off_call_rate, "twenty authenticated offline-grid requests enforce one pending call-up", "3"),
+    "P2-OFF-CALL-LASER": (p2_off_call_laser, "native id/GPS laser wake and established-link no-wake", "3"),
 })

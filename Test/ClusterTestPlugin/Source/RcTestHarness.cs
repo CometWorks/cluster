@@ -28,6 +28,17 @@ public static class RcTestHarness
 {
 	private const string HostGridName = "cluster-rc-host";
 	private const string RelayGridName = "cluster-rc-relay";
+	public static object RateFixtures(long ownerId)
+	{
+		var player = PositionRegistryService.Players.First(p => p.ClientId != 0);
+		Vector3D origin = new(player.X, player.Y, player.Z);
+		return Enumerable.Range(0, 20).Select(i =>
+		{
+			Vector3D position = origin + Vector3D.Right * ((i % 5 - 2) * 8000) + Vector3D.Up * (18000 + i / 5 * 8000);
+			var grid = SpawnStation("offline-rate-" + i, position, ownerId, true);
+			return new { grid = grid.EntityId, block = grid.GetFatBlocks<MyRemoteControl>().Single().EntityId };
+		}).ToArray();
+	}
 
 	/// <summary>
 	/// Ensures this node hosts a dedicated remote-control station 20 km out plus a relay antenna 150 m from
@@ -149,6 +160,7 @@ public static class RcTestHarness
 		{
 			var thrust = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Thrust>("LargeBlockSmallThrust");
 			thrust.Min = new SerializableVector3I(3, 0, 0);
+			thrust.BlockOrientation = new SerializableBlockOrientation(Base6Directions.Direction.Backward, Base6Directions.Direction.Up);
 			thrust.Owner = ownerId;
 			thrust.Enabled = true;
 			builder.CubeBlocks.Add(thrust);

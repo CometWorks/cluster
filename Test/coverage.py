@@ -77,10 +77,7 @@ PLAN_GAPS.update({
     "T-OC-05": "Measure-node decision pending real observed-world evidence; no Measure role implemented.",
     "T-OC-06": "Short observation exists; Measure-node full-rotation mod fixture/decision pending.",
     "PRF-OC-01": "Needs the 200-panel planet/ridge fixture and exclusive frame-budget measurement; no performance claim.",
-    "P2-OFF-CALL-DENY": "Needs real packet injection plus hostile/no-relay fixture; proxy admission requires native validation.",
-    "P2-OFF-CALL-RATE": "Needs 20 reachable offline grids and authenticated demand injection; no native rate-limit claim.",
     "P2-OFF-CALL-CONFLICT": "Registry ownership/presence and balance proved by remote-use self-test; two-live-client remote session fixture still needed.",
-    "P2-OFF-CALL-LASER": "ID/GPS wake/replay and established-link no-wake require the two-laser offline fixture; no native claim.",
 })
 
 HOST_CAPABILITIES: dict[str, tuple[str, str]] = {
