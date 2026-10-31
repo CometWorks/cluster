@@ -169,3 +169,4 @@ OfflineResult Run(OfflineProfile p, long frames) => OfflineModel.Simulate(p, p.S
 }
 Console.WriteLine($"Offline model: {checks} assertions passed (synthetic deterministic proofs; no game differential/GUI/performance claim).");
 ReviewChecks.Run("all");
+PowerBudgetChecks.Run();

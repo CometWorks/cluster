@@ -956,6 +956,8 @@ def t_oc_11(bench):
         _put_config(bench, node, {"offline.enabled": "false", "offline.quietMeters": "0", "offline.settleFrames": "0",
                                 "offline.wakeMeters": "0", "offline.leadSeconds": "0"})
     owner = _client_identity(bench)
+    admin = bench.cluster.node("node-1", "/block-test-admin-safezone?op=create&x=100000&y=20000&z=0", "POST")["zone"]
+    bench.cluster.node("node-1", f"/block-test-admin-safezone?op=update&id={admin}&radius=50&allowed=Drilling", "POST")
     fixture = bench.cluster.node("node-1", f"/rc-test-ensure?owner={owner}", "POST")
     grid = fixture["grid"]
     bench.cluster.node("node-1", f"/offline-test-zone?grid={grid}", "POST")
@@ -970,6 +972,11 @@ def t_oc_11(bench):
     first_draw = first["predicted"]["Upkeep"][0]["OperationalPower"]
     bigger_draw = larger["predicted"]["Upkeep"][0]["OperationalPower"]
     bench.check("actual radius-dependent sink demand drives the shared budget", bigger_draw > first_draw, f"{first_draw} -> {bigger_draw} MW")
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=box-zone", "POST")
+    boxed, boxed_state = _zone_reference(bench, grid, partition, "zone-box")
+    bench.check("actual shape-dependent sink demand is captured", boxed_state["shape"] == "Box"
+                and boxed["predicted"]["Upkeep"][0]["OperationalPower"] != bigger_draw)
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=sphere10", "POST")
     bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=empty-production", "POST")
     _zone_reference(bench, grid, partition, "zone-empty-production", seconds=10, blocked=True)
     bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=restore-production", "POST")
@@ -979,7 +986,7 @@ def t_oc_11(bench):
     bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=battery-off", "POST")
     _zone_reference(bench, grid, partition, "zone-fuel-exhaustion", depleted=True)
     bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=solar-backup", "POST")
-    _zone_reference(bench, grid, partition, "zone-solar-battery-recovery", seconds=70, renewable=True)
+    _zone_reference(bench, grid, partition, "zone-solar-battery-recovery", seconds=135, renewable=True)
     bench.cluster.post("/automatic/resume")
     # Actual shared recovery: the short, already-paid credit expires while offline, with
     # electricity/fuel available. No timer shortcut or synthetic result is injected at wake.
@@ -1012,6 +1019,10 @@ def t_oc_11(bench):
                 and after["blockEnabled"] is True and after["allowedActions"] == zone_before["allowedActions"])
     bench.check("shared wake charges reactor for both production and zone power", any(p.get("MyObjectBuilder_Ingot/Uranium", 0) > 0
                 for p in result["ProducerFuelConsumed"].values()) and len(result["ProductionUnits"]) == 2 and result["DisabledZones"])
+    admin_after = next((z for z in bench.cluster.node("node-1", "/block-test-safezones")["zones"] if z["entityId"] == admin), {})
+    bench.record("admin-zone-uncharged-control", admin_after)
+    bench.check("admin zone remains enabled under its separate no-player-chip rules", admin_after.get("enabled") is True and admin_after.get("block") == 0
+                and all(z["Block"] != admin for z in result["Zones"]))
     api.close_remote_terminal()
     bench.exercised(nativePlayerZone=True, nativeRefineryAssembler=True, sharedBudget=True, finiteFuelOutage=True,
                     solarBatteryRecovery=True, actualSharedWake=True,

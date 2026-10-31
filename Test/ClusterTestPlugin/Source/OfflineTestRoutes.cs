@@ -206,13 +206,15 @@ internal static class OfflineTestRoutes
                 var item = MyDefinitionId.Parse(production is MyRefinery ? "MyObjectBuilder_Ingot/Iron" : "MyObjectBuilder_Component/SteelPlate");
                 production.OutputInventory.AddItems(production.OutputInventory.ComputeAmountThatFits(item), MyObjectBuilderSerializerKeen.CreateNewObject(item));
             }
-        else if (mode == "radius20")
+        else if (mode is "radius20" or "box-zone" or "sphere10")
         {
             var block = grid.GetFatBlocks<MySafeZoneBlock>().Single();
             var manager = block.Components.Get<MySafeZoneComponent>();
             var zone = (MySafeZone)MyEntities.GetEntityById(manager.SafeZoneEntityId);
             var settings = (MyObjectBuilder_SafeZone)zone.GetObjectBuilder();
-            settings.Radius = 20;
+            settings.Radius = mode == "sphere10" ? 10 : 20;
+            settings.Shape = mode == "box-zone" ? MySafeZoneShape.Box : MySafeZoneShape.Sphere;
+            if (mode == "box-zone") settings.Size = new Vector3(40, 50, 60);
             MySessionComponentSafeZones.UpdateSafeZone(settings, sync: true);
         }
         else if (mode == "solar-backup")
