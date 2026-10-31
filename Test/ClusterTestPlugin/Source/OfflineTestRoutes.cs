@@ -35,9 +35,42 @@ internal static class OfflineTestRoutes
     private static object applied;
     private static bool patched;
     private static OfflineProfile reference;
+    private static long capturePartition;
+    private static int captureEntered;
+    private static readonly ManualResetEventSlim CaptureRelease = new(true);
 
     public static void Register()
     {
+        // Hold the HTTP request after the Gateway's source report/presync, before
+        // game-thread Capture. A real client can acquire a pin during this gap.
+        // The production dispatcher and capture then run unchanged.
+        ClusterControlServer.AddRouteExtension((context, path) =>
+        {
+            long expected = Interlocked.Read(ref capturePartition);
+            if (expected > 0 && context.Request.HttpMethod == "GET" && path.EndsWith("/capture", StringComparison.OrdinalIgnoreCase)
+                && context.Request.QueryString["partition"] == expected.ToString(System.Globalization.CultureInfo.InvariantCulture))
+            {
+                Volatile.Write(ref captureEntered, 1);
+                CaptureRelease.Wait(TimeSpan.FromSeconds(20));
+                Interlocked.Exchange(ref capturePartition, 0);
+            }
+            return false;
+        });
+        TestRoutes.Add("POST", "/offline-test-capture-hold", context =>
+        {
+            long partition = long.Parse(TestRoutes.Query(context, "partition", "0"), System.Globalization.CultureInfo.InvariantCulture);
+            if (partition < 0) throw new ArgumentOutOfRangeException(nameof(partition));
+            if (partition == 0) CaptureRelease.Set();
+            else { CaptureRelease.Reset(); Volatile.Write(ref captureEntered, 0); }
+            Interlocked.Exchange(ref capturePartition, partition);
+            TestRoutes.Json(context, 200, new { partition });
+        });
+        TestRoutes.Add("GET", "/offline-test-capture-hold", context =>
+        {
+            long grid = TestRoutes.Long(context, "grid");
+            TestRoutes.Json(context, 200, new { partition = Interlocked.Read(ref capturePartition), entered = Volatile.Read(ref captureEntered) != 0,
+                frozen = ClusterRuntime.IsFrozen(grid) });
+        });
         TestRoutes.Add("POST", "/offline-test-station", context =>
         {
             long owner = TestRoutes.Long(context, "owner");

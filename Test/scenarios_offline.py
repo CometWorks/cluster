@@ -535,6 +535,40 @@ def p2_off_call_conflict(bench):
     bench.exercised(twoLiveClients=True, differentNodes=True, twoGridsOnePartition=True, observedSeconds=time.monotonic() - started)
 
 
+def offline_remote_capture_race(bench):
+    """R7: a real terminal pin starts after the gateway read, before source freeze."""
+    api, grid, _, partition, _ = _call_fixture(bench)
+    _require(bench, "race target first wakes through actual terminal", _open_terminal(api, grid).get("screenOpen") is True)
+    for node in ("node-1", "node-2"):
+        _put_config(bench, node, {"offline.enabled": "false"})
+    bench.cluster.post("/automatic/pause")
+    api.close_remote_terminal()
+    _require(bench, "no source pin remains before the gateway checks", bool(_poll(lambda: not _remote_presence(bench, partition), 30)))
+    bench.cluster.node("node-1", f"/offline-test-capture-hold?partition={partition}", "POST")
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            request = pool.submit(bench.cluster.post, f"/registry/pull-demands?partition={partition}&source=node-1&target=node-2", timeout=60)
+            held = _poll(lambda: (lambda s: s if s["entered"] else None)(bench.cluster.node("node-1", f"/offline-test-capture-hold?grid={grid}")), 15, .1)
+            _require(bench, "gateway passed its reads and reached held source capture", bool(held) and not held["frozen"])
+            opened = _open_terminal(api, grid, timeout=10)
+            _require(bench, "real terminal acquires its permanent pin inside the capture gap", opened.get("screenOpen") is True
+                     and bool(_poll(lambda: _remote_presence(bench, partition), 4, .1)), json.dumps(opened))
+            bench.cluster.node("node-1", "/offline-test-capture-hold?partition=0", "POST")
+            outcome = request.result(timeout=60)
+        state = bench.cluster.node("node-1", f"/offline-test-capture-hold?grid={grid}")
+        bench.record("capture-race", {"held": held, "terminal": opened, "outcome": outcome, "state": state,
+                                     "owner": _owner_of(bench, grid), "presence": _remote_presence(bench, partition)})
+        bench.check("atomic source guard refuses the stale gateway decision without freezing or moving the pin", not outcome.get("accepted")
+                    and _owner_of(bench, grid) == ("node-1", partition) and not state["frozen"] and bool(_remote_presence(bench, partition)))
+        bench.check("source refusal is actually remote-use", bool(_lines(bench, "node-1", "remote-use")))
+        bench.screenshot(CLIENT_ID, "terminal-pin-after-capture-race")
+    finally:
+        bench.cluster.node("node-1", "/offline-test-capture-hold?partition=0", "POST")
+        api.close_remote_terminal()
+    bench.exercised(realTerminalAfterGatewayRead=True, sourceAtomicRefusal=True,
+                    limitation="deliberate spatial co-location positive control remains separate")
+
+
 def t_oc_07(bench):
     api, grid, block, partition, _ = _call_fixture(bench, unknown=True)
     profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
@@ -1356,4 +1390,5 @@ SCENARIOS_OFFLINE.update({
     "T-OC-11": (t_oc_11, "running player zones, common production power/fuel budget, outage/backup and real shared wake", "3"),
     "OFF-SOLAR-NATIVE": (offline_solar_native, "native physics-queue solar profiling crash regression", "2"),
     "OFF-ZONE-PAUSED": (offline_zone_paused, "native power-paused zone credit, shared recovery, vanilla reactivation and manual-off control", "3"),
+    "OFF-REMOTE-CAPTURE-RACE": (offline_remote_capture_race, "native terminal pin acquired after gateway read refuses source capture", "3"),
 })
