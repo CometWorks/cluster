@@ -59,10 +59,15 @@ public static class OfflinePartitionService
 	}
 
 	/// <summary>Antenna entries of offline partitions, for the authority's merge (never mutated in place).</summary>
-	public static AntennaGraphEntry[] AntennaEntries()
+	public static AntennaGraphEntry[] AntennaEntries() => AntennaEntries(out _);
+
+	internal static AntennaGraphEntry[] AntennaEntries(out Dictionary<long, string> loadTargets)
 	{
 		lock (Sync)
 		{
+			var targets = m_rows.ToDictionary(r => r.Partition, r => r.LoadRequestedNode);
+			loadTargets = m_antennas.ToDictionary(a => a.AntennaEntityId,
+				a => targets.GetValueOrDefault(PartitionOfOrigin(a.Origin)));
 			if (m_endedAntennas.Count == 0) return m_antennas;
 			double now = ClusterRuntime.LocalMilliseconds;
 			foreach (long expired in m_endedAntennas.Where(x => x.Value.Until <= now).Select(x => x.Key).ToArray()) m_endedAntennas.Remove(expired);

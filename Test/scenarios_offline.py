@@ -720,7 +720,7 @@ def p2_off_call_deny(bench):
             bench.cluster.node("node-1", f"/promote-test?userId={client_id}")["promoted"] == 2, 30)))
         _require(bench, "hostile positive-control target is still offline before the privileged request", bool(_offline_row(bench, hostile_partition)))
         answer = api.open_remote_terminal(hostile_grid, timeout=3)
-        loaded = _poll(lambda: _owner_of(bench, hostile_grid), 90)
+        loaded = _poll(lambda: _owner_of(bench, hostile_grid) if _offline_row(bench, hostile_partition) is None else None, 90)
         bench.record("moderator-bypass-positive-control", {"answer": answer, "owner": loaded,
             "promotion": bench.cluster.node("node-1", f"/promote-test?userId={client_id}")})
         bench.check("an actually promoted moderator can admit the otherwise hostile unreachable target", bool(loaded)

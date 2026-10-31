@@ -318,7 +318,10 @@ public static class AntennaGraphService
 			if (m_retainedOffline.Count != 0)
 			{
 				double now = ClusterRuntime.LocalMilliseconds;
-				foreach (long expired in m_retainedOffline.Where(x => x.Value.Until <= now).Select(x => x.Key).ToArray())
+				// Once the authority publishes the offline/new origin, the bridge has done
+				// its job. Continuing to report it would masquerade as a fresh live owner.
+				var adopted = m_entries.Where(e => e.Origin != Node).Select(e => e.AntennaEntityId).ToHashSet();
+				foreach (long expired in m_retainedOffline.Where(x => x.Value.Until <= now || adopted.Contains(x.Key)).Select(x => x.Key).ToArray())
 					m_retainedOffline.Remove(expired);
 				HashSet<long> live = entries.Select(x => x.AntennaEntityId).ToHashSet();
 				foreach ((AntennaGraphEntry retained, double _) in m_retainedOffline.Values)
@@ -406,13 +409,16 @@ public static class AntennaGraphService
 			double cutoff = now - ReportCutoffMilliseconds;
 			foreach (string origin in Reports.Where(x => x.Value.Received < cutoff).Select(x => x.Key).ToArray()) Reports.Remove(origin);
 			var next = new Dictionary<long, AntennaGraphEntry>();
-			// T-0193 requirement 6: offline partitions' antennas as of the moment they went offline,
-			// FIRST, so any node's live report of the same antenna id overrides them.
-			foreach (AntennaGraphEntry entry in OfflinePartitionService.AntennaEntries()) next[entry.AntennaEntityId] = entry;
+			// A durable offline row is authoritative over the source's retained bridge
+			// report. Only its admitted load target may replace it with a live report.
+			var offline = OfflinePartitionService.AntennaEntries(out var loadTargets);
+			foreach (AntennaGraphEntry entry in offline) next[entry.AntennaEntityId] = entry;
 			// A later report wins an antenna id two nodes both claim (the moment of a handover): the
 			// order of Reports, by receipt then by node, is what settles that, as it always has.
 			foreach (AntennaGraphEntry entry in Reports.OrderBy(x => x.Value.Received).ThenBy(x => x.Key, StringComparer.Ordinal)
-				.SelectMany(x => x.Value.Antennas.Values)) next[entry.AntennaEntityId] = entry;
+				.SelectMany(x => x.Value.Antennas.Values))
+				if (!loadTargets.TryGetValue(entry.AntennaEntityId, out string target) || target == entry.Origin)
+					next[entry.AntennaEntityId] = entry;
 			Diff(m_entries.ToDictionary(x => x.AntennaEntityId), next, out List<AntennaGraphEntry> upserts, out List<long> removed);
 			if (upserts.Count == 0 && removed.Count == 0) return;
 			merged = next.Values.OrderBy(x => x.AntennaEntityId).ToArray();
