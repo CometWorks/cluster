@@ -407,6 +407,7 @@ def p2_off_call_terminal(bench):
     started = time.monotonic()
     opened = _open_terminal(api, grid)
     latency = time.monotonic() - started
+    bench.record("call-up-latency", {"seconds": latency, "grid": grid, "kind": "small refinery station", "exclusiveBenchmark": False})
     bench.record("call-up-terminal", opened)
     _require(bench, "real client opened the woken remote terminal", opened.get("screenOpen") is True and opened.get("connected") is True, json.dumps(opened))
     bench.screenshot(CLIENT_ID, "02-woken-production-terminal")
@@ -503,7 +504,12 @@ def p2_off_call_conflict(bench):
     _require(bench, "both clients remain attached on different nodes", _client_node(bench, CLIENT_ID) == "node-1" and _client_node(bench, CLIENT2_ID) == "node-2")
     identity = bench.cluster.node("node-2", f"/respawn-test-player?userId={CLIENT2_ID}")["identityId"]
     bench.cluster.node("node-2", f"/rc-test-ensure?owner={identity}", "POST")
-    other.key("O")
+    for _ in range(8):
+        characters = bench.cluster.node("node-2", "/characters").get("characters") or []
+        if any(r.get("radioOn") for r in characters if identity in (r.get("controllingIdentity"), r.get("identityOwner"))):
+            break
+        other.key("O")
+        time.sleep(2)
     attempts = []
     started = time.monotonic()
     while time.monotonic() - started < 180:
@@ -627,6 +633,8 @@ def offline_cache_durability(bench):
     bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
     key = "native-offline-cache-clear"
     bench.cluster.node("wa-1", f"/offline-test-cache?key={key}", "POST")
+    control = key + "-untouched-control"
+    bench.cluster.node("wa-1", f"/offline-test-cache?key={control}", "POST")
     def cache(node):
         return bench.cluster.node(node, "/offline")["owner"]["compensation"]["cache"]
     _require(bench, "WA cache seeded before the snapshot", any(e["Key"] == key for e in cache("wa-1")["entries"]))
@@ -645,8 +653,12 @@ def offline_cache_durability(bench):
     _wa_failover(bench, _authority(bench)["Generation"])
     restored = cache("wa-2")
     bench.record("cache-after-wa-replacement", restored)
+    bench.check("replacement restored the pre-clear snapshot's untouched cache entry", any(e["Key"] == control for e in restored["entries"]))
     bench.check("replacement replays the acknowledged clear over its old snapshot", not any(e["Key"] == key for e in restored["entries"]))
-    # The epoch rejects a contribution created before the clear, even after the replacement.
+    bench.cluster.node("wa-2", f"/offline-test-cache?key={key}&epoch=0", "POST")
+    bench.check("replacement rejects stale pre-clear measurement epoch", not any(e["Key"] == key for e in cache("wa-2")["entries"]))
+    bench.cluster.node("wa-2", f"/offline-test-cache?key={key}&epoch=1", "POST")
+    bench.check("replacement admits a new measurement at the cleared epoch", any(e["Key"] == key and e["Epoch"] == 1 for e in cache("wa-2")["entries"]))
     bench.exercised(waKilledBeforeFinal=True, localClearJournaled=True, proof="native authority command journal/replacement; production cache reuse remains separate")
 
 
@@ -655,8 +667,12 @@ def _denied_call(bench, api, grid, partition, label):
     answer = api.open_remote_terminal(grid, timeout=4)
     bench.record(label + "-answer", answer)
     _require(bench, label + ": authenticated client actually sent an absent-grid request", answer.get("replicationRequests", 0) > 0)
+    # WA proxy publication and the asynchronous admission task follow the client request.
+    # A timed-out UI helper is not itself a server admission outcome.
+    _poll(lambda: bench.cluster.node("node-1", "/offline")["callUps"]["outcomes"].get("refused-reach", 0) > before, 60)
     outcomes = bench.cluster.node("node-1", "/offline")["callUps"]["outcomes"]
     row = _offline_row(bench, partition)
+    bench.record(label + "-server-admission", {"outcomes": outcomes, "offline": row})
     bench.check(label + ": server admission refuses and leaves the row offline", outcomes.get("refused-reach", 0) > before
                 and bool(row) and not row.get("LoadRequestedNode") and not answer.get("screenOpen"), json.dumps({"row": row, "outcomes": outcomes}))
 
@@ -892,6 +908,12 @@ def t_oc_12(bench):
     for f in fixtures:
         bench.cluster.node("node-1", f"/offline-test-production?grid={f['grid']}", "POST")
     bench.record("cache-twenty-bases", fixtures)
+    target_ids = {f["grid"] for f in fixtures}
+    def powered():
+        status = bench.cluster.node("node-1", "/offline-test-measurements")
+        ready = {b["grid"] for b in status["production"] if b["working"] and b["power"] >= .999}
+        return status if target_ids <= ready else None
+    _require(bench, "all twenty native refineries reach electrical working state before measurement", bool(_poll(powered, 60)))
     first_attempts = bench.cluster.node("node-1", "/offline-test-measurements")["attempts"]
     profiles = []
     for f in fixtures:
@@ -911,6 +933,8 @@ def t_oc_12(bench):
     bench.check("only the first base rotates for that formula", measured["attempts"] - first_attempts == 1, json.dumps(measured))
     entry = next(e for e in measured["cache"]["entries"] if iron in e["Key"])
     bench.cluster.node("node-1", "/profiles/cache/clear?key=" + quote(entry["Key"], safe=""), "POST")
+    _require(bench, "authoritative clear reaches the measuring node before reprofiling", bool(_poll(lambda:
+        not any(e["Key"] == entry["Key"] for e in bench.cluster.node("node-1", "/offline-test-measurements")["cache"]["entries"]), 30)))
     node, partition = _owner_of(bench, fixtures[0]["grid"])
     _require(bench, "cleared formula remeasures on the next native profile", bool(_poll(lambda: bench.cluster.node(node,
              f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))

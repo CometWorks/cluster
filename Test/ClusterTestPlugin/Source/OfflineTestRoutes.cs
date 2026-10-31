@@ -8,6 +8,7 @@ using HarmonyLib;
 using Sandbox.Common.ObjectBuilders;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Cube;
+using Sandbox.Game.EntityComponents;
 using Sandbox.Game.World;
 using VRage;
 using VRage.Game;
@@ -62,6 +63,9 @@ internal static class OfflineTestRoutes
                 attempts = OfflineCompensation.Attempted.Count,
                 perBlock = OfflineCompensation.PerBlockRates.Count,
                 cache = OfflineRateCache.Status(),
+                production = MyEntities.GetEntities().OfType<MyCubeGrid>().SelectMany(g => g.GetFatBlocks<MyProductionBlock>())
+                    .Select(b => new { block = b.EntityId, grid = b.CubeGrid.EntityId, working = b.IsWorking,
+                        power = b.ResourceSink.SuppliedRatioByType(MyResourceDistributorComponent.ElectricityId) }).ToArray(),
             })));
         TestRoutes.Add("POST", "/offline-test-rate-fixtures", context =>
         {
@@ -71,9 +75,10 @@ internal static class OfflineTestRoutes
         TestRoutes.Add("POST", "/offline-test-cache", context =>
         {
             string key = TestRoutes.Query(context, "key");
+            int? epoch = int.TryParse(TestRoutes.Query(context, "epoch"), out int supplied) ? supplied : null;
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
             {
-                OfflineRateCache.Measured(key, 1, 1);
+                OfflineRateCache.Measured(key, 1, 1, epoch);
                 return new { key, epoch = OfflineRateCache.Epoch(key) };
             }));
         });
@@ -134,8 +139,8 @@ internal static class OfflineTestRoutes
         else if (mode == "rotor")
         {
             var builder = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_MotorStator>("LargeStator");
-            builder.Min = new SerializableVector3I(2, 0, 0); builder.Owner = grid.BigOwners.First();
-            var rotor = (MyMotorStator)grid.AddBlock(builder, false).FatBlock;
+            builder.Min = new SerializableVector3I(3, 0, 0); builder.Owner = grid.BigOwners.First();
+            var rotor = (MyMotorStator)(grid.AddBlock(builder, false) ?? throw new InvalidOperationException("rotor fixture did not fit")).FatBlock;
             rotor.RecreateTop(builder.Owner, instantBuild: true);
             rotor.TargetVelocityRPM = 1;
         }
@@ -164,12 +169,18 @@ internal static class OfflineTestRoutes
         }
         else if (mode == "observed")
         {
+            for (int x = 2; x <= 13; x++)
+            {
+                var armor = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_CubeBlock>("LargeBlockArmorBlock");
+                armor.Min = new SerializableVector3I(x, -1, 0);
+                grid.AddBlock(armor, false);
+            }
             var solar = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_SolarPanel>("LargeBlockSolarPanel");
             solar.Min = new SerializableVector3I(3, 0, 0);
-            OfflineObservedLogic.Attach(grid.AddBlock(solar, false).FatBlock);
+            OfflineObservedLogic.Attach((grid.AddBlock(solar, false) ?? throw new InvalidOperationException("observed solar fixture did not fit")).FatBlock);
             var generator = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_OxygenGenerator>("LargeBlockOxygenGenerator");
-            generator.Min = new SerializableVector3I(6, 0, 0); generator.UseConveyorSystem = false;
-            var gas = grid.AddBlock(generator, false).FatBlock;
+            generator.Min = new SerializableVector3I(12, 0, 0); generator.UseConveyorSystem = false;
+            var gas = (grid.AddBlock(generator, false) ?? throw new InvalidOperationException("observed generator fixture did not fit")).FatBlock;
             gas.GetInventory().AddItems(1000, MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Ore>("Ice"));
             OfflineObservedLogic.Attach(gas);
             // A scripted reservoir is deliberately opaque, and a scripted cargo invents items.

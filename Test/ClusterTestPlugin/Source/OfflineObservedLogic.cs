@@ -37,7 +37,11 @@ internal sealed class OfflineObservedLogic : MyGameLogicComponent
     internal static void Attach(MyCubeBlock block, bool inventory = false)
     {
         var logic = new OfflineObservedLogic(inventory) { EntityUpdate = true };
-        block.GameLogic = MyCompositeGameLogicComponent.Create(new[] { block.GameLogic, logic }.Where(c => c != null).ToArray(), block);
+        var previous = block.GameLogic;
+        // Remove before composing: assigning the new component otherwise detaches the old
+        // component after Create set its container, leaving vanilla solar logic Entity=null.
+        block.Components.Remove<MyGameLogicComponent>();
+        block.GameLogic = MyCompositeGameLogicComponent.Create(new[] { previous, logic }.Where(c => c != null).ToArray(), block);
         logic.NeedsUpdate |= MyEntityUpdateEnum.EACH_100TH_FRAME;
     }
 }
