@@ -35,11 +35,12 @@ public static class RcTestHarness
 		return new { grid = grid.EntityId };
 	}
 
-	public static object RateFixtures(long ownerId)
+	public static object RateFixtures(long ownerId, int count = 20)
 	{
+		if (count is < 1 or > 20) throw new ArgumentOutOfRangeException(nameof(count));
 		var player = PositionRegistryService.Players.First(p => p.ClientId != 0);
 		Vector3D origin = new(player.X, player.Y, player.Z);
-		return Enumerable.Range(0, 20).Select(i =>
+		return Enumerable.Range(0, count).Select(i =>
 		{
 			Vector3D position = origin + Vector3D.Right * ((i % 5 - 2) * 8000) + Vector3D.Up * (18000 + i / 5 * 8000);
 			var grid = SpawnStation("offline-rate-" + i, position, ownerId, true);

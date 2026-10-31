@@ -70,7 +70,8 @@ internal static class OfflineTestRoutes
         TestRoutes.Add("POST", "/offline-test-rate-fixtures", context =>
         {
             long owner = TestRoutes.Long(context, "owner");
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => RcTestHarness.RateFixtures(owner)));
+            int count = int.TryParse(TestRoutes.Query(context, "count"), out int parsed) ? parsed : 20;
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => RcTestHarness.RateFixtures(owner, count)));
         });
         TestRoutes.Add("POST", "/offline-test-cache", context =>
         {

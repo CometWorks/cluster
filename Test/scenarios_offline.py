@@ -682,11 +682,14 @@ def p2_off_call_deny(bench):
     _denied_call(bench, api, grid, partition, "hostile-owner")
     _put_config(bench, "node-1", {"offline.enabled": "false"})
     identity = _client_identity(bench)
-    fresh = bench.cluster.node("node-1", f"/rc-test-ensure?owner={identity}", "POST")
+    # A fresh target must not overlap the hostile offline row: vanilla spatial co-location
+    # would deliberately wake that row, independently of this denied radio demand.
+    fresh = bench.cluster.node("node-1", f"/offline-test-rate-fixtures?owner={identity}&count=1", "POST")[0]
     grid = fresh["grid"]
     partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 90)
     _require(bench, "friendly no-relay fixture has ownership", bool(partition))
-    bench.cluster.node("node-1", f"/offline-test-options?grid={fresh['relay']}&mode=no-relay", "POST")
+    relay = json.loads((bench.dir / "call-up-fixture.json").read_text())["relay"]
+    bench.cluster.node("node-1", f"/offline-test-options?grid={relay}&mode=no-relay", "POST")
     _put_config(bench, "node-1", {"offline.enabled": "true"})
     _require(bench, "friendly no-relay target reached offline", bool(_poll(lambda: _offline_row(bench, partition), 90)))
     time.sleep(3)
