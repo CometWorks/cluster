@@ -593,6 +593,14 @@ def _applied(bench, node):
     return bench.cluster.node(node, "/offline-test-recovery").get("applied")
 
 
+def _serving_after_restart(bench, node, previous_pid):
+    try:
+        state = bench.cluster.node(node, "/node-state", timeout=3)
+        return state if state.get("pid") != previous_pid and state.get("state") == "Serving" else None
+    except (OSError, ClusterError):
+        return None
+
+
 def _assert_applied_inventory(bench, profiles, applied, grid, label):
     profile = next(p for p in profiles if grid in p["Members"])
     result = next(r for r in applied["compensation"]["results"] if r["Group"] == profile["Group"])
@@ -914,13 +922,18 @@ def t_oc_10(bench):
     profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
     bench.record("changed-mod-original-profiles", profiles)
     _put_config(bench, "node-1", {"offline.enabled": "false"})
+    previous_pid = bench.cluster.node("node-2", "/node-state")["pid"]
     bench.cluster.kill(slot="node-2")
     mod = bench.run_root / "node-2-data/Mods" / PROBE_NAME / "Data/Scripts/ClusterLocalModProbe/Probe.cs"
     original = mod.read_text()
     mod.write_text(original + "\n// native offline content-hash change fixture\n")
     bench.record("changed-mod-bytes", {"file": str(mod), "beforeBytes": len(original.encode()), "afterBytes": mod.stat().st_size})
     bench.cluster.start_node("node-2")
-    bench.cluster.wait_node_log("node-2", "Game ready", timeout=180)
+    # A just-closed game log still has a recent mtime and an old Game-ready line.
+    # Require the replacement process itself to serve before sending test commands.
+    state = _poll(lambda: _serving_after_restart(bench, "node-2", previous_pid), 180)
+    _require(bench, "changed-mod replacement process is actually serving", bool(state))
+    bench.record("changed-mod-replacement", {"previousPid": previous_pid, "state": state})
     bench.cluster.node("node-2", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
     bench.cluster.post(f"/registry/partitions/offline/load?partition={partition}&node=node-2&reason=remote")
     applied = _poll(lambda: _applied(bench, "node-2"), 120)
