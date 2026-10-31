@@ -18,6 +18,8 @@ internal static class OfflineModel
 		if (wakeFrame < profile.SimulatedThrough || maxFrames < 0) throw new InvalidDataException("Offline clock moved backwards");
 		long requested = wakeFrame - profile.SimulatedThrough;
 		long frames = Math.Min(requested, maxFrames);
+		double engineFramesPerClockFrame = profile.ClockFrameSeconds * 60;
+		double duration = frames * engineFramesPerClockFrame;
 		var result = new OfflineResult { Group = profile.Group, FromFrame = profile.SimulatedThrough, Frames = frames,
 			CompensatedTo = wakeFrame, Confidence = profile.Confidence, Capped = requested > frames };
 		var before = Totals(profile);
@@ -31,18 +33,19 @@ internal static class OfflineModel
 		}
 		double elapsed = 0;
 		var inventories = profile.Inventories;
-		while (elapsed + Epsilon < frames)
+		while (true)
 		{
 			if (++result.Events > 2_000_000) throw new InvalidDataException("Offline event budget exceeded; no partial result may be applied");
-			ApplyUpkeep(profile);
 			var choice = profile.Production.Select(p => Select(profile, p)).ToArray();
-			double[] required = profile.Sinks.Select(s => profile.Upkeep.Any(z => z.Block == s.Block && !z.Enabled) ? 0 : s.Required).ToArray();
+			double[] required = profile.Sinks.Select(s => s.Required).ToArray();
+			foreach (var zone in profile.Upkeep.Where(z => z.PowerSink >= 0))
+				required[zone.PowerSink] = zone.Enabled && zone.Exists && zone.ActivationRemainingFrames <= Epsilon ? zone.OperationalPower : zone.IdlePower;
 			for (int i = 0; i < choice.Length; i++)
 			{
 				var production = profile.Production[i];
 				if (production.PowerSink >= 0) required[production.PowerSink] = choice[i] == null ? production.IdlePower : production.OperationalPower;
 			}
-			double angleFrame = profile.SunFrame + (profile.SimulatedThrough - profile.FrozenFrame) + elapsed;
+			double angleFrame = profile.SunFrame + (profile.SimulatedThrough - profile.FrozenFrame) + elapsed / engineFramesPerClockFrame;
 			double[] maximum = profile.Sources.Select(s => Maximum(profile, s, angleFrame)).ToArray();
 			double[] input = new double[required.Length], output = new double[maximum.Length], charging = new double[profile.Storage.Count];
 			bool[] workingStorage = profile.Storage.Select(s => s.Enabled).ToArray();
@@ -64,6 +67,11 @@ internal static class OfflineModel
 				}
 				if (!changed) break;
 			}
+			// Working state and chip renewal use the SAME allocated electricity as production.
+			// Losing power removes the bubble and pauses its paid credit; recovery recreates it
+			// with vanilla's activation delay. Neither transition switches the functional block off.
+			if (UpdateZones(profile, required, input, result)) continue;
+			if (elapsed + Epsilon >= duration) break;
 			var changes = new Dictionary<(int Inventory, string Item), decimal>();
 			var storageRate = new double[profile.Storage.Count];
 			for (int i = 0; i < output.Length; i++)
@@ -78,12 +86,12 @@ internal static class OfflineModel
 				storageRate[i] += charging[i] * store.InputConversion - store.LeakPerFrame;
 				if (store.Kind == "Battery" && storageRate[i] > 0) storageRate[i] *= store.RechargeEfficiency;
 			}
-			double step = frames - elapsed;
+			double step = duration - elapsed;
 			if (profile.SunPeriodFrames > 0 && profile.Sources.Any(s => s.Curve is { Length: > 1 }))
 			{
 				int count = profile.Sources.Where(s => s.Curve is { Length: > 1 }).Max(s => s.Curve.Length);
 				double width = profile.SunPeriodFrames / count;
-				step = Math.Min(step, width - Mod(angleFrame, width));
+				step = Math.Min(step, (width - Mod(angleFrame, width)) * engineFramesPerClockFrame);
 			}
 			for (int i = 0; i < choice.Length; i++)
 			{
@@ -140,8 +148,23 @@ internal static class OfflineModel
 				if (store.Kind == "Battery" && store.Mode != 2 && (store.Full && storageRate[i] < -Epsilon
 					|| !store.Full && store.Capacity - store.Amount < store.MaxInput / 2160)) step = Math.Min(step, 100);
 			}
-			foreach (var zone in profile.Upkeep.Where(z => z.Enabled)) step = Math.Min(step, Math.Max(Epsilon, zone.RemainingFrames));
+			foreach (var zone in profile.Upkeep.Where(z => z.Enabled && z.Exists))
+				step = Math.Min(step, Math.Max(Epsilon, zone.ActivationRemainingFrames > Epsilon ? zone.ActivationRemainingFrames : zone.RemainingFrames));
 			if (!double.IsFinite(step) || step <= 0) throw new InvalidDataException("Offline model made no progress; refusing partial compensation");
+			for (int i = 0; i < output.Length; i++)
+			{
+				var source = profile.Sources[i];
+				if (source.Resource == Electricity) result.ProducerEnergyMWh[source.Block] = result.ProducerEnergyMWh.GetValueOrDefault(source.Block) + output[i] * step / 216000;
+				foreach (var fuel in source.Fuel)
+				{
+					if (!result.ProducerFuelConsumed.TryGetValue(source.Block, out var consumed)) result.ProducerFuelConsumed[source.Block] = consumed = [];
+					consumed[fuel.Item] = consumed.GetValueOrDefault(fuel.Item) + (decimal)(output[i] * step) * fuel.Amount;
+				}
+			}
+			for (int i = 0; i < input.Length; i++)
+				if (profile.Sinks[i].Resource == Electricity) result.ConsumerEnergyMWh[profile.Sinks[i].Block] = result.ConsumerEnergyMWh.GetValueOrDefault(profile.Sinks[i].Block) + input[i] * step / 216000;
+			for (int i = 0; i < charging.Length; i++)
+				if (profile.Storage[i].Resource == Electricity) result.StorageInputEnergyMWh[profile.Storage[i].Block] = result.StorageInputEnergyMWh.GetValueOrDefault(profile.Storage[i].Block) + charging[i] * step / 216000;
 			foreach (var change in changes) Add(inventories[change.Key.Inventory], change.Key.Item, change.Value * (decimal)step);
 			for (int i = 0; i < storageRate.Length; i++)
 			{
@@ -153,11 +176,13 @@ internal static class OfflineModel
 			{
 				var production = profile.Production[i];
 				var recipe = choice[i];
-				if (recipe == null || production.Refinery) continue;
+				if (recipe == null) continue;
+				if (production.Refinery) { result.ProductionUnits[production.Block] = result.ProductionUnits.GetValueOrDefault(production.Block) + recipe.UnitsPerFrame * step; continue; }
 				production.Progress += recipe.UnitsPerFrame * step;
 				if (production.Progress < 1 - Epsilon) continue;
 				if (RecipeTransaction(profile, recipe, 1, true))
 				{
+					result.ProductionUnits[production.Block] = result.ProductionUnits.GetValueOrDefault(production.Block) + 1;
 					var queued = production.Queue.First(q => q.Recipe == recipe.Id && q.Amount >= 1);
 					queued.Amount--;
 					if (production.Repeat) production.Queue.Add(new() { Recipe = queued.Recipe, Amount = 1, ItemId = queued.ItemId });
@@ -166,15 +191,18 @@ internal static class OfflineModel
 				}
 				else production.Progress = Math.Min(production.Progress, 1 - Epsilon);
 			}
-			foreach (var zone in profile.Upkeep.Where(z => z.Enabled)) zone.RemainingFrames -= step;
+			foreach (var zone in profile.Upkeep.Where(z => z.Enabled && z.Exists))
+				if (zone.ActivationRemainingFrames > Epsilon) zone.ActivationRemainingFrames = Math.Max(0, zone.ActivationRemainingFrames - step);
+				else zone.RemainingFrames = Math.Max(0, zone.RemainingFrames - step);
 			elapsed += step;
 		}
-		ApplyUpkeep(profile);
 		profile.SimulatedThrough = wakeFrame; // the cap is deliberately forfeited, never banked for a second wake
 		result.EnergyDelta = profile.Storage.Where(s => s.Kind is "Battery" or "Jump").Sum(s => s.Amount) - energy;
 		foreach (var pair in Totals(profile)) result.ItemDelta[pair.Key] = pair.Value - before.GetValueOrDefault(pair.Key);
 		foreach (var pair in before) if (!result.ItemDelta.ContainsKey(pair.Key)) result.ItemDelta[pair.Key] = -pair.Value;
-		result.DisabledZones = profile.Upkeep.Where(z => !z.Enabled).Select(z => z.Block).ToArray();
+		result.DisabledZones = profile.Upkeep.Where(z => !z.Enabled || !z.Exists || z.ActivationRemainingFrames > Epsilon).Select(z => z.Block).ToArray();
+		result.Zones = profile.Upkeep.Select(z => new OfflineZoneResult { Block = z.Block, Exists = z.Exists, Activating = z.ActivationRemainingFrames > Epsilon,
+			Exhausted = !z.Enabled, RemainingFrames = z.RemainingFrames, ActivationRemainingFrames = z.ActivationRemainingFrames }).ToList();
 		Validate(profile);
 		return result;
 	}
@@ -362,14 +390,29 @@ internal static class OfflineModel
 		if (amount < -0.000001m) throw new InvalidDataException("Offline stock underflow");
 	}
 
-	private static void ApplyUpkeep(OfflineProfile p)
+	private static bool UpdateZones(OfflineProfile p, double[] required, double[] input, OfflineResult result)
 	{
-		foreach (var zone in p.Upkeep.Where(z => z.Enabled && z.RemainingFrames <= Epsilon))
+		bool changed = false;
+		foreach (var zone in p.Upkeep.Where(z => z.Enabled))
 		{
-			if (Available(p, zone.Chips) >= zone.Chips.Amount)
-			{ Transfer(p, zone.Chips, -zone.Chips.Amount); zone.RemainingFrames += zone.PeriodFrames; }
-			else { zone.Enabled = false; zone.RemainingFrames = 0; }
+			bool powered = zone.PowerSink < 0 || input[zone.PowerSink] + Epsilon >= required[zone.PowerSink];
+			if (!powered && zone.Exists) { zone.Exists = false; zone.ActivationRemainingFrames = 0; changed = true; }
+			else if (powered && !zone.Exists && zone.RemainingFrames > Epsilon)
+			{
+				zone.Exists = true; zone.ActivationRemainingFrames = Math.Max(100, zone.ActivationFrames); changed = true;
+			}
+			else if (powered && zone.Exists && zone.ActivationRemainingFrames <= Epsilon && zone.RemainingFrames <= Epsilon)
+			{
+				if (Available(p, zone.Chips) >= zone.Chips.Amount)
+				{
+					Transfer(p, zone.Chips, -zone.Chips.Amount); zone.RemainingFrames = zone.PeriodFrames;
+					result.UpkeepConsumed[zone.Block] = result.UpkeepConsumed.GetValueOrDefault(zone.Block) + zone.Chips.Amount;
+				}
+				else { zone.Enabled = false; zone.Exists = false; zone.RemainingFrames = 0; }
+				changed = true;
+			}
 		}
+		return changed;
 	}
 
 	private static Dictionary<string, decimal> Totals(OfflineProfile p) => p.Inventories.SelectMany(i => i.Stacks).GroupBy(s => s.Item).ToDictionary(g => g.Key, g => g.Sum(s => s.Amount));
@@ -378,6 +421,7 @@ internal static class OfflineModel
 	internal static void Validate(OfflineProfile p)
 	{
 		if (p.Schema != OfflineProfile.CurrentSchema || p.SimulatedThrough < p.FrozenFrame || p.FrozenFrame < 0
+			|| !double.IsFinite(p.ClockFrameSeconds) || p.ClockFrameSeconds <= 0 || p.ClockFrameSeconds > 1
 			|| !double.IsFinite(p.SunFrame) || !double.IsFinite(p.SunPeriodFrames) || p.SunPeriodFrames < 0) throw new InvalidDataException("Invalid offline profile clock/schema");
 		foreach (var item in p.Items.Values) if (item.Volume < 0 || item.Mass < 0) throw new InvalidDataException("Invalid item dimensions");
 		for (int i = 0; i < p.Inventories.Count; i++)
@@ -409,6 +453,10 @@ internal static class OfflineModel
 			foreach (var recipe in production.Recipes) if (!double.IsFinite(recipe.UnitsPerFrame) || recipe.UnitsPerFrame <= 0) throw new InvalidDataException("Invalid production throughput");
 			if (production.Queue.Any(q => q.Amount < 0)) throw new InvalidDataException("Invalid production queue");
 		}
-		foreach (var zone in p.Upkeep) if (!double.IsFinite(zone.PeriodFrames) || zone.PeriodFrames <= 0 || !double.IsFinite(zone.RemainingFrames)) throw new InvalidDataException("Invalid upkeep period");
+		foreach (var zone in p.Upkeep)
+			if (!double.IsFinite(zone.PeriodFrames) || zone.PeriodFrames <= 0 || !double.IsFinite(zone.RemainingFrames) || zone.RemainingFrames < 0
+				|| zone.PowerSink < -1 || zone.PowerSink >= p.Sinks.Count || !double.IsFinite(zone.ActivationFrames) || zone.ActivationFrames < 0
+				|| !double.IsFinite(zone.ActivationRemainingFrames) || zone.ActivationRemainingFrames < 0 || !double.IsFinite(zone.OperationalPower) || zone.OperationalPower < 0
+				|| !double.IsFinite(zone.IdlePower) || zone.IdlePower < 0) throw new InvalidDataException("Invalid upkeep state");
 	}
 }

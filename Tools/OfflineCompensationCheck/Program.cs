@@ -2,6 +2,7 @@ using ClusterPlugin;
 using System.Text.Json;
 
 if (args.Length == 2 && args[0] == "--review") { ReviewChecks.Run(args[1]); return; }
+if (args.Length == 1 && args[0] == "--power-budget") { PowerBudgetChecks.Run(); return; }
 
 if (args.Length == 3 && args[0] is "--save-container" or "--solar-pivots")
 {
@@ -37,7 +38,9 @@ void Check(bool condition, string why) { if (!condition) throw new Exception(why
 void Near(double actual, double expected, string why, double tolerance = 1e-6) => Check(Math.Abs(actual - expected) <= tolerance, $"{why}: {actual} != {expected}");
 OfflineProfile Clone(OfflineProfile p) => JsonSerializer.Deserialize<OfflineProfile>(JsonSerializer.Serialize(p, OfflineProfile.Json), OfflineProfile.Json);
 const string E = OfflineModel.Electricity;
-OfflineProfile Base() => new() { Group = 1, Members = [1], FrozenFrame = 100, SimulatedThrough = 100 };
+// These detached cases express their durations in engine frames; captured game profiles use
+// 16 ms authority-clock units. The native live differential checks that conversion separately.
+OfflineProfile Base() => new() { Group = 1, Members = [1], FrozenFrame = 100, SimulatedThrough = 100, ClockFrameSeconds = 1.0 / 60 };
 OfflineSource Reservoir(OfflineProfile p, double amount, double capacity, double output, string kind = "Battery", string resource = E, int priority = 2)
 {
     int index = p.Storage.Count;

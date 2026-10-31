@@ -270,15 +270,25 @@ internal static partial class OfflineCompensation
 			var block = (MyObjectBuilder_FunctionalBlock)blocks[zone.Block];
 			var component = block.ComponentContainer?.Components.Select(c => c.Component).OfType<MyObjectBuilder_SafeZoneComponent>().FirstOrDefault()
 				?? throw new InvalidDataException("Safe zone component missing");
+			// Prepare every parse/serialization before committing any builder writes. Removing a
+			// bubble retains its settings/rights and the functional block's Enabled switch, like
+			// vanilla power loss/chip exhaustion; paid credit can reactivate after power returns.
+			string carried = BlockBuilderEntry.Read(block, BlockSafeZones.Key);
+			var bubble = carried == null ? null : BlockSafeZones.Parse(carried);
+			var settings = component.SafeZoneOb ?? bubble;
+			var retained = settings?.Clone() as MyObjectBuilder_SafeZone;
+			if (retained != null) retained.Enabled = false;
+			bool exists = zone.Enabled && zone.Exists;
+			if (bubble != null) bubble.Enabled = exists && zone.ActivationRemainingFrames <= 0;
+			string nextEntry = exists && bubble != null ? BlockSafeZones.Serialize(bubble) : null;
 			writes.Add(() =>
 			{
 				component.UpkeepTime = zone.RemainingFrames * (1000.0 / 60);
-				if (!zone.Enabled)
-				{
-					block.Enabled = false; component.SafeZoneOb = null;
-					((ObjectBuilders.SafeZone.MyObjectBuilder_SafeZoneBlock)block).SafeZoneId = 0;
-					if (BlockBuilderEntry.Read(block, BlockSafeZones.Key) != null) BlockBuilderEntry.Write(block, BlockSafeZones.Key, null);
-				}
+				component.Activating = exists && zone.ActivationRemainingFrames > 0;
+				component.ActivationTime = checked((long)Math.Ceiling(zone.ActivationRemainingFrames * (1000.0 / 60)));
+				component.SafeZoneOb = retained;
+				if (!exists) ((ObjectBuilders.SafeZone.MyObjectBuilder_SafeZoneBlock)block).SafeZoneId = 0;
+				BlockBuilderEntry.Write(block, BlockSafeZones.Key, nextEntry);
 			});
 		}
 		foreach (var write in writes) write();

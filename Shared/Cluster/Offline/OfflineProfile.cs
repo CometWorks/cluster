@@ -15,6 +15,9 @@ internal sealed class OfflineProfile
 	public string ContentHash;
 	public string[] Definitions = [];
 	public long FrozenFrame, SimulatedThrough;
+	// Existing captured clocks use floor(authority milliseconds / 16). Resource/timer rates
+	// use native 60 Hz engine frames; keep the conversion explicit at the model boundary.
+	public double ClockFrameSeconds = 0.016;
 	public double SunFrame, SunPeriodFrames;
 	public bool Creative, Simplified;
 	public string Confidence = "Exact";
@@ -112,6 +115,9 @@ internal sealed class OfflineUpkeep
 	public long Block;
 	public double RemainingFrames, PeriodFrames;
 	public bool Enabled;
+	public int PowerSink = -1;
+	public bool Exists = true;
+	public double OperationalPower, IdlePower, ActivationFrames, ActivationRemainingFrames;
 	public OfflineMaterial Chips;
 }
 internal sealed class OfflineResult
@@ -122,7 +128,19 @@ internal sealed class OfflineResult
 	public string Confidence, Skipped;
 	public double EnergyDelta;
 	public Dictionary<string, decimal> ItemDelta = [];
+	public Dictionary<long, double> ProducerEnergyMWh = [], ConsumerEnergyMWh = [], StorageInputEnergyMWh = [];
+	public Dictionary<long, Dictionary<string, decimal>> ProducerFuelConsumed = [];
+	public Dictionary<long, double> ProductionUnits = [];
+	public Dictionary<long, decimal> UpkeepConsumed = [];
+	public List<OfflineZoneResult> Zones = [];
 	public long[] DisabledZones = [];
+}
+
+internal sealed class OfflineZoneResult
+{
+	public long Block;
+	public bool Exists, Activating, Exhausted;
+	public double RemainingFrames, ActivationRemainingFrames;
 }
 
 internal sealed class OfflineObservation

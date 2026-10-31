@@ -15,6 +15,7 @@ using Sandbox.Game.GameSystems.Conveyors;
 using Sandbox.Game.World;
 using SpaceEngineers.Game.Entities.Blocks;
 using SpaceEngineers.Game.Entities.Blocks.SafeZone;
+using SpaceEngineers.Game.EntityComponents.Blocks;
 using VRage;
 using VRage.Game;
 using VRage.Game.Entity;
@@ -301,8 +302,21 @@ internal static partial class OfflineCompensation
 			{
 				var builder = zone.GetObjectBuilderCubeBlock();
 				var component = builder.ComponentContainer?.Components.Select(c => c.Component).OfType<MyObjectBuilder_SafeZoneComponent>().FirstOrDefault();
-				if (component != null && enabled && ((ObjectBuilders.SafeZone.MyObjectBuilder_SafeZoneBlock)builder).SafeZoneId != 0 && !component.Activating) p.Upkeep.Add(new() { Block = block.EntityId, Enabled = enabled, RemainingFrames = Math.Max(0, component.UpkeepTime * 60 / 1000),
-					PeriodFrames = zone.Definition.SafeZoneUpkeepTimeM * 3600, Chips = Material(block, new MyDefinitionId(typeof(MyObjectBuilder_Component), "ZoneChip"), zone.Definition.SafeZoneUpkeep, zone.GetInventory(), false) });
+				var manager = zone.Components.Get<MySafeZoneComponent>();
+				if (component != null && manager != null && enabled && ((ObjectBuilders.SafeZone.MyObjectBuilder_SafeZoneBlock)builder).SafeZoneId != 0)
+				{
+					bool active = manager.IsSafeZoneEnabled();
+					if (active || component.Activating)
+						p.Upkeep.Add(new() { Block = block.EntityId, Enabled = true, Exists = true, PowerSink = powerSink,
+							RemainingFrames = Math.Max(0, (component.Activating ? manager.m_timeLeft.TotalMilliseconds : component.UpkeepTime) * 60 / 1000), PeriodFrames = zone.Definition.SafeZoneUpkeepTimeM * 3600,
+							// The active sink is the engine's shape/radius calculation, in MW. During
+							// activation the engine exposes only its standby draw; ask its own manager
+							// for the eventual operational demand without changing the live zone.
+							OperationalPower = active && powerSink >= 0 ? p.Sinks[powerSink].Required : manager.GetMaxPowerDrain(), IdlePower = 0.000001,
+							ActivationFrames = zone.Definition.SafeZoneActivationTimeS * 60,
+							ActivationRemainingFrames = component.Activating ? Math.Max(0, component.ActivationTime * 60 / 1000) : 0,
+							Chips = Material(block, new MyDefinitionId(typeof(MyObjectBuilder_Component), "ZoneChip"), zone.Definition.SafeZoneUpkeep, zone.GetInventory(), false) });
+				}
 			}
 			// Known-class capture above supplies stock/fuel/recipe semantics. It must not replace
 			// an observed mod rate with the final instantaneous sample or the vanilla definition.

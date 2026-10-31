@@ -5,7 +5,7 @@ internal static class ReviewChecks
     internal static void Run(string selected)
     {
         const string E = OfflineModel.Electricity;
-        OfflineProfile P() => new() { Group = 1, Members = [1], FrozenFrame = 100, SimulatedThrough = 100 };
+        OfflineProfile P() => new() { Group = 1, Members = [1], FrozenFrame = 100, SimulatedThrough = 100, ClockFrameSeconds = 1.0 / 60 };
         OfflineMaterial M(string item, int inventory) => new() { Item = item, Amount = 1, Inventories = [inventory] };
         void Check(bool ok, string message) { if (!ok) throw new Exception(message); Console.WriteLine(message); }
         if (selected is "R1" or "all")
