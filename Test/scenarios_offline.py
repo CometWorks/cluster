@@ -1281,10 +1281,13 @@ def _zone_reference(bench, grid, partition, label, seconds=30, blocked=False, de
         if blocked:
             # ComputeAmountThatFits rounds to MyFixedPoint: a nominally full output can
             # retain sub-unit headroom. Bound that last partial batch by one native tick,
-            # and require standby electricity for the remainder of the interval.
-            extra = result["ConsumerEnergyMWh"][str(production["Block"])] - production["IdlePower"] * result["Frames"] * .016 / 3600
+            # and compare billing separately from throughput. Native assemblers
+            # with a queue retain working draw when missing input/output room.
+            queued = not production["Refinery"] and bool(production["Queue"])
+            baseline = production["OperationalPower"] if queued else production["IdlePower"]
+            extra = result["ConsumerEnergyMWh"][str(production["Block"])] - baseline * result["Frames"] * .016 / 3600
             tick_energy = (production["OperationalPower"] - production["IdlePower"]) * production["TickFrames"] / 216000
-            bench.check(label + ": blocked/empty production settles to standby within one engine tick",
+            bench.check(label + ": blocked/empty throughput and native queued-versus-idle power agree",
                         result["ProductionUnits"].get(str(production["Block"]), 0) <= benchmark["UnitsPerFrame"] * production["TickFrames"] + .00001
                         and -.00000001 <= extra <= tick_energy + .00000001,
                         json.dumps({"extraMWh": extra, "oneTickMWh": tick_energy, "productionUnits": result["ProductionUnits"].get(str(production["Block"]), 0)}))

@@ -50,12 +50,13 @@ internal static class PowerBudgetChecks
             Near(p.Upkeep[0].RemainingFrames, 40, "darkness and activation do not spend paid credit");
             Check(!p.Upkeep[0].Exists && !r.Zones.Single().Exhausted, "renewable loss removes bubble without exhausting its remaining credit");
         }
-        // One shared budget pays zone + production, then only standby after each stops.
+        // Refinery input exhaustion selects standby; an assembler's remaining queue
+        // retains working draw even though missing input stops item completion.
         foreach (bool refinery in new[] { true, false })
         {
             var p = Base(chips: 0); Reactor(p); Production(p, refinery, stock: refinery ? 10 : 2);
             var original = Clone(p); var r = Simulate(p);
-            double working = refinery ? 10 : 20;
+            double working = refinery ? 10 : 600;
             double expected = (5 * 60 + 2 * working + .2 * (600 - working) + .000001 * 540) / 216000;
             Near(10 - Stock(p, "fuel"), expected, "delivered demand debits reactor fuel, never maximum capacity");
             Near(r.ProducerEnergyMWh.Values.Sum(), r.ConsumerEnergyMWh.Values.Sum() + r.StorageInputEnergyMWh.Values.Sum(), "shared delivered energy conserved");

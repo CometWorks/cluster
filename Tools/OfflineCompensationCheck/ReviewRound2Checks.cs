@@ -122,5 +122,28 @@ foreach (int mode in new[] { 0, 1, 2 })
         "native forced discharge suppresses unused solar/reactor rather than curtailing the battery");
 }
 
+// Native MyAssembler.UpdateProduction requests working draw while a queue exists,
+// even when ingredients or output capacity prevent completing any item.
+{
+    var p = new OfflineProfile { ClockFrameSeconds=1.0/60 };
+    p.Items["iron"] = new() { Mass=1, Volume=1 };
+    p.Inventories.Add(new() { MaxMass=10, MaxVolume=10 });
+    p.Sinks.Add(new() { Block=1, Resource=E, Required=.5 });
+    p.Sources.Add(new() { Block=2, Resource=E, Maximum=1 });
+    p.Production.Add(new() { Block=1, Enabled=true, PowerSink=0, IdlePower=.001, OperationalPower=.5,
+        Recipes=[new() { Id="plate", UnitsPerFrame=1, Inputs=[new() { Item="iron", Amount=1, Inventories=[0] }] }],
+        Queue=[new() { Recipe="plate", Amount=10 }] });
+    var result=OfflineModel.Simulate(p,60,1000);
+    Check(Math.Abs(result.ConsumerEnergyMWh[1]-.5/3600)<1e-12 && result.ProductionUnits.Count==0,
+        "native queued missing-input assembler consumes working power without inventing production");
+    p.Production[0].Queue.Clear();
+    result=OfflineModel.Simulate(p,120,1000);
+    Check(Math.Abs(result.ConsumerEnergyMWh[1]-.001/3600)<1e-12,
+        "native empty-queue assembler retains standby draw");
+    p.Production[0].Enabled=false;
+    result=OfflineModel.Simulate(p,180,1000);
+    Check(result.ConsumerEnergyMWh[1]==0, "native disabled production requests no power");
+}
+
 }
 }

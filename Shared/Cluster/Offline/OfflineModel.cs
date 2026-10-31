@@ -45,7 +45,10 @@ internal static class OfflineModel
 			for (int i = 0; i < choice.Length; i++)
 			{
 				var production = profile.Production[i];
-				if (production.PowerSink >= 0) required[production.PowerSink] = choice[i] == null ? production.IdlePower : production.OperationalPower;
+				// MyAssembler.UpdateProduction requests working power whenever its queue
+				// exists, including MissingItems/InventoryFull. Throughput is a separate gate.
+				bool wantsPower = production.Enabled && (production.Refinery ? choice[i] != null : production.Queue.Count > 0);
+				if (production.PowerSink >= 0) required[production.PowerSink] = !production.Enabled ? 0 : wantsPower ? production.OperationalPower : production.IdlePower;
 			}
 			double angleFrame = profile.SunFrame + (profile.SimulatedThrough - profile.FrozenFrame) + elapsed / engineFramesPerClockFrame;
 			double[] maximum = profile.Sources.Select(s => Maximum(profile, s, angleFrame)).ToArray();
