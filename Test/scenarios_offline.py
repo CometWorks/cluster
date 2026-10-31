@@ -544,6 +544,7 @@ def t_oc_07(bench):
     blocks = next(g["blocks"] for g in applied["builders"] if g["grid"] == grid)
     bench.check("PB Storage remains frozen before engine instantiation", any(b.get("storage") == "offline-storage-sentinel" for b in blocks))
     result = next(r for r in applied["compensation"]["results"] if r["Group"] == grid)
+    bench.check("actual shared wake retains Frozen confidence", result["Confidence"] == "Frozen", json.dumps(result))
     bench.check("modeled battery compensates beside unknowns", not result.get("Skipped") and result["EnergyDelta"] < 0, json.dumps(result))
     api.close_remote_terminal()
 

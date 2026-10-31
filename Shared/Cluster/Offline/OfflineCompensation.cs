@@ -49,8 +49,13 @@ internal static partial class OfflineCompensation
 				if (profile.ContentHash != ContentHash(profile.Definitions)) throw new InvalidDataException("content mismatch");
 				// A clone keeps diagnostics and dry-run repeatable, even if application validation refuses.
 				var model = JsonSerializer.Deserialize<OfflineProfile>(JsonSerializer.Serialize(profile, OfflineProfile.Json), OfflineProfile.Json);
-				double period = MySession.Static.Settings.EnableSunRotation ? MySession.Static.Settings.SunRotationIntervalMinutes * 60 * 1000 / 16.0 : 0;
-				if (model.SunPeriodFrames != period) { model.SunPeriodFrames = period; model.Confidence = "Approximate"; }
+				// Match capture's double arithmetic: float intermediate rounding is not a settings change.
+				double period = MySession.Static.Settings.EnableSunRotation ? MySession.Static.Settings.SunRotationIntervalMinutes * 60000.0 / 16 : 0;
+				if (model.SunPeriodFrames != period)
+				{
+					model.SunPeriodFrames = period;
+					if (model.Confidence == "Exact") model.Confidence = "Approximate";
+				}
 				OfflineResult result = OfflineModel.Simulate(model, wake, MaxFrames);
 				Commit(profile, model, entities);
 				Results[profile.Group] = result;
