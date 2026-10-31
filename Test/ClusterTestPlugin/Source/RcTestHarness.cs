@@ -38,7 +38,8 @@ public static class RcTestHarness
 	public static object RateFixtures(long ownerId, int count = 20)
 	{
 		if (count is < 1 or > 20) throw new ArgumentOutOfRangeException(nameof(count));
-		var player = PositionRegistryService.Players.First(p => p.ClientId != 0);
+		var player = PositionRegistryService.Players.FirstOrDefault(p => p.ClientId != 0 && p.IdentityId == ownerId)
+			?? PositionRegistryService.Players.First(p => p.ClientId != 0);
 		Vector3D origin = new(player.X, player.Y, player.Z);
 		return Enumerable.Range(0, count).Select(i =>
 		{
@@ -60,7 +61,8 @@ public static class RcTestHarness
 	{
 		if (ownerId == 0) throw new ArgumentOutOfRangeException(nameof(ownerId),
 			"A remote control owned by identity 0 fails the ownership validation of every use request");
-		ClusterPlayerPosition anyPlayer = PositionRegistryService.Players.FirstOrDefault(player => player.ClientId != 0)
+		ClusterPlayerPosition anyPlayer = PositionRegistryService.Players.FirstOrDefault(player => player.ClientId != 0 && player.IdentityId == ownerId)
+			?? PositionRegistryService.Players.FirstOrDefault(player => player.ClientId != 0)
 			?? throw new InvalidOperationException("No cluster player position to anchor the remote control grid");
 		Vector3D reference = new(anyPlayer.X, anyPlayer.Y, anyPlayer.Z);
 		MyPlanet planet = MyGamePruningStructure.GetClosestPlanet(reference);

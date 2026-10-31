@@ -1207,9 +1207,9 @@ def t_oc_12(bench):
     target_ids = {f["grid"] for f in fixtures}
     def powered():
         status = bench.cluster.node("node-1", "/offline-test-measurements")
-        ready = {b["grid"] for b in status["production"] if b["working"] and b["power"] >= .999}
+        ready = {b["grid"] for b in status["production"] if b["working"] and b["power"] >= .999 and b["producing"] and b["output"] > 0}
         return status if target_ids <= ready else None
-    _require(bench, "all twenty native refineries reach electrical working state before measurement", bool(_poll(powered, 60)))
+    _require(bench, "all twenty native refineries produced before measuring a complete timer tick", bool(_poll(powered, 60)))
     first_attempts = bench.cluster.node("node-1", "/offline-test-measurements")["attempts"]
     profiles = []
     for f in fixtures:

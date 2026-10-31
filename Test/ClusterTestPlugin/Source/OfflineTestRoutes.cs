@@ -99,7 +99,8 @@ internal static class OfflineTestRoutes
                 perBlock = OfflineCompensation.PerBlockRates.Count,
                 cache = OfflineRateCache.Status(),
                 production = MyEntities.GetEntities().OfType<MyCubeGrid>().SelectMany(g => g.GetFatBlocks<MyProductionBlock>())
-                    .Select(b => new { block = b.EntityId, grid = b.CubeGrid.EntityId, working = b.IsWorking,
+                    .Select(b => new { block = b.EntityId, grid = b.CubeGrid.EntityId, working = b.IsWorking, producing = b.IsProducing,
+                        output = b.OutputInventory.GetItems().Sum(i => (decimal)i.Amount),
                         power = b.ResourceSink.SuppliedRatioByType(MyResourceDistributorComponent.ElectricityId) }).ToArray(),
             })));
         TestRoutes.Add("POST", "/offline-test-rate-fixtures", context =>
