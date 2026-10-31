@@ -757,8 +757,15 @@ def p2_off_call_laser(bench):
         return {"source": s, "target": t} if s.get("state") == "connected" and t.get("state") == "connected" else None
     enable("node-2")
     _require(bench, "laser id target is durably offline", bool(_poll(lambda: _offline_row(bench, partition), 90)))
-    bench.record("laser-id-request", bench.cluster.node("node-1", f"/igc-test-laser-connect?grid={source_grid}&target={target['laser']}", "POST"))
+    # Deliberately do not wait for the authority's next antenna publish: the durable
+    # offline row can precede it. An accepted explicit intent must survive that race.
+    bench.record("laser-graph-at-request", bench.cluster.node("node-1", "/antenna-graph"))
+    requested = bench.cluster.node("node-1", f"/igc-test-laser-connect?grid={source_grid}&target={target['laser']}", "POST")
+    bench.record("laser-id-request", requested)
+    _require(bench, "the real laser accepts the explicit id connection", requested.get("requested") is True)
     paired = _poll(connected, 150, 2)
+    bench.record("laser-graph-after-id", bench.cluster.node("node-1", "/antenna-graph"))
+    bench.record("laser-source-after-id", bench.cluster.node("node-1", f"/igc-test-laser-status?grid={source_grid}"))
     _require(bench, "id wake loads onto source node and establishes both real lasers", bool(paired) and _owner_of(bench, target_grid) == ("node-1", partition))
     bench.record("laser-id-connected", paired)
     enable("node-1")
