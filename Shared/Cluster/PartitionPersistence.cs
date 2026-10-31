@@ -353,7 +353,9 @@ internal sealed partial class PartitionPersistence
 				foreach (ulong client in m_partitions.ClientPartitions(m_partitions.Evaluate()).Select(x => x.Client).Distinct())
 					MyMultiplayer.Static.DisconnectClient(client);
 		}
-		while (m_recoveries.TryDequeue(out RecoveryClaim recovery))
+		// A readiness-deferred claim stays pending until a later update. Bound this
+		// pass to its original queue so requeueing cannot spin on the game thread.
+		for (int pending = m_recoveries.Count; pending > 0 && m_recoveries.TryDequeue(out RecoveryClaim recovery); pending--)
 		{
 			// T-0297: the heartbeat dropped this claim (the registry no longer holds it for this node at this
 			// generation) while it waited in the queue. Loading it would duplicate the new claimant's load.
@@ -364,11 +366,16 @@ internal sealed partial class PartitionPersistence
 					+ recovery.Generation + " was lost before its load (T-0297)");
 				continue;
 			}
+			if (recovery.WaitForOfflineReadiness && !OfflineLoadReady)
+			{
+				m_recoveries.Enqueue(recovery);
+				continue;
+			}
 			Volatile.Write(ref m_recoveryLoadInFlight, 1);
 			try
 			{
 				int saved = LoadRecovery(recovery);
-				if (saved == DeferredLoad) continue;   // #1286: back on the replication thread for a census check, still claimed
+				if (saved == DeferredLoad) continue;   // still claimed in its readiness or census queue
 				lock (m_owned) m_owned[recovery.Partition] = recovery.Generation;
 				m_claimedPending.TryRemove(recovery.Partition, out _);
 				lock (m_recoveryFailureCounts) m_recoveryFailureCounts.Remove(recovery.Partition);
@@ -2461,8 +2468,10 @@ internal sealed partial class PartitionPersistence
 	// (see Update). 0 = off.
 	private static readonly int DiscardDelayMs =
 		int.TryParse(Environment.GetEnvironmentVariable("CLUSTER_TEST_DISCARD_DELAY_MS"), out int discardDelay) && discardDelay > 0 ? discardDelay : 0;
-	// LoadRecovery's answer for a load handed back to the replication thread (m_censusChecks) instead of loaded.
+	// A load requeued for offline readiness or handed to the replication thread for census checks.
 	private const int DeferredLoad = -1;
+	private static bool OfflineLoadReady => !ClusterConfig.GetBool("offline.compensate") || ClusterRuntime.HasAuthorityClock && OfflineCompensation.ContentReady
+		&& SessionClockPatch.AppliedOffsetMilliseconds == TimeOfDayService.OffsetMilliseconds;
 
 	private bool BelowRecoveryCapacity()
 	{
@@ -3758,8 +3767,14 @@ internal sealed partial class PartitionPersistence
 					offlineProfiles.Add((profile, selected.Select(e => e.EntityId).ToHashSet()));
 		}
 		// Never permanently drop a profile by applying against a boot-local or not-yet-offset clock.
-		if (offlineProfiles.Count != 0 && ClusterConfig.GetBool("offline.compensate") && (!ClusterRuntime.HasAuthorityClock || !OfflineCompensation.ContentReady
-			|| SessionClockPatch.AppliedOffsetMilliseconds != TimeOfDayService.OffsetMilliseconds)) return DeferredLoad;
+		if (offlineProfiles.Count != 0 && !OfflineLoadReady)
+		{
+			// Content hashing is asynchronous on a fresh modded node. No census worker
+			// owns this deferral: retain the claim ourselves, without repeatedly reading
+			// or deserializing its immutable Final while the clock/content is pending.
+			m_recoveries.Enqueue(recovery with { WaitForOfflineReadiness = true });
+			return DeferredLoad;
+		}
 		int saved = entities.Count;
 		if (StaleCopyCheck && recovery.Census != null && DeferForCensusCheck(recovery, entities)) return DeferredLoad;
 		if (recovery.LiveElsewhere is { Count: > 0 })
@@ -5170,6 +5185,7 @@ internal sealed partial class PartitionPersistence
 		string[] Locations, HashSet<long> EntityIds, Dictionary<string, (string Node, string Endpoint)> HolderProxies = null);
 	internal sealed record RecoveryClaim(ulong Partition, uint Generation, RecoveryFile[] Files, RecoveryFile[] Fallbacks)
 	{
+		public bool WaitForOfflineReadiness { get; init; }
 		/// <summary>
 		/// Entity ids live on OTHER nodes at claim time. A recovered save may carry an entity whose
 		/// newer incarnation rides a different partition id on another node - the per-partition-id
