@@ -76,6 +76,9 @@ internal sealed class OfflineSource
 	// Inventory material expended by one resource-unit of output for one frame.
 	public List<OfflineMaterial> Fuel = [];
 	public int PowerSink = -1;
+	// A gas producer's one electrical sink follows delivered gas, shared by all
+	// its output ports. -1 preserves the captured constant demand of older profiles.
+	public double IdlePower = -1, OperationalPower;
 }
 internal sealed class OfflineStorage
 {

@@ -221,13 +221,21 @@ internal static partial class OfflineCompensation
 			{
 				var d = (MyOxygenGeneratorDefinition)block.BlockDefinition;
 				var ice = new MyDefinitionId(typeof(MyObjectBuilder_Ore), "Ice");
+				bool gasEnabled = enabled && (MySession.Static.Settings.EnableOxygen || !d.IsOxygenOnly);
 				foreach (var port in sources)
 				{
 					var gas = d.ProducedGases.First(g => Resource(g.Id, block) == port.Resource);
-					port.Kind = "Generator"; port.PowerSink = powerSink; port.Maximum = enabled ? d.IceConsumptionPerSecond * gas.IceToGasRatio : 0;
+					port.Kind = "Generator"; port.PowerSink = powerSink;
+					port.Maximum = gasEnabled && (MySession.Static.Settings.EnableOxygen || gas.Id != MyResourceDistributorComponent.OxygenId)
+						? d.IceConsumptionPerSecond * gas.IceToGasRatio * generator.m_productionCapacityMultiplier : 0;
+					if (!observe)
+					{
+						port.IdlePower = gasEnabled ? d.StandbyPowerConsumption * generator.m_powerConsumptionMultiplier : 0;
+						port.OperationalPower = gasEnabled ? d.OperationalPowerConsumption * generator.m_powerConsumptionMultiplier : 0;
+					}
 					port.Fuel.Add(Material(block, ice, (decimal)(1.0 / gas.IceToGasRatio / 60), generator.GetInventory(), false));
 				}
-				if (powerSink >= 0 && enabled) p.Sinks[powerSink].Required = d.OperationalPowerConsumption;
+				if (powerSink >= 0 && !observe) p.Sinks[powerSink].Required = gasEnabled ? d.OperationalPowerConsumption * generator.m_powerConsumptionMultiplier : 0;
 			}
 			else if (block is MyJumpDrive jump)
 			{

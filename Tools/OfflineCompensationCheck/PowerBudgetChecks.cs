@@ -96,6 +96,33 @@ internal static class PowerBudgetChecks
             Near(p.Storage[0].Amount, 2 * 600.0 / 216000 * .8, "battery receives its actual charge with recharge loss");
             Near(r.ProducerEnergyMWh.Values.Sum(), r.ConsumerEnergyMWh.Values.Sum() + r.StorageInputEnergyMWh.Values.Sum(), "production, zone and battery use the same budget");
         }
+        // Both gas outputs share the generator's electrical sink. Empty/full gas
+        // demand costs only standby; working gas pays operational draw once.
+        foreach (bool demand in new[] { false, true })
+        {
+            var p = Base(); p.Upkeep.Clear(); p.Sinks.Clear(); Reactor(p);
+            p.Sinks.Add(new() { Block = 60, Resource = OfflineModel.Electricity, Required = .5 });
+            foreach (string gas in new[] { "oxygen", "hydrogen" })
+            {
+                p.Sources.Add(new() { Block = 60, Resource = gas, Maximum = 10, PowerSink = 0, IdlePower = .001, OperationalPower = .5 });
+                if (demand) p.Sinks.Add(new() { Block = 70, Resource = gas, Required = 1 });
+            }
+            var r = Simulate(p);
+            Near(r.ConsumerEnergyMWh[60], (demand ? .5 : .001) * 600 / 216000, "gas producer uses shared working/standby power");
+            Near(10 - Stock(p, "fuel"), (demand ? .5 : .001) * 600 / 216000, "reactor fuel pays the one actual gas producer sink");
+        }
+        {
+            var p = Base(); p.Upkeep.Clear(); p.Sinks.Clear();
+            p.Sources.Add(new() { Block = 20, Resource = OfflineModel.Electricity, Maximum = .1 });
+            p.Sinks.Add(new() { Block = 60, Resource = OfflineModel.Electricity, Required = .5 });
+            p.Sinks.Add(new() { Block = 70, Resource = "hydrogen", Required = 1 });
+            p.Inventories[0].Stacks.Add(new() { Item = "ore", Amount = 10 });
+            p.Sources.Add(new() { Block = 60, Resource = "hydrogen", Maximum = 10, PowerSink = 0, IdlePower = .001, OperationalPower = .5,
+                Fuel = [M("ore", 1m / 60)] });
+            var r = Simulate(p);
+            Near(r.ConsumerEnergyMWh[60], .001 * 600 / 216000, "insufficient working power falls back to standby");
+            Near(Stock(p, "ore"), 10, "gas cannot bootstrap itself from insufficient electrical supply");
+        }
         // A captured authority hour is 225000 16-ms units, or 216000 native engine frames.
         {
             var p = Base(credit: 1000000); p.ClockFrameSeconds = .016; Reactor(p);

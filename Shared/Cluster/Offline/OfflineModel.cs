@@ -33,6 +33,8 @@ internal static class OfflineModel
 		}
 		double elapsed = 0;
 		var inventories = profile.Inventories;
+		var poweredSources = profile.Sources.Select((source, index) => (Source: source, Index: index))
+			.Where(s => s.Source.PowerSink >= 0 && s.Source.IdlePower >= 0).GroupBy(s => s.Source.PowerSink).ToArray();
 		while (true)
 		{
 			if (++result.Events > 2_000_000) throw new InvalidDataException("Offline event budget exceeded; no partial result may be applied");
@@ -51,9 +53,25 @@ internal static class OfflineModel
 			bool[] workingStorage = profile.Storage.Select(s => s.Enabled).ToArray();
 			// Electricity and gas are coupled through generators/engines/farms. Iterate their power gate;
 			// monotone disabling prevents an unpowered generator from supplying its own bootstrap energy.
-			for (int pass = 0; pass <= profile.Sources.Count + profile.Storage.Count; pass++)
+			int powerPasses = 3 * profile.Sources.Count + profile.Storage.Count + 2;
+			for (int pass = 0; pass < powerPasses; pass++)
 			{
 				Allocate(profile, required, maximum, input, output, charging, workingStorage);
+				bool demandChanged = false;
+				foreach (var ports in poweredSources)
+				{
+					// Oxygen and hydrogen share one producer and one power sink. Charge
+					// operational draw only while at least one gas is actually delivered.
+					double demand = ports.Any(s => output[s.Index] > Epsilon)
+						? ports.Max(s => s.Source.OperationalPower) : ports.Max(s => s.Source.IdlePower);
+					if (Math.Abs(required[ports.Key] - demand) > Epsilon) { required[ports.Key] = demand; demandChanged = true; }
+				}
+				// Reallocate at the new draw before testing a source's electrical gate.
+				if (demandChanged)
+				{
+					if (pass == powerPasses - 1) throw new InvalidDataException("Coupled resource allocation did not settle");
+					continue;
+				}
 				bool changed = false;
 				for (int i = 0; i < maximum.Length; i++)
 				{
@@ -66,6 +84,7 @@ internal static class OfflineModel
 					if (workingStorage[i] && sink >= 0 && input[sink] + Epsilon < required[sink]) { workingStorage[i] = false; changed = true; }
 				}
 				if (!changed) break;
+				if (pass == powerPasses - 1) throw new InvalidDataException("Coupled resource allocation did not settle");
 			}
 			// Working state and chip renewal use the SAME allocated electricity as production.
 			// Losing power removes the bubble and pauses its paid credit; recovery recreates it
@@ -439,6 +458,7 @@ internal static class OfflineModel
 		foreach (var source in p.Sources)
 			if (!double.IsFinite(source.Maximum) || source.Maximum < 0 || source.Storage < -1 || source.Storage >= p.Storage.Count
 				|| source.PowerSink < -1 || source.PowerSink >= p.Sinks.Count || !double.IsFinite(source.StorageCost) || source.StorageCost < 0
+				|| !double.IsFinite(source.IdlePower) || source.IdlePower < 0 && source.IdlePower != -1 || !double.IsFinite(source.OperationalPower) || source.OperationalPower < 0
 				|| source.Curve?.Any(v => !double.IsFinite(v) || v < 0 || v > 1) == true) throw new InvalidDataException("Invalid offline source");
 		foreach (var sink in p.Sinks) if (!double.IsFinite(sink.Required) || sink.Required < 0) throw new InvalidDataException("Invalid offline sink");
 		foreach (var material in p.Sources.SelectMany(s => s.Fuel).Concat(p.Production.SelectMany(b => b.Recipes).SelectMany(r => r.Inputs.Concat(r.Outputs)))

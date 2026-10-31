@@ -99,6 +99,11 @@ and inventory bounds. Fuel is consumed according to each producer's delivered ou
 captured definition rate, rather than its nameplate maximum. Results include per-producer
 energy/fuel, per-consumer energy, storage input, production units, chip renewal and zone state.
 There is no separate accounting service, second debit layer or background offline simulation.
+Gas generators now select standby versus operational draw from delivered gas in the same
+allocator; oxygen/hydrogen ports share one electrical sink. Power/production multipliers and
+the oxygen setting remain respected. A blocked working draw cannot bootstrap gas production.
+Older profiles without these optional rates retain their captured constant demand. The expanded
+39-check shared-budget proof is detached; the fresh native gas-standby comparison is separate.
 
 Vanilla only advances upkeep while the block works. Power loss removes the modeled bubble and
 pauses paid credit. Recovery recreates it through the native activation delay, then resumes
