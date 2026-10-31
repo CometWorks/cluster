@@ -4,5 +4,7 @@
   <ItemGroup>
     <Compile Remove="$(MSBuildThisFileDirectory)../ClusterTestPlugin/Source/**/*.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Plugin.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)GasCases.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)ProductionCases.cs" />
   </ItemGroup>
 </Project>

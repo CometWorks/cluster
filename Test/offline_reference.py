@@ -17,9 +17,9 @@ from scenarios_offline import _survival_template
 from scenarios_planet import start_standalone
 
 
-def build():
+def build(scenario="energy"):
     source = Path(__file__).parent / "OfflineReference"
-    bundle = HOST.test_root / "offline-reference-plugin/OfflineReference"
+    bundle = HOST.test_root / ("offline-reference-plugin-" + scenario) / Path("OfflineReference")
     bundle.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(["dotnet", "build", str(source / "OfflineReference.csproj"), "-c", "Release", "--nologo", "-v", "q",
         f"-p:ClusterPlugins={HOST.package / 'plugins'}", f"-p:Magnetar={HOST.magnetar}"], capture_output=True, text=True)
@@ -34,7 +34,7 @@ def build():
     return bundle
 
 
-def run_one(bundle, out, label, frames, fast):
+def run_one(bundle, out, label, frames, fast, port_slot=None, scenario="energy"):
     state = resources()
     if state["availableGb"] < 10 or state["testRootFreeGb"] < 100: raise RuntimeError(f"resource floor: {state}")
     bench = Bench("OFF-REFERENCE-" + label, label, "3", out, keep_root=True)
@@ -44,9 +44,9 @@ def run_one(bundle, out, label, frames, fast):
     server = None
     try:
         server = start_standalone(bench, bench.cluster.config.world_template, name="reference-" + label,
-            ready=("Session loaded", "Game ready"), local_plugins=[bundle], extra_env={
+            ready=("Session loaded", "Game ready"), local_plugins=[bundle], port_slot=port_slot, extra_env={
                 "OFFLINE_REFERENCE_ROOT": str(evidence), "OFFLINE_REFERENCE_FRAMES": str(frames),
-                "OFFLINE_REFERENCE_FAST": "1" if fast else "0"})
+                "OFFLINE_REFERENCE_FAST": "1" if fast else "0", "OFFLINE_REFERENCE_SCENARIO": scenario})
         limit = time.monotonic() + max(600, frames / (60 if not fast else 100) + 300)
         last = 0
         while time.monotonic() < limit:
@@ -78,13 +78,46 @@ def fuel(profile):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--proof-only", action="store_true")
+    parser.add_argument("--continue-long", type=Path)
+    parser.add_argument("--production", action="store_true")
+    parser.add_argument("--gyros", action="store_true")
+    parser.add_argument("--gas", action="store_true")
+    parser.add_argument("--zone-long", type=Path, help="prior valid pacing proof")
     args = parser.parse_args()
     out = HOST.results / (datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ") + "-standalone")
     out.mkdir(parents=True)
-    bundle = build()
+    bundle = build("production" if args.production else "gyros" if args.gyros else "gas" if args.gas else "zones" if args.zone_long else "energy")
     (out / "provenance.json").write_text(json.dumps({"package": str(HOST.package), "source": subprocess.check_output(
         ["git", "rev-parse", "HEAD"], text=True).strip(), "engine": "stock DS, cluster plugin not registered",
         "pacing": "native EnableMaxSpeed plus2ms sleep; no skipped frames/time jumps", "resources": resources()}, indent=2))
+    if args.production:
+        run = run_one(bundle, out, "production", 36000, True, port_slot=11, scenario="production")
+        (out / "production-reference.json").write_text(json.dumps(run, indent=2))
+        return
+    if args.gyros:
+        run = run_one(bundle, out, "gyro-fuel", 21600, True, port_slot=10, scenario="gyros")
+        (out / "gyro-reference.json").write_text(json.dumps(run, indent=2))
+        return
+    if args.gas:
+        run = run_one(bundle, out, "gas-coupled", 7200, True, port_slot=9, scenario="gas")
+        (out / "gas-reference.json").write_text(json.dumps(run, indent=2))
+        return
+    if args.zone_long:
+        proof = json.loads((args.zone_long / "pacing-equivalence.json").read_text())
+        assert proof["passed"] and proof["clockEquivalence"]
+        run = run_one(bundle, out, "four-hour-zone", 864000, True, port_slot=7, scenario="zones")
+        (out / "zone-reference.json").write_text(json.dumps(run, indent=2))
+        return
+    if args.continue_long:
+        proof = json.loads((args.continue_long / "pacing-equivalence.json").read_text())
+        initial = json.loads((args.continue_long / "OFF-REFERENCE-paced60/native/initial.json").read_text())
+        assert proof["passed"] and proof["clockEquivalence"] and all(not p["Creative"] and not p["Simplified"] for p in initial["profiles"])
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            runs = list(pool.map(lambda n: run_one(bundle, out, "six-hour-resume-"+str(n),1296000,True,port_slot=4+n), (1,2)))
+        baseline = args.continue_long / "OFF-REFERENCE-six-hour-2/native/result.json"
+        runs.append(json.loads(baseline.read_text()))
+        compare(runs,out)
+        return
     normal = run_one(bundle, out, "paced60", 3600, False)
     fast = run_one(bundle, out, "bounded-fast", 3600, True)
     checks = []
@@ -98,7 +131,11 @@ def main():
     if not eq["passed"]: raise RuntimeError("pacing equivalence failed; long fast lane refused")
     if args.proof_only: return
     with ThreadPoolExecutor(max_workers=3) as pool:
-        runs=list(pool.map(lambda n:run_one(bundle,out,"six-hour-"+str(n),1296000,True),range(1,4)))
+        runs=list(pool.map(lambda n:run_one(bundle,out,"six-hour-"+str(n),1296000,True,port_slot=4+n),range(1,4)))
+    compare(runs,out)
+
+
+def compare(runs,out):
     differences=[]
     for run in runs:
         for c in run["results"]:

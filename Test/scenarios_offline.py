@@ -1308,8 +1308,11 @@ def _zone_reference(bench, grid, partition, label, seconds=30, blocked=False, de
                     and modeled.get(fuel, 0) <= .00001 and not state["active"] and not zone["Exists"])
     if renewable:
         solar_ids = {str(s["Block"]) for s in initial["Sources"] if s["Kind"] == "Environmental"}
-        bench.check(label + ": real solar and battery backup supply costs after reactor fuel is gone", native_burn == 0 and model_burn == 0
-                    and any(result["ProducerEnergyMWh"].get(i, 0) > 0 for i in solar_ids) and state["active"])
+        native_solar = bench.cluster.node("node-1", f"/offline-test-solar-state?grid={grid}")
+        bench.record(label + "-native-solar", native_solar)
+        bench.check(label + ": real solar and Auto-battery backup supply costs after reactor fuel is gone", native_burn == 0 and model_burn == 0
+                    and any(result["ProducerEnergyMWh"].get(i, 0) > 0 for i in solar_ids)
+                    and any(s["output"] > 0 for s in native_solar) and state["active"])
     return compared, state
 
 

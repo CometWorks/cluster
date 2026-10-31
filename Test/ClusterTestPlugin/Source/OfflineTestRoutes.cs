@@ -441,7 +441,7 @@ internal static class OfflineTestRoutes
             var aligned = MatrixD.Invert(local) * world;
             aligned.Translation = grid.PositionComp.GetPosition(); grid.WorldMatrix = aligned;
             // Recreate the powered bubble only after moving its block into the final pose.
-            foreach (var battery in grid.GetFatBlocks<MyBatteryBlock>()) { battery.ChargeMode = Sandbox.ModAPI.Ingame.ChargeMode.Discharge; battery.Enabled = true; }
+            foreach (var battery in grid.GetFatBlocks<MyBatteryBlock>()) { battery.ChargeMode = Sandbox.ModAPI.Ingame.ChargeMode.Auto; battery.Enabled = true; }
         }
         else if (mode == "stop-rotor")
             foreach (var rotor in grid.GetFatBlocks<MyMotorStator>())
