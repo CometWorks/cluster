@@ -39,6 +39,9 @@ internal static class OfflineTestRoutes
     private static long capturePartition;
     private static int captureEntered;
     private static readonly ManualResetEventSlim CaptureRelease = new(true);
+    private static long adminPreflightPartition, adminReleasePartition;
+    private static int adminPreflightEntered, adminReleaseEntered;
+    private static readonly ManualResetEventSlim AdminPreflightRelease = new(true), AdminSourceRelease = new(true);
 
     public static void Register()
     {
@@ -47,6 +50,20 @@ internal static class OfflineTestRoutes
         // The production dispatcher and capture then run unchanged.
         ClusterControlServer.AddRouteExtension((context, path) =>
         {
+            bool preflight = path.EndsWith("/offline/admin", StringComparison.OrdinalIgnoreCase);
+            bool release = path.EndsWith("/release", StringComparison.OrdinalIgnoreCase);
+            long held = preflight ? Interlocked.Read(ref adminPreflightPartition) : release ? Interlocked.Read(ref adminReleasePartition) : 0;
+            if (held > 0 && (preflight || context.Request.QueryString["partition"] == held.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+            {
+                if (preflight) { Interlocked.Exchange(ref adminPreflightPartition, 0); Volatile.Write(ref adminPreflightEntered, 1); }
+                else { Interlocked.Exchange(ref adminReleasePartition, 0); Volatile.Write(ref adminReleaseEntered, 1); }
+                ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    (preflight ? AdminPreflightRelease : AdminSourceRelease).Wait(TimeSpan.FromSeconds(25));
+                    ClusterControlServer.Handle(context);
+                });
+                return true;
+            }
             long expected = Interlocked.Read(ref capturePartition);
             if (expected > 0 && context.Request.HttpMethod == "GET" && path.EndsWith("/capture", StringComparison.OrdinalIgnoreCase)
                 && context.Request.QueryString["partition"] == expected.ToString(System.Globalization.CultureInfo.InvariantCulture)
@@ -78,6 +95,27 @@ internal static class OfflineTestRoutes
             long grid = TestRoutes.Long(context, "grid");
             TestRoutes.Json(context, 200, new { partition = Interlocked.Read(ref capturePartition), entered = Volatile.Read(ref captureEntered) != 0,
                 frozen = ClusterRuntime.IsFrozen(grid) });
+        });
+        TestRoutes.Add("POST", "/offline-test-admin-hold", context =>
+        {
+            long partition = TestRoutes.Long(context, "partition");
+            bool preflight = TestRoutes.Query(context, "phase", "preflight") == "preflight";
+            var signal = preflight ? AdminPreflightRelease : AdminSourceRelease;
+            if (partition == 0) signal.Set(); else signal.Reset();
+            if (preflight) { Volatile.Write(ref adminPreflightEntered, 0); Interlocked.Exchange(ref adminPreflightPartition, partition); }
+            else { Volatile.Write(ref adminReleaseEntered, 0); Interlocked.Exchange(ref adminReleasePartition, partition); }
+            TestRoutes.Json(context, 200, new { partition, preflight });
+        });
+        TestRoutes.Add("GET", "/offline-test-admin-hold", context =>
+        {
+            long grid = TestRoutes.Long(context, "grid");
+            ulong partition = ulong.Parse(TestRoutes.Query(context, "partition", "0"));
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => new
+            {
+                preflightEntered = Volatile.Read(ref adminPreflightEntered) != 0,
+                releaseEntered = Volatile.Read(ref adminReleaseEntered) != 0,
+                frozen = ClusterRuntime.IsFrozen(grid), generation = ((PartitionPersistence)AccessTools.Field(typeof(ClusterRuntime), "m_persistence").GetValue(null)).OwnedGeneration(partition)
+            }));
         });
         TestRoutes.Add("POST", "/offline-test-station", context =>
         {

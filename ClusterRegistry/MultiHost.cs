@@ -112,18 +112,25 @@ internal sealed partial class DirectGateway
             HttpResponseMessage response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
             if ((int)response.StatusCode is 401 or 403 && request.RequestUri != null)
             {
-                await response.Content.LoadIntoBufferAsync().ConfigureAwait(false);
-                string body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-                if (ClusterNet.RejectionCode((int)response.StatusCode, body) is { } code && gateway._registry is { } registry)
+                try
                 {
-                    (string? peer, long epoch) = ClusterNet.RejectingPeer(body);
-                    string endpoint = request.RequestUri.GetLeftPart(UriPartial.Authority);
-                    string verdict = registry.JudgePeerRejection(null, 0, peer, epoch, endpoint);
-                    gateway.RememberRejection(new { at = DateTimeOffset.UtcNow, code = "node:" + code, verdict, reporter = "gateway", peer, peerEpoch = epoch,
-                        peerEndpoint = endpoint, route = request.RequestUri.AbsolutePath });
-                    Console.WriteLine($"WARNING: node {peer ?? "?"}/{epoch} at {endpoint} refused the gateway's credential ({code}) on "
-                        + $"{request.RequestUri.AbsolutePath}; verdict={verdict}");
+                    // Peer rejection envelopes are metadata too. This handler runs before
+                    // the caller sees headers, so it must not bypass its deadline or cap.
+                    await response.Content.LoadIntoBufferAsync(OfflineMetadataLimit, cancellationToken)
+                        .WaitAsync(cancellationToken).ConfigureAwait(false);
+                    string body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                    if (ClusterNet.RejectionCode((int)response.StatusCode, body) is { } code && gateway._registry is { } registry)
+                    {
+                        (string? peer, long epoch) = ClusterNet.RejectingPeer(body);
+                        string endpoint = request.RequestUri.GetLeftPart(UriPartial.Authority);
+                        string verdict = registry.JudgePeerRejection(null, 0, peer, epoch, endpoint);
+                        gateway.RememberRejection(new { at = DateTimeOffset.UtcNow, code = "node:" + code, verdict, reporter = "gateway", peer, peerEpoch = epoch,
+                            peerEndpoint = endpoint, route = request.RequestUri.AbsolutePath });
+                        Console.WriteLine($"WARNING: node {peer ?? "?"}/{epoch} at {endpoint} refused the gateway's credential ({code}) on "
+                            + $"{request.RequestUri.AbsolutePath}; verdict={verdict}");
+                    }
                 }
+                catch { response.Dispose(); throw; }
             }
             return response;
         }

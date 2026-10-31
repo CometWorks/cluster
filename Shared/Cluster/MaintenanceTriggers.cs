@@ -56,7 +56,11 @@ internal static class MaintenanceTriggers
 			}
 			case "profile":
 				if (partitionFilter is not ulong profiling) throw new ArgumentException("profile requires partition");
-				return new { task, partition = profiling, complete = OfflineCompensation.Prepare(partitions.Peek(profiling)) };
+				var candidate = partitions.Peek(profiling);
+				if (ClusterRuntime.IsClustered && (!ClusterRuntime.IsServing || ClusterRuntime.IsAuthorityFenced
+				    || persistence.OwnedGeneration(profiling) == 0 || candidate.Members.Any(ClusterRuntime.IsFrozen)))
+				    throw new InvalidOperationException("Profile requires current serving, non-frozen ownership");
+				return new { task, partition = profiling, complete = OfflineCompensation.Prepare(candidate) };
 			case "conceal-eval":
 				return new { task, concealment = persistence.TriggerConcealEval() };
 			case "compact":

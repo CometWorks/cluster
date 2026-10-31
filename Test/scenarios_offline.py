@@ -713,6 +713,61 @@ def t_oc_09(bench):
     bench.exercised(grid=grid, partition=partition, actualNodeKills=2, proof="shared apply/pre-Final crash/retry/catalogued-Final recovery; long differential still separate")
 
 
+def offline_admin_profile_race(bench):
+    """U1: actual preflight -> committed handover -> held source release."""
+    from scenarios_core import _handover_url
+    _survival_template(bench)
+    bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
+    bench.cluster.post("/automatic/pause")
+    for node in ("node-1", "node-2"):
+        _put_config(bench, node, {"offline.enabled": "false", "offline.quietMeters": "0", "offline.settleFrames": "0"})
+    owner = bench.cluster.node("node-1", "/identity-test-create?name=admin-race-owner", "POST")["identityId"]
+    grid = bench.cluster.node("node-1", f"/offline-test-station?owner={owner}", "POST")["grid"]
+    partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 60)
+    _require(bench, "profile race fixture has current ownership", bool(partition))
+    def profile(node, key):
+        return bench.cluster._request("POST", f"/admin/v1/triggers/profile?node={node}&partition={partition}",
+            headers={"Idempotency-Key": key})["data"]
+    control = profile("node-1", "profile-race-before")
+    _require(bench, "current owner profile is accepted before transfer", control["state"] == "Succeeded", json.dumps(control))
+    generation = next(r["Generation"] for r in bench.cluster.get("/registry/partitions") if r["Partition"] == partition)
+    def status():
+        return bench.cluster.node("node-1", f"/offline-test-admin-hold?grid={grid}&partition={partition}")
+    for phase in ("preflight", "release"):
+        bench.cluster.node("node-1", f"/offline-test-admin-hold?phase={phase}&partition={partition}", "POST")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        request = pool.submit(profile, "node-1", "profile-race-stale")
+        _require(bench, "capability preflight is held", bool(_poll(lambda: status()["preflightEntered"], 8)))
+        transfer = pool.submit(bench.cluster.post, _handover_url(bench, partition, clientless=True), timeout=90)
+        try:
+            _require(bench, "real source release is held after commit", bool(_poll(lambda: status()["releaseEntered"], 18)))
+            frozen = status()
+            bench.record("committed-before-source-release", {"source": frozen, "registry": bench.cluster.get("/registry/partitions")})
+            _require(bench, "source is frozen with original local generation", frozen["frozen"] and frozen["generation"] == generation, json.dumps(frozen))
+            _require(bench, "gateway ownership committed to target", any(r["Partition"] == partition and r["Node"] == "node-2" for r in bench.cluster.get("/registry/partitions")))
+            before = bench.cluster.node("node-1", f"/offline/admin?partition={partition}")
+            try:
+                bench.cluster.node("node-1", f"/trigger/profile?partition={partition}&generation={generation}", "POST")
+                refused = False
+            except ClusterHttpError as error:
+                refused = "non-frozen ownership" in str(error)
+            after = bench.cluster.node("node-1", f"/offline/admin?partition={partition}")
+            bench.check("native game-thread admission refuses stale frozen source", refused)
+            bench.check("refused profile preserves source diagnostics", before == after)
+            bench.cluster.node("node-1", "/offline-test-admin-hold?phase=preflight&partition=0", "POST")
+            result = request.result(timeout=8)
+            bench.record("stale-profile-result", result)
+            bench.check("gateway refuses original target after real preflight/commit race", result["state"] == "Failed"
+                and result["error"]["code"] == "offline_target_mismatch")
+        finally:
+            for phase in ("preflight", "release"):
+                bench.cluster.node("node-1", f"/offline-test-admin-hold?phase={phase}&partition=0", "POST")
+        transfer.result(timeout=60)
+    current = profile("node-2", "profile-race-after")
+    bench.check("current target profile succeeds after source release", current["state"] == "Succeeded")
+    bench.exercised(actualPreflightHandoverRace=True, frozenSourceGeneration=True, noRedirect=True)
+
+
 def offline_cache_durability(bench):
     """R8: a WA-local clear acknowledged from the actual journal survives pre-Final WA death.
 
@@ -1565,6 +1620,7 @@ SCENARIOS_OFFLINE.update({
     "P2-OFF-CALL-CONFLICT": (p2_off_call_conflict, "two live clients on separate nodes cannot steal a pinned partition in three minutes", "3"),
     "T-OC-07": (t_oc_07, "real PB/timer/ejector Block and Freeze policies through shared wake", "3"),
     "T-OC-09": (t_oc_09, "actual shared-apply crash, immutable-Final retry and post-Final no-repeat recovery", "3"),
+    "OFF-ADMIN-PROFILE-RACE": (offline_admin_profile_race, "Profile preflight/committed-handover/frozen-source refusal (U1)", "3"),
     "OFF-CACHE-DURABILITY": (offline_cache_durability, "WA-local cache clear journal and pre-Final replacement (R8)", "3"),
     "P2-OFF-CALL-DENY": (p2_off_call_deny, "authenticated hostile-owner and missing-relay requests do not wake", "3"),
     "P2-OFF-CALL-RATE": (p2_off_call_rate, "twenty authenticated offline-grid requests enforce one pending call-up", "3"),

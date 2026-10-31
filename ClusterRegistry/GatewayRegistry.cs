@@ -4427,6 +4427,23 @@ internal sealed partial class GatewayRegistry : IDisposable
         }
     }
 
+    /// <summary>A lost/malformed clear reply is uncertain, not proof of no effect. Retrying
+    /// its original key reuses the WA ledger GUID and CAS, including after Gateway restart.</summary>
+    internal bool ResumeOfflineCacheClear(string operationId)
+    {
+        lock (_lock)
+        {
+            if (!_state.AdminOperations.TryGetValue(operationId, out var record) || record.Kind != "offline-cache-clear"
+                || record.State != AdminOperationPhase.Failed || record.ErrorCode != "offline_clear_uncertain") return false;
+            record.State = AdminOperationPhase.Running;
+            record.ErrorCode = record.ErrorMessage = null;
+            record.UpdatedAt = _clock();
+            Emit("operation.resumed", operationId, new Dictionary<string, string> { ["kind"] = record.Kind, ["actor"] = record.Actor });
+            Persist();
+            return true;
+        }
+    }
+
     private AdminOperationRecord FinishAdminOperation(string operationId, AdminOperationPhase state,
         IReadOnlyDictionary<string, string>? result, string? errorCode, string? errorMessage)
     {
