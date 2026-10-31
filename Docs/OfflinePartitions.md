@@ -206,15 +206,24 @@ roots, port offset10000 and Remote34900; no rendering/screenshot or benchmark pr
 there. Primary correctness lane remains at9f128a7/offset700/Remote24900 and its per-package
 results stay separate. Both retain resource floors; no shared deployment is touched.
 
-At9f128a7, `results/20261031-203241Z/P2-OFF-CALL-RATE` passes29/29 with the repaired promotion
-predicate. Native laser id wake establishes both real blocks (registration-boundary fix), but
-its established-link leg fails: the old source bridge masks the durable offline origin for20s,
-leaving the local proxy absent at12s. This exact failure drove6423447; its fixed run is pending.
-Deny's ordinary hostile/no-relay refusals both pass at9f128a7. An actual replicated Moderator
-loads the hostile grid, but the final assertion ran before the ownership heartbeat ended the
-offline row; the fixture now waits for both ownership and row retirement. Whole case remains
-failed until that fresh run passes.
+`bridge-results/20261031-205109Z` now passes at6423447: **laser8/8** (actual id wake,
+established proxy/no wake, GPS wake, both real ends connected) and **Deny14/14** (ordinary
+hostile/no-relay refusals with authoritative promotion0, actual Moderator positive control).
+This is native correctness evidence without rendering; the radio-chain-behind-laser leg remains.
+The earlier9f128a7 laser7/8 failure drove the durable-row/bridge repair; its Deny13/14 failure
+was the final ownership-heartbeat observation race. Both historical failures remain failures.
 
+At9f128a7, `results/20261031-203241Z` also passes **T-OC-11 125/125** (476.6s),
+**T-OC-09 14/14**, **T-OC-12 47/47**, **OFF-CACHE-DURABILITY12/12**, and **Rate29/29**.
+The warm-output cache fixture now proves twenty real refinery bases use one measured formula,
+then exactly one remeasurement after a journaled clear/epoch increment. Crash proof here covers
+fuel/production, not actual chip renewal; a fresh test-only extension waits across paid-credit
+expiry before killing/retrying shared Apply. Other primary cases are still active.
+
+A focused native paused-zone runner is authored: power-removed bubble/id0, paid credit,
+settings/rights through shared recovery, real120s power restoration, and a powered manual-off
+control. Initial id0 capture remains a source gap pending its fail/fix/fresh-package proof. An
+authored runner is not a native pass.
 
 Prior private package: **9f128a7bc2715cc2f0bbb0522715ffb6b7d39380**, archive SHA256
 `d837fc659fc7f4276f092dc2337bb89ab6f3193ae60feb47957b8977eba7f3a4`.
