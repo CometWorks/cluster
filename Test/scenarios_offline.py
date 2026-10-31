@@ -1182,6 +1182,71 @@ def t_oc_11(bench):
                     limitation="short clustered-engine references; full 4-hour/3-chip standalone differential and larger baseline envelope remain")
 
 
+def offline_zone_paused(bench):
+    """A real power-removed zone carries paid credit/settings through shared recovery.
+
+    The powered manual-off control must stay off. The eventual power recovery is
+    ordinary native simulation, including its 120-second activation delay.
+    """
+    _survival_template(bench)
+    _join(bench)
+    for node in ("node-1", "node-2"):
+        _put_config(bench, node, {"offline.enabled": "false", "offline.quietMeters": "0", "offline.wakeMeters": "0",
+                                "offline.leadSeconds": "0", "offline.settleFrames": "0"})
+    owner = _client_identity(bench)
+    grid = bench.cluster.node("node-1", f"/rc-test-ensure?owner={owner}", "POST")["grid"]
+    before = bench.cluster.node("node-1", f"/offline-test-zone?grid={grid}&seconds=600&radius=20", "POST")
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=box-zone", "POST")
+    before = bench.cluster.node("node-1", f"/offline-test-zone-state?grid={grid}")
+    _require(bench, "native player zone starts active with edited Box settings", before["active"] and before["shape"] == "Box")
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=zone-power-off", "POST")
+    paused = _poll(lambda: (lambda s: s if s["zone"] == 0 and not s["working"] and s["remainingMs"] > 0 else None)(
+        bench.cluster.node("node-1", f"/offline-test-zone-state?grid={grid}")), 30)
+    _require(bench, "vanilla power loss removes the bubble and retains paid credit", bool(paused))
+    bench.record("paused-zone-native", paused)
+    partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 60)
+    _require(bench, "paused zone profile completes", bool(_poll(lambda: bench.cluster.node("node-1", f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))
+    captured = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}", "POST")
+    bench.record("paused-zone-profile", captured)
+    _require(bench, "unpowered zone with id zero is captured as paused", len(captured["Upkeep"]) == 1
+             and not captured["Upkeep"][0]["Exists"] and captured["Upkeep"][0]["RemainingFrames"] > 0)
+    time.sleep(10)
+    comparison = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}")
+    bench.record("paused-zone-reference", comparison)
+    bench.check("paused paid credit does not run down while no electricity is supplied", comparison["predicted"]["Upkeep"][0]["RemainingFrames"] == captured["Upkeep"][0]["RemainingFrames"]
+                and abs(comparison["actual"]["Upkeep"][0]["RemainingFrames"] - captured["Upkeep"][0]["RemainingFrames"]) < 1
+                and not comparison["result"]["UpkeepConsumed"] and not comparison["result"]["ProducerFuelConsumed"])
+    _put_config(bench, "node-1", {"offline.enabled": "true", "offline.minOnlineSeconds": "0", "offline.graceSeconds": "0"})
+    _require(bench, "paused player zone can durably offline", bool(_poll(lambda: _offline_row(bench, partition), 90)))
+    profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
+    _put_config(bench, "node-1", {"offline.enabled": "false"})
+    bench.cluster.node("node-2", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
+    bench.cluster.post(f"/registry/partitions/offline/load?partition={partition}&node=node-2&reason=remote")
+    applied = _poll(lambda: _applied(bench, "node-2"), 90)
+    _require(bench, "paused zone reached actual shared recovery", bool(applied))
+    bench.record("paused-zone-applied", applied)
+    result = _assert_applied_inventory(bench, profiles, applied, grid, "unpowered shared wake invents no fuel or chip debit")
+    after = _poll(lambda: bench.cluster.node("node-2", f"/offline-test-zone-state?grid={grid}") if _owner_of(bench, grid) == ("node-2", partition) else None, 60)
+    bench.check("shared wake retains paused credit, block switch, Box dimensions and rights", after["zone"] == 0 and after["blockEnabled"]
+                and after["shape"] == before["shape"] and after["radius"] == before["radius"] and after["allowedActions"] == before["allowedActions"]
+                and abs(after["remainingMs"] - paused["remainingMs"]) < 2000 and not result["UpkeepConsumed"])
+    bench.cluster.node("node-2", f"/offline-test-options?grid={grid}&mode=zone-power-on", "POST")
+    activating = _poll(lambda: (lambda s: s if s["zone"] != 0 and s["activating"] else None)(bench.cluster.node("node-2", f"/offline-test-zone-state?grid={grid}")), 30)
+    _require(bench, "real power restoration recreates the bubble with vanilla activation", bool(activating))
+    restored = _poll(lambda: (lambda s: s if s["active"] and not s["activating"] else None)(bench.cluster.node("node-2", f"/offline-test-zone-state?grid={grid}")), 140, 2)
+    _require(bench, "vanilla finishes activation with retained rights and geometry", bool(restored)
+             and restored["shape"] == before["shape"] and restored["allowedActions"] == before["allowedActions"])
+    bench.record("paused-zone-restored", restored)
+    bench.cluster.node("node-2", f"/offline-test-options?grid={grid}&mode=zone-manual-off", "POST")
+    time.sleep(2)
+    _require(bench, "manual-off control profile completes", bool(_poll(lambda: bench.cluster.node("node-2", f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))
+    manual = bench.cluster.node("node-2", f"/offline-test-reference?partition={partition}", "POST")
+    bench.record("manual-off-zone-profile", manual)
+    bench.check("powered manually removed zone is not automatically modeled active", not manual["Upkeep"])
+    bench.exercised(nativePausedZone=True, actualSharedRecovery=True, nativePowerRecovery=True,
+                    limitation="no environmental power recovery during the offline interval in this fixture")
+
+
 def offline_observed_policy(bench):
     """Native external game-logic rate sampling and conservative storage/inventory fallback.
 
@@ -1281,4 +1346,5 @@ SCENARIOS_OFFLINE.update({
     "T-OC-12": (t_oc_12, "twenty native refinery bases share one rotation and remeasure after clear", "2"),
     "T-OC-11": (t_oc_11, "running player zones, common production power/fuel budget, outage/backup and real shared wake", "3"),
     "OFF-SOLAR-NATIVE": (offline_solar_native, "native physics-queue solar profiling crash regression", "2"),
+    "OFF-ZONE-PAUSED": (offline_zone_paused, "native power-paused zone credit, shared recovery, vanilla reactivation and manual-off control", "3"),
 })

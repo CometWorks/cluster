@@ -200,6 +200,13 @@ internal static class OfflineTestRoutes
         }
         else if (mode == "battery-off")
             foreach (var battery in grid.GetFatBlocks<MyBatteryBlock>()) battery.Enabled = false;
+        else if (mode is "zone-power-off" or "zone-power-on")
+        {
+            foreach (var battery in grid.GetFatBlocks<MyBatteryBlock>()) battery.Enabled = mode == "zone-power-on";
+            foreach (var reactor in grid.GetFatBlocks<MyReactor>()) reactor.Enabled = mode == "zone-power-on";
+        }
+        else if (mode == "zone-manual-off")
+            grid.GetFatBlocks<MySafeZoneBlock>().Single().Components.Get<MySafeZoneComponent>().SafeZoneRemove_Server();
         else if (mode == "empty-production")
             foreach (var production in grid.GetFatBlocks<MyProductionBlock>()) production.InputInventory.Clear();
         else if (mode == "restore-production")
