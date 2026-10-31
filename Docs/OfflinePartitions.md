@@ -206,7 +206,53 @@ Private `Build/release.sh` packages passed their build/check/manifest/binary-has
 
 Evidence root: `/home/owendb/tm/offline-partitions/native-host`.
 
-Current private package: **6423447** (full SHA in its manifest), archive SHA256
+Current private package: **4109242cf4ecb17b3c04f74d9fd45ed5a336ae51**, archive SHA256
+`c81472f8a694222afa40db4cb5ebbb6befd36af746ddb14ffb7663132ccec262`.
+Its full private release build, registry/CLI and exact binary/symbol checks pass. Node logs
+confirm all3 declared patch method hashes. Source93c2fa3 changes only the test hold scheduler;
+package source stays4109242. The native primary lane now uses this package.
+
+`results/20261031-213001Z/T-OC-10` passes**7/7**: actual locally staged mod bytes change,
+replacement pid/Serving readiness, immutable offline Final, actual shared recovery, explicit
+`content mismatch` skip and healthy loaded ownership. At b3feac1, a real native load read its
+Final once and then never resumed: asynchronous mod hashing returned DeferredLoad without a
+queue owner.4109242 retains that claimed load in a bounded pass, checks readiness before any
+repeated file read, and preserves census/fencing checks. The old native failure is retained.
+The same run passes **OFF-REMOTE-CAPTURE-RACE10/10** (complete terminal PNG viewed)
+and **T-OC-09 18/18**,262s. The actual pin starts after the gateway read and refuses source
+freeze/ownership movement. Shared crash proof consumes1 chip and0.0799590741902 uranium
+on its first provisional Apply, then1 chip and0.1563608327776 uranium on retry from the same
+immutable Final for its later interval; the second post-Final recovery retains2 of3 chips and
+has no compensation profile. This is actual common zone/production/fuel/upkeep recovery.
+
+Gas-standby package **1e51d8e57c53b1cc08391ce52b91cbeb10bebfcd**, archive
+`540aca599dac6ccd99009adca85f2a6657c8537bd99833286aa819e1e211ad54`, earns
+`gas-results/20261031-212653Z/OFF-GAS-IDLE`,**7/7**:
+real generator1kW standby/both gas outputs0/ice unchanged; modeled0.0000055688891534MWh
+versus native0.0000055688888889MWh, and all electrical consumers conserve delivered energy.
+The old b3feac1 native case failed6/7 at500 times the real standby draw. Six added detached
+checks cover standby, working draw, two-output one-sink accounting and insufficient-power
+fallback; the exact old model fails. Full native coupled gas/cold-bootstrap remains separate.
+`gas-results/20261031-212653Z/OFF-ZONE-PAUSED` passes**14/14**: exact paid-credit pause,
+real shared recovery without a debit/bubble, native120s reactivation with edited Box/rights,
+and powered manual-off stays off. The prior b3feac1 run is13/14 FAIL only for an erroneous
+dictionary-emptiness assertion on an explicit zero fuel diagnostic; the numeric check is fixed.
+Environmental power recovery during the offline interval still lacks native proof.
+
+At9f128a7, `results/20261031-203241Z` also earns **Conflict23/23** (two live clients,
+different nodes, repeated authenticated sibling requests,3min no ping-pong; complete final
+terminal PNG viewed), **T-OC-08 6/6**, **T-OC-13 5/5**, **Terminal12/12**, **RC9/9**
+(raw-W drone motion112.9460601807m) and **IGC5/5**. Terminal/RC complete PNGs were viewed.
+The whole historical suite is11/14: laser/denial were fixed in the later6423447 lane, and its
+changed-mod case failed before reaching the assertion. Whole-suite failure is retained.
+
+`bridge-results/20261031-210020Z/T-OC-09` at6423447 passes**18/18**,300s: actual paid
+credit expiry, first shared apply consumes1 chip and0.0997225080014 uranium, pre-Final
+SIGKILL, retry debits1 chip and0.1259399743134 uranium from the same original Final without
+stacking the abandoned attempt; second post-Final kill/recovery carries no profile and retains
+2 of original3 chips. The original14-check passes did not include actual chip renewal.
+
+Historical bridge package: **6423447** (full SHA in its manifest), archive SHA256
 `58bf6cc64c4787a7da5729054a412224fa5bb739e4136bf894f638ce9891009b`.
 This adds durable offline-row precedence over retained source antenna reports and drops the
 bridge when the authority publishes its new origin. Native bridge lane uses separate caches,
@@ -224,9 +270,8 @@ was the final ownership-heartbeat observation race. Both historical failures rem
 At9f128a7, `results/20261031-203241Z` also passes **T-OC-11 125/125** (476.6s),
 **T-OC-09 14/14**, **T-OC-12 47/47**, **OFF-CACHE-DURABILITY12/12**, and **Rate29/29**.
 The warm-output cache fixture now proves twenty real refinery bases use one measured formula,
-then exactly one remeasurement after a journaled clear/epoch increment. Crash proof here covers
-fuel/production, not actual chip renewal; a fresh test-only extension waits across paid-credit
-expiry before killing/retrying shared Apply. Other primary cases are still active.
+then exactly one remeasurement after a journaled clear/epoch increment. Crash proof in that historical14-check case covers fuel/production; the later18-check6423447
+and4109242 passes above also exercise actual chip renewal. This primary batch has now ended.
 
 A focused native paused-zone runner is authored: power-removed bubble/id0, paid credit,
 settings/rights through shared recovery, real120s power restoration, and a powered manual-off
@@ -358,28 +403,29 @@ compiled/authored fixtures are not promoted to executed proof.
 | T-OC-01 | R1 detached fail/pass and short native full-Auto/refinery reference passed at ef2e016; full six-hour standalone differential and uranium tolerance missing |
 | T-OC-02 | R2 detached fail/pass and actual Survival refinery wake/stock conservation; full upgraded three-ore/two-refinery/output-full standalone differential missing |
 | T-OC-03 | Cold Forward-Z game-math regression; native planet/ridge/own-grid obstruction differential missing |
-| T-OC-04 | Electrically gated tank regressions and coupled stock checks; native exhaustion order/timing and cold-bootstrap differential missing |
+| T-OC-04 | Electrically gated tank regressions; native gas-standby power fail/pass and detached coupled power controls; full native exhaustion order/timing/cold bootstrap missing |
 | T-OC-05 | Real-world observed-group fraction and Measure decision pending; no speculative role added |
 | T-OC-06 | Native external-logic short-window means and conservative storage/inventory fallback passed,10 checks at ef2e016; full-rotation/Measure acceptance missing |
 | T-OC-07 | Native Block/Freeze, PB/timer/ejector, radio/UI/shared wake, Storage/Frozen confidence and modeled battery debit passed,10 checks at ef2e016 |
-| T-OC-08 | Real rotor top and independent quiet production sibling runner authored; execution pending |
-| T-OC-09 | Extended native zone+reactor+refinery+assembler Apply/fuel debit/pre-Final kill/retry/ordinary Final/second-kill no-repeat passed,14 checks at ef2e016; long-cap differential remains separate |
-| T-OC-10 | Real locally staged changed-mod-byte wake/healthy-skip runner authored; execution pending |
+| T-OC-08 | Native6/6 passed at9f128a7, real moving rotor top, independent quiet sibling and stopped-rate reuse |
+| T-OC-09 | Native18/18 passed at6423447 and4109242, real zone/fuel/production/chip renewal, pre-Final kill/immutable retry/replicated ordinary Final/second kill no-repeat; long-cap differential separate |
+| T-OC-10 | Native7/7 passed at4109242 after real asynchronous-readiness lost-claim failure; changed mod bytes explicitly skip and leave a healthy loaded partition |
 | T-OC-11 | Expanded native125-check combined zone/production/fuel/chip-renewal/outage/backup/true-radio-shared-wake fixture passed at1063947. four-hour/three-chip standalone differential and broader producer envelope still required |
-| T-OC-12 | Native twenty-base run exposed cold readiness and replica propagation assumptions; corrected runner compiled; acceptance rerun pending |
-| T-OC-13 | Parked large dynamic grid true radio wake/pose runner authored; execution pending |
+| T-OC-12 | Native47/47 passed at9f128a7: twenty real refinery bases share one formula, journaled clear propagates and one fresh epoch measurement follows |
+| T-OC-13 | Native5/5 passed at9f128a7: parked large dynamic grid, true radio wake, unchanged pose |
 | PRF-OC-01 | 200-panel planet fixture and exclusive frame-budget measurement missing |
-| P2-OFF-CALL-TERMINAL | Full actual Survival radio/UI/caller-node/pin/source refusal/production/close/offline lifecycle passed at e76821b |
-| P2-OFF-CALL-RC | Actual Survival authenticated take, presence and dynamic raw-input drone drive passed at 2656266 |
-| P2-OFF-CALL-DENY | Real authenticated negative packet runners authored; server-outcome/relay/spatial setup corrected; rerun pending |
-| P2-OFF-CALL-RATE | Native29-check burst plus six actual terminal completions in16.573s/seventh-refusal passed at1063947; fresh ordinary-player/role-repair run pending |
-| P2-OFF-CALL-CONFLICT | Two-live-client/different-node/two-grid/three-minute no-ping-pong runner authored; execution pending |
-| P2-OFF-CALL-LASER | Id wake establishes both real lasers at9f128a7; same-origin retained-report/established-link leg failed and drove6423447. Fixed GPS/established no-wake and radio-chain proof pending |
-| P2-OFF-CALL-IGC | Actual unicast false/no load passed at 2656266 |
+| P2-OFF-CALL-TERMINAL | Native12/12 passed at9f128a7, actual Survival radio/UI/caller-node/pin/source refusal/refinery/close/offline; actual gateway-to-source race10/10 at4109242 |
+| P2-OFF-CALL-RC | Native9/9 passed at9f128a7, actual Survival take/presence/raw-W dynamic drone drive112.946m |
+| P2-OFF-CALL-DENY | Native14/14 passed at6423447, ordinary hostile/no-relay refusals and actual promoted Moderator positive control |
+| P2-OFF-CALL-RATE | Native29/29 passed at9f128a7 after role repair:20 concurrent requests, real minute wait,6 completed terminal wakes/seventh refused |
+| P2-OFF-CALL-CONFLICT | Native23/23 passed at9f128a7, two live clients/different nodes/two grids/3min no ping-pong, first terminal stays pinned |
+| P2-OFF-CALL-LASER | Native8/8 passed at6423447, id/GPS wake and established proxy/no wake with both real ends connected; radio chain behind offline laser still missing |
+| P2-OFF-CALL-IGC | Native5/5 passed at9f128a7, actual offline unicast false/no load |
 
-`Test/coverage.py` maps all 21 required IDs. Fourteen have native runners (some still partial or
-unrun); seven retain explicit fixture/decision/performance gaps. Extra native regressions
-`OFF-CACHE-DURABILITY`, `OFF-OBSERVED-POLICY`, `OFF-LIVE-DIFFERENTIAL` and `OFF-SOLAR-NATIVE` state their narrower scope.
+`Test/coverage.py` maps all 21 required IDs. Fourteen have native runners (several discharge only part of their full differential obligation);
+seven retain explicit fixture/decision/performance gaps. Extra native regressions
+`OFF-CACHE-DURABILITY`, `OFF-OBSERVED-POLICY`, `OFF-LIVE-DIFFERENTIAL`, `OFF-SOLAR-NATIVE`,
+`OFF-GAS-IDLE`, `OFF-ZONE-PAUSED` and `OFF-REMOTE-CAPTURE-RACE` state their narrower scope.
 A short clustered-engine comparison is not the full standalone/three-baseline differential lane.
 
 Large-station frozen window, bytes, handover traffic, call frequency/conflicts and latency remain
