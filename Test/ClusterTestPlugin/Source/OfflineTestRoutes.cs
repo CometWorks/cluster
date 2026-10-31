@@ -143,6 +143,22 @@ internal static class OfflineTestRoutes
                 grid = RcTestHarness.SpawnStation("offline-native-station", new Vector3D(20000, 20000, 0), owner, withRemoteControl: true).EntityId,
             }));
         });
+        TestRoutes.Add("POST", "/offline-test-colocation", context =>
+        {
+            long owner = TestRoutes.Long(context, "owner");
+            var position = new Vector3D(TestRoutes.Double(context, "x"), TestRoutes.Double(context, "y"), TestRoutes.Double(context, "z"));
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                var grid = RcTestHarness.SpawnStation("offline-spatial-heavy-home", position, owner, true);
+                for (int x = 3; x < 103; x++)
+                {
+                    var gyro = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Gyro>("LargeBlockGyro");
+                    gyro.Min = new SerializableVector3I(x, 0, 0); gyro.Owner = owner;
+                    grid.AddBlock(gyro, false);
+                }
+                return new { grid = grid.EntityId };
+            }));
+        });
         TestRoutes.Add("POST", "/offline-test-mod-gas", context =>
         {
             bool factory = TestRoutes.Query(context, "factory", "false") == "true";

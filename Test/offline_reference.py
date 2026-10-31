@@ -14,7 +14,7 @@ import time
 from bench import Bench, HOST
 from run_suite import resources
 from scenarios_offline import _survival_template
-from scenarios_planet import start_standalone
+from scenarios_planet import start_standalone, planet_template
 
 
 def build(scenario="energy"):
@@ -38,7 +38,18 @@ def run_one(bundle, out, label, frames, fast, port_slot=None, scenario="energy")
     state = resources()
     if state["availableGb"] < 10 or state["testRootFreeGb"] < 100: raise RuntimeError(f"resource floor: {state}")
     bench = Bench("OFF-REFERENCE-" + label, label, "3", out, keep_root=True)
-    _survival_template(bench)
+    if scenario == "solar-planet":
+        template = planet_template(bench)
+        import xml.etree.ElementTree as ET
+        for name in ("Sandbox.sbc", "Sandbox_config.sbc"):
+            path = template / name
+            tree = ET.parse(path); settings = tree.getroot().find("Settings")
+            for key, value in {"GameMode": "Survival", "EnableSunRotation": "true", "SunRotationIntervalMinutes": "120", "AutoSaveInMinutes": "0"}.items():
+                field = settings.find(key)
+                if field is None: field = ET.SubElement(settings, key)
+                field.text = value
+            tree.write(path, encoding="utf-8", xml_declaration=True)
+    else: _survival_template(bench)
     bench.cluster.config.dumps.mkdir(parents=True, exist_ok=True)
     evidence = bench.dir / "native"
     server = None
@@ -79,6 +90,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--proof-only", action="store_true")
     parser.add_argument("--continue-long", type=Path)
+    parser.add_argument("--solar-planet", action="store_true")
     parser.add_argument("--production", action="store_true")
     parser.add_argument("--gyros", action="store_true")
     parser.add_argument("--gas", action="store_true")
@@ -86,10 +98,14 @@ def main():
     args = parser.parse_args()
     out = HOST.results / (datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ") + "-standalone")
     out.mkdir(parents=True)
-    bundle = build("production" if args.production else "gyros" if args.gyros else "gas" if args.gas else "zones" if args.zone_long else "energy")
+    bundle = build("solar-planet" if args.solar_planet else "production" if args.production else "gyros" if args.gyros else "gas" if args.gas else "zones" if args.zone_long else "energy")
     (out / "provenance.json").write_text(json.dumps({"package": str(HOST.package), "source": subprocess.check_output(
         ["git", "rev-parse", "HEAD"], text=True).strip(), "engine": "stock DS, cluster plugin not registered",
-        "pacing": "native EnableMaxSpeed plus2ms sleep; no skipped frames/time jumps", "resources": resources()}, indent=2))
+        "pacing": "native EnableMaxSpeed plus1ms sleep; no skipped frames/time jumps", "resources": resources()}, indent=2))
+    if args.solar_planet:
+        run = run_one(bundle, out, "solar-planet", 675000, True, port_slot=12, scenario="solar-planet")
+        (out / "solar-planet-reference.json").write_text(json.dumps(run, indent=2))
+        return
     if args.production:
         run = run_one(bundle, out, "production", 36000, True, port_slot=11, scenario="production")
         (out / "production-reference.json").write_text(json.dumps(run, indent=2))
@@ -105,7 +121,7 @@ def main():
     if args.zone_long:
         proof = json.loads((args.zone_long / "pacing-equivalence.json").read_text())
         assert proof["passed"] and proof["clockEquivalence"]
-        run = run_one(bundle, out, "four-hour-zone", 864000, True, port_slot=7, scenario="zones")
+        run = run_one(bundle, out, "four-hour-zone", 864000, True, port_slot=20, scenario="zones")
         (out / "zone-reference.json").write_text(json.dumps(run, indent=2))
         return
     if args.continue_long:

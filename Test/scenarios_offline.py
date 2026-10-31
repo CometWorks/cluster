@@ -715,6 +715,41 @@ def t_oc_09(bench):
     bench.exercised(grid=grid, partition=partition, actualNodeKills=2, proof="shared apply/pre-Final crash/retry/catalogued-Final recovery; long differential still separate")
 
 
+def offline_spatial_pin(bench):
+    """Ordinary movement refuses a real terminal pin; actual spatial co-location may end it."""
+    from scenarios_core import _handover_url
+    api, grid, _, partition, _ = _call_fixture(bench)
+    opened = _open_terminal(api, grid)
+    _require(bench, "actual terminal pins the woken source", opened.get("screenOpen") is True
+        and bool(_poll(lambda: _remote_presence(bench, partition), 10)))
+    for node in ("node-1", "node-2"):
+        _put_config(bench, node, {"offline.enabled": "false"})
+    bench.cluster.post("/automatic/pause")
+    try:
+        bench.cluster.post(_handover_url(bench, partition, clientless=True), timeout=20)
+        denied = False
+    except ClusterHttpError as error:
+        denied = "remote-use" in str(error)
+    _require(bench, "ordinary forced movement refuses the live pin", denied and _owner_of(bench, grid) == ("node-1", partition))
+    before = bench.cluster.node("node-1", f"/offline-test-state?grid={grid}")[0]
+    x, y, z = before["position"]
+    heavy = bench.cluster.node("node-2", f"/offline-test-colocation?owner={_client_identity(bench)}&x={x+100}&y={y}&z={z}", "POST")["grid"]
+    _require(bench, "separate heavy home has confirmed target ownership", bool(_poll(lambda: (_owner_of(bench, heavy) or (None,))[0] == "node-2", 30)))
+    _require(bench, "real pin still exists at spatial initiation", bool(_remote_presence(bench, partition)))
+    bench.cluster.post("/automatic/resume")
+    def moved():
+        owner = _owner_of(bench, grid)
+        return owner if owner and owner[0] == "node-2" else None
+    arrived = _poll(moved, 90)
+    gateway_log = (bench.run_root / "gateway.log").read_text(errors="replace")
+    chosen = [line for line in gateway_log.splitlines() if f"handover triggered for {partition}, reason co-location," in line]
+    bench.record("spatial-co-location", {"arrived": arrived, "decision": chosen, "registry": bench.cluster.get("/registry/partitions")})
+    bench.check("actual spatial chooser moves the pinned clientless grid to its physical home", bool(arrived) and bool(chosen))
+    bench.check("source transfer releases the old source pin", bool(arrived) and not _remote_presence(bench, partition))
+    api.close_remote_terminal()
+    bench.exercised(actualTerminalPin=True, ordinaryDenial=True, actualSpatialChooser=True, noSyntheticPin=True)
+
+
 def offline_frozen_new_pin(bench):
     """A real new terminal request cannot pin a source after native capture froze it."""
     from scenarios_saves import _PausedHandover
@@ -1656,6 +1691,7 @@ SCENARIOS_OFFLINE.update({
     "P2-OFF-CALL-CONFLICT": (p2_off_call_conflict, "two live clients on separate nodes cannot steal a pinned partition in three minutes", "3"),
     "T-OC-07": (t_oc_07, "real PB/timer/ejector Block and Freeze policies through shared wake", "3"),
     "T-OC-09": (t_oc_09, "actual shared-apply crash, immutable-Final retry and post-Final no-repeat recovery", "3"),
+    "OFF-SPATIAL-PIN": (offline_spatial_pin, "Actual spatial co-location exempts a live terminal pin", "3"),
     "OFF-FROZEN-NEW-PIN": (offline_frozen_new_pin, "Frozen source denies actual new terminal pin and replay", "3"),
     "OFF-ADMIN-PROFILE-RACE": (offline_admin_profile_race, "Profile preflight/committed-handover/frozen-source refusal (U1)", "3"),
     "OFF-CACHE-DURABILITY": (offline_cache_durability, "WA-local cache clear journal and pre-Final replacement (R8)", "3"),

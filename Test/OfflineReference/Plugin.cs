@@ -48,7 +48,8 @@ public sealed partial class Plugin : IPlugin
     private long spawned = -1, start, elapsedStart, gameplayStart, nextSample;
     private int target;
     private bool fast, finished;
-    private bool zones, gas, gyros, production;
+    private bool zones, gas, gyros, production, solarPlanet;
+    private bool solarCurvesStarted;
     private readonly List<object> timeline = new();
     private readonly Stopwatch wall = new();
     private static readonly Type CensusType = typeof(OfflineCompensation).GetNestedType("Census", BindingFlags.NonPublic);
@@ -65,6 +66,7 @@ public sealed partial class Plugin : IPlugin
         gas = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "gas";
         gyros = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "gyros";
         production = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "production";
+        solarPlanet = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "solar-planet";
         if (target < 3600 || target > 2000000) throw new ArgumentOutOfRangeException(nameof(target));
     }
 
@@ -80,9 +82,10 @@ public sealed partial class Plugin : IPlugin
             long frame = MySession.Static.GameplayFrameCounter;
             if (spawned < 0)
             {
-                MySession.Static.Settings.EnableSunRotation = false;
+                MySession.Static.Settings.EnableSunRotation = solarPlanet;
                 MySession.Static.Settings.AutoSaveInMinutes = 0;
-                if (production) { cases.Add(SpawnProduction(false)); cases.Add(SpawnProduction(true)); }
+                if (solarPlanet) SpawnPlanetSolar();
+                else if (production) { cases.Add(SpawnProduction(false)); cases.Add(SpawnProduction(true)); }
                 else if (gyros) { cases.Add(SpawnGyro(true)); cases.Add(SpawnGyro(false)); }
                 else if (gas) foreach (int variant in new[] { 0, 1, 2 }) cases.Add(SpawnGas(variant));
                 else if (zones) cases.Add(SpawnZone());
@@ -93,9 +96,14 @@ public sealed partial class Plugin : IPlugin
                 }
                 spawned = frame;
             }
-            if (start == 0 && frame - spawned >= 600 && OfflineCompensation.ContentReady)
+            if (start == 0 && frame - spawned >= (solarPlanet ? 3600 : 600) && OfflineCompensation.ContentReady)
             {
-                foreach (var c in cases) { c.Start?.Invoke(); c.Initial = Read(c); }
+                if (solarPlanet)
+                {
+                    if (!solarCurvesStarted) { foreach (var c in cases) c.Start?.Invoke(); solarCurvesStarted = true; }
+                    if (cases.Any(c => ((Dictionary<long, Task<double[]>>)CensusType.GetField("Curves").GetValue(c.Census)).Values.Any(t => !t.IsCompleted))) return;
+                }
+                foreach (var c in cases) { if (!solarPlanet) c.Start?.Invoke(); c.Initial = Read(c); }
                 start = frame; elapsedStart = MySession.Static.ElapsedGameTime.Ticks;
                 gameplayStart = MySandboxGame.TotalGamePlayTimeInMilliseconds;
                 Write("initial.json", new { frame, dormantClusterLibrary = ClusterNodePlugin.Plugin.Instance == null,
@@ -105,6 +113,7 @@ public sealed partial class Plugin : IPlugin
             }
             if (start == 0) return;
             long count = frame - start;
+            if (solarPlanet) SamplePlanetSolar(count);
             if (frame >= nextSample)
             {
                 nextSample = frame + (gas ? 60 : 3600);
@@ -133,8 +142,8 @@ public sealed partial class Plugin : IPlugin
                 MySandboxGame.Static.EnableMaxSpeed = false;
                 finished = true;
             }
-            // Native max-speed changes pacing only. Bound CPU/noise to at most ~500 updates/s.
-            if (fast && !finished) Thread.Sleep(2);
+            // Native max-speed changes pacing only. Bound CPU/noise to at most ~1000 updates/s.
+            if (fast && !finished) Thread.Sleep(1);
         }
         catch (Exception e) { finished = true; MySandboxGame.Static.EnableMaxSpeed = false; Write("error.json", new { error = e.ToString() }); }
     }
@@ -206,7 +215,7 @@ public sealed partial class Plugin : IPlugin
         var builder = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_SafeZoneBlock>("SafeZoneBlock");
         builder.Owner = owner; builder.Min = new SerializableVector3I(5, 0, 0); builder.Enabled = true; builder.UseConveyorSystem = false; b.CubeBlocks.Add(builder);
         var grid = (MyCubeGrid)MyEntities.CreateFromObjectBuilderAndAdd(b, false);
-        grid.GetFatBlocks<MyReactor>().Single().GetInventory().AddItems(10,
+        grid.GetFatBlocks<MyReactor>().Single().GetInventory().AddItems(100,
             MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Ingot>("Uranium"));
         var block = grid.GetFatBlocks<MySafeZoneBlock>().Single();
         block.GetInventory().AddItems(3, MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Component>("ZoneChip"));

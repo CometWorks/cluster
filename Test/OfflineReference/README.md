@@ -11,7 +11,7 @@ The runner first compares3600 ordinary60Hz engine frames with3600 engine frames 
 native max-speed pacing. Both gameplay time and elapsed-sun counters must advance by exactly
 the native amount per frame, and battery/fuel outcomes must agree within the recorded native
 phase bounds. Only then can three independent1296000-frame baselines start. Native max-speed
-removes the engine's pacing wait; a2ms observer sleep bounds CPU/noise. No update is skipped,
+removes the engine's pacing wait; a1ms observer sleep bounds CPU/noise. No update is skipped,
 no engine counter is assigned, and no admin sun jump is used. The long references consume six
 hours of60Hz resource updates, including native reactor900/1800/3600 timer transitions.
 

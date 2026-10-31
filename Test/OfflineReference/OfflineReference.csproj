@@ -6,5 +6,6 @@
     <Compile Include="$(MSBuildThisFileDirectory)Plugin.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)GasCases.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ProductionCases.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)SolarCases.cs" />
   </ItemGroup>
 </Project>
