@@ -301,7 +301,7 @@ def _survival_template(bench):
     bench.cluster.config.world_template = target
 
 
-def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=False, hostile=False, observed=False, rotor=False, zone=False, zone_seconds=3600, api=None, client_id=CLIENT_ID):
+def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=False, hostile=False, observed=False, rotor=False, zone=False, zone_seconds=3600, api=None, client_id=CLIENT_ID, take_offline=True):
     if api is None:
         _survival_template(bench)
         api = _join(bench, client_id=client_id)
@@ -340,6 +340,8 @@ def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=F
     addresses = None
     if pb:
         addresses = [bench.cluster.node("node-1", f"/igc-test-add-pb?grid={g}", "POST")["address"] for g in (relay, grid)]
+    if not take_offline:
+        return api, grid, block, partition, addresses
     for node in _nodes(bench):
         _put_config(bench, node, {"offline.wakeMeters": "0", "offline.leadSeconds": "0", "offline.quietMeters": "0"})
     _put_config(bench, "node-1", {"offline.enabled": "true", "offline.minOnlineSeconds": "0", "offline.graceSeconds": "0", "offline.settleFrames": "0"})
@@ -711,6 +713,37 @@ def t_oc_09(bench):
     bench.check("post-Final recovery retains the single committed chip debit", recovered_chips == original_chips - zone["Chips"]["Amount"],
                 json.dumps({"original": original_chips, "recovered": recovered_chips}))
     bench.exercised(grid=grid, partition=partition, actualNodeKills=2, proof="shared apply/pre-Final crash/retry/catalogued-Final recovery; long differential still separate")
+
+
+def offline_frozen_new_pin(bench):
+    """A real new terminal request cannot pin a source after native capture froze it."""
+    from scenarios_saves import _PausedHandover
+    api, grid, _, partition, _ = _call_fixture(bench, take_offline=False)
+    bench.cluster.post("/automatic/pause")
+    _require(bench, "fresh remote grid has no source pin", not _remote_presence(bench, partition))
+    handover = _PausedHandover(bench, partition, clientless=True)
+    pause = handover.wait_pause()
+    try:
+        frozen = bench.cluster.node("node-1", f"/offline-test-capture-hold?grid={grid}")
+        _require(bench, "actual source transfer froze the target grid", frozen["frozen"])
+        answer = api.open_remote_terminal(grid, timeout=4)
+        bench.record("frozen-new-pin-request", answer)
+        _require(bench, "authenticated client sent a fresh absent-grid add request", answer.get("replicationRequests", 0) > 0)
+        bench.check("frozen source denies a new terminal pin", not answer.get("screenOpen") and not _remote_presence(bench, partition))
+        # The real remove request also exercises cancellation of any pending replay.
+        api.close_remote_terminal()
+        bench.check("cancel/replay cannot acquire a pin on the frozen source", not _remote_presence(bench, partition)
+            and bench.cluster.node("node-1", f"/offline-test-capture-hold?grid={grid}")["frozen"])
+    finally:
+        handover.release(pause["transferId"])
+        _require(bench, "source transfer completes after the frozen window", handover.finish() and handover.error is None, str(handover.error))
+    _require(bench, "target now has the transferred grid", bool(_poll(lambda: _owner_of(bench, grid) == ("node-2", partition), 30)))
+    control = _open_terminal(api, grid)
+    bench.record("after-transfer-positive-control", control)
+    bench.check("same friendly grid can be pulled and pinned after transfer", control.get("screenOpen") is True
+        and _owner_of(bench, grid) == ("node-1", partition) and bool(_remote_presence(bench, partition)))
+    api.close_remote_terminal()
+    bench.exercised(actualFrozenSource=True, actualNewClientAdd=True, cancellation=True, afterTransferPositive=True)
 
 
 def offline_admin_profile_race(bench):
@@ -1623,6 +1656,7 @@ SCENARIOS_OFFLINE.update({
     "P2-OFF-CALL-CONFLICT": (p2_off_call_conflict, "two live clients on separate nodes cannot steal a pinned partition in three minutes", "3"),
     "T-OC-07": (t_oc_07, "real PB/timer/ejector Block and Freeze policies through shared wake", "3"),
     "T-OC-09": (t_oc_09, "actual shared-apply crash, immutable-Final retry and post-Final no-repeat recovery", "3"),
+    "OFF-FROZEN-NEW-PIN": (offline_frozen_new_pin, "Frozen source denies actual new terminal pin and replay", "3"),
     "OFF-ADMIN-PROFILE-RACE": (offline_admin_profile_race, "Profile preflight/committed-handover/frozen-source refusal (U1)", "3"),
     "OFF-CACHE-DURABILITY": (offline_cache_durability, "WA-local cache clear journal and pre-Final replacement (R8)", "3"),
     "P2-OFF-CALL-DENY": (p2_off_call_deny, "authenticated hostile-owner and missing-relay requests do not wake", "3"),
