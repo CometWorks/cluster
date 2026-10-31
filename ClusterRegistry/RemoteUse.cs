@@ -22,7 +22,9 @@ internal sealed partial class GatewayRegistry
                     || owner.Epoch != epoch || owner.Generation != reported.Generation) continue;
                 // Both samples must name this generation; a delayed game-thread snapshot must not
                 // acquire the newer generation sampled by the heartbeat thread.
-                if (reports.TryGetValue(reported.Partition, out var report) && report.Generation != reported.Generation) continue;
+                // Missing means this ownership was not yet in the game-thread sample. A clear
+                // must be an explicit empty record carrying that sample's generation too.
+                if (!reports.TryGetValue(reported.Partition, out var report) || report.Generation != reported.Generation) continue;
                 _remoteUse.Remove(reported.Partition);
                 if (report?.Users is { Length: > 0 })
                     _remoteUse[reported.Partition] = (node, epoch, reported.Generation, report.Users.Where(id => id != 0).Distinct().Take(1024).ToArray());

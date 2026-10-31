@@ -30,7 +30,7 @@ internal static partial class SelfTest
             refused = false;
             try { registry.TakeOffline(offer); } catch (RegistryConflictException) { refused = true; }
             Check(refused && !registry.IsOffline(17), "remote-use blocks offline in the registry invariant, not only its HTTP caller");
-            registry.ReportRemoteUse(one.Node, one.Epoch, versions, new());
+            registry.ReportRemoteUse(one.Node, one.Epoch, versions, new() { [17] = new(owned.Generation, []) });
             Check(!registry.HasRemoteUse(17), "closing UI/disconnect clears remote presence");
             var offline = registry.TakeOffline(offer);
             Check(offline.OfflineGameFrame == 100 && offline.ProfileSummary?.GetArrayLength() == 1, "profile summary survives the offline offer");
@@ -58,6 +58,10 @@ internal static partial class SelfTest
             registry.ReportRemoteUse(one.Node, one.Epoch, current, new() { [17] = new(owned.Generation, [81]) });
             Check(registry.HasRemoteUse(17), "old game-thread presence paired with new ownership cannot clear current users");
             registry.ReportRemoteUse(one.Node, one.Epoch, current, new());
+            Check(registry.HasRemoteUse(17), "snapshot missing the newly owned partition cannot clear its users");
+            registry.ReportRemoteUse(one.Node, one.Epoch, current, new() { [17] = new(owned.Generation, []) });
+            Check(registry.HasRemoteUse(17), "delayed empty snapshot retains its sampled old generation");
+            registry.ReportRemoteUse(one.Node, one.Epoch, current, new() { [17] = new(claim.Ownership.Generation, []) });
             Check(!registry.HasRemoteUse(17), "explicit current-generation empty snapshot clears users");
         }
         finally { Directory.Delete(directory, true); }
