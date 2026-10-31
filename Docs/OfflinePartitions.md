@@ -92,8 +92,9 @@ cancel pending work. Proxy relay reach and friendly ownership/remote sharing are
 waking; moderators bypass those checks, never rate limits. The service permits one pending
 request per client, a 10-second entity cooldown and six offline admissions per minute.
 
-A directed request loads onto the caller's node and reasserts while pending. A second caller
-cannot steal a live reserved remote/laser target. Once local, vanilla rights are checked before
+A directed request loads onto the caller's node and reasserts while pending; an unavailable
+caller is refused without redirecting. A same-node approach refresh preserves the reservation.
+A second caller cannot steal a live reserved remote/laser target. Once local, vanilla rights are checked before
 pinning and forcing replication (also for online pulls). A brief receiver-settle retry covers the
 Update100 gap between entity registration and antenna graph readiness. HUD notices start after
 two seconds, repeat every ten, and report failure at denial/timeout. Default timeout: 120 seconds.
@@ -157,6 +158,9 @@ Node, WA and Registry compile with post-build deployment disabled. New productio
 were resolved against local DS binaries (`d24b196b`, `a90270cc`, replicable request `d6d1e890`);
 confirmation against an actual running-node hash dump remains pending. The always-on CI job runs
 the detached model proof. No version was bumped.
+
+The vendored plugin-protocol hash check also passes, and the existing CLI suite passes
+153 tests with one skip. These do not exercise a game or a remote terminal.
 
 | Required scenario | Current proof / remaining obligation |
 |---|---|

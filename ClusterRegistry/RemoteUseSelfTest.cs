@@ -31,7 +31,15 @@ internal static partial class SelfTest
             Check(!registry.HasRemoteUse(17), "closing UI/disconnect clears remote presence");
             var offline = registry.TakeOffline(offer);
             Check(offline.OfflineGameFrame == 100 && offline.ProfileSummary?.GetArrayLength() == 1, "profile summary survives the offline offer");
+            Check(registry.RequestOfflineLoad(17, "missing", "remote") == "no-target" && offline.LoadRequestedNode == null,
+                "radio call-up never redirects away from an unavailable caller");
+            Check(registry.RequestOfflineLoad(17, null, "laser") == "no-target" && offline.LoadRequestedNode == null,
+                "laser call-up needs its source node");
             Check(registry.RequestOfflineLoad(17, one.Node, "remote") == "requested:one", "call-up directed to caller");
+            now += TimeSpan.FromSeconds(11);
+            registry.Heartbeat(one.Node, one.Epoch, []); registry.Heartbeat(two.Node, two.Epoch, []);
+            Check(registry.RequestOfflineLoad(17, one.Node, "approach") == "requested:one" && offline.LoadReason == "remote",
+                "same-node proximity refresh cannot demote the call-up reservation");
             Check(registry.RequestOfflineLoad(17, two.Node, "remote") == "requested:one", "second caller cannot steal first target before load");
             Check(registry.ClaimRecoveries(two.Node, two.Epoch, []).Length == 0, "only reserved caller can claim");
             var claim = registry.ClaimRecoveries(one.Node, one.Epoch, []).Single();

@@ -151,7 +151,7 @@ public static class RemotePullService
 					{
 						string refusal = await OnGame(demand, () => Admit(demand, entry));
 						if (refusal != null) { Count(refusal); await Notice(demand, true); return; }
-											}
+					}
 					if (Environment.TickCount64 >= nextLoad)
 					{
 						// Revalidate reach/access on every renewed demand: a stale click is not an authorization lease.

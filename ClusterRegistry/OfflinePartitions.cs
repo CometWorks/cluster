@@ -240,7 +240,9 @@ internal sealed partial class GatewayRegistry
     /// <summary>
     /// Demand for an offline partition: aim a directed load at <paramref name="node"/> (the node whose
     /// player or partition is approaching), or, when that one cannot take it or
-    /// none is named, at the serving regular node with the fewest partitions (<see cref="FreeOfflineTarget"/>). Answers what happened; never throws for "not offline" - demand races the load.
+    /// none is named, at the serving regular node with the fewest partitions (<see cref="FreeOfflineTarget"/>).
+    /// Radio/laser call-ups require their named caller node instead of falling back.
+    /// Answers what happened; never throws for "not offline" - demand races the load.
     /// </summary>
     public string RequestOfflineLoad(ulong partition, string? node, string reason)
     {
@@ -254,19 +256,22 @@ internal sealed partial class GatewayRegistry
             // then switched the client off the closing node without it, and the route pinned the drain until a
             // forced reconnect (node-2 parked, then relaunched).
             IReadOnlyCollection<string> draining = DrainingNodes?.Invoke() ?? [];
-            string? target = node != null && CanTakeOfflineLoad(node, now, draining) ? node : FreeOfflineTarget(row, node, now, draining);
+            bool callUp = reason is "remote" or "laser";
+            string? target = node != null && CanTakeOfflineLoad(node, now, draining) ? node
+                : callUp ? null : FreeOfflineTarget(row, node, now, draining);
             if (target == null) return "no-target";
             // Deliberate call-ups race for one unsplittable partition. Keep the first live target
             // until its demand expires; a second requester must use ordinary conflict-checked pull.
-            if (row.LoadReason is "remote" or "laser" && row.LoadRequestedNode is { } reserved && reserved != target && row.LoadRequestedAt is { } reservedAt
-                && now - reservedAt < OfflineLoadRequestTtl && CanTakeOfflineLoad(reserved, now, draining))
-                return "requested:" + reserved;
+            bool reserved = row.LoadReason is "remote" or "laser" && row.LoadRequestedNode is { } reservedNode && row.LoadRequestedAt is { } reservedAt
+                && now - reservedAt < OfflineLoadRequestTtl && CanTakeOfflineLoad(reservedNode, now, draining);
+            if (reserved && row.LoadRequestedNode != target) return "requested:" + row.LoadRequestedNode;
             bool changed = row.LoadRequestedNode != target || row.LoadRequestedAt is not { } at || now - at >= TimeSpan.FromSeconds(10);
             if (!changed) return "requested:" + target;
             bool first = row.LoadRequestedNode == null || row.LoadRequestedAt is not { } last || now - last >= OfflineLoadRequestTtl;
             row.LoadRequestedNode = target;
             row.LoadRequestedAt = now;
-            row.LoadReason = reason;
+            // An approach on the same node can refresh the request, but cannot demote its call-up reservation.
+            if (!reserved) row.LoadReason = reason;
             if (first)
                 Console.WriteLine($"offline partition {partition} load requested onto {target}, reason {reason}");
             // Demand is volatile by nature and re-asserted by whoever still has it: the coalesced
