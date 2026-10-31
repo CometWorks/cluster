@@ -547,8 +547,21 @@ def offline_remote_capture_race(bench):
     bench.cluster.node("node-1", f"/offline-test-capture-hold?partition={partition}", "POST")
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
-            request = pool.submit(bench.cluster.post, f"/registry/pull-demands?partition={partition}&source=node-1&target=node-2", timeout=60)
-            held = _poll(lambda: (lambda s: s if s["entered"] else None)(bench.cluster.node("node-1", f"/offline-test-capture-hold?grid={grid}")), 15, .1)
+            early = []
+            held = None
+            for _ in range(20):
+                request = pool.submit(bench.cluster.post, f"/registry/pull-demands?partition={partition}&source=node-1&target=node-2", timeout=60)
+                held = _poll(lambda: (lambda s: s if s["entered"] else {"early": True} if request.done() else None)(
+                    bench.cluster.node("node-1", f"/offline-test-capture-hold?grid={grid}")), 15, .1)
+                if held and not held.get("early"):
+                    break
+                # Source-local close precedes its next ownership-fenced heartbeat.
+                # Early remote-use refusal is correct; wait for that explicit clear.
+                outcome = request.result(timeout=60)
+                early.append(outcome)
+                bench.record("capture-race-before-heartbeat-clear", early)
+                _require(bench, "only the old presence snapshot delays arming the race", outcome.get("reason") == "remote-use", json.dumps(outcome))
+                time.sleep(1)
             _require(bench, "gateway passed its reads and reached held source capture", bool(held) and not held["frozen"])
             opened = _open_terminal(api, grid, timeout=10)
             _require(bench, "real terminal acquires its permanent pin inside the capture gap", opened.get("screenOpen") is True
