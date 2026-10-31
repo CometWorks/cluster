@@ -890,7 +890,20 @@ def _zone_reference(bench, grid, partition, label, seconds=30, blocked=False, de
     _require(bench, label + ": native profile completes", bool(_poll(lambda: bench.cluster.node("node-1",
         f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))
     if depleted:
-        bench.cluster.node("node-1", f"/offline-test-limit-fuel?grid={grid}&fuel=0.03", "POST")
+        # Align one finite, steady-demand interval to an ACTUAL vanilla fuel settlement.
+        # A reactor samples output every 900..3600 frames; do not pretend it bills at 100.
+        prior = bench.cluster.node("node-1", f"/offline-test-zone-state?grid={grid}")["producers"][0]
+        tick_state = _poll(lambda: (lambda s: s if s["producers"][0]["fuel"] < prior["fuel"] else None)(
+            bench.cluster.node("node-1", f"/offline-test-zone-state?grid={grid}")), prior["timerFrames"] / 60 + 10, .2)
+        _require(bench, label + ": observed a real reactor fuel timer settlement", bool(tick_state))
+        producer = tick_state["producers"][0]
+        profile = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}", "POST")
+        source = next(s for s in profile["Sources"] if s["Block"] == producer["block"])
+        rate = next(m["Amount"] for m in source["Fuel"] if m["Item"] == "MyObjectBuilder_Ingot/Uranium")
+        quota = max(.000001, math.floor(producer["output"] * producer["timerFrames"] * rate * 1000000) / 1000000 - .000002)
+        bench.record(label + "-native-timer", {"state": tick_state, "quota": quota})
+        bench.cluster.node("node-1", f"/offline-test-limit-fuel?grid={grid}&fuel={quota:.6f}", "POST")
+        seconds = producer["timerFrames"] / 60 + 5
     initial = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}", "POST")
     _require(bench, label + ": actual player zone and both production blocks are captured", len(initial["Upkeep"]) == 1
              and initial["Upkeep"][0]["PowerSink"] >= 0 and len(initial["Production"]) == 2)
@@ -911,25 +924,41 @@ def _zone_reference(bench, grid, partition, label, seconds=30, blocked=False, de
     # A reactor samples current output on its native timer, so retain a single full-output
     # timer tick as the endpoint envelope, and record raw quantities for longer baselines.
     reactor = next(s for s in initial["Sources"] if s["Kind"] == "Reactor")
-    allowance = reactor["Maximum"] * 100 * next(m["Amount"] for m in reactor["Fuel"] if m["Item"] == fuel)
+    timer_frames = max(s["producers"][0]["timerFrames"] for s in samples)
+    allowance = reactor["Maximum"] * timer_frames * next(m["Amount"] for m in reactor["Fuel"] if m["Item"] == fuel)
     bench.check(label + ": native fuel burn matches modeled delivered output within one reactor tick", abs(native_burn - model_burn) <= allowance + .00001,
                 json.dumps({"nativeBurn": native_burn, "modeledBurn": model_burn, "oneTick": allowance}))
     supplied = sum(result["ProducerEnergyMWh"].values())
     consumed = sum(result["ConsumerEnergyMWh"].values()) + sum(result["StorageInputEnergyMWh"].values())
     bench.check(label + ": one shared grid budget conserves delivered energy", abs(supplied - consumed) < 1e-8)
+    bench.check(label + ": observed reactor output matches all native sink inputs", all(abs(
+        sum(p["output"] for p in s["producers"]) - sum(c["input"] for c in s["consumers"])) < .0001 for s in samples)
+        if all(not store["Enabled"] for store in initial["Storage"]) else True)
     for production in initial["Production"]:
         benchmark = next((r for r in production["Recipes"] if r["Id"].endswith("/IronOreToIngot") or r["Id"].endswith("/SteelPlate")), None)
         if benchmark is None:
             continue
-        for output in benchmark["Outputs"]:
-            item = output["Item"]
-            tick = benchmark["UnitsPerFrame"] * production["TickFrames"] * output["Amount"] + 1.00001
-            bench.check(label + ": native produced stock stays within one production tick", abs(observed.get(item, 0) - modeled.get(item, 0)) <= tick,
-                        json.dumps({"item": item, "native": observed.get(item, 0), "modeled": modeled.get(item, 0), "oneTick": tick}))
+        for material in benchmark["Inputs"] + benchmark["Outputs"]:
+            item = material["Item"]
+            tick = (benchmark["UnitsPerFrame"] * production["TickFrames"] + 1) * material["Amount"] + .00001
+            for inventory_index in material["Inventories"]:
+                captured = initial["Inventories"][inventory_index]
+                def amount(profile):
+                    inventory = next(i for i in profile["Inventories"] if i["Block"] == captured["Block"] and i["Index"] == captured["Index"])
+                    return sum(s["Amount"] for s in inventory["Stacks"] if s["Item"] == item)
+                native_amount, model_amount = amount(actual), amount(predicted)
+                bench.check(label + ": native input/output inventory stays within one production tick", abs(native_amount - model_amount) <= tick,
+                            json.dumps({"block": captured["Block"], "item": item, "native": native_amount, "modeled": model_amount, "oneTick": tick}))
         if blocked:
             bench.check(label + ": blocked/empty production uses standby draw", result["ProductionUnits"].get(str(production["Block"]), 0) < .0001
                         and abs(result["ConsumerEnergyMWh"][str(production["Block"])] - production["IdlePower"] * result["Frames"] * .016 / 3600) < 1e-8)
     zone = result["Zones"][0]
+    for store in actual["Storage"]:
+        expected = next(s for s in predicted["Storage"] if s["Block"] == store["Block"])
+        outgoing = sum(s["Maximum"] for s in initial["Sources"] if s["Block"] == store["Block"])
+        tick = (store["MaxInput"] + outgoing) * 100 / 216000
+        bench.check(label + ": native battery energy follows its mode and recharge loss", abs(store["Amount"] - expected["Amount"]) <= tick + .00001,
+                    json.dumps({"native": store["Amount"], "modeled": expected["Amount"], "oneTick": tick}))
     bench.check(label + ": actual bubble agrees with modeled active/activation state", state["active"] == (zone["Exists"] and not zone["Activating"]))
     bench.check(label + ": power transitions retain functional block switch and settings", state["blockEnabled"] is True
                 and state["radius"] == samples[0]["radius"] and state["allowedActions"] == samples[0]["allowedActions"])
@@ -961,6 +990,8 @@ def t_oc_11(bench):
     fixture = bench.cluster.node("node-1", f"/rc-test-ensure?owner={owner}", "POST")
     grid = fixture["grid"]
     bench.cluster.node("node-1", f"/offline-test-zone?grid={grid}", "POST")
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=battery-off", "POST")
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=restore-production", "POST")
     partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 60)
     _require(bench, "powered zone fixture has one owner", bool(partition))
     _require(bench, "native zone is running before profiling", bool(_poll(lambda:
@@ -968,11 +999,13 @@ def t_oc_11(bench):
     bench.cluster.post("/automatic/pause")
     first, _ = _zone_reference(bench, grid, partition, "zone-radius10")
     bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=radius20", "POST")
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=restore-production", "POST")
     larger, _ = _zone_reference(bench, grid, partition, "zone-radius20")
     first_draw = first["predicted"]["Upkeep"][0]["OperationalPower"]
     bigger_draw = larger["predicted"]["Upkeep"][0]["OperationalPower"]
     bench.check("actual radius-dependent sink demand drives the shared budget", bigger_draw > first_draw, f"{first_draw} -> {bigger_draw} MW")
     bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=box-zone", "POST")
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=restore-production", "POST")
     boxed, boxed_state = _zone_reference(bench, grid, partition, "zone-box")
     bench.check("actual shape-dependent sink demand is captured", boxed_state["shape"] == "Box"
                 and boxed["predicted"]["Upkeep"][0]["OperationalPower"] != bigger_draw)

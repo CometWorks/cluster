@@ -77,7 +77,9 @@ internal static class OfflineTestRoutes
             ulong partition = ulong.Parse(TestRoutes.Query(context, "partition"));
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
             {
-                var actual = OfflineCompensation.CaptureFor(ClusterRuntime.m_partitions.Get(partition)).Single();
+                // The live endpoint may have emptied a queue since the starting census. Read
+                // stocks/working state without requiring the old profiling signature to survive.
+                var actual = OfflineCompensation.CaptureFor(ClusterRuntime.m_partitions.Get(partition), quick: true).Single();
                 var predicted = JsonSerializer.Deserialize<OfflineProfile>(JsonSerializer.Serialize(reference, OfflineProfile.Json), OfflineProfile.Json);
                 var result = OfflineModel.Simulate(predicted, actual.FrozenFrame, OfflineCompensation.MaxFrames);
                 return new { actual = JsonSerializer.SerializeToElement(actual, OfflineProfile.Json),
@@ -197,7 +199,7 @@ internal static class OfflineTestRoutes
             {
                 production.InputInventory.Clear(); production.OutputInventory.Clear();
                 var item = MyDefinitionId.Parse(production is MyRefinery ? "MyObjectBuilder_Ore/Iron" : "MyObjectBuilder_Ingot/Iron");
-                var amount = MyFixedPoint.Min(1000, production.InputInventory.ComputeAmountThatFits(item));
+                var amount = MyFixedPoint.Min(5000, production.InputInventory.ComputeAmountThatFits(item));
                 production.InputInventory.AddItems(amount, MyObjectBuilderSerializerKeen.CreateNewObject(item));
             }
         else if (mode == "full-production")
@@ -219,7 +221,6 @@ internal static class OfflineTestRoutes
         }
         else if (mode == "solar-backup")
         {
-            foreach (var battery in grid.GetFatBlocks<MyBatteryBlock>()) { battery.Enabled = true; battery.ChargeMode = Sandbox.ModAPI.Ingame.ChargeMode.Discharge; }
             for (int y = 0; y < 5; y++)
             {
                 var armor = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_CubeBlock>("LargeBlockArmorBlock");
@@ -234,6 +235,8 @@ internal static class OfflineTestRoutes
             var world = MatrixD.CreateWorld(Vector3D.Zero, sun, Vector3D.CalculatePerpendicularVector(sun));
             var aligned = MatrixD.Invert(local) * world;
             aligned.Translation = grid.PositionComp.GetPosition(); grid.WorldMatrix = aligned;
+            // Recreate the powered bubble only after moving its block into the final pose.
+            foreach (var battery in grid.GetFatBlocks<MyBatteryBlock>()) { battery.ChargeMode = Sandbox.ModAPI.Ingame.ChargeMode.Discharge; battery.Enabled = true; }
         }
         else if (mode == "stop-rotor")
             foreach (var rotor in grid.GetFatBlocks<MyMotorStator>())
@@ -382,7 +385,10 @@ internal static class OfflineTestRoutes
             remainingMs = zone != null && !component.Activating ? component.UpkeepTime : manager.m_timeLeft.TotalMilliseconds, activationMs = component.ActivationTime,
             radius = zone?.Radius ?? saved?.Radius, shape = (zone?.Shape ?? saved?.Shape)?.ToString(),
             allowedActions = (zone?.AllowedActions ?? saved?.AllowedActions)?.ToString(),
-            producers = grid.GetFatBlocks<MyReactor>().Select(r => new { block = r.EntityId, output = r.SourceComp.CurrentOutput, maximum = r.MaxOutput }).ToArray(),
+            producers = grid.GetFatBlocks<MyReactor>().Select(r => new { block = r.EntityId, output = r.SourceComp.CurrentOutput, maximum = r.MaxOutput,
+                timerFrames = r.m_timer?.TimerTickInFrames ?? 0, fuel = (decimal)r.GetInventory().GetItemAmount(MyDefinitionId.Parse("MyObjectBuilder_Ingot/Uranium")) }).ToArray(),
+            consumers = grid.GetFatBlocks().Where(b => b.ResourceSink != null).Select(b => new { block = b.EntityId,
+                input = b.ResourceSink.CurrentInputByType(MyResourceDistributorComponent.ElectricityId) }).ToArray(),
             state = Snapshot(new[] { (MyObjectBuilder_CubeGrid)grid.GetObjectBuilder() }) };
     }
 
