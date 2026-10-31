@@ -23,19 +23,21 @@ voids the trial instead of reading as either answer.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import signal
 import subprocess
 import time
 import urllib.request
+import uuid
 from pathlib import Path
 
 from bench import REMOTE_PASSWORD, REMOTE_USER
 from cluster import ClusterError
 from se_remote import RemoteAPI
 from scenarios_core import CLIENT_ID, _enter_nearest_cockpit, _join, _lines, _nodes
-from scenarios_wa_ops import _client_identity, _poll, _require, _session
+from scenarios_wa_ops import _authority, _client_identity, _poll, _require, _session, _wa_failover
 
 #: Two sweeps (5 s apart) after the switch take an eligible partition; the rest is margin, and the
 #: whole pause stays well under DirectTransport's 30 s DisconnectTimeout.
@@ -275,15 +277,22 @@ SCENARIOS_OFFLINE = {
 
 # SE-346: these use the existing real-client RC/terminal fixture and the production sweep/load.
 # They deliberately do not label the unavailable multi-client/planet differential fixtures as passing.
-def _call_fixture(bench, *, pb=False):
+def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=False, hostile=False):
     api = _join(bench)
-    bench.cluster.post("/automatic/pause")
+    # Offline admission requires fresh geometry reports from the normal automatic loop.
+    # Pausing it before the first offline row starves those reports and refuses every offer.
     for node in _nodes(bench):
         if node != "wa-1":
             _put_config(bench, node, {"offline.enabled": "false"})
     identity = _client_identity(bench)
-    fixture = bench.cluster.node("node-1", f"/rc-test-ensure?owner={identity}", "POST")
+    fixture = bench.cluster.node("node-1", f"/rc-test-ensure?owner={identity}&dynamic={str(dynamic).lower()}", "POST")
     grid, block, relay = fixture["grid"], fixture["block"], fixture["relay"]
+    bench.exercised(relay=relay)
+    if production:
+        bench.record("production-fixture", bench.cluster.node("node-1", f"/offline-test-production?grid={grid}", "POST"))
+    if unknown or hostile:
+        mode = "unknown" if unknown else "hostile"
+        bench.record(mode + "-fixture", bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode={mode}", "POST"))
     partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 90)
     _require(bench, "remote fixture has an owned partition", bool(partition), json.dumps(fixture))
     # Suit broadcasting is an explicit player action in vanilla.
@@ -299,9 +308,19 @@ def _call_fixture(bench, *, pb=False):
     for node in _nodes(bench):
         _put_config(bench, node, {"offline.wakeMeters": "0", "offline.leadSeconds": "0", "offline.quietMeters": "0"})
     _put_config(bench, "node-1", {"offline.enabled": "true", "offline.minOnlineSeconds": "0", "offline.graceSeconds": "0", "offline.settleFrames": "0"})
+    if unknown:
+        _put_config(bench, "node-1", {"offline.unknownBlocks": "Block"})
+        def blocked():
+            status = bench.cluster.node("node-1", "/offline").get("owner", {}).get("compensation", {})
+            return next((p for p in status.get("profiling", []) if grid in p.get("members", []) and p.get("state") == "unknown-blocked"), None)
+        bench.record("unknown-blocked", _poll(blocked, 30))
+        _require(bench, "Block policy keeps the real unknown group online", blocked() is not None and _offline_row(bench, partition) is None)
+        _put_config(bench, "node-1", {"offline.unknownBlocks": "Freeze"})
     row = _poll(lambda: _offline_row(bench, partition), 120)
     _require(bench, "station reached the durable offline table", bool(row), str(partition))
     bench.record("call-up-before", row)
+    # Leave enough authority frames for a non-zero compensation interval, independent of load latency.
+    time.sleep(4)
     return api, grid, block, partition, addresses
 
 
@@ -318,20 +337,36 @@ def _remote_presence(bench, partition):
 
 
 def p2_off_call_terminal(bench):
-    api, grid, block, partition, _ = _call_fixture(bench)
+    api, grid, block, partition, _ = _call_fixture(bench, production=True)
+    profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
+    bench.record("production-offline-profiles", profiles)
+    _require(bench, "real refinery profile was captured in the Final", any(p.get("Production") for p in profiles))
+    bench.cluster.node("node-1", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
     started = time.monotonic()
     opened = api.open_remote_terminal(grid, timeout=120)
     latency = time.monotonic() - started
     bench.record("call-up-terminal", opened)
     _require(bench, "real client opened the woken remote terminal", opened.get("screenOpen") is True and opened.get("connected") is True, json.dumps(opened))
+    bench.screenshot(CLIENT_ID, "02-woken-production-terminal")
     _require(bench, "call-up loads onto the caller's node", _owner_of(bench, grid) == ("node-1", partition))
     _require(bench, "terminal pin becomes remote presence", bool(_poll(lambda: _remote_presence(bench, partition), 15)))
+    # A source-local terminal opened after an earlier gateway report must be checked at capture.
+    generation = next(p["Generation"] for p in bench.cluster.get("/registry/partitions") if p["Partition"] == partition)
+    refusal = ""
+    try:
+        bench.cluster.node("node-1", f"/capture?transferId={uuid.uuid4()}&partition={partition}&generation={generation}&clientless=true")
+    except Exception as error:
+        refusal = str(error)
+    bench.check("source capture atomically refuses an active terminal pin", "remote-use" in refusal, refusal[:300])
     # Outlast two sweep passes; the fixture's zero grace would otherwise offline it again.
     time.sleep(12)
     bench.check("open terminal remains online", _offline_row(bench, partition) is None)
     status = bench.cluster.node("node-1", "/offline")
     bench.record("call-up-status", status)
-    bench.check("wake ran through shared compensation", bool(status.get("owner", {}).get("compensation", {}).get("results")))
+    results = status.get("owner", {}).get("compensation", {}).get("results", [])
+    result = next((r for r in results if r.get("Group") == grid), {})
+    bench.check("shared wake credits actual refinery output", not result.get("Skipped") and result.get("ItemDelta", {}).get("MyObjectBuilder_Ingot/Iron", 0) > 0, json.dumps(result))
+    bench.record("production-applied-builders", bench.cluster.node("node-1", "/offline-test-recovery"))
     api.close_remote_terminal()
     _require(bench, "closing removes remote presence", bool(_poll(lambda: not _remote_presence(bench, partition), 15)))
     _require(bench, "closed remote terminal station can offline again", bool(_poll(lambda: _offline_row(bench, partition), 60)))
@@ -340,7 +375,7 @@ def p2_off_call_terminal(bench):
 
 
 def p2_off_call_rc(bench):
-    api, grid, block, partition, _ = _call_fixture(bench)
+    api, grid, block, partition, _ = _call_fixture(bench, dynamic=True)
     taken = api.take_remote_control(grid, block, timeout=120)
     bench.record("call-up-control", taken)
     _require(bench, "real client takes the offline remote control", taken.get("controlledByMe") is True, json.dumps(taken))
@@ -349,9 +384,20 @@ def p2_off_call_rc(bench):
     bench.check("controlled partition stays online", _offline_row(bench, partition) is None)
     status = bench.cluster.node("node-1", f"/rc-test-status?block={block}")
     bench.check("server agrees on the remote controller", status.get("controlled") is True)
+    bench.ensure_gameplay_focus(CLIENT_ID)
+    _require(bench, "the remote-control fixture is a dynamic drone", status.get("isStatic") is False)
+    api.set_input_state(keys=["W"])
+    try:
+        time.sleep(4)
+        driven = bench.cluster.node("node-1", f"/rc-test-status?block={block}")
+    finally:
+        api.clear_input_state()
+    distance = math.dist(status["position"], driven["position"])
+    bench.record("drone-driving", {"before": status, "after": driven, "metres": distance})
+    bench.check("raw client thrust drives the server-side drone", distance > 2 and driven.get("controlled") is True, f"{distance:.3f} m")
+    bench.screenshot(CLIENT_ID, "02-driving-woken-drone")
     bench.cluster.node("node-1", f"/rc-test-release?block={block}", "POST")
-    bench.exercised(grid=grid, block=block, partition=partition,
-                    limitation="station fixture proves take and presence; dynamic drone driving still needs its acceptance fixture")
+    bench.exercised(grid=grid, block=block, partition=partition, drivenMetres=distance)
 
 
 def p2_off_call_igc(bench):
@@ -368,8 +414,130 @@ def p2_off_call_igc(bench):
     bench.exercised(grid=grid, block=block, partition=partition, source=source, target=target)
 
 
+def t_oc_07(bench):
+    api, grid, block, partition, _ = _call_fixture(bench, unknown=True)
+    profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
+    bench.record("unknown-frozen-profiles", profiles)
+    profile = next(p for p in profiles if grid in p["Members"])
+    _require(bench, "Freeze reports PB/timer/ejection as unknown", profile["Confidence"] == "Frozen" and len(profile["Unknowns"]) >= 3, json.dumps(profile["Unknowns"]))
+    bench.cluster.node("node-1", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
+    opened = api.open_remote_terminal(grid, timeout=120)
+    _require(bench, "unknown-group wake opens through the real terminal", opened.get("screenOpen") is True, json.dumps(opened))
+    applied = bench.cluster.node("node-1", "/offline-test-recovery").get("applied")
+    bench.record("unknown-applied", applied)
+    _require(bench, "shared recovery observer saw the unknown builders", bool(applied))
+    blocks = next(g["blocks"] for g in applied["builders"] if g["grid"] == grid)
+    bench.check("PB Storage remains frozen before engine instantiation", any(b.get("storage") == "offline-storage-sentinel" for b in blocks))
+    result = next(r for r in applied["compensation"]["results"] if r["Group"] == grid)
+    bench.check("modeled battery compensates beside unknowns", not result.get("Skipped") and result["EnergyDelta"] < 0, json.dumps(result))
+    api.close_remote_terminal()
+
+
+def _applied(bench, node):
+    return bench.cluster.node(node, "/offline-test-recovery").get("applied")
+
+
+def _assert_applied_inventory(bench, profiles, applied, grid, label):
+    profile = next(p for p in profiles if grid in p["Members"])
+    result = next(r for r in applied["compensation"]["results"] if r["Group"] == profile["Group"])
+    expected = {}
+    for inventory in profile["Inventories"]:
+        for item in inventory["Stacks"]:
+            expected[item["Item"]] = expected.get(item["Item"], 0) + item["Amount"]
+    for item, delta in result["ItemDelta"].items():
+        expected[item] = expected.get(item, 0) + delta
+    actual = {}
+    for g in applied["builders"]:
+        if g["grid"] not in profile["Members"]:
+            continue
+        for block in g["blocks"]:
+            for inventory in block["inventories"]:
+                for item in inventory["items"]:
+                    actual[item["type"]] = actual.get(item["type"], 0) + item["amount"]
+    bench.check(label, not result.get("Skipped") and result["FromFrame"] == profile["SimulatedThrough"]
+                and all(abs(actual.get(k, 0) - v) < .00001 for k, v in expected.items()), json.dumps({"result": result, "actual": actual}))
+    return result
+
+
+def t_oc_09(bench):
+    _, grid, _, partition, _ = _call_fixture(bench, production=True)
+    profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
+    original = bench.cluster.get(f"/registry/saves/newest?partition={partition}")
+    bench.record("crash-original-profiles", profiles)
+    bench.record("crash-original-final", original)
+    _put_config(bench, "node-1", {"offline.enabled": "false"})
+    bench.cluster.node("node-2", f"/offline-test-recovery?grid={grid}&ms=45000", "POST")
+    bench.record("crash-wake-request", bench.cluster.post(f"/registry/partitions/offline/load?partition={partition}&node=node-2&reason=remote"))
+    first = _poll(lambda: _applied(bench, "node-2"), 90)
+    _require(bench, "node-2 reached shared apply before instantiation/Final", bool(first))
+    bench.record("crash-held-builders", first)
+    _assert_applied_inventory(bench, profiles, first, grid, "first apply uses exactly the original stocks plus its interval delta")
+    latest = bench.cluster.get(f"/registry/saves/newest?partition={partition}")
+    _require(bench, "held wake has not advanced the durable Final", latest["SaveId"] == original["SaveId"], json.dumps(latest["SaveId"]))
+    bench.cluster.node("node-1", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
+    bench.cluster.kill(slot="node-2")
+    def retry():
+        bench.cluster.post("/registry/leases/expire")
+        return _applied(bench, "node-1")
+    second = _poll(retry, 240, 2)
+    _require(bench, "another node actually recovered after SIGKILL in the apply window", bool(second))
+    bench.record("crash-retry-builders", second)
+    result = _assert_applied_inventory(bench, profiles, second, grid, "crash retry recomputes from original stocks without crediting the first attempt")
+    _require(bench, "retry credits nonzero production", result["ItemDelta"].get("MyObjectBuilder_Ingot/Iron", 0) > 0)
+    final = _poll(lambda: (lambda s: s if s["SaveId"]["Generation"] > original["SaveId"]["Generation"] else None)(bench.cluster.get(f"/registry/saves/newest?partition={partition}")), 90)
+    _require(bench, "post-compensation Final is catalogued", bool(final))
+    bench.record("crash-compensated-final", final)
+    bench.cluster.start_node("node-2")
+    bench.cluster.wait_node_log("node-2", "Game ready", timeout=180)
+    _put_config(bench, "node-2", {"offline.enabled": "false"})
+    bench.cluster.node("node-2", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
+    bench.cluster.kill(slot="node-1")
+    def after_final():
+        bench.cluster.post("/registry/leases/expire")
+        return _applied(bench, "node-2")
+    third = _poll(after_final, 240, 2)
+    _require(bench, "ordinary Final actually recovered after the second kill", bool(third))
+    bench.record("crash-after-final-builders", third)
+    bench.check("ordinary Final carries no profile to credit again", not any(r.get("Group") == grid for r in third["compensation"]["results"]))
+    bench.exercised(grid=grid, partition=partition, actualNodeKills=2, proof="shared apply/pre-Final crash/retry/catalogued-Final recovery; long differential still separate")
+
+
+def offline_cache_durability(bench):
+    """R8: a WA-local clear acknowledged from the actual journal survives pre-Final WA death.
+
+    This is command durability, not T-OC-12's twenty-production-base cache measurement.
+    """
+    bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
+    key = "native-offline-cache-clear"
+    bench.cluster.node("wa-1", f"/offline-test-cache?key={key}", "POST")
+    def cache(node):
+        return bench.cluster.node(node, "/offline")["owner"]["compensation"]["cache"]
+    _require(bench, "WA cache seeded before the snapshot", any(e["Key"] == key for e in cache("wa-1")["entries"]))
+    before = bench.cluster.get("/registry/global-saves/newest")["SaveId"]
+    bench.cluster.node("wa-1", "/global-save-capture", "POST")
+    saved = _poll(lambda: (lambda s: s if s["SaveId"] != before else None)(bench.cluster.get("/registry/global-saves/newest")), 90)
+    _require(bench, "pre-clear cache snapshot is catalogued", bool(saved))
+    _require(bench, "pre-clear snapshot has a holder besides the WA", bool(_poll(lambda: len(bench.cluster.get("/registry/global-saves/newest").get("Locations", [])) > 1, 60)))
+    bench.cluster.node("wa-1", "/global-save-register-hold?ms=60000", "POST")
+    cleared = bench.cluster.node("wa-1", f"/profiles/cache/clear?key={key}", "POST")
+    _require(bench, "WA-local clear acknowledged", cleared.get("cleared") is True, json.dumps(cleared))
+    journal = bench.cluster.get("/registry/global-journal?after=0")
+    bench.record("cache-clear-journal", journal)
+    _require(bench, "clear was journaled before success", any(e["Subsystem"] == "offline-rates-clear" and e["Payload"] == key for e in journal["Entries"]))
+    _require(bench, "no post-clear Final was catalogued before the kill", bench.cluster.get("/registry/global-saves/newest")["SaveId"] == saved["SaveId"])
+    _wa_failover(bench, _authority(bench)["Generation"])
+    restored = cache("wa-2")
+    bench.record("cache-after-wa-replacement", restored)
+    bench.check("replacement replays the acknowledged clear over its old snapshot", not any(e["Key"] == key for e in restored["entries"]))
+    # The epoch rejects a contribution created before the clear, even after the replacement.
+    bench.exercised(waKilledBeforeFinal=True, localClearJournaled=True, proof="native authority command journal/replacement; production cache reuse remains separate")
+
+
 SCENARIOS_OFFLINE.update({
     "P2-OFF-CALL-TERMINAL": (p2_off_call_terminal, "offline radio terminal, caller-node wake, pin and sweep lifecycle", "3"),
-    "P2-OFF-CALL-RC": (p2_off_call_rc, "offline radio control take and presence (dynamic-drive fixture pending)", "3"),
+    "P2-OFF-CALL-RC": (p2_off_call_rc, "offline dynamic drone radio control, raw client driving and presence", "3"),
     "P2-OFF-CALL-IGC": (p2_off_call_igc, "offline IGC remains a no-wake delivery failure", "3"),
+    "T-OC-07": (t_oc_07, "real PB/timer/ejector Block and Freeze policies through shared wake", "3"),
+    "T-OC-09": (t_oc_09, "actual shared-apply crash, immutable-Final retry and post-Final no-repeat recovery", "3"),
+    "OFF-CACHE-DURABILITY": (offline_cache_durability, "WA-local cache clear journal and pre-Final replacement (R8)", "3"),
 })

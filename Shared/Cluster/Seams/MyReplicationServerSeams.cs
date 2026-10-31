@@ -24,6 +24,7 @@ public static class MyReplicationServerSeams
 	public static bool ReplayRequest(this MyReplicationServer self, long gridEntityId, long medicalRoomId,
 		long interactedEntityId, byte flags, Endpoint clientEndpoint)
 	{
+		if (ClusterRuntime.IsFrozen(gridEntityId)) return false;
 		IMyReplicable replicable = self.m_callback.GetReplicableByEntityId(gridEntityId);
 		if (replicable == null || !self.m_clientStates.TryGetValue(clientEndpoint, out MyClient client)
 			|| !replicable.HasRightsForReplication(clientEndpoint, interactedEntityId, medicalRoomId)) return false;

@@ -84,7 +84,7 @@ internal static class OfflineRateCache
 				if (Contributions.TryGetValue(entry.Key, out var local) && entry.Samples >= local.Samples) Contributions.Remove(entry.Key);
 			}
 	}
-	internal static string Clear(string key) => ClusterRuntime.IsWorldAuthority ? ClearOnAuthority(key) : GlobalStateChannel.SendCommand(Subsystem + "-clear", key);
+	internal static string Clear(string key) => ClusterRuntime.IsWorldAuthority ? GlobalStateChannel.ExecuteLocalCommand(Subsystem + "-clear", key) : GlobalStateChannel.SendCommand(Subsystem + "-clear", key);
 	private static string ClearOnAuthority(string key)
 	{
 		if (string.IsNullOrEmpty(key) || key.Length > 4096) throw new ArgumentException("A cache key is required");

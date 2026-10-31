@@ -27,6 +27,7 @@ internal static partial class ClusterSelfTest
 	{
 		("membership-determinism", MembershipDeterminism),
 		("offline-save-sections", OfflineSaveSections),
+		("offline-solar-pivots", OfflineSolarPivots),
 		("membership-hysteresis", MembershipHysteresis),
 		("membership-atomicity", MembershipAtomicity),
 		("membership-conga", MembershipConga),

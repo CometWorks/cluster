@@ -18,6 +18,8 @@ namespace ClusterPlugin;
 
 internal static partial class OfflineCompensation
 {
+	internal static Vector3D SolarPivot(Vector3 pivot, MatrixD matrix) => matrix.Translation
+		+ matrix.Right * pivot.X + matrix.Up * pivot.Y + matrix.Forward * pivot.Z;
 	private static bool IsEnvironmental(MyCubeBlock block) => block is MySolarPanel or MyOxygenFarm;
 
 	/// <summary>Snapshot geometry on the game thread, ray-test off-thread, as the engine's own solar
@@ -36,8 +38,8 @@ internal static partial class OfflineCompensation
 			normal = Vector3.Transform(modern.PanelOrientation, matrix.GetOrientation());
 			twoSided = modern.m_isTwoSided;
 			legacy = false;
-			pivots = Enumerable.Range(0, modern.PivotAmount).Select(i => Vector3D.Transform(modern.m_pivots[i * (twoSided ? 2 : 1)], matrix)).ToArray();
-			if (twoSided) alternate = Enumerable.Range(0, modern.PivotAmount).Select(i => Vector3D.Transform(modern.m_pivots[i * 2 + 1], matrix)).ToArray();
+			pivots = Enumerable.Range(0, modern.PivotAmount).Select(i => SolarPivot(modern.m_pivots[i * (twoSided ? 2 : 1)], matrix)).ToArray();
+			if (twoSided) alternate = Enumerable.Range(0, modern.PivotAmount).Select(i => SolarPivot(modern.m_pivots[i * 2 + 1], matrix)).ToArray();
 		}
 		else
 		{

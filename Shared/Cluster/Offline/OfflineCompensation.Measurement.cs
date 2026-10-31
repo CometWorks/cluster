@@ -29,6 +29,7 @@ internal static partial class OfflineCompensation
 	private static readonly Dictionary<long, List<MeasurePlan>> Measurements = new();
 	private static readonly HashSet<(long Block, string Key)> Attempted = new();
 	private static readonly Dictionary<(long Block, string Key), double> PerBlockRates = new();
+	internal static bool CanMeasureAssembler(bool repeat, bool disassemble, double progress) => !repeat && !disassemble && progress == 0;
 
 	private static string RateKey(MyCubeBlock block, string blueprint, double formula) => string.Join("|", block.BlockDefinition.Id, blueprint,
 		string.Join(",", block.UpgradeValues.OrderBy(x => x.Key).Select(x => x.Key + "=" + x.Value.ToString("R", CultureInfo.InvariantCulture))),
@@ -42,6 +43,9 @@ internal static partial class OfflineCompensation
 		foreach (var entry in profile.Production.Where(p => p.Enabled))
 		{
 			var block = grids.SelectMany(g => g.GetFatBlocks()).OfType<MyProductionBlock>().First(b => b.EntityId == entry.Block);
+			// Repeat re-enqueues completed units, so queue shrinkage is not a throughput counter.
+			// Keep the formula fallback until an independent completion counter is available.
+			if (block is MyAssembler repeatAssembler && !CanMeasureAssembler(repeatAssembler.RepeatEnabled, repeatAssembler.DisassembleEnabled, repeatAssembler.CurrentProgress)) continue;
 			foreach (var recipe in entry.Recipes.Where(r => !r.Cached))
 			{
 				string key = RateKey(block, recipe.Id, recipe.UnitsPerFrame);
@@ -104,7 +108,7 @@ internal static partial class OfflineCompensation
 		}
 		else if (block is MyAssembler assembler)
 		{
-			if (assembler.CurrentProgress != 0 || assembler.DisassembleEnabled) return null;
+			if (!CanMeasureAssembler(assembler.RepeatEnabled, assembler.DisassembleEnabled, assembler.CurrentProgress)) return null;
 			int index = assembler.m_queue.FindIndex(q => q.Blueprint.Id == blueprint.Id);
 			if (index < 0) return null;
 			state.QueueOrder = assembler.m_queue.Select(q => q.ItemId).ToArray();

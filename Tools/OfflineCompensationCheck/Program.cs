@@ -1,7 +1,9 @@
 using ClusterPlugin;
 using System.Text.Json;
 
-if (args.Length == 3 && args[0] == "--save-container")
+if (args.Length == 2 && args[0] == "--review") { ReviewChecks.Run(args[1]); return; }
+
+if (args.Length == 3 && args[0] is "--save-container" or "--solar-pivots")
 {
     string plugin = Path.GetFullPath(args[1]);
     string[] probes = [Path.GetDirectoryName(plugin), Path.GetFullPath(args[2])];
@@ -23,10 +25,10 @@ if (args.Length == 3 && args[0] == "--save-container")
         return candidate == null || !File.Exists(candidate) ? null : System.Reflection.Assembly.LoadFrom(candidate);
     };
     var assembly = System.Reflection.Assembly.LoadFrom(plugin);
-    var method = assembly.GetType("ClusterPlugin.ClusterSelfTest", throwOnError: true).GetMethod("OfflineSaveSections", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+    var method = assembly.GetType("ClusterPlugin.ClusterSelfTest", throwOnError: true).GetMethod(args[0] == "--solar-pivots" ? "OfflineSolarPivots" : "OfflineSaveSections", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
     try { method.Invoke(null, null); }
     catch (System.Reflection.TargetInvocationException e) { throw e.InnerException; }
-    Console.WriteLine("Offline save container: 10 structural/compatibility assertions passed against the built plugin; no game process started.");
+    Console.WriteLine(args[0] == "--solar-pivots" ? "Solar pivots: identity/rotated engine-basis checks passed; cold math only, no raycasts." : "Offline save container: 10 structural/compatibility assertions passed against the built plugin; no game process started.");
     return;
 }
 
@@ -163,3 +165,4 @@ OfflineResult Run(OfflineProfile p, long frames) => OfflineModel.Simulate(p, p.S
     Check(rejected, "non-finite stock rejected");
 }
 Console.WriteLine($"Offline model: {checks} assertions passed (synthetic deterministic proofs; no game differential/GUI/performance claim).");
+ReviewChecks.Run("all");

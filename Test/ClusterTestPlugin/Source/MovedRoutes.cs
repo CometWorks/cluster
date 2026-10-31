@@ -751,7 +751,8 @@ internal static class MovedRoutes
         TestRoutes.Add("POST", "/rc-test-ensure", (context, path) =>
 		{
 					long rcOwner = QueryLong(context, "owner");
-					string result = Invoke(() => JsonSerializer.Serialize(RcTestHarness.EnsureRemoteControlGrid(rcOwner)));
+					bool dynamic = context.Request.QueryString["dynamic"] == "true";
+					string result = Invoke(() => JsonSerializer.Serialize(RcTestHarness.EnsureRemoteControlGrid(rcOwner, dynamic)));
 					Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 					return;
 		});

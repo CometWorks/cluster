@@ -140,7 +140,8 @@ internal sealed partial class PartitionPersistence
 	private volatile int m_projectedLoad;
 	/// <summary>Per-partition member counts for heartbeat Ownerships; swapped whole on the game thread.</summary>
 	private long m_nextRemoteUse;
-	private volatile Dictionary<ulong, ulong[]> m_remoteUsers = new();
+	private sealed record RemotePresence(uint Generation, ulong[] Users);
+	private volatile Dictionary<ulong, RemotePresence> m_remoteUsers = new();
 	private volatile Dictionary<ulong, int> m_partitionMembers = new Dictionary<ulong, int>();
 	private long m_nodeEpoch;
 	private volatile bool m_registryReady;
@@ -341,7 +342,9 @@ internal sealed partial class PartitionPersistence
 		if (Environment.TickCount64 >= m_nextRemoteUse)
 		{
 			m_nextRemoteUse = Environment.TickCount64 + 1000;
-			m_remoteUsers = RemoteUse.Capture(loadSnapshot);
+			var remote = RemoteUse.Capture(loadSnapshot);
+			lock (m_owned) m_remoteUsers = m_owned.ToDictionary(x => x.Key,
+				x => new RemotePresence(x.Value, remote.GetValueOrDefault(x.Key) ?? []));
 		}
 		if (m_disconnectForFence)
 		{

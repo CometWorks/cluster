@@ -4619,7 +4619,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     request.SimulationFrame, request.SaveFailure, request.RecoveryCapacity, request.Quarantined,
                     request.ProjectedLoad, request.LoadCapacity, request.RecoveryLoadsPending, request.Serving,
                     request.DeploymentRevision, request.ConfigurationVerified, request.ConfigurationFailure, request.Liveness);
-                _registry.ReportRemoteUse(request.Node, request.Epoch, request.RemoteUsers);
+                if (!request.Liveness) _registry.ReportRemoteUse(request.Node, request.Epoch, request.Ownerships, request.RemoteUsers);
                 if (request.Hitches != null)
                     foreach (HitchReport hitch in request.Hitches)
                         _handoverTelemetry.Hitch(hitch.TransferId, request.Node, hitch.Phase, hitch.Ms, hitch.Utc, hitch.PhaseMs);
@@ -6613,7 +6613,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             LogTransfer(transferId, partition, "begun", presyncId == null ? "" : $" presync={presyncId}");
 
             captured = true;
-            byte[] capture = await FencedCapture(ClusterUrl(source, "capture") + fence + "&clientless=true" + presyncQuery, partition);
+            byte[] capture = await FencedCapture(ClusterUrl(source, "capture") + fence + "&clientless=true"
+                + (allowRemoteUse ? "&allowRemoteUse=true" : "") + presyncQuery, partition);
             HandoverCapture handover = HandoverCapture.Parse(capture);
             if (handover.ClientStates.Count != 0)
                 throw new InvalidDataException("Clientless capture included client state");
@@ -8427,7 +8428,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         long? RecoveryCapacity = null, ulong[]? Quarantined = null, long? ProjectedLoad = null, long? LoadCapacity = null,
         long? RecoveryLoadsPending = null, HitchReport[]? Hitches = null, long? ConfigRevision = null, bool? Serving = null,
         string? DeploymentRevision = null, bool ConfigurationVerified = false, string? ConfigurationFailure = null,
-        bool Liveness = false, Dictionary<ulong, ulong[]>? RemoteUsers = null);
+        bool Liveness = false, Dictionary<ulong, RemoteUseReport>? RemoteUsers = null);
     /// <summary>A game-thread frame over the node's hitch threshold, with the handover phase that held it (§3).</summary>
     private sealed record HitchReport(DateTime Utc, double Ms, string Phase, string? TransferId, ulong Partition, double PhaseMs);
     private sealed record HeartbeatResponse(string Node, long Epoch, string Endpoint, DateTimeOffset Registered, NodeState State,

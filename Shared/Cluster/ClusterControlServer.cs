@@ -1054,7 +1054,8 @@ internal sealed partial class ClusterControlServer
 				ulong partition = ulong.Parse(context.Request.QueryString["partition"] ?? throw new ArgumentException("Missing partition query parameter"));
 				Guid? transferId = OptionalTransferId(context);
 				uint? generation = OptionalGeneration(context, transferId);
-				byte[] body = InvokePhase("capture", transferId, partition, () => Capture(clients, partition, transferId, generation));
+				bool allowRemoteUse = context.Request.QueryString["allowRemoteUse"] == "true";
+				byte[] body = InvokePhase("capture", transferId, partition, () => Capture(clients, partition, transferId, generation, allowRemoteUse));
 				// HandoverDelta: the target staged this partition from baseline ?presync=ID; answer with the
 				// patch against it. A missing baseline (expired, or a different partition) means the full
 				// capture, logged, never an error: the freeze already happened.
@@ -1719,7 +1720,7 @@ internal sealed partial class ClusterControlServer
 	/// that all of them leave the source at the same instant: their replication views are exported
 	/// from a single frozen state, never one freeze per client. Empty means a clientless capture.
 	/// </param>
-	private static byte[] Capture(ulong[] clients, ulong partitionId, Guid? transferId, uint? generation)
+	private static byte[] Capture(ulong[] clients, ulong partitionId, Guid? transferId, uint? generation, bool allowRemoteUse = false)
 	{
 		if (transferId.HasValue && m_sourceTransfers.TryGetValue(transferId.Value, out Transfer existing))
 		{
@@ -1778,6 +1779,10 @@ internal sealed partial class ClusterControlServer
 			timer?.Step("freeze");
 			if (transfer != null)
 			{
+				// Same game-thread operation as Freeze: a terminal/camera opened after the gateway's
+				// report/presync must still refuse a clientless pull. Only deliberate co-location wins.
+				if (clients.Length == 0 && !allowRemoteUse && RemoteUse.Capture(new[] { partition }).ContainsKey(partitionId))
+					throw new InvalidOperationException("remote-use");
 				Freeze(transfer, entities);
 				// Attached children (a seated pilot above all) serialize INSIDE their parent's
 				// object builder. Vanilla re-tops the pilot character when the switching client

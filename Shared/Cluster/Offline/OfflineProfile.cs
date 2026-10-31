@@ -80,6 +80,7 @@ internal sealed class OfflineStorage
 	public string Kind, Resource, Group;
 	public double Amount, Capacity, MaxInput, InputConversion, LeakPerFrame;
 	public int Priority, Mode; // battery: Auto=0, Recharge=1, Discharge=2; tank stockpile=1
+	public int PowerSink = -1;
 	public bool Pair, Enabled = true, Full;
 	public double RechargeEfficiency = 1;
 }
@@ -101,6 +102,7 @@ internal sealed class OfflineProduction
 	public long Block;
 	public bool Refinery, Repeat, Slave, Disassemble, Enabled;
 	public int PowerSink;
+	public uint TickFrames = 60;
 	public double IdlePower, OperationalPower, Progress;
 	public List<OfflineRecipe> Recipes = [];
 	public List<OfflineQueue> Queue = [];

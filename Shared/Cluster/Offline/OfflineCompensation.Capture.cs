@@ -193,10 +193,11 @@ internal static partial class OfflineCompensation
 			else if (block is MyGasTank tank)
 			{
 				var d = (MyGasTankDefinition)block.BlockDefinition; int index = p.Storage.Count;
+				bool gasEnabled = enabled && (MySession.Static.Settings.EnableOxygen || d.StoredGasId != MyResourceDistributorComponent.OxygenId);
 				p.Storage.Add(new() { Block = block.EntityId, Kind = "Tank", Resource = Resource(d.StoredGasId, block), Amount = tank.FilledRatio * d.Capacity,
 					Capacity = d.Capacity, MaxInput = d.Capacity * 0.05, InputConversion = 1.0 / 60, Mode = ((Sandbox.ModAPI.Ingame.IMyGasTank)tank).Stockpile ? 1 : 0,
-					Pair = true, Enabled = enabled, LeakPerFrame = block.IsFunctional ? 0 : d.Capacity * d.LeakPercent / 100.0 });
-				foreach (var port in sources) { port.Storage = index; port.StorageCost = 1.0 / 60; port.Kind = "Tank"; port.Maximum = enabled && !((Sandbox.ModAPI.Ingame.IMyGasTank)tank).Stockpile ? d.Capacity * 0.05 : 0; }
+					Pair = true, Enabled = gasEnabled, PowerSink = powerSink, LeakPerFrame = block.IsFunctional ? 0 : d.Capacity * d.LeakPercent / 100.0 });
+				foreach (var port in sources) { port.Storage = index; port.StorageCost = 1.0 / 60; port.Kind = "Tank"; port.PowerSink = powerSink; port.Maximum = gasEnabled && !((Sandbox.ModAPI.Ingame.IMyGasTank)tank).Stockpile ? d.Capacity * 0.05 : 0; }
 			}
 			else if (block is MyGasFueledPowerProducer engine)
 			{
@@ -258,6 +259,7 @@ internal static partial class OfflineCompensation
 			{
 				var d = (MyProductionBlockDefinition)block.BlockDefinition;
 				var entry = new OfflineProduction { Block = block.EntityId, Enabled = enabled, PowerSink = powerSink, Refinery = block is MyRefinery,
+					TickFrames = production.m_timer?.TimerTickInFrames ?? 60,
 					IdlePower = d.StandbyPowerConsumption, OperationalPower = d.OperationalPowerConsumption * (1 + block.UpgradeValues.GetValueOrDefault("Productivity")) / Math.Max(0.000001, block.UpgradeValues.GetValueOrDefault("PowerEfficiency", 1)) };
 				var assembler = block as MyAssembler;
 				if (assembler != null)
@@ -301,6 +303,16 @@ internal static partial class OfflineCompensation
 				var component = builder.ComponentContainer?.Components.Select(c => c.Component).OfType<MyObjectBuilder_SafeZoneComponent>().FirstOrDefault();
 				if (component != null && enabled && ((ObjectBuilders.SafeZone.MyObjectBuilder_SafeZoneBlock)builder).SafeZoneId != 0 && !component.Activating) p.Upkeep.Add(new() { Block = block.EntityId, Enabled = enabled, RemainingFrames = Math.Max(0, component.UpkeepTime * 60 / 1000),
 					PeriodFrames = zone.Definition.SafeZoneUpkeepTimeM * 3600, Chips = Material(block, new MyDefinitionId(typeof(MyObjectBuilder_Component), "ZoneChip"), zone.Definition.SafeZoneUpkeep, zone.GetInventory(), false) });
+			}
+			// Known-class capture above supplies stock/fuel/recipe semantics. It must not replace
+			// an observed mod rate with the final instantaneous sample or the vanilla definition.
+			if (observe && p.Observations.LastOrDefault(o => o.Block == block.EntityId) is { } observation)
+			{
+				int offset = 0;
+				foreach (var port in p.Sinks.Where(s => s.Block == block.EntityId)) port.Required = observation.Mean[offset++];
+				foreach (var port in sources) port.Maximum = enabled ? observation.Mean[offset++] : 0;
+				foreach (var entry in p.Production.Where(p => p.Block == block.EntityId))
+					entry.IdlePower = entry.OperationalPower = powerSink >= 0 ? p.Sinks[powerSink].Required : 0;
 			}
 		}
 		if (p.Unknowns.Count > 0) p.Confidence = ClusterConfig.Get("offline.unknownBlocks") == "Freeze" || p.Unknowns.Any(x => x.Contains("cannot be separated", StringComparison.Ordinal) || x.Contains("unavailable", StringComparison.Ordinal) || x.Contains("insufficient", StringComparison.Ordinal)) ? "Frozen" : "Approximate";

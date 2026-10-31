@@ -17,17 +17,20 @@ internal static partial class SelfTest
             registry.Heartbeat(one.Node, one.Epoch, []); registry.Heartbeat(two.Node, two.Epoch, []);
             var owned = registry.ClaimPartition(17, one.Node, one.Epoch, 0) with { };
             registry.RegisterSave(new SaveId(17, owned.Generation, 1), one.Node, one.Epoch, SaveKind.Final, 1, "a", 1, "17/1", "http://one/control");
-            registry.ReportRemoteUse(one.Node, one.Epoch, new() { [17] = [81, 81, 0], [999] = [82] });
+            PartitionVersion[] versions = [new(17, owned.Generation)];
+            registry.ReportRemoteUse(one.Node, one.Epoch, versions, new() { [17] = new(owned.Generation, [81, 81, 0]), [999] = new(1, [82]) });
             Check(registry.HasRemoteUse(17) && !registry.HasRemoteUse(999), "only owned partitions carry heartbeat remote presence");
+            registry.ReportRemoteUse(one.Node, one.Epoch, [], null);
+            Check(registry.HasRemoteUse(17), "liveness/no-report heartbeat preserves active remote users");
             bool refused = false;
-            try { registry.ReportRemoteUse(one.Node, one.Epoch + 1, new()); } catch (RegistryConflictException) { refused = true; }
+            try { registry.ReportRemoteUse(one.Node, one.Epoch + 1, versions, new()); } catch (RegistryConflictException) { refused = true; }
             Check(refused && registry.HasRemoteUse(17), "stale node epoch cannot clear presence");
             var offer = new OfflineRequest(17, one.Node, one.Epoch, owned.Generation, 1, 100, 0, 0, 10, [[100, 0, 0, 10]], [170], 100, "[]", "[]")
                 { OfflineGameFrame = 100, ProfileSummary = JsonSerializer.SerializeToElement(new[] { new { Group = 170, Confidence = "Exact" } }) };
             refused = false;
             try { registry.TakeOffline(offer); } catch (RegistryConflictException) { refused = true; }
             Check(refused && !registry.IsOffline(17), "remote-use blocks offline in the registry invariant, not only its HTTP caller");
-            registry.ReportRemoteUse(one.Node, one.Epoch, new());
+            registry.ReportRemoteUse(one.Node, one.Epoch, versions, new());
             Check(!registry.HasRemoteUse(17), "closing UI/disconnect clears remote presence");
             var offline = registry.TakeOffline(offer);
             Check(offline.OfflineGameFrame == 100 && offline.ProfileSummary?.GetArrayLength() == 1, "profile summary survives the offline offer");
@@ -45,6 +48,14 @@ internal static partial class SelfTest
             var claim = registry.ClaimRecoveries(one.Node, one.Epoch, []).Single();
             Check(claim.Ownership.Partition == 17 && claim.ResolveCover.Any(c => c.Save.SaveId == new SaveId(17, owned.Generation, 1)), "call-up uses ordinary fenced recovery cover");
             Check(!registry.HasRemoteUse(17), "old-generation presence is not inherited by a recovery");
+            registry.ReportRemoteUse(one.Node, one.Epoch, versions, new() { [17] = new(owned.Generation, [81]) });
+            Check(!registry.HasRemoteUse(17), "delayed old ownership/presence snapshot cannot be retagged at recovery generation");
+            PartitionVersion[] current = [new(17, claim.Ownership.Generation)];
+            registry.ReportRemoteUse(one.Node, one.Epoch, current, new() { [17] = new(claim.Ownership.Generation, [82]) });
+            registry.ReportRemoteUse(one.Node, one.Epoch, current, new() { [17] = new(owned.Generation, [81]) });
+            Check(registry.HasRemoteUse(17), "old game-thread presence paired with new ownership cannot clear current users");
+            registry.ReportRemoteUse(one.Node, one.Epoch, current, new());
+            Check(!registry.HasRemoteUse(17), "explicit current-generation empty snapshot clears users");
         }
         finally { Directory.Delete(directory, true); }
 

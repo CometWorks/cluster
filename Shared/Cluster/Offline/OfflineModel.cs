@@ -45,16 +45,22 @@ internal static class OfflineModel
 			double angleFrame = profile.SunFrame + (profile.SimulatedThrough - profile.FrozenFrame) + elapsed;
 			double[] maximum = profile.Sources.Select(s => Maximum(profile, s, angleFrame)).ToArray();
 			double[] input = new double[required.Length], output = new double[maximum.Length], charging = new double[profile.Storage.Count];
+			bool[] workingStorage = profile.Storage.Select(s => s.Enabled).ToArray();
 			// Electricity and gas are coupled through generators/engines/farms. Iterate their power gate;
 			// monotone disabling prevents an unpowered generator from supplying its own bootstrap energy.
-			for (int pass = 0; pass <= profile.Sources.Count; pass++)
+			for (int pass = 0; pass <= profile.Sources.Count + profile.Storage.Count; pass++)
 			{
-				Allocate(profile, required, maximum, input, output, charging);
+				Allocate(profile, required, maximum, input, output, charging, workingStorage);
 				bool changed = false;
 				for (int i = 0; i < maximum.Length; i++)
 				{
 					int sink = profile.Sources[i].PowerSink;
 					if (maximum[i] > 0 && sink >= 0 && input[sink] + Epsilon < required[sink]) { maximum[i] = 0; changed = true; }
+				}
+				for (int i = 0; i < workingStorage.Length; i++)
+				{
+					int sink = profile.Storage[i].PowerSink;
+					if (workingStorage[i] && sink >= 0 && input[sink] + Epsilon < required[sink]) { workingStorage[i] = false; changed = true; }
 				}
 				if (!changed) break;
 			}
@@ -91,6 +97,23 @@ internal static class OfflineModel
 				}
 				else step = Math.Min(step, Math.Max(Epsilon, (1 - production.Progress) / recipe.UnitsPerFrame));
 			}
+			// Revisit an infeasible recipe when upstream flow supplies ingredients or frees output
+			// room. Exact single-material thresholds are events; shared/atomic capacity interactions
+			// are rechecked within one captured engine production tick, rather than a whole offline span.
+			foreach (var production in profile.Production.Where(p => p.Enabled))
+			foreach (var recipe in production.Recipes.Where(r => !CanMake(profile, r, production.Refinery ? 0.000001m : 1m)))
+			{
+				decimal units = production.Refinery ? 0.000001m : 1m;
+				bool improving = false;
+				foreach (var material in recipe.Inputs)
+				{
+					decimal rate = material.Inventories.Sum(i => changes.GetValueOrDefault((i, material.Item)));
+					decimal missing = material.Amount * units - Available(profile, material);
+					if (missing > 0 && rate > 0) { step = Math.Min(step, (double)(missing / rate)); improving = true; }
+				}
+				if (recipe.Outputs.Any(m => changes.Any(c => m.Inventories.Contains(c.Key.Inventory) && c.Value < 0))) improving = true;
+				if (improving) step = Math.Min(step, Math.Max(1, production.TickFrames));
+			}
 			foreach (var change in changes)
 				if (change.Value < 0)
 					step = Math.Min(step, (double)(Amount(inventories[change.Key.Inventory], change.Key.Item) / -change.Value));
@@ -112,6 +135,10 @@ internal static class OfflineModel
 				if (storageRate[i] < -Epsilon && store.Amount > Epsilon) step = Math.Min(step, store.Amount / -storageRate[i]);
 				// An empty engine may fill from a powered generator/tank before it can produce power.
 				if (store.Kind == "Engine" && store.Amount <= Epsilon && storageRate[i] > Epsilon) step = Math.Min(step, 1);
+				// ConsumePower clears m_isFull on Update100; near full, required input also varies
+				// with the remaining gap. Neither state can be held for an hour-long segment.
+				if (store.Kind == "Battery" && store.Mode != 2 && (store.Full && storageRate[i] < -Epsilon
+					|| !store.Full && store.Capacity - store.Amount < store.MaxInput / 2160)) step = Math.Min(step, 100);
 			}
 			foreach (var zone in profile.Upkeep.Where(z => z.Enabled)) step = Math.Min(step, Math.Max(Epsilon, zone.RemainingFrames));
 			if (!double.IsFinite(step) || step <= 0) throw new InvalidDataException("Offline model made no progress; refusing partial compensation");
@@ -163,7 +190,7 @@ internal static class OfflineModel
 
 	/// <summary>Priority groups: non-adaptible blackout leaves supply for lower groups, adaptible
 	/// shortage is proportional. Storage pairs charge after ordinary sinks, stockpiles first.</summary>
-	internal static void Allocate(OfflineProfile p, double[] demand, double[] maximum, double[] input, double[] output, double[] charging)
+	internal static void Allocate(OfflineProfile p, double[] demand, double[] maximum, double[] input, double[] output, double[] charging, bool[] workingStorage = null)
 	{
 		Array.Clear(input); Array.Clear(output); Array.Clear(charging);
 		foreach (string resource in p.Sinks.Select(s => s.Resource).Concat(p.Sources.Select(s => s.Resource)).Concat(p.Storage.Select(s => s.Resource)).Distinct())
@@ -174,7 +201,7 @@ internal static class OfflineModel
 			var ordinary = Enumerable.Range(0, demand.Length).Where(i => p.Sinks[i].Resource == resource)
 				.Select(i => (Index: i, Priority: p.Sinks[i].Priority, Group: p.Sinks[i].Group, Rate: demand[i], Adaptible: p.Sinks[i].Adaptible, Store: false)).ToList();
 			var storageDemands = Enumerable.Range(0, p.Storage.Count).Where(i => p.Storage[i].Resource == resource)
-				.Select(i => (Index: i, Priority: p.Storage[i].Priority, Group: p.Storage[i].Group, Rate: StorageDemand(p, i, output), Adaptible: true, Store: true)).ToArray();
+				.Select(i => (Index: i, Priority: p.Storage[i].Priority, Group: p.Storage[i].Group, Rate: workingStorage?[i] == false ? 0 : StorageDemand(p, i, output), Adaptible: true, Store: true)).ToArray();
 			ordinary.AddRange(storageDemands.Where(s => !p.Storage[s.Index].Pair));
 			foreach (var group in ordinary.GroupBy(s => (s.Priority, s.Group)).OrderBy(g => g.Key.Priority))
 			{
@@ -204,7 +231,8 @@ internal static class OfflineModel
 			Dispatch(used, false);
 			// Auto storage can take remaining generator supply, never extra discharge of itself or a peer.
 			double external = sources.Where(i => p.Sources[i].Storage < 0 || !p.Storage[p.Sources[i].Storage].Pair).Sum(i => maximum[i] - output[i]);
-			var autos = storageDemands.Where(s => p.Storage[s.Index].Pair && p.Storage[s.Index].Mode != 1).ToArray();
+			var autos = storageDemands.Where(s => p.Storage[s.Index].Pair && p.Storage[s.Index].Mode != 1)
+				.Select(s => s with { Rate = workingStorage?[s.Index] == false ? 0 : StorageDemand(p, s.Index, output) }).ToArray();
 			double autoRequired = autos.Sum(s => s.Rate);
 			double autoRatio = p.Simplified ? 1 : autoRequired <= 0 ? 0 : Math.Min(1, Math.Max(0, external) / autoRequired);
 			foreach (var sink in autos) charging[sink.Index] = sink.Rate * autoRatio;
@@ -361,6 +389,7 @@ internal static class OfflineModel
 		}
 		foreach (var s in p.Storage)
 			if (!double.IsFinite(s.Amount) || !double.IsFinite(s.Capacity) || s.Amount < -Epsilon || s.Amount > s.Capacity + Epsilon
+				|| s.PowerSink < -1 || s.PowerSink >= p.Sinks.Count
 				|| s.Capacity < 0 || !double.IsFinite(s.MaxInput) || s.MaxInput < 0 || !double.IsFinite(s.InputConversion) || s.InputConversion < 0)
 				throw new InvalidDataException("Invalid offline reservoir");
 		foreach (var source in p.Sources)
