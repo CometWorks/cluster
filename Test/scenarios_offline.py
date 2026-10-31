@@ -994,6 +994,79 @@ def t_oc_08(bench):
     bench.exercised(nativeRotorSubgrid=True, quietSibling=True, sharedPartition=partition)
 
 
+def offline_partial_gas(bench):
+    """Q3: actual definition-only adaptible generator with native partial and zero electricity."""
+    import copy
+    import xml.etree.ElementTree as ET
+    from scenarios_mods import _template, PROBE_NAME
+    _survival_template(bench)
+    bench.cluster.config.world_template = _template(bench)
+    bench.cluster.kill()
+    bench.cluster.prepare(wipe=True)
+    ET.register_namespace("xsi", "http://www.w3.org/2001/XMLSchema-instance")
+    content = HOST.server / "Content/Data/CubeBlocks"
+    production = ET.parse(content / "CubeBlocks_Production.sbc").getroot()
+    energy = ET.parse(content / "CubeBlocks_Energy.sbc").getroot()
+    gas = next(d for d in production.iter("Definition") if d.findtext("Id/TypeId") == "OxygenGenerator"
+               and not d.findtext("Id/SubtypeId") and d.findtext("CubeSize") == "Large")
+    battery = next(d for d in energy.iter("Definition") if d.findtext("Id/SubtypeId") == "LargeBlockBatteryBlock")
+    root = ET.Element("Definitions")
+    blocks = ET.SubElement(root, "CubeBlocks")
+    for subtype, group in (("OfflinePartialGenerator", "Generators"), ("OfflineFactoryGenerator", "Factory")):
+        definition = copy.deepcopy(gas)
+        definition.find("Id/SubtypeId").text = subtype
+        definition.find("ResourceSinkGroup").text = group
+        if group == "Factory": definition.find("StandbyPowerConsumption").text = "0.5"
+        blocks.append(definition)
+    definition = copy.deepcopy(battery)
+    definition.find("Id/SubtypeId").text = "OfflinePartialBattery"
+    definition.find("MaxPowerOutput").text = "0.1"
+    blocks.append(definition)
+    raw = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    for node in ("wa-1", "node-1", "node-2"):
+        folder = bench.run_root / f"{node}-data/Mods" / PROBE_NAME / "Data"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "OfflinePartial.sbc").write_bytes(raw)
+    bench.record("definition-only-mod.sbc", raw.decode())
+    bench.cluster.start()
+    bench.cluster.wait_ready()
+    for node in ("node-1", "node-2"):
+        _put_config(bench, node, {"offline.enabled": "false", "offline.quietMeters": "0", "offline.settleFrames": "0"})
+    owner = bench.cluster.node("node-1", "/identity-test-create?name=partial-gas-owner", "POST")["identityId"]
+    # No client is needed: scripted Workshop IDs cannot be downloaded by a retail client.
+    for factory in (False, True):
+        fixture = bench.cluster.node("node-1", f"/offline-test-mod-gas?factory={str(factory).lower()}", "POST")
+        grid = fixture["grid"]
+        partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 60)
+        _require(bench, "definition-only gas fixture has ownership", bool(partition))
+        for zero in (False, True):
+            label = ("factory" if factory else "adaptible") + ("-zero" if zero else "-partial")
+            if zero: bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=battery-off", "POST")
+            time.sleep(5)
+            _require(bench, label + ": profile completes", bool(_poll(lambda:
+                bench.cluster.node("node-1", f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))
+            initial = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}", "POST")
+            state = bench.cluster.node("node-1", f"/offline-test-gas-state?grid={grid}")[0]
+            bench.record(label + "-start", {"profile": initial, "native": state})
+            should_work = not factory and not zero
+            bench.check(label + ": native delivered gas follows definition group", (sum(state["outputs"]) > 0) == should_work, json.dumps(state))
+            if should_work:
+                _require(bench, label + ": electrical supply is actually partial", 0 < state["input"] < state["required"])
+            time.sleep(12)
+            comparison = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}")
+            bench.record(label + "-comparison", comparison)
+            ice = "MyObjectBuilder_Ore/Ice"
+            before, actual, model = map(_inventory_totals, (initial, comparison["actual"], comparison["predicted"]))
+            native_ice = before.get(ice, 0) - actual.get(ice, 0)
+            model_ice = before.get(ice, 0) - model.get(ice, 0)
+            bench.check(label + ": actual and modeled fuel use agrees within native Update100", abs(native_ice - model_ice) <= 45
+                        and ((model_ice > 0) == should_work), json.dumps({"nativeIce": native_ice, "modelIce": model_ice}))
+            bench.check(label + ": definition-only fixture is not a scripted fallback", not initial["Observations"]
+                        and all("mod logic" not in reason for reason in initial["Unknowns"]))
+    bench.exercised(definitionOnlyMod=True, partialAdaptible=True, zeroInput=True, factoryNegative=True,
+                    limitation="bounded gas-generator differential; complete coupled chain/long baselines remain")
+
+
 def offline_grid_power(bench):
     """Q1: native distributor census and actual battery energy, enabled/disabled gyro controls."""
     _survival_template(bench)
@@ -1500,6 +1573,7 @@ SCENARIOS_OFFLINE.update({
     "T-OC-13": (t_oc_13, "parked large dynamic grid offlines and preserves its pose", "2"),
     "T-OC-08": (t_oc_08, "moving rotor subgrid leaves a quiet sibling profiled and reuses its rate when stopped", "2"),
     "OFF-OBSERVED-POLICY": (offline_observed_policy, "native short-window external rates and conservative script storage/inventory policy", "3"),
+    "OFF-PARTIAL-GAS": (offline_partial_gas, "Definition-only gas generator partial/zero/Factory controls (Q3)", "3"),
     "OFF-GRID-POWER": (offline_grid_power, "Whole native distributor demand and gyro battery debit (Q1)", "3"),
     "OFF-LIVE-DIFFERENTIAL": (offline_live_differential, "short native engine reference for full Auto battery and real refinery production", "3"),
     "T-OC-12": (t_oc_12, "twenty native refinery bases share one rotation and remeasure after clear", "2"),

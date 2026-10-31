@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><AssemblyName>OfflineReference</AssemblyName><ClusterAssembly>ClusterNode</ClusterAssembly></PropertyGroup>
+  <Import Project="../ClusterTestPlugin/ClusterTest.props" />
+  <ItemGroup>
+    <Compile Remove="$(MSBuildThisFileDirectory)../ClusterTestPlugin/Source/**/*.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Plugin.cs" />
+  </ItemGroup>
+</Project>

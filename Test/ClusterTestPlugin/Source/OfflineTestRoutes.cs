@@ -87,6 +87,32 @@ internal static class OfflineTestRoutes
                 grid = RcTestHarness.SpawnStation("offline-native-station", new Vector3D(20000, 20000, 0), owner, withRemoteControl: true).EntityId,
             }));
         });
+        TestRoutes.Add("POST", "/offline-test-mod-gas", context =>
+        {
+            bool factory = TestRoutes.Query(context, "factory", "false") == "true";
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                var builder = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_CubeGrid>();
+                builder.GridSizeEnum = MyCubeSize.Large; builder.IsStatic = true; builder.CreatePhysics = true;
+                builder.PersistentFlags = MyPersistentEntityFlags2.InScene | MyPersistentEntityFlags2.CastShadows;
+                builder.PositionAndOrientation = new MyPositionAndOrientation(new Vector3D(25000, factory ? 25000 : 20000, 0), Vector3D.Forward, Vector3D.Up);
+                builder.DisplayName = factory ? "offline-factory-negative" : "offline-adaptible-generator";
+                var battery = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_BatteryBlock>("OfflinePartialBattery");
+                battery.Min = new SerializableVector3I(-3, 0, 0); battery.CurrentStoredPower = 3;
+                battery.ChargeMode = (int)Sandbox.ModAPI.Ingame.ChargeMode.Discharge;
+                builder.CubeBlocks.Add(battery);
+                var tank = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_GasTank>("LargeHydrogenTank");
+                tank.Min = new SerializableVector3I(0, 0, 0); tank.FilledRatio = 0; tank.IsStockpiling = true;
+                builder.CubeBlocks.Add(tank);
+                var generator = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_OxygenGenerator>(factory ? "OfflineFactoryGenerator" : "OfflinePartialGenerator");
+                generator.Min = new SerializableVector3I(1, 1, -1); generator.UseConveyorSystem = false;
+                builder.CubeBlocks.Add(generator);
+                var grid = (MyCubeGrid)MyEntities.CreateFromObjectBuilderAndAdd(builder, false);
+                var gas = grid.GetFatBlocks<MyGasGenerator>().Single();
+                gas.GetInventory().AddItems(1000, MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Ore>("Ice"));
+                return new { grid = grid.EntityId, generator = gas.EntityId };
+            }));
+        });
         TestRoutes.Add("POST", "/offline-test-zone", context =>
         {
             long grid = TestRoutes.Long(context, "grid");
