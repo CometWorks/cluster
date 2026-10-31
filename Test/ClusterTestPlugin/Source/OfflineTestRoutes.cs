@@ -179,7 +179,7 @@ internal static class OfflineTestRoutes
             var solar = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_SolarPanel>("LargeBlockSolarPanel");
             solar.Min = new SerializableVector3I(3, 0, 0);
             OfflineObservedLogic.Attach((grid.AddBlock(solar, false) ?? throw new InvalidOperationException("observed solar fixture did not fit")).FatBlock);
-            var generator = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_OxygenGenerator>("LargeBlockOxygenGenerator");
+            var generator = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_OxygenGenerator>();
             generator.Min = new SerializableVector3I(12, 0, 0); generator.UseConveyorSystem = false;
             var gas = (grid.AddBlock(generator, false) ?? throw new InvalidOperationException("observed generator fixture did not fit")).FatBlock;
             gas.GetInventory().AddItems(1000, MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Ore>("Ice"));

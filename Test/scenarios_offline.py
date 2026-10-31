@@ -511,6 +511,7 @@ def p2_off_call_conflict(bench):
         other.key("O")
         time.sleep(2)
     attempts = []
+    before_remote_refusals = bench.cluster.node("node-2", "/offline")["callUps"]["outcomes"].get("remote-use", 0)
     started = time.monotonic()
     while time.monotonic() - started < 180:
         answer = other.open_remote_terminal(sibling, timeout=4)
@@ -523,6 +524,9 @@ def p2_off_call_conflict(bench):
         time.sleep(12)
     bench.record("two-client-conflict-three-minutes", attempts)
     bench.check("second live client emitted authenticated replication demands", any(a["client"].get("replicationRequests", 0) > 0 for a in attempts))
+    actual_refusals = bench.cluster.node("node-2", "/offline")["callUps"]
+    bench.record("second-client-server-admission", actual_refusals)
+    bench.check("actual authenticated client path reports remote-use refusal", actual_refusals["outcomes"].get("remote-use", 0) > before_remote_refusals)
     bench.check("three-minute conflict has no owner ping-pong", all(a["owner"] == ("node-1", partition) for a in attempts))
     bench.screenshot(CLIENT_ID, "first-terminal-still-pinned")
     api.close_remote_terminal()
