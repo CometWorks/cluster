@@ -73,11 +73,10 @@ PLAN_GAPS: dict[str, str] = {
 # SE-346/347 acceptance obligations. Detailed assertions and pending fixtures are recorded in
 # Docs/OfflinePartitions.md; do not alias a model self-check to a native differential/GUI run.
 PLAN_GAPS.update({
-    **{f"T-OC-{i:02}": "Offline compensation game differential/fixture not yet available; deterministic model/container proofs cover only the mapped invariants (Docs/OfflinePartitions.md)." for i in (1, 2, 3, 4, 8, 11, 12)},
+    **{f"T-OC-{i:02}": "Offline compensation game differential/fixture not yet available; deterministic model/container proofs cover only the mapped invariants (Docs/OfflinePartitions.md)." for i in (1, 2, 3, 4, 8, 11)},
     "T-OC-05": "Measure-node decision pending real observed-world evidence; no Measure role implemented.",
     "T-OC-06": "Short observation exists; Measure-node full-rotation mod fixture/decision pending.",
     "PRF-OC-01": "Needs the 200-panel planet/ridge fixture and exclusive frame-budget measurement; no performance claim.",
-    "P2-OFF-CALL-CONFLICT": "Registry ownership/presence and balance proved by remote-use self-test; two-live-client remote session fixture still needed.",
 })
 
 HOST_CAPABILITIES: dict[str, tuple[str, str]] = {

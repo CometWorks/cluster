@@ -28,6 +28,18 @@ internal static class OfflineTestRoutes
 
     public static void Register()
     {
+        TestRoutes.Add("POST", "/offline-test-sibling", context =>
+        {
+            long grid = TestRoutes.Long(context, "grid"), owner = TestRoutes.Long(context, "owner");
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => RcTestHarness.Sibling(grid, owner)));
+        });
+        TestRoutes.Add("GET", "/offline-test-measurements", context =>
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => new
+            {
+                attempts = OfflineCompensation.Attempted.Count,
+                perBlock = OfflineCompensation.PerBlockRates.Count,
+                cache = OfflineRateCache.Status(),
+            })));
         TestRoutes.Add("POST", "/offline-test-rate-fixtures", context =>
         {
             long owner = TestRoutes.Long(context, "owner");
@@ -125,6 +137,8 @@ internal static class OfflineTestRoutes
             long hostile = MySession.Static.Players.CreateNewIdentity("Offline hostile fixture", initialPlayer: true).IdentityId;
             foreach (var block in grid.GetFatBlocks()) block.ChangeOwner(hostile, MyOwnershipShareModeEnum.None);
         }
+        else if (mode == "share-all")
+            foreach (var block in grid.GetFatBlocks()) block.ChangeOwner(grid.BigOwners.First(), MyOwnershipShareModeEnum.All);
         else if (mode == "unknown")
         {
             var pb = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_MyProgrammableBlock>("LargeProgrammableBlock");

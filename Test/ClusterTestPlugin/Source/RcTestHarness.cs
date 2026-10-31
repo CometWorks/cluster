@@ -28,6 +28,13 @@ public static class RcTestHarness
 {
 	private const string HostGridName = "cluster-rc-host";
 	private const string RelayGridName = "cluster-rc-relay";
+	public static object Sibling(long gridId, long owner)
+	{
+		var parent = (MyCubeGrid)MyEntities.GetEntityById(gridId);
+		var grid = SpawnStation("offline-conflict-sibling", parent.PositionComp.GetPosition() + Vector3D.Right * 30, owner, true);
+		return new { grid = grid.EntityId };
+	}
+
 	public static object RateFixtures(long ownerId)
 	{
 		var player = PositionRegistryService.Players.First(p => p.ClientId != 0);

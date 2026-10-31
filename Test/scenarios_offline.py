@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import time
 import urllib.request
+from urllib.parse import quote
 import uuid
 from pathlib import Path
 
@@ -99,8 +100,13 @@ def _put_config(bench, node_id: str, values: dict) -> dict | str:
     endpoint = _nodes(bench)[node_id].control
     _assert_bench_endpoint(bench, endpoint)
     url = f"http://{endpoint}/cluster/config"
-    print(f"[P1-OFF-SEATED-JOIN] PUT {url} {json.dumps(values)}", flush=True)
-    request = urllib.request.Request(url, method="PUT", data=json.dumps(values).encode(),
+    # PUT replaces the entire override document. Preserve previous fixture settings when
+    # changing one knob (e.g. Block -> Freeze must retain zero grace and quiet distance).
+    with urllib.request.urlopen(url, timeout=30) as response:
+        merged = json.load(response)["values"]
+    merged.update(values)
+    print(f"[offline fixture] PUT {url} changes={json.dumps(values)}", flush=True)
+    request = urllib.request.Request(url, method="PUT", data=json.dumps(merged).encode(),
                                      headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=30) as response:
         text = response.read().decode(errors="replace")
@@ -439,6 +445,53 @@ def p2_off_call_igc(bench):
     bench.exercised(grid=grid, block=block, partition=partition, source=source, target=target)
 
 
+def p2_off_call_conflict(bench):
+    from scenarios_contracts import _client_partition, _client_node, _hand_over
+    from scenarios_redeliver import CLIENT2_ID, CLIENT2_PORT
+    api, grid, _, partition, _ = _call_fixture(bench)
+    opened = api.open_remote_terminal(grid, timeout=120)
+    _require(bench, "first real client pins the woken station", opened.get("screenOpen") is True)
+    for node in ("node-1", "node-2"):
+        _put_config(bench, node, {"offline.enabled": "false"})
+    owner = _client_identity(bench)
+    sibling = bench.cluster.node("node-1", f"/offline-test-sibling?grid={grid}&owner={owner}", "POST")["grid"]
+    for target in (grid, sibling):
+        bench.cluster.node("node-1", f"/offline-test-options?grid={target}&mode=share-all", "POST")
+    _require(bench, "two independent grids share the pinned partition", bool(_poll(lambda: _owner_of(bench, sibling) == ("node-1", partition), 60)))
+    other = bench.start_client(CLIENT2_ID, remote_port=CLIENT2_PORT, render=False)
+    bench.wait_spawned(CLIENT2_ID)
+    bench.ensure_gameplay_focus(CLIENT2_ID)
+    position = other.get_character()["position"]
+    x, y, z = (position[a] for a in ("x", "y", "z")) if isinstance(position, dict) else position
+    other.character_teleport(x + 20000, y, z)
+    separate = _poll(lambda: (lambda p: p if p and p[1] != _client_partition(bench, CLIENT_ID)[1] else None)(
+        _client_partition(bench, CLIENT2_ID)), 120, 2)
+    _require(bench, "second live client has its own character partition", bool(separate))
+    bench.cluster.post("/automatic/pause")
+    _hand_over(bench, separate[1], "node-2", client=CLIENT2_ID)
+    _require(bench, "both clients remain attached on different nodes", _client_node(bench, CLIENT_ID) == "node-1" and _client_node(bench, CLIENT2_ID) == "node-2")
+    identity = bench.cluster.node("node-2", f"/respawn-test-player?userId={CLIENT2_ID}")["identityId"]
+    bench.cluster.node("node-2", f"/rc-test-ensure?owner={identity}", "POST")
+    other.key("O")
+    attempts = []
+    started = time.monotonic()
+    while time.monotonic() - started < 180:
+        answer = other.open_remote_terminal(sibling, timeout=4)
+        demand = bench.cluster.post(f"/registry/pull-demands?partition={partition}&source=node-1&target=node-2")
+        attempts.append({"elapsed": time.monotonic() - started, "client": answer, "gateway": demand,
+                         "owner": _owner_of(bench, grid), "presence": _remote_presence(bench, partition)})
+        _require(bench, "second caller is refused while the original pin survives", not answer.get("screenOpen")
+                 and not demand.get("accepted") and demand.get("reason") == "remote-use"
+                 and _owner_of(bench, sibling) == ("node-1", partition) and bool(_remote_presence(bench, partition)), json.dumps(attempts[-1]))
+        time.sleep(12)
+    bench.record("two-client-conflict-three-minutes", attempts)
+    bench.check("second live client emitted authenticated replication demands", any(a["client"].get("replicationRequests", 0) > 0 for a in attempts))
+    bench.check("three-minute conflict has no owner ping-pong", all(a["owner"] == ("node-1", partition) for a in attempts))
+    bench.screenshot(CLIENT_ID, "first-terminal-still-pinned")
+    api.close_remote_terminal()
+    bench.exercised(twoLiveClients=True, differentNodes=True, twoGridsOnePartition=True, observedSeconds=time.monotonic() - started)
+
+
 def t_oc_07(bench):
     api, grid, block, partition, _ = _call_fixture(bench, unknown=True)
     profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
@@ -740,10 +793,52 @@ def offline_observed_policy(bench):
     api.close_remote_terminal()
 
 
+def t_oc_12(bench):
+    """Twenty real refinery bases share one measured formula and remeasure after a journaled clear."""
+    _survival_template(bench)
+    _join(bench)
+    for node in ("node-1", "node-2"):
+        _put_config(bench, node, {"offline.enabled": "false", "offline.settleFrames": "0", "offline.quietMeters": "0"})
+    owner = _client_identity(bench)
+    # Ensure the near-player relay exists; the twentieth far base still lies within 50 km.
+    bench.cluster.node("node-1", f"/rc-test-ensure?owner={owner}", "POST")
+    fixtures = bench.cluster.node("node-1", f"/offline-test-rate-fixtures?owner={owner}", "POST")
+    for f in fixtures:
+        bench.cluster.node("node-1", f"/offline-test-production?grid={f['grid']}", "POST")
+    bench.record("cache-twenty-bases", fixtures)
+    first_attempts = bench.cluster.node("node-1", "/offline-test-measurements")["attempts"]
+    profiles = []
+    for f in fixtures:
+        location = _poll(lambda: _owner_of(bench, f["grid"]), 60)
+        _require(bench, "refinery fixture has one native owner", bool(location), str(f["grid"]))
+        node, partition = location
+        complete = _poll(lambda: bench.cluster.node(node, f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)
+        _require(bench, "native refinery profiling completes", bool(complete), str(f["grid"]))
+        p = next(p for p in bench.cluster.node(node, f"/profiles?partition={partition}") if f["grid"] in p["Members"])
+        profiles.append(p)
+    bench.record("cache-twenty-profiles", profiles)
+    measured = bench.cluster.node("node-1", "/offline-test-measurements")
+    bench.record("cache-twenty-measurements", measured)
+    iron = "MyObjectBuilder_BlueprintDefinition/IronOreToIngot"
+    bench.check("all twenty real bases consume the cached iron formula", all(any(r["Id"] == iron and r["Cached"]
+                for b in p["Production"] for r in b["Recipes"]) for p in profiles))
+    bench.check("only the first base rotates for that formula", measured["attempts"] - first_attempts == 1, json.dumps(measured))
+    entry = next(e for e in measured["cache"]["entries"] if iron in e["Key"])
+    bench.cluster.node("node-1", "/profiles/cache/clear?key=" + quote(entry["Key"], safe=""), "POST")
+    node, partition = _owner_of(bench, fixtures[0]["grid"])
+    _require(bench, "cleared formula remeasures on the next native profile", bool(_poll(lambda: bench.cluster.node(node,
+             f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))
+    after = bench.cluster.node(node, "/offline-test-measurements")
+    bench.record("cache-after-clear", after)
+    bench.check("clear increments epoch and permits one fresh measurement", after["attempts"] == measured["attempts"] + 1
+                and any(e["Key"] == entry["Key"] and e["Epoch"] == entry["Epoch"] + 1 for e in after["cache"]["entries"]))
+
+
 SCENARIOS_OFFLINE.update({
     "P2-OFF-CALL-TERMINAL": (p2_off_call_terminal, "offline radio terminal, caller-node wake, pin and sweep lifecycle", "3"),
     "P2-OFF-CALL-RC": (p2_off_call_rc, "offline dynamic drone radio control, raw client driving and presence", "3"),
     "P2-OFF-CALL-IGC": (p2_off_call_igc, "offline IGC remains a no-wake delivery failure", "3"),
+    "P2-OFF-CALL-CONFLICT": (p2_off_call_conflict, "two live clients on separate nodes cannot steal a pinned partition in three minutes", "3"),
     "T-OC-07": (t_oc_07, "real PB/timer/ejector Block and Freeze policies through shared wake", "3"),
     "T-OC-09": (t_oc_09, "actual shared-apply crash, immutable-Final retry and post-Final no-repeat recovery", "3"),
     "OFF-CACHE-DURABILITY": (offline_cache_durability, "WA-local cache clear journal and pre-Final replacement (R8)", "3"),
@@ -753,4 +848,5 @@ SCENARIOS_OFFLINE.update({
     "T-OC-10": (t_oc_10, "real changed-mod bytes skip compensation and leave the woken partition healthy", "3"),
     "T-OC-13": (t_oc_13, "parked large dynamic grid offlines and preserves its pose", "2"),
     "OFF-OBSERVED-POLICY": (offline_observed_policy, "native short-window external rates and conservative script storage/inventory policy", "3"),
+    "T-OC-12": (t_oc_12, "twenty native refinery bases share one rotation and remeasure after clear", "2"),
 })
