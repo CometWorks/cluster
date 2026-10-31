@@ -305,3 +305,21 @@ replicated promotion map through PromotionService.IsModerator, reused by online-
 reporting. Standalone retains vanilla role behavior. New native fixture asserts no actual
 promotion for negatives and sets a real replicated Moderator for a positive control; pending
 rebuilt-package proof. This supplements the R1-R8 repairs and does not alter their original review.
+
+
+### Latest build and additional earned native results
+
+All23 feature commits rebased cleanly onto main dcc444ece0d473eefb516d660b8f2172fd353708.
+Patch equivalence is recorded in rebase-range-diff.txt; original tested commits remain available
+under refs/tm/offline-wake/pre-main. Current production package9f128a7bc2715cc2f0bbb0522715ffb6b7d39380,
+archive d837fc659fc7f4276f092dc2337bb89ab6f3193ae60feb47957b8977eba7f3a4, passes full private build,
+registry/CLI and exact binary/symbol hash checks. Fresh native suite results/20261031-203241Z
+is active; no pending case is a pass. Test-only follow-up30d928f awaits actual refinery output
+rather than power alone, and anchors a second client's relay to that client's position.
+
+At product1063947, results/20261031-201018Z/P2-OFF-CALL-RATE passes29/29:20 concurrent
+client requests,19 refused/one complete; real minute boundary;6 successive actual terminal
+wakes in16.573s;7th refused and offline. OFF-CACHE-DURABILITY passes12/12, adding untouched-entry
+and stale/new epoch controls to real WA pre-Final kill/replacement replay. T-OC-12 still FAIL:
+first cold zero-output tick retained formula fallback, then another base measured/cache populated;
+corrected warm-output fixture is pending. No incomplete whole batch or interrupted case counted.

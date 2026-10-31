@@ -194,7 +194,31 @@ Private `Build/release.sh` packages passed their build/check/manifest/binary-has
 
 Evidence root: `/home/owendb/tm/offline-partitions/native-host`.
 
-Current rebuilt package: **1063947af594975ad2fae65259dc39c2ea67ae98**, archive SHA256
+Current private package: **9f128a7bc2715cc2f0bbb0522715ffb6b7d39380**, archive SHA256
+`d837fc659fc7f4276f092dc2337bb89ab6f3193ae60feb47957b8977eba7f3a4`.
+It includes the promotion-map and registration-boundary repairs and is rebased onto main
+`dcc444ece0d473eefb516d660b8f2172fd353708`. All23 feature commits rebased without conflict;
+`rebase-range-diff.txt` records the unchanged patches. Native suite at
+`results/20261031-203241Z` uses this package; pending cases are not passes. Test-only follow-up
+30d928f waits for actual refinery output before counting rotations and anchors a second caller's
+relay at that caller's position. Source semantic changes require fresh package proof; old
+package results below retain their own exact manifests.
+
+- `results/20261031-201018Z/P2-OFF-CALL-RATE`:**29/29 passed** at1063947. Twenty real
+  concurrent client requests produced19 refusals/one completion. After an actual minute wait,
+  six successive absent-grid requests completed actual terminal/UI wakes in16.573 seconds;
+  the seventh was rate-refused and stayed offline. The implicit OFFLINE owner bypass does
+  not bypass rate limits. Ordinary-player admission is rerunning with the promotion-map repair.
+- `results/20261031-201018Z/OFF-CACHE-DURABILITY`:**12/12 passed** at1063947, strengthened
+  WA-local journal-before-success/pre-Final kill/replacement replay with untouched-entry and
+  stale/new-epoch controls. This supplements the earlier nine-check2656266 proof.
+- `results/20261031-201018Z/T-OC-12`:FAIL. The first electrically working cold refinery had
+  not produced yet; its incomplete measurement used the explicit formula fallback. A second
+  measured base populated the shared cache. Warm-output readiness is authored for the fresh
+  run; clear propagation/epoch remeasurement checks passed separately in the failed run.
+
+
+Historical rebuilt package with the 125-check zone pass: **1063947af594975ad2fae65259dc39c2ea67ae98**, archive SHA256
 `242b88048f67eb11c62ad10aac2ccb8b45588ac322200ace838830bbe1184f3e`.
 This includes the common zone/production budget, authority/native-frame conversion, physics-queue
 solar fix and explicit laser-intent retention. OFF-SOLAR-NATIVE and the expanded T-OC-11 passed
@@ -309,7 +333,7 @@ compiled/authored fixtures are not promoted to executed proof.
 | P2-OFF-CALL-TERMINAL | Full actual Survival radio/UI/caller-node/pin/source refusal/production/close/offline lifecycle passed at e76821b |
 | P2-OFF-CALL-RC | Actual Survival authenticated take, presence and dynamic raw-input drone drive passed at 2656266 |
 | P2-OFF-CALL-DENY | Real authenticated negative packet runners authored; server-outcome/relay/spatial setup corrected; rerun pending |
-| P2-OFF-CALL-RATE | Twenty real reachable offline bases/concurrent-pending runner authored; successive six-completion/seventh-refusal leg authored after this suite imported Python; fresh run pending |
+| P2-OFF-CALL-RATE | Native29-check burst plus six actual terminal completions in16.573s/seventh-refusal passed at1063947; fresh ordinary-player/role-repair run pending |
 | P2-OFF-CALL-CONFLICT | Two-live-client/different-node/two-grid/three-minute no-ping-pong runner authored; execution pending |
 | P2-OFF-CALL-LASER | Id request now wakes the target onto the source node; both lasers fell idle before pairing, so the scenario still fails. Native state trace, GPS/established no-wake and radio-chain legs pending |
 | P2-OFF-CALL-IGC | Actual unicast false/no load passed at 2656266 |
