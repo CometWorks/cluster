@@ -301,7 +301,7 @@ def _survival_template(bench):
     bench.cluster.config.world_template = target
 
 
-def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=False, hostile=False, observed=False, api=None):
+def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=False, hostile=False, observed=False, rotor=False, api=None):
     if api is None:
         _survival_template(bench)
         api = _join(bench)
@@ -317,6 +317,10 @@ def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=F
     bench.exercised(relay=relay)
     if production:
         bench.record("production-fixture", bench.cluster.node("node-1", f"/offline-test-production?grid={grid}", "POST"))
+    if rotor:
+        sibling = bench.cluster.node("node-1", f"/offline-test-sibling?grid={grid}&owner={identity}", "POST")["grid"]
+        bench.cluster.node("node-1", f"/offline-test-production?grid={sibling}", "POST")
+        bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=rotor", "POST")
     if unknown or hostile or observed:
         mode = "unknown" if unknown else "hostile" if hostile else "observed"
         bench.record(mode + "-fixture", bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode={mode}", "POST"))
@@ -337,6 +341,16 @@ def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=F
     for node in _nodes(bench):
         _put_config(bench, node, {"offline.wakeMeters": "0", "offline.leadSeconds": "0", "offline.quietMeters": "0"})
     _put_config(bench, "node-1", {"offline.enabled": "true", "offline.minOnlineSeconds": "0", "offline.graceSeconds": "0", "offline.settleFrames": "0"})
+    if rotor:
+        def quiet():
+            status = bench.cluster.node("node-1", "/offline")["owner"]["compensation"]
+            return next((p for p in status["profiling"] if sibling in p["members"] and p["state"] == "complete"), None)
+        _require(bench, "quiet sibling profiles while the rotor group moves", bool(_poll(quiet, 90))
+                 and _owner_of(bench, sibling) == ("node-1", partition) and _offline_row(bench, partition) is None)
+        before = bench.cluster.node("node-1", "/offline-test-measurements")
+        bench.record("rotor-quiet-profile", quiet())
+        bench.record("rotor-quiet-measurements", before)
+        bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=stop-rotor", "POST")
     if unknown:
         _put_config(bench, "node-1", {"offline.unknownBlocks": "Block"})
         def blocked():
@@ -348,6 +362,10 @@ def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=F
     row = _poll(lambda: _offline_row(bench, partition), 120)
     _require(bench, "station reached the durable offline table", bool(row), str(partition))
     bench.record("call-up-before", row)
+    if rotor:
+        after = bench.cluster.node("node-1", "/offline-test-measurements")
+        bench.record("rotor-stopped-measurements", after)
+        bench.check("quiet sibling reuses its production rate after rotor stop", after["attempts"] == before["attempts"])
     # Leave enough authority frames for a non-zero compensation interval, independent of load latency.
     time.sleep(4)
     return api, grid, block, partition, addresses
@@ -367,6 +385,19 @@ def _remote_presence(bench, partition):
     return next((p.get("remoteUsers") for p in report.get("partitions", []) if p.get("id") == partition), [])
 
 
+def _open_terminal(api, grid, timeout=120):
+    # Remote returns as soon as the grid exists. Vanilla's client antenna graph can
+    # need another Update100 before CanConnect succeeds; existence is not UI readiness.
+    deadline = time.monotonic() + timeout
+    last = {}
+    while time.monotonic() < deadline:
+        last = api.open_remote_terminal(grid, timeout=min(10, max(1, deadline - time.monotonic())))
+        if last.get("screenOpen"):
+            return last
+        time.sleep(2)
+    return last
+
+
 def p2_off_call_terminal(bench):
     api, grid, block, partition, _ = _call_fixture(bench, production=True)
     profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
@@ -374,7 +405,7 @@ def p2_off_call_terminal(bench):
     _require(bench, "real refinery profile was captured in the Final", any(p.get("Production") for p in profiles))
     bench.cluster.node("node-1", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
     started = time.monotonic()
-    opened = api.open_remote_terminal(grid, timeout=120)
+    opened = _open_terminal(api, grid)
     latency = time.monotonic() - started
     bench.record("call-up-terminal", opened)
     _require(bench, "real client opened the woken remote terminal", opened.get("screenOpen") is True and opened.get("connected") is True, json.dumps(opened))
@@ -449,7 +480,7 @@ def p2_off_call_conflict(bench):
     from scenarios_contracts import _client_partition, _client_node, _hand_over
     from scenarios_redeliver import CLIENT2_ID, CLIENT2_PORT
     api, grid, _, partition, _ = _call_fixture(bench)
-    opened = api.open_remote_terminal(grid, timeout=120)
+    opened = _open_terminal(api, grid)
     _require(bench, "first real client pins the woken station", opened.get("screenOpen") is True)
     for node in ("node-1", "node-2"):
         _put_config(bench, node, {"offline.enabled": "false"})
@@ -499,7 +530,7 @@ def t_oc_07(bench):
     profile = next(p for p in profiles if grid in p["Members"])
     _require(bench, "Freeze reports PB/timer/ejection as unknown", profile["Confidence"] == "Frozen" and len(profile["Unknowns"]) >= 3, json.dumps(profile["Unknowns"]))
     bench.cluster.node("node-1", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
-    opened = api.open_remote_terminal(grid, timeout=120)
+    opened = _open_terminal(api, grid)
     _require(bench, "unknown-group wake opens through the real terminal", opened.get("screenOpen") is True, json.dumps(opened))
     applied = bench.cluster.node("node-1", "/offline-test-recovery").get("applied")
     bench.record("unknown-applied", applied)
@@ -752,7 +783,7 @@ def t_oc_13(bench):
     api, grid, _, partition, _ = _call_fixture(bench, dynamic=True)
     fixture = json.loads((bench.dir / "call-up-fixture.json").read_text())
     bench.cluster.node("node-1", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
-    answer = api.open_remote_terminal(grid, timeout=120)
+    answer = _open_terminal(api, grid)
     _require(bench, "parked large dynamic grid wakes through real radio", answer.get("screenOpen") is True, json.dumps(answer))
     applied = _applied(bench, "node-1")
     bench.record("parked-dynamic-applied", applied)
@@ -760,6 +791,61 @@ def t_oc_13(bench):
     bench.check("large dynamic grid survives offline at the same position", builder["isStatic"] is False
                 and math.dist(fixture["position"], builder["position"]) < .01, json.dumps(builder["position"]))
     api.close_remote_terminal()
+
+
+def t_oc_08(bench):
+    api, grid, _, partition, _ = _call_fixture(bench, rotor=True)
+    profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
+    bench.record("rotor-stopped-final-profiles", profiles)
+    bench.check("stopped rotor and independent quiet sibling have separate logical profiles", len(profiles) == 2
+                and any(len(p["Members"]) == 2 and grid in p["Members"] for p in profiles)
+                and any(p["Production"] for p in profiles))
+    bench.exercised(nativeRotorSubgrid=True, quietSibling=True, sharedPartition=partition)
+
+
+def offline_live_differential(bench):
+    """Bounded native engine reference, not the six-hour/three-baseline standalone T-OC lane."""
+    _survival_template(bench)
+    _join(bench)
+    for node in ("node-1", "node-2"):
+        _put_config(bench, node, {"offline.enabled": "false", "offline.quietMeters": "0", "offline.settleFrames": "0"})
+    owner = _client_identity(bench)
+    grid = bench.cluster.node("node-1", f"/rc-test-ensure?owner={owner}", "POST")["grid"]
+    bench.cluster.node("node-1", f"/offline-test-production?grid={grid}", "POST")
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=full-auto-reactor", "POST")
+    partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 60)
+    _require(bench, "native reference fixture has an owned partition", bool(partition))
+    bench.cluster.post("/automatic/pause")
+    _require(bench, "native reference profile completes", bool(_poll(lambda: bench.cluster.node("node-1", f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))
+    initial = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}", "POST")
+    bench.record("native-reference-initial", initial)
+    time.sleep(30)
+    comparison = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}")
+    bench.record("native-live-comparison", comparison)
+    actual, predicted, result = (comparison[k] for k in ("actual", "predicted", "result"))
+    _require(bench, "native 60 Hz engine advanced through the reference interval", result["Frames"] >= 1500)
+    for store in actual["Storage"]:
+        expected = next(s for s in predicted["Storage"] if s["Block"] == store["Block"])
+        bench.check("full Auto battery follows native Update100 charging", abs(store["Amount"] - expected["Amount"]) < .0004,
+                    json.dumps({"actual": store, "predicted": expected}))
+    def totals(profile):
+        sums = {}
+        for inventory in profile["Inventories"]:
+            for stack in inventory["Stacks"]:
+                sums[stack["Item"]] = sums.get(stack["Item"], 0) + stack["Amount"]
+        return sums
+    before, native, model = map(totals, (initial, actual, predicted))
+    iron = "MyObjectBuilder_Ingot/Iron"
+    delta = native.get(iron, 0) - before.get(iron, 0)
+    _require(bench, "live reference actually produced iron", delta > 0)
+    # One ordinary refinery tick bounds the endpoint phase difference; this does not hide a
+    # six-hour drift or ore-switch/upgrade/conveyor discrepancy behind a short fixture pass.
+    recipe = next(r for p in initial["Production"] for r in p["Recipes"] if r["Id"].endswith("/IronOreToIngot"))
+    tick = max(p["TickFrames"] for p in initial["Production"])
+    tolerance = recipe["UnitsPerFrame"] * tick * next(m["Amount"] for m in recipe["Outputs"] if m["Item"] == iron)
+    bench.check("short native production differential stays within one engine tick", abs(native[iron] - model[iron]) <= tolerance,
+                json.dumps({"native": native, "model": model, "oneTickIron": tolerance}))
+    bench.exercised(nativeLiveEngineReference=True, frames=result["Frames"], limitation="short clustered-engine reference; six-hour standalone lane, three baselines and full stock-chain differentials remain")
 
 
 def offline_observed_policy(bench):
@@ -782,7 +868,7 @@ def offline_observed_policy(bench):
     _require(bench, "opaque storage and script inventory effects are explicitly frozen", profile["Confidence"] == "Frozen" and any("script-driven storage" in u for u in profile["Unknowns"])
              and any("script inventory changes" in u for u in profile["Unknowns"]))
     bench.cluster.node("node-1", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
-    answer = api.open_remote_terminal(grid, timeout=120)
+    answer = _open_terminal(api, grid)
     _require(bench, "observed/unknown group wakes through real radio", answer.get("screenOpen") is True, json.dumps(answer))
     applied = _applied(bench, "node-1")
     bench.record("observed-applied", applied)
@@ -847,6 +933,8 @@ SCENARIOS_OFFLINE.update({
     "P2-OFF-CALL-LASER": (p2_off_call_laser, "native id/GPS laser wake and established-link no-wake", "3"),
     "T-OC-10": (t_oc_10, "real changed-mod bytes skip compensation and leave the woken partition healthy", "3"),
     "T-OC-13": (t_oc_13, "parked large dynamic grid offlines and preserves its pose", "2"),
+    "T-OC-08": (t_oc_08, "moving rotor subgrid leaves a quiet sibling profiled and reuses its rate when stopped", "2"),
     "OFF-OBSERVED-POLICY": (offline_observed_policy, "native short-window external rates and conservative script storage/inventory policy", "3"),
+    "OFF-LIVE-DIFFERENTIAL": (offline_live_differential, "short native engine reference for full Auto battery and real refinery production", "3"),
     "T-OC-12": (t_oc_12, "twenty native refinery bases share one rotation and remeasure after clear", "2"),
 })

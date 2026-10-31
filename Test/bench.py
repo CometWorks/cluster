@@ -665,6 +665,12 @@ def run_scenario(function, scenario: str, title: str, tier: str, results_root: P
     print(f"\n=== {scenario} - {title} ===")
     try:
         function(bench)
+    except (KeyboardInterrupt, SystemExit) as error:
+        # Teardown still records the run. An interrupted scenario must never leave a
+        # default-success result.json, even if it had not reached its first assertion.
+        bench.result.passed = False
+        bench.result.error = f"{type(error).__name__}: interrupted before completion"
+        raise
     except (ClusterError, AssertionError, Exception) as error:  # noqa: BLE001 - a scenario failure is data
         bench.result.passed = False
         bench.result.error = f"{type(error).__name__}: {error}"

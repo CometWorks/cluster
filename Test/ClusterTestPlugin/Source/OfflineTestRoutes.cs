@@ -25,9 +25,32 @@ internal static class OfflineTestRoutes
     private static long target, until;
     private static object applied;
     private static bool patched;
+    private static OfflineProfile reference;
 
     public static void Register()
     {
+        TestRoutes.Add("POST", "/offline-test-reference", context =>
+        {
+            ulong partition = ulong.Parse(TestRoutes.Query(context, "partition"));
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                reference = OfflineCompensation.CaptureFor(ClusterRuntime.m_partitions.Get(partition)).Single();
+                return JsonSerializer.SerializeToElement(reference, OfflineProfile.Json);
+            }));
+        });
+        TestRoutes.Add("GET", "/offline-test-reference", context =>
+        {
+            ulong partition = ulong.Parse(TestRoutes.Query(context, "partition"));
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                var actual = OfflineCompensation.CaptureFor(ClusterRuntime.m_partitions.Get(partition)).Single();
+                var predicted = JsonSerializer.Deserialize<OfflineProfile>(JsonSerializer.Serialize(reference, OfflineProfile.Json), OfflineProfile.Json);
+                var result = OfflineModel.Simulate(predicted, actual.FrozenFrame, OfflineCompensation.MaxFrames);
+                return new { actual = JsonSerializer.SerializeToElement(actual, OfflineProfile.Json),
+                    predicted = JsonSerializer.SerializeToElement(predicted, OfflineProfile.Json),
+                    result = JsonSerializer.SerializeToElement(result, OfflineProfile.Json) };
+            }));
+        });
         TestRoutes.Add("POST", "/offline-test-sibling", context =>
         {
             long grid = TestRoutes.Long(context, "grid"), owner = TestRoutes.Long(context, "owner");
@@ -108,6 +131,30 @@ internal static class OfflineTestRoutes
             gyro.Min = new SerializableVector3I(2, 0, 0); gyro.GyroOverride = true;
             grid.AddBlock(gyro, false);
         }
+        else if (mode == "rotor")
+        {
+            var builder = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_MotorStator>("LargeStator");
+            builder.Min = new SerializableVector3I(2, 0, 0); builder.Owner = grid.BigOwners.First();
+            var rotor = (MyMotorStator)grid.AddBlock(builder, false).FatBlock;
+            rotor.RecreateTop(builder.Owner, instantBuild: true);
+            rotor.TargetVelocityRPM = 1;
+        }
+        else if (mode == "full-auto-reactor")
+        {
+            var battery = grid.GetFatBlocks<MyBatteryBlock>().Single();
+            battery.ChargeMode = Sandbox.ModAPI.Ingame.ChargeMode.Auto;
+            battery.CurrentStoredPower = battery.MaxStoredPower;
+            var builder = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Reactor>("LargeBlockSmallGenerator");
+            builder.Min = new SerializableVector3I(9, -1, 0); builder.Owner = grid.BigOwners.First();
+            var reactor = (MyReactor)grid.AddBlock(builder, false).FatBlock;
+            reactor.GetInventory().AddItems(10, MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Ingot>("Uranium"));
+        }
+        else if (mode == "stop-rotor")
+            foreach (var rotor in grid.GetFatBlocks<MyMotorStator>())
+            {
+                rotor.TargetVelocityRPM = 0;
+                ((Sandbox.ModAPI.Ingame.IMyMotorStator)rotor).RotorLock = true;
+            }
         else if (mode == "short-radio")
         {
             var antenna = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_RadioAntenna>("LargeBlockRadioAntenna");
