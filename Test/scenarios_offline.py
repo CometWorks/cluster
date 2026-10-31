@@ -28,6 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 import os
 import re
 import signal
+import shutil
 import subprocess
 import time
 import urllib.request
@@ -35,7 +36,8 @@ import uuid
 from pathlib import Path
 
 from bench import REMOTE_PASSWORD, REMOTE_USER
-from cluster import ClusterError
+from cluster import ClusterError, ClusterHttpError
+from hostenv import HOST
 from se_remote import RemoteAPI
 from scenarios_core import CLIENT_ID, _enter_nearest_cockpit, _join, _lines, _nodes
 from scenarios_wa_ops import _authority, _client_identity, _poll, _require, _session, _wa_failover
@@ -278,8 +280,25 @@ SCENARIOS_OFFLINE = {
 
 # SE-346: these use the existing real-client RC/terminal fixture and the production sweep/load.
 # They deliberately do not label the unavailable multi-client/planet differential fixtures as passing.
-def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=False, hostile=False):
-    api = _join(bench)
+def _survival_template(bench):
+    source = Path(bench.cluster.config.world_template or HOST.package / "examples/Cluster-Simple")
+    target = bench.run_root.parent / (bench.run_root.name + "-templates") / "survival"
+    if target.exists():
+        shutil.rmtree(target)
+    shutil.copytree(source, target)
+    for name in ("Sandbox.sbc", "Sandbox_config.sbc"):
+        path = target / name
+        text, count = re.subn(r"<GameMode>Creative</GameMode>", "<GameMode>Survival</GameMode>", path.read_text())
+        if not count and "<GameMode>Survival</GameMode>" not in text:
+            raise ClusterError(f"{path}: no explicit game mode")
+        path.write_text(text)
+    bench.cluster.config.world_template = target
+
+
+def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=False, hostile=False, api=None):
+    if api is None:
+        _survival_template(bench)
+        api = _join(bench)
     # Offline admission requires fresh geometry reports from the normal automatic loop.
     # Pausing it before the first offline row starves those reports and refuses every offer.
     for node in _nodes(bench):
@@ -287,6 +306,7 @@ def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=F
             _put_config(bench, node, {"offline.enabled": "false"})
     identity = _client_identity(bench)
     fixture = bench.cluster.node("node-1", f"/rc-test-ensure?owner={identity}&dynamic={str(dynamic).lower()}", "POST")
+    bench.record("call-up-fixture", fixture)
     grid, block, relay = fixture["grid"], fixture["block"], fixture["relay"]
     bench.exercised(relay=relay)
     if production:
@@ -328,8 +348,10 @@ def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=F
 def _offline_row(bench, partition):
     try:
         return bench.cluster.get(f"/registry/partitions/offline?partition={partition}")
-    except Exception:  # 404 is the expected answer after a load completed
-        return None
+    except ClusterHttpError as error:
+        if error.status == 404:
+            return None
+        raise
 
 
 def _remote_presence(bench, partition):
@@ -572,7 +594,7 @@ def p2_off_call_rate(bench):
     for node in ("node-1", "node-2"):
         _put_config(bench, node, {"offline.enabled": "true", "offline.minOnlineSeconds": "0", "offline.graceSeconds": "0", "offline.settleFrames": "0"})
     def rows():
-        return bench.cluster.get("/registry/partitions/offline").get("Rows", [])
+        return bench.cluster.get("/registry/partitions/offline").get("Partitions", [])
     offline = _poll(lambda: (lambda rs: rs if target_ids <= {m for r in rs for m in r.get("Members", [])} else None)(rows()), 240, 2)
     _require(bench, "twenty distinct reachable targets are durably offline", bool(offline))
     before = bench.cluster.node("node-1", "/offline")["callUps"]
@@ -607,7 +629,7 @@ def p2_off_call_laser(bench):
         _put_config(bench, node, {"offline.enabled": "true", "offline.minOnlineSeconds": "0", "offline.graceSeconds": "0", "offline.settleFrames": "0"})
     def connected():
         s = bench.cluster.node("node-1", f"/igc-test-laser-status?grid={source_grid}")
-        t = bench.cluster.node("node-1", f"/igc-test-laser-status?grid={target_grid}") if _owner_of(bench, target_grid) else {}
+        t = bench.cluster.node("node-1", f"/igc-test-laser-status?grid={target_grid}") if _owner_of(bench, target_grid) == ("node-1", partition) else {}
         return {"source": s, "target": t} if s.get("state") == "connected" and t.get("state") == "connected" else None
     enable("node-2")
     _require(bench, "laser id target is durably offline", bool(_poll(lambda: _offline_row(bench, partition), 90)))
@@ -633,6 +655,50 @@ def p2_off_call_laser(bench):
                     limitation="explicit radio-chain relay-behind-offline-laser assertion remains separate")
 
 
+def t_oc_10(bench):
+    """A real locally staged world mod changes on the waking node, with no live world migration."""
+    from scenarios_mods import PROBE_NAME, _run as run_mod_world
+    _survival_template(bench)
+    logs, error = run_mod_world(bench, None)
+    _require(bench, "staged mod world starts natively", error is None, str(error))
+    api = bench.start_client(CLIENT_ID)
+    bench.wait_spawned(CLIENT_ID)
+    bench.ensure_gameplay_focus(CLIENT_ID)
+    api, grid, _, partition, _ = _call_fixture(bench, api=api, production=True)
+    profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
+    bench.record("changed-mod-original-profiles", profiles)
+    bench.cluster.kill(slot="node-2")
+    mod = bench.run_root / "node-2-data/Mods" / PROBE_NAME / "Data/Scripts/ClusterLocalModProbe/Probe.cs"
+    original = mod.read_text()
+    mod.write_text(original + "\n// native offline content-hash change fixture\n")
+    bench.record("changed-mod-bytes", {"file": str(mod), "beforeBytes": len(original.encode()), "afterBytes": mod.stat().st_size})
+    bench.cluster.start_node("node-2")
+    bench.cluster.wait_node_log("node-2", "Game ready", timeout=180)
+    bench.cluster.node("node-2", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
+    bench.cluster.post(f"/registry/partitions/offline/load?partition={partition}&node=node-2&reason=remote")
+    applied = _poll(lambda: _applied(bench, "node-2"), 120)
+    _require(bench, "changed-content wake reached actual shared recovery", bool(applied))
+    bench.record("changed-mod-applied", applied)
+    result = next(r for r in applied["compensation"]["results"] if r["Group"] == grid)
+    bench.check("changed mod bytes skip compensation explicitly", "content mismatch" in (result.get("Skipped") or ""), json.dumps(result))
+    owner = _poll(lambda: _owner_of(bench, grid), 30)
+    bench.check("partition remains healthy after the skip", owner == ("node-2", partition), str(owner))
+
+
+def t_oc_13(bench):
+    api, grid, _, partition, _ = _call_fixture(bench, dynamic=True)
+    fixture = json.loads((bench.dir / "call-up-fixture.json").read_text())
+    bench.cluster.node("node-1", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
+    answer = api.open_remote_terminal(grid, timeout=120)
+    _require(bench, "parked large dynamic grid wakes through real radio", answer.get("screenOpen") is True, json.dumps(answer))
+    applied = _applied(bench, "node-1")
+    bench.record("parked-dynamic-applied", applied)
+    builder = next(g for g in applied["builders"] if g["grid"] == grid)
+    bench.check("large dynamic grid survives offline at the same position", builder["isStatic"] is False
+                and math.dist(fixture["position"], builder["position"]) < .01, json.dumps(builder["position"]))
+    api.close_remote_terminal()
+
+
 SCENARIOS_OFFLINE.update({
     "P2-OFF-CALL-TERMINAL": (p2_off_call_terminal, "offline radio terminal, caller-node wake, pin and sweep lifecycle", "3"),
     "P2-OFF-CALL-RC": (p2_off_call_rc, "offline dynamic drone radio control, raw client driving and presence", "3"),
@@ -643,4 +709,6 @@ SCENARIOS_OFFLINE.update({
     "P2-OFF-CALL-DENY": (p2_off_call_deny, "authenticated hostile-owner and missing-relay requests do not wake", "3"),
     "P2-OFF-CALL-RATE": (p2_off_call_rate, "twenty authenticated offline-grid requests enforce one pending call-up", "3"),
     "P2-OFF-CALL-LASER": (p2_off_call_laser, "native id/GPS laser wake and established-link no-wake", "3"),
+    "T-OC-10": (t_oc_10, "real changed-mod bytes skip compensation and leave the woken partition healthy", "3"),
+    "T-OC-13": (t_oc_13, "parked large dynamic grid offlines and preserves its pose", "2"),
 })

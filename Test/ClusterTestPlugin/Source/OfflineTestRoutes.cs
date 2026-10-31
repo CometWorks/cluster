@@ -165,7 +165,8 @@ internal static class OfflineTestRoutes
 
     private static object Snapshot(IEnumerable<MyObjectBuilder_CubeGrid> grids) => grids.Select(g => new
     {
-        grid = g.EntityId, isStatic = g.IsStatic, pose = g.PositionAndOrientation,
+        grid = g.EntityId, isStatic = g.IsStatic,
+        position = g.PositionAndOrientation is { } pose ? new[] { pose.Position.X, pose.Position.Y, pose.Position.Z } : null,
         blocks = g.CubeBlocks.Select(b => new
         {
             id = b.EntityId, type = b.GetId().ToString(),
