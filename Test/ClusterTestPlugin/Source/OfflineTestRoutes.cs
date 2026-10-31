@@ -49,11 +49,18 @@ internal static class OfflineTestRoutes
         {
             long expected = Interlocked.Read(ref capturePartition);
             if (expected > 0 && context.Request.HttpMethod == "GET" && path.EndsWith("/capture", StringComparison.OrdinalIgnoreCase)
-                && context.Request.QueryString["partition"] == expected.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                && context.Request.QueryString["partition"] == expected.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                && Interlocked.CompareExchange(ref capturePartition, 0, expected) == expected)
             {
                 Volatile.Write(ref captureEntered, 1);
-                CaptureRelease.Wait(TimeSpan.FromSeconds(20));
-                Interlocked.Exchange(ref capturePartition, 0);
+                // The control listener is serial. Hold this one request on a worker so
+                // status/release requests and the Gateway's heartbeats keep flowing.
+                ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    CaptureRelease.Wait(TimeSpan.FromSeconds(20));
+                    ClusterControlServer.Handle(context);
+                });
+                return true;
             }
             return false;
         });
