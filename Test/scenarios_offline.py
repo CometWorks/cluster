@@ -562,7 +562,7 @@ def offline_remote_capture_race(bench):
                 bench.record("capture-race-before-heartbeat-clear", early)
                 _require(bench, "only the old presence snapshot delays arming the race", outcome.get("reason") == "remote-use", json.dumps(outcome))
                 time.sleep(1)
-            _require(bench, "gateway passed its reads and reached held source capture", bool(held) and not held["frozen"])
+            _require(bench, "gateway passed its reads and reached held source capture", bool(held) and not held.get("early") and not held["frozen"])
             opened = _open_terminal(api, grid, timeout=10)
             _require(bench, "real terminal acquires its permanent pin inside the capture gap", opened.get("screenOpen") is True
                      and bool(_poll(lambda: _remote_presence(bench, partition), 4, .1)), json.dumps(opened))
@@ -1284,7 +1284,8 @@ def offline_zone_paused(bench):
     bench.record("paused-zone-reference", comparison)
     bench.check("paused paid credit does not run down while no electricity is supplied", comparison["predicted"]["Upkeep"][0]["RemainingFrames"] == captured["Upkeep"][0]["RemainingFrames"]
                 and abs(comparison["actual"]["Upkeep"][0]["RemainingFrames"] - captured["Upkeep"][0]["RemainingFrames"]) < 1
-                and not comparison["result"]["UpkeepConsumed"] and not comparison["result"]["ProducerFuelConsumed"])
+                and not comparison["result"]["UpkeepConsumed"]
+                and all(amount == 0 for producer in comparison["result"]["ProducerFuelConsumed"].values() for amount in producer.values()))
     _put_config(bench, "node-1", {"offline.enabled": "true", "offline.minOnlineSeconds": "0", "offline.graceSeconds": "0"})
     _require(bench, "paused player zone can durably offline", bool(_poll(lambda: _offline_row(bench, partition), 90)))
     profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
@@ -1314,6 +1315,43 @@ def offline_zone_paused(bench):
     bench.check("powered manually removed zone is not automatically modeled active", not manual["Upkeep"])
     bench.exercised(nativePausedZone=True, actualSharedRecovery=True, nativePowerRecovery=True,
                     limitation="no environmental power recovery during the offline interval in this fixture")
+
+
+def offline_gas_idle(bench):
+    """Native gas-production standby demand participates in the shared producer budget.
+
+    This short reference is not the full T-OC-04 coupled exhaustion/cold-bootstrap lane.
+    """
+    _survival_template(bench)
+    bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
+    for node in ("node-1", "node-2"):
+        _put_config(bench, node, {"offline.enabled": "false", "offline.quietMeters": "0", "offline.settleFrames": "0"})
+    owner = bench.cluster.node("node-1", "/identity-test-create?name=offline-gas-owner", "POST")["identityId"]
+    grid = bench.cluster.node("node-1", f"/offline-test-station?owner={owner}", "POST")["grid"]
+    for mode in ("full-auto-reactor", "battery-off", "gas-idle"):
+        bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode={mode}", "POST")
+    partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 60)
+    _require(bench, "idle gas fixture has an owned partition", bool(partition))
+    native = _poll(lambda: (lambda rows: rows[0] if rows and rows[0]["working"] and rows[0]["input"] > 0
+                            and not any(rows[0]["outputs"]) else None)(bench.cluster.node("node-1", f"/offline-test-gas-state?grid={grid}")), 30)
+    _require(bench, "native gas generator is electrically supplied but delivering no gas", bool(native))
+    _require(bench, "native standby draw is below operational draw", native["required"] < .01, json.dumps(native))
+    _require(bench, "idle gas profile completes", bool(_poll(lambda: bench.cluster.node("node-1", f"/trigger/profile?partition={partition}", "POST").get("complete"), 30)))
+    initial = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}", "POST")
+    time.sleep(20)
+    comparison = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}")
+    after = bench.cluster.node("node-1", f"/offline-test-gas-state?grid={grid}")[0]
+    bench.record("gas-idle-reference", {"nativeBefore": native, "nativeAfter": after, "initial": initial, "comparison": comparison})
+    result = comparison["result"]
+    expected = native["input"] * result["Frames"] * initial["ClockFrameSeconds"] / 3600
+    actual = result["ConsumerEnergyMWh"].get(str(native["block"]), 0)
+    bench.check("shared budget charges the actual native standby sink rather than nameplate working draw",
+                abs(actual - expected) < expected * .01, json.dumps({"nativeMWh": expected, "modeledMWh": actual}))
+    bench.check("idle gas production consumes no ice", after["ice"] == native["ice"] and result["ItemDelta"].get("MyObjectBuilder_Ore/Ice", 0) == 0)
+    bench.check("delivered reactor energy conserves all grid consumers including gas standby",
+                abs(sum(result["ProducerEnergyMWh"].values()) - sum(result["ConsumerEnergyMWh"].values())
+                    - sum(result["StorageInputEnergyMWh"].values())) < 1e-9)
+    bench.exercised(nativeGasStandby=True, sharedPowerBudget=True, limitation="full coupled gas exhaustion and cold bootstrap remain separate")
 
 
 def offline_observed_policy(bench):
@@ -1417,4 +1455,5 @@ SCENARIOS_OFFLINE.update({
     "OFF-SOLAR-NATIVE": (offline_solar_native, "native physics-queue solar profiling crash regression", "2"),
     "OFF-ZONE-PAUSED": (offline_zone_paused, "native power-paused zone credit, shared recovery, vanilla reactivation and manual-off control", "3"),
     "OFF-REMOTE-CAPTURE-RACE": (offline_remote_capture_race, "native terminal pin acquired after gateway read refuses source capture", "3"),
+    "OFF-GAS-IDLE": (offline_gas_idle, "native gas generator standby shares the actual grid power budget", "2"),
 })

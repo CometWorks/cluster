@@ -184,6 +184,16 @@ internal static class OfflineTestRoutes
                 .GetFatBlocks<MySolarPanel>().Select(p => new { block = p.EntityId,
                     maximum = p.SourceComp.MaxOutput, output = p.SourceComp.CurrentOutput }).ToArray()));
         });
+        TestRoutes.Add("GET", "/offline-test-gas-state", context =>
+        {
+            long grid = TestRoutes.Long(context, "grid");
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => ((MyCubeGrid)MyEntities.GetEntityById(grid))
+                .GetFatBlocks<MyGasGenerator>().Select(g => new { block = g.EntityId, working = g.IsWorking,
+                    required = g.ResourceSink.RequiredInputByType(MyResourceDistributorComponent.ElectricityId),
+                    input = g.ResourceSink.CurrentInputByType(MyResourceDistributorComponent.ElectricityId),
+                    outputs = g.SourceComp.ResourceTypes.Select(t => g.SourceComp.CurrentOutputByType(t)).ToArray(),
+                    ice = (decimal)g.GetInventory().GetItemAmount(MyDefinitionId.Parse("MyObjectBuilder_Ore/Ice")) }).ToArray()));
+        });
         TestRoutes.Add("POST", "/offline-test-recovery", context =>
         {
             long grid = TestRoutes.Long(context, "grid"), ms = long.Parse(TestRoutes.Query(context, "ms"), System.Globalization.CultureInfo.InvariantCulture);
@@ -238,6 +248,18 @@ internal static class OfflineTestRoutes
             builder.Min = new SerializableVector3I(9, -1, 0); builder.Owner = grid.BigOwners.First();
             var reactor = (MyReactor)grid.AddBlock(builder, false).FatBlock;
             reactor.GetInventory().AddItems(10, MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Ingot>("Uranium"));
+        }
+        else if (mode == "gas-idle")
+        {
+            for (int x = 2; x <= 13; x++)
+            {
+                var armor = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_CubeBlock>("LargeBlockArmorBlock");
+                armor.Min = new SerializableVector3I(x, -1, 0); grid.AddBlock(armor, false);
+            }
+            var builder = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_OxygenGenerator>();
+            builder.Min = new SerializableVector3I(12, 0, 0); builder.Owner = grid.BigOwners.First(); builder.UseConveyorSystem = false;
+            var generator = (MyGasGenerator)(grid.AddBlock(builder, false) ?? throw new InvalidOperationException("idle generator did not fit")).FatBlock;
+            generator.GetInventory().AddItems(1000, MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Ore>("Ice"));
         }
         else if (mode == "battery-off")
             foreach (var battery in grid.GetFatBlocks<MyBatteryBlock>()) battery.Enabled = false;
