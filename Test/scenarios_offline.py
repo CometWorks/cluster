@@ -301,7 +301,7 @@ def _survival_template(bench):
     bench.cluster.config.world_template = target
 
 
-def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=False, hostile=False, observed=False, rotor=False, zone=False, api=None, client_id=CLIENT_ID):
+def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=False, hostile=False, observed=False, rotor=False, zone=False, zone_seconds=3600, api=None, client_id=CLIENT_ID):
     if api is None:
         _survival_template(bench)
         api = _join(bench, client_id=client_id)
@@ -318,7 +318,7 @@ def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=F
     if production:
         bench.record("production-fixture", bench.cluster.node("node-1", f"/offline-test-production?grid={grid}", "POST"))
     if zone:
-        bench.record("zone-fixture", bench.cluster.node("node-1", f"/offline-test-zone?grid={grid}", "POST"))
+        bench.record("zone-fixture", bench.cluster.node("node-1", f"/offline-test-zone?grid={grid}&seconds={zone_seconds}", "POST"))
     if rotor:
         sibling = bench.cluster.node("node-1", f"/offline-test-sibling?grid={grid}&owner={identity}", "POST")["grid"]
         bench.cluster.node("node-1", f"/offline-test-production?grid={sibling}", "POST")
@@ -582,12 +582,23 @@ def _assert_applied_inventory(bench, profiles, applied, grid, label):
 
 
 def t_oc_09(bench):
-    _, grid, _, partition, _ = _call_fixture(bench, production=True, zone=True)
+    _, grid, _, partition, _ = _call_fixture(bench, production=True, zone=True, zone_seconds=60)
     profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
     original = bench.cluster.get(f"/registry/saves/newest?partition={partition}")
     bench.record("crash-original-profiles", profiles)
     bench.record("crash-original-final", original)
     _put_config(bench, "node-1", {"offline.enabled": "false"})
+    profile = next(p for p in profiles if grid in p["Members"])
+    zone = next(z for z in profile["Upkeep"] if z["Enabled"] and z["Exists"])
+    _require(bench, "immutable Final has paid zone credit and spare chips", zone["RemainingFrames"] > 0
+             and sum(s["Amount"] for i in profile["Inventories"] for s in i["Stacks"]
+                     if s["Item"] == "MyObjectBuilder_Component/ZoneChip") >= zone["Chips"]["Amount"])
+    # Real authority time, not injected model time: cross the captured paid-credit
+    # boundary before either node may apply. Repeated attempts must debit the same
+    # immutable chip stock, just as they do fuel and production ingredients.
+    deadline = time.monotonic() + zone["RemainingFrames"] / 60 + 5
+    while time.monotonic() < deadline:
+        time.sleep(min(2, deadline - time.monotonic()))
     bench.cluster.node("node-2", f"/offline-test-recovery?grid={grid}&ms=45000", "POST")
     bench.record("crash-wake-request", bench.cluster.post(f"/registry/partitions/offline/load?partition={partition}&node=node-2&reason=remote"))
     first = _poll(lambda: _applied(bench, "node-2"), 90)
@@ -598,6 +609,8 @@ def t_oc_09(bench):
     _require(bench, "held shared wake debits actual producer fuel for zone and both production blocks", any(
         values.get("MyObjectBuilder_Ingot/Uranium", 0) > 0 for values in budget["ProducerFuelConsumed"].values())
         and len(budget["ProductionUnits"]) == 2 and bool(budget["Zones"]), json.dumps(budget))
+    _require(bench, "first held apply consumes a real zone upkeep period", budget["UpkeepConsumed"].get(str(zone["Block"])) == zone["Chips"]["Amount"]
+             and budget["ItemDelta"].get("MyObjectBuilder_Component/ZoneChip") == -zone["Chips"]["Amount"], json.dumps(budget["UpkeepConsumed"]))
     latest = bench.cluster.get(f"/registry/saves/newest?partition={partition}")
     _require(bench, "held wake has not advanced the durable Final", latest["SaveId"] == original["SaveId"], json.dumps(latest["SaveId"]))
     bench.cluster.node("node-1", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
@@ -614,6 +627,9 @@ def t_oc_09(bench):
     bench.record("crash-retry-builders", second)
     result = _assert_applied_inventory(bench, profiles, second, grid, "crash retry recomputes from original stocks without crediting the first attempt")
     _require(bench, "retry credits nonzero production", result["ItemDelta"].get("MyObjectBuilder_Ingot/Iron", 0) > 0)
+    _require(bench, "crash retry debits one chip period from original stock without stacking the first debit",
+             result["UpkeepConsumed"] == budget["UpkeepConsumed"]
+             and result["ItemDelta"].get("MyObjectBuilder_Component/ZoneChip") == budget["ItemDelta"].get("MyObjectBuilder_Component/ZoneChip"))
     final = _poll(lambda: (lambda s: s if s["SaveId"]["Generation"] > original["SaveId"]["Generation"] else None)(bench.cluster.get(f"/registry/saves/newest?partition={partition}")), 90)
     _require(bench, "post-compensation Final is catalogued", bool(final))
     bench.record("crash-compensated-final", final)
@@ -633,6 +649,12 @@ def t_oc_09(bench):
     _require(bench, "ordinary Final actually recovered after the second kill", bool(third))
     bench.record("crash-after-final-builders", third)
     bench.check("ordinary Final carries no profile to credit again", not any(r.get("Group") == grid for r in third["compensation"]["results"]))
+    original_chips = sum(s["Amount"] for i in profile["Inventories"] for s in i["Stacks"] if s["Item"] == "MyObjectBuilder_Component/ZoneChip")
+    recovered_chips = sum(i["amount"] for g in third["builders"] if g["grid"] in profile["Members"]
+                          for b in g["blocks"] for inv in b["inventories"] for i in inv["items"]
+                          if i["type"] == "MyObjectBuilder_Component/ZoneChip")
+    bench.check("post-Final recovery retains the single committed chip debit", recovered_chips == original_chips - zone["Chips"]["Amount"],
+                json.dumps({"original": original_chips, "recovered": recovered_chips}))
     bench.exercised(grid=grid, partition=partition, actualNodeKills=2, proof="shared apply/pre-Final crash/retry/catalogued-Final recovery; long differential still separate")
 
 
