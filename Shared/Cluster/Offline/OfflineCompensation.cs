@@ -279,15 +279,25 @@ internal static partial class OfflineCompensation
 			var retained = settings?.Clone() as MyObjectBuilder_SafeZone;
 			if (retained != null) retained.Enabled = false;
 			bool exists = zone.Enabled && zone.Exists;
+			// An initially power-paused zone has no carried live entry. If its modeled
+			// supply recovered, restore the remembered entity through the same carried-zone
+			// path, with its original id/settings and the already-accounted activation clock.
+			if (exists && bubble == null)
+			{
+				if (retained == null || retained.EntityId == 0 || retained.SafeZoneBlockId != block.EntityId || entities.ContainsKey(retained.EntityId))
+					throw new InvalidDataException("Paused safe zone settings missing or conflicting");
+				bubble = (MyObjectBuilder_SafeZone)retained.Clone();
+			}
 			if (bubble != null) bubble.Enabled = exists && zone.ActivationRemainingFrames <= 0;
 			string nextEntry = exists && bubble != null ? BlockSafeZones.Serialize(bubble) : null;
+			long nextZoneId = exists ? bubble.EntityId : 0;
 			writes.Add(() =>
 			{
 				component.UpkeepTime = zone.RemainingFrames * (1000.0 / 60);
 				component.Activating = exists && zone.ActivationRemainingFrames > 0;
 				component.ActivationTime = checked((long)Math.Ceiling(zone.ActivationRemainingFrames * (1000.0 / 60)));
 				component.SafeZoneOb = retained;
-				if (!exists) ((ObjectBuilders.SafeZone.MyObjectBuilder_SafeZoneBlock)block).SafeZoneId = 0;
+				((ObjectBuilders.SafeZone.MyObjectBuilder_SafeZoneBlock)block).SafeZoneId = nextZoneId;
 				BlockBuilderEntry.Write(block, BlockSafeZones.Key, nextEntry);
 			});
 		}

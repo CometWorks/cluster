@@ -43,6 +43,9 @@ internal static partial class OfflineCompensation
 		foreach (var entry in profile.Production.Where(p => p.Enabled))
 		{
 			var block = grids.SelectMany(g => g.GetFatBlocks()).OfType<MyProductionBlock>().First(b => b.EntityId == entry.Block);
+			// An unpowered production timer may stop ticking altogether. Do not leave the
+			// group waiting for a measurement it cannot run; its definition is the fallback.
+			if (!block.IsWorking || block.ResourceSink.SuppliedRatioByType(MyResourceDistributorComponent.ElectricityId) < 0.999f) continue;
 			// Repeat re-enqueues completed units, so queue shrinkage is not a throughput counter.
 			// Keep the formula fallback until an independent completion counter is available.
 			if (block is MyAssembler repeatAssembler && !CanMeasureAssembler(repeatAssembler.RepeatEnabled, repeatAssembler.DisassembleEnabled, repeatAssembler.CurrentProgress)) continue;

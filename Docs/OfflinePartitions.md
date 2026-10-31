@@ -110,8 +110,11 @@ quiet offlining; the existing approach/interaction wake path remains responsible
 content before interaction. Admin zones follow their separate global-state rules and incur no
 player-block chip or producer-fuel debit.
 
-Capture covers active or activating zones with a live zone id. Initially already-paused zones
-with id0 are not full modeled coverage. Native reactors settle fuel at900..3600-frame timers;
+Capture also records an enabled zone already paused by power loss, with id0 and retained paid
+credit/settings. It uses the paused manager credit, not its stale serialized wall deadline. A
+powered manually removed zone stays off. A restored modeled bubble uses the existing carried-zone
+path, retaining its former entity id and rights; native proof of this added path is pending.
+Unpowered production keeps its formula fallback rather than waiting forever for a stopped timer. Native reactors settle fuel at900..3600-frame timers;
 the model integrates delivered energy. Short steady-load comparisons record raw native and
 modeled quantities plus the actual native timer envelope. A rapidly changing Auto-battery load
 needs the longer differential; these short checks do not establish its native sampled-fuel fidelity.

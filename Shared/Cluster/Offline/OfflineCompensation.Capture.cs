@@ -303,16 +303,23 @@ internal static partial class OfflineCompensation
 				var builder = zone.GetObjectBuilderCubeBlock();
 				var component = builder.ComponentContainer?.Components.Select(c => c.Component).OfType<MyObjectBuilder_SafeZoneComponent>().FirstOrDefault();
 				var manager = zone.Components.Get<MySafeZoneComponent>();
-				if (component != null && manager != null && enabled && ((ObjectBuilders.SafeZone.MyObjectBuilder_SafeZoneBlock)builder).SafeZoneId != 0)
+				if (component != null && manager != null && enabled)
 				{
+					bool exists = ((ObjectBuilders.SafeZone.MyObjectBuilder_SafeZoneBlock)builder).SafeZoneId != 0;
 					bool active = manager.IsSafeZoneEnabled();
-					if (active || component.Activating)
-						p.Upkeep.Add(new() { Block = block.EntityId, Enabled = true, Exists = true, PowerSink = powerSink,
-							RemainingFrames = Math.Max(0, (component.Activating ? manager.m_timeLeft.TotalMilliseconds : component.UpkeepTime) * 60 / 1000), PeriodFrames = zone.Definition.SafeZoneUpkeepTimeM * 3600,
+					var saved = component.SafeZoneOb as MyObjectBuilder_SafeZone;
+					// Vanilla removes the bubble on power loss but keeps m_timeLeft. Its serialized
+					// UpkeepTime still follows the old wall deadline while paused. A powered manual
+					// removal is different: do not turn that zone back on during compensation.
+					bool paused = !exists && !zone.IsWorking && manager.m_timeLeft > TimeSpan.Zero
+						&& saved != null && saved.EntityId != 0 && saved.SafeZoneBlockId == block.EntityId;
+					if (active || component.Activating || paused)
+						p.Upkeep.Add(new() { Block = block.EntityId, Enabled = true, Exists = exists, PowerSink = powerSink,
+							RemainingFrames = Math.Max(0, (paused || component.Activating ? manager.m_timeLeft.TotalMilliseconds : component.UpkeepTime) * 60 / 1000), PeriodFrames = zone.Definition.SafeZoneUpkeepTimeM * 3600,
 							// The active sink is the engine's shape/radius calculation, in MW. During
 							// activation the engine exposes only its standby draw; ask its own manager
 							// for the eventual operational demand without changing the live zone.
-							OperationalPower = active && powerSink >= 0 ? p.Sinks[powerSink].Required : manager.GetMaxPowerDrain(), IdlePower = 0.000001,
+							OperationalPower = paused ? PausedZonePower(zone, saved) : active && powerSink >= 0 ? p.Sinks[powerSink].Required : manager.GetMaxPowerDrain(), IdlePower = 0.000001,
 							ActivationFrames = zone.Definition.SafeZoneActivationTimeS * 60,
 							ActivationRemainingFrames = component.Activating ? Math.Max(0, component.ActivationTime * 60 / 1000) : 0,
 							Chips = Material(block, new MyDefinitionId(typeof(MyObjectBuilder_Component), "ZoneChip"), zone.Definition.SafeZoneUpkeep, zone.GetInventory(), false) });
@@ -336,6 +343,23 @@ internal static partial class OfflineCompensation
 		p.ContentHash = ContentHash(p.Definitions);
 		OfflineModel.Validate(p);
 		return p;
+	}
+	private static float PausedZonePower(MySafeZoneBlock block, MyObjectBuilder_SafeZone settings)
+	{
+		// GetMaxPowerDrain uses default geometry when the live id is zero. Use its
+		// same definition formula with the settings vanilla will restore instead.
+		var d = block.Definition;
+		float range = d.MaxSafeZonePowerDrainkW - d.MinSafeZonePowerDrainkW;
+		float span = d.MaxSafeZoneRadius - d.MinSafeZoneRadius;
+		float fraction;
+		if (settings.Shape == MySafeZoneShape.Sphere) fraction = (settings.Radius - d.MinSafeZoneRadius) / span;
+		else
+		{
+			span = d.MaxSafeZoneRadius * 2f - d.MinSafeZoneRadius;
+			fraction = (settings.Size.X - d.MinSafeZoneRadius) / span / 3f
+				+ (settings.Size.Y - d.MinSafeZoneRadius) / span / 3f + (settings.Size.Z - d.MinSafeZoneRadius) / span / 3f;
+		}
+		return d.MinSafeZonePowerDrainkW / 1000f + fraction * range / 1000f;
 	}
 	private static decimal Limit(double value) => !double.IsFinite(value) || value > 1e20 ? 100000000000000000000m : Math.Max(0, (decimal)value);
 }
