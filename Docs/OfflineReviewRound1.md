@@ -323,3 +323,22 @@ wakes in16.573s;7th refused and offline. OFF-CACHE-DURABILITY passes12/12, addin
 and stale/new epoch controls to real WA pre-Final kill/replacement replay. T-OC-12 still FAIL:
 first cold zero-output tick retained formula fallback, then another base measured/cache populated;
 corrected warm-output fixture is pending. No incomplete whole batch or interrupted case counted.
+
+
+### Durable antenna row / bridge follow-up
+
+At9f128a7, native P2-OFF-CALL-RATE passes29/29 again using the repaired raw promotion-map
+predicate. Native laser id wake now establishes BOTH real blocks, proving the registration-boundary
+pairing repair. The established-link leg fails with no local proxy at12s: its retained source
+report still appears live for20s and outranks the authority's durable offline row. Source6423447
+makes that durable row authoritative until its admitted load target reports live, and drops the
+source bridge when the authority publishes a new origin. Native fixture fails before this repair;
+fresh package archive58bf6cc64c4787a7da5729054a412224fa5bb739e4136bf894f638ce9891009b is running
+in an isolated second correctness lane (offset10000/Remote34900, separate caches, no rendering).
+No additional accounting service or background wake demand was added.
+
+Deny at9f128a7 earned ordinary-player hostile and no-relay refusal checks with promoted-map0.
+Its Moderator positive-control actually loaded the hostile target (artifact owner=node-1,
+found=true, promoted2), but the immediate final assertion preceded the heartbeat ending the
+offline row. Whole case remains FAIL; corrected fixture waits for owner AND row retirement.
+No synthetic or partial proof is promoted to a full native pass.

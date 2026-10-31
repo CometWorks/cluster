@@ -121,7 +121,8 @@ needs the longer differential; these short checks do not establish its native sa
 Only an authenticated client's explicit absent-replicable add request starts radio call-up.
 The original endpoint, interacted entity, medical ID and pin flags survive. Remove requests
 cancel pending work. Proxy relay reach and friendly ownership/remote sharing are checked before
-waking; moderators bypass those checks, never rate limits. The service permits one pending
+waking; moderators bypass those checks, never rate limits. Cluster moderator bypasses read the replicated promotion map; vanilla OFFLINE backend
+Owner shortcuts do not grant a bypass. The service permits one pending
 request per client, a 10-second entity cooldown and six offline admissions per minute.
 
 A directed request loads onto the caller's node and reasserts while pending; an unavailable
@@ -142,7 +143,10 @@ race, then directs an offline wake and runs vanilla `ConnectTo` against both rea
 completed online link leaves that pending set; the source minute allowance is spent on an actual
 offline admission.
 Retarget, disable and timeout cancel it; one source can start at most once per minute.
-An established proxy link does not create a wake demand. IGC does not wake offline PBs: unicast
+The arriving real peer is paired at laser registration before vanilla Update10 can idle its
+caller. A durable offline row wins over retained source reports until its admitted target
+reports live; a bridge ends once the authority publishes the new origin. An established proxy
+link does not create a wake demand. IGC does not wake offline PBs: unicast
 returns false and no broadcast listener exists there.
 
 ## Operator surface
@@ -194,7 +198,25 @@ Private `Build/release.sh` packages passed their build/check/manifest/binary-has
 
 Evidence root: `/home/owendb/tm/offline-partitions/native-host`.
 
-Current private package: **9f128a7bc2715cc2f0bbb0522715ffb6b7d39380**, archive SHA256
+Current private package: **6423447** (full SHA in its manifest), archive SHA256
+`58bf6cc64c4787a7da5729054a412224fa5bb739e4136bf894f638ce9891009b`.
+This adds durable offline-row precedence over retained source antenna reports and drops the
+bridge when the authority publishes its new origin. Native bridge lane uses separate caches,
+roots, port offset10000 and Remote34900; no rendering/screenshot or benchmark proof is claimed
+there. Primary correctness lane remains at9f128a7/offset700/Remote24900 and its per-package
+results stay separate. Both retain resource floors; no shared deployment is touched.
+
+At9f128a7, `results/20261031-203241Z/P2-OFF-CALL-RATE` passes29/29 with the repaired promotion
+predicate. Native laser id wake establishes both real blocks (registration-boundary fix), but
+its established-link leg fails: the old source bridge masks the durable offline origin for20s,
+leaving the local proxy absent at12s. This exact failure drove6423447; its fixed run is pending.
+Deny's ordinary hostile/no-relay refusals both pass at9f128a7. An actual replicated Moderator
+loads the hostile grid, but the final assertion ran before the ownership heartbeat ended the
+offline row; the fixture now waits for both ownership and row retirement. Whole case remains
+failed until that fresh run passes.
+
+
+Prior private package: **9f128a7bc2715cc2f0bbb0522715ffb6b7d39380**, archive SHA256
 `d837fc659fc7f4276f092dc2337bb89ab6f3193ae60feb47957b8977eba7f3a4`.
 It includes the promotion-map and registration-boundary repairs and is rebased onto main
 `dcc444ece0d473eefb516d660b8f2172fd353708`. All23 feature commits rebased without conflict;
@@ -335,7 +357,7 @@ compiled/authored fixtures are not promoted to executed proof.
 | P2-OFF-CALL-DENY | Real authenticated negative packet runners authored; server-outcome/relay/spatial setup corrected; rerun pending |
 | P2-OFF-CALL-RATE | Native29-check burst plus six actual terminal completions in16.573s/seventh-refusal passed at1063947; fresh ordinary-player/role-repair run pending |
 | P2-OFF-CALL-CONFLICT | Two-live-client/different-node/two-grid/three-minute no-ping-pong runner authored; execution pending |
-| P2-OFF-CALL-LASER | Id request now wakes the target onto the source node; both lasers fell idle before pairing, so the scenario still fails. Native state trace, GPS/established no-wake and radio-chain legs pending |
+| P2-OFF-CALL-LASER | Id wake establishes both real lasers at9f128a7; same-origin retained-report/established-link leg failed and drove6423447. Fixed GPS/established no-wake and radio-chain proof pending |
 | P2-OFF-CALL-IGC | Actual unicast false/no load passed at 2656266 |
 
 `Test/coverage.py` maps all 21 required IDs. Fourteen have native runners (some still partial or
