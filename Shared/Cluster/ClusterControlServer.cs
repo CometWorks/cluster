@@ -1143,9 +1143,28 @@ internal sealed partial class ClusterControlServer
 				return;
 			}
 
+			if (context.Request.HttpMethod == "GET" && path.EndsWith("/offline/admin", StringComparison.OrdinalIgnoreCase))
+			{
+				string raw = context.Request.QueryString["partition"];
+				string result;
+				if (raw == null) result = Invoke(() => JsonSerializer.Serialize(new { capability = "v1", cache = OfflineRateCache.Status() }));
+				else
+				{
+					ulong partition = ulong.Parse(raw, CultureInfo.InvariantCulture);
+					OfflineProfile[] profiles = null;
+					if (context.Request.QueryString["offline"] == "true")
+						profiles = JsonSerializer.Deserialize<OfflineProfile[]>(m_persistence.ReadOfflineFinal(partition).Profiles ?? Encoding.UTF8.GetBytes("[]"), OfflineProfile.Json) ?? [];
+					result = Invoke(() => JsonSerializer.Serialize(OfflineCompensation.AdminRead(partition, m_partitions, profiles), OfflineProfile.Json));
+				}
+				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
+				return;
+			}
 			if (context.Request.HttpMethod == "POST" && path.EndsWith("/profiles/cache/clear", StringComparison.OrdinalIgnoreCase))
 			{
-				string result = OfflineRateCache.Clear(context.Request.QueryString["key"]);
+				string expected = context.Request.QueryString["expectedEpoch"];
+				string result = expected == null ? OfflineRateCache.Clear(context.Request.QueryString["key"])
+					: OfflineRateCache.Clear(context.Request.QueryString["key"], int.Parse(expected, CultureInfo.InvariantCulture),
+						Guid.Parse(context.Request.QueryString["operation"] ?? throw new ArgumentException("Missing operation id")));
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 				return;
 			}
@@ -1178,7 +1197,7 @@ internal sealed partial class ClusterControlServer
 					}
 					source = PartitionSaveFile.Read(stream.ToArray());
 				}
-				else source = m_persistence.ReadOfflineFinal(ulong.Parse(context.Request.QueryString["partition"] ?? throw new ArgumentException("Missing partition"), CultureInfo.InvariantCulture));
+				else source = m_persistence.ReadOfflineFinal(ulong.Parse(context.Request.QueryString["partition"] ?? throw new ArgumentException("Missing partition"), CultureInfo.InvariantCulture), context.Request.QueryString["save"]);
 				string result = Invoke(() => JsonSerializer.Serialize(OfflineCompensation.DryRun(source, hours), OfflineProfile.Json));
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 				return;
@@ -1190,8 +1209,14 @@ internal sealed partial class ClusterControlServer
 				string task = path.Substring(path.LastIndexOf('/') + 1);
 				ulong? triggerPartition = ulong.TryParse(context.Request.QueryString["partition"], NumberStyles.Integer,
 					CultureInfo.InvariantCulture, out ulong triggerParsed) ? triggerParsed : null;
-				string result = Invoke(() => JsonSerializer.Serialize(
-					MaintenanceTriggers.Run(task, m_partitions, m_persistence, triggerPartition)));
+				string expectedGeneration = context.Request.QueryString["generation"];
+				string result = Invoke(() =>
+				{
+					if (task == "profile" && expectedGeneration != null && (!triggerPartition.HasValue
+						|| m_persistence.OwnedGeneration(triggerPartition.Value) != uint.Parse(expectedGeneration, CultureInfo.InvariantCulture)))
+						throw new InvalidOperationException("Profile ownership generation changed");
+					return JsonSerializer.Serialize(MaintenanceTriggers.Run(task, m_partitions, m_persistence, triggerPartition));
+				});
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 				return;
 			}

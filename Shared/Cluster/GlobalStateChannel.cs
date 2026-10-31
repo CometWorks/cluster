@@ -104,10 +104,13 @@ public static class GlobalStateChannel
 	/// <summary>Off-game-thread authority callers use the same ledger, journal and held-answer path
 	/// as remote commands. The game thread consumes the existing authority queue.</summary>
 	internal static string ExecuteLocalCommand(string subsystem, string payload, int timeoutMilliseconds = 5000)
+		=> ExecuteLocalCommand(subsystem, payload, Guid.NewGuid(), timeoutMilliseconds);
+
+	internal static string ExecuteLocalCommand(string subsystem, string payload, Guid operationId, int timeoutMilliseconds = 5000)
 	{
 		if (!ClusterRuntime.IsWorldAuthority) throw new InvalidOperationException("Local authority command requires the World Authority");
 		if (Sandbox.MySandboxGame.Static?.UpdateThread == Thread.CurrentThread) throw new InvalidOperationException("Local authority command cannot wait on the game thread");
-		return SendCommandCore(subsystem, payload, Guid.NewGuid(), timeoutMilliseconds, localAuthority: true);
+		return SendCommandCore(subsystem, payload, operationId, timeoutMilliseconds, localAuthority: true);
 	}
 
 	private static string SendCommandCore(string subsystem, string payload, Guid operationId, int timeoutMilliseconds, bool localAuthority)

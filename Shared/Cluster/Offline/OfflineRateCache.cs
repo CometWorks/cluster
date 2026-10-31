@@ -20,6 +20,11 @@ internal static class OfflineRateCache
 	{
 		GlobalStateChannel.RegisterAuthorityHandler(Subsystem, Receive);
 		GlobalStateChannel.RegisterCommandHandler(Subsystem + "-clear", (_, key) => ClearOnAuthority(key), journaled: true);
+		GlobalStateChannel.RegisterCommandHandler(Subsystem + "-clear-epoch", (_, payload) =>
+		{
+			var request = JsonSerializer.Deserialize<ClearRequest>(payload) ?? throw new ArgumentException("Missing cache clear request");
+			return ClearOnAuthority(request.Key, request.ExpectedEpoch);
+		}, journaled: true);
 		GlobalStateChannel.RegisterReplicaHandler(Subsystem, Restore);
 		GlobalStateChannel.RegisterSnapshot(Subsystem, PersistedRecord, Restore);
 	}
@@ -85,17 +90,27 @@ internal static class OfflineRateCache
 			}
 	}
 	internal static string Clear(string key) => ClusterRuntime.IsWorldAuthority ? GlobalStateChannel.ExecuteLocalCommand(Subsystem + "-clear", key) : GlobalStateChannel.SendCommand(Subsystem + "-clear", key);
-	private static string ClearOnAuthority(string key)
+	private sealed record ClearRequest(string Key, int ExpectedEpoch);
+	internal static string Clear(string key, int expectedEpoch, Guid operationId)
+	{
+		if (expectedEpoch < 0) throw new ArgumentException("expectedEpoch must be non-negative");
+		string payload = JsonSerializer.Serialize(new ClearRequest(key, expectedEpoch));
+		return ClusterRuntime.IsWorldAuthority ? GlobalStateChannel.ExecuteLocalCommand(Subsystem + "-clear-epoch", payload, operationId)
+			: GlobalStateChannel.SendCommand(Subsystem + "-clear-epoch", payload, operationId);
+	}
+	private static string ClearOnAuthority(string key, int? expectedEpoch = null)
 	{
 		if (string.IsNullOrEmpty(key) || key.Length > 4096) throw new ArgumentException("A cache key is required");
 		lock (Sync)
 		{
+			if (expectedEpoch.HasValue && Epochs.GetValueOrDefault(key) != expectedEpoch.Value)
+				return JsonSerializer.Serialize(new { cleared = false, code = "epoch_mismatch", epoch = Epochs.GetValueOrDefault(key) });
 			Epochs[key] = checked(Epochs.GetValueOrDefault(key) + 1);
 			Entries.Remove(key); Contributions.Remove(key);
 		}
 		GlobalStateChannel.Publish(Subsystem, PersistedRecord());
 		ClusterRuntime.RequestGlobalSave();
-		return "{\"cleared\":true}";
+		return JsonSerializer.Serialize(new { cleared = true, epoch = Epoch(key) });
 	}
 
 	internal static object Status() { lock (Sync) return new { count = Entries.Count, scripted = Entries.Values.Count(e => e.Scripted), entries = Entries.Values.ToArray() }; }

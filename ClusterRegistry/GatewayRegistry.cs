@@ -4177,7 +4177,11 @@ internal sealed partial class GatewayRegistry : IDisposable
                 partition.LeaseExpires,
                 partition.Recovering,
                 quarantined.Contains(partition.Partition),
-                IsRetired(partition.Partition))).ToArray();
+                IsRetired(partition.Partition),
+                _state.OfflinePartitions.ContainsKey(partition.Partition),
+                _state.OfflinePartitions.GetValueOrDefault(partition.Partition)?.OfflineGameFrame,
+                OfflineGroups(_state.OfflinePartitions.GetValueOrDefault(partition.Partition)?.ProfileSummary),
+                HasRemoteUse(partition.Partition) ? _remoteUse[partition.Partition].Users.ToArray() : [])).ToArray();
         }
     }
 

@@ -17,3 +17,6 @@ protocol 4. See `Docs/Gateway/ClientDiagnostics.md`.
 
 Package `0.2.0` adds the recovery-readiness DTOs. This is an additive extension
 of wire protocol v1: existing health, status, and plan consumers remain valid.
+
+This branch also adds capability-gated offline partition, compensation cost,
+prediction and cache DTOs while retaining wire protocol v1.

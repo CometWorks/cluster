@@ -68,6 +68,11 @@ internal static class Program
         ("nodes", "GET /admin/v1/nodes", []),
         ("world-authority", "GET /admin/v1/world-authority", []),
         ("partitions", "GET /admin/v1/partitions", []),
+        ("offline-partitions", "GET /admin/v1/offline/partitions", []),
+        ("offline-details {node} {partition}", "GET /admin/v1/offline/details", []),
+        ("offline-cache", "GET /admin/v1/offline/cache", []),
+        ("offline-prediction {node} {partition} {hours}", "GET /admin/v1/offline/prediction", []),
+        ("offline-cache-clear {cacheKey} {epoch}", "POST /admin/v1/offline/cache/clear", []),
         ("snapshots", "GET /admin/v1/snapshots", []),
         ("events", "GET /admin/v1/events", []),
         ("operations", "GET /admin/v1/operations", []),
@@ -296,6 +301,9 @@ internal static class Program
             ["{slot}"] = "slot-1",
             ["{node}"] = "node-1",
             ["{epoch}"] = "3",
+            ["{partition}"] = "7",
+            ["{hours}"] = "6",
+            ["{cacheKey}"] = "cache-key",
             ["{task}"] = "save",
             ["{userId}"] = "9",
             ["{message}"] = "hello",
@@ -345,7 +353,7 @@ internal static class Program
             string method = "GET";
             string? body = null;
             long? cursor = null, limit = null;
-            double? grace = null, forceAfter = null, ttlHours = null;
+            double? grace = null, forceAfter = null, ttlHours = null, hours = null;
             bool emergency = false, sweep = false, unthrottled = false, reconnect = false;
             ulong? sender = null;
             string? depth = null, node = null, partition = null, player = null, entity = null;
@@ -419,6 +427,7 @@ internal static class Program
                 else if (args[i] == "--now")
                     now = true;
                 else if (command == null && args[i] is "health" or "capabilities" or "status" or "plan"
+                    or "offline-partitions" or "offline-details" or "offline-cache" or "offline-prediction" or "offline-cache-clear"
                     or "recovery-readiness" or "nodes" or "world-authority" or "partitions" or "snapshots"
                     or "rotation" or "rotation-set" or "client-diagnostics" or "handover-config" or "handover-config-set" or "config" or "clients" or "bans" or "chat-history" or "ship-storage-takes" or "artifacts" or "events"
                     or "operations" or "diag" or "shutdown" or "gateway-restart" or "save-all"
@@ -496,6 +505,25 @@ internal static class Program
                 case "wa-move":
                     (method, command, body) = ("POST", "world-authority/move",
                         JsonSerializer.Serialize(new Admin.WorldAuthorityMoveRequest(forceAfter), JsonOptions));
+                    break;
+                case "offline-partitions": command = "offline/partitions"; break;
+                case "offline-cache": command = "offline/cache"; break;
+                case "offline-details":
+                case "offline-prediction":
+                    if (positional.Count != (command == "offline-details" ? 2 : 3)
+                        || !ulong.TryParse(positional[1], out ulong offlinePartition) || offlinePartition == 0) throw new ArgumentException(Usage);
+                    if (command == "offline-prediction")
+                    {
+                        if (!double.TryParse(positional[2], NumberStyles.Float, CultureInfo.InvariantCulture, out double value)
+                            || !double.IsFinite(value) || value is < 0 or > 168) throw new ArgumentException(Usage);
+                        hours = value;
+                    }
+                    node = positional[0]; partition = positional[1];
+                    command = command == "offline-details" ? "offline/details" : "offline/prediction";
+                    break;
+                case "offline-cache-clear":
+                    if (positional.Count != 2 || !int.TryParse(positional[1], out int cacheEpoch) || cacheEpoch < 0) throw new ArgumentException(Usage);
+                    (method, command, body) = ("POST", "offline/cache/clear", JsonSerializer.Serialize(new Admin.OfflineCacheClearRequest(positional[0], cacheEpoch), JsonOptions));
                     break;
                 case "trigger":
                     if (positional.Count != 1) throw new ArgumentException(Usage);
@@ -602,6 +630,7 @@ internal static class Program
                 .. player is { } s ? [$"player={Uri.EscapeDataString(s)}"] : Array.Empty<string>(),
                 .. entity is { } e ? [$"entity={Uri.EscapeDataString(e)}"] : Array.Empty<string>(),
                 .. host is { } h ? [$"host={Uri.EscapeDataString(h)}"] : Array.Empty<string>(),
+                .. hours is { } oh ? [$"hours={oh.ToString("R", CultureInfo.InvariantCulture)}"] : Array.Empty<string>(),
                 .. unthrottled ? new[] { "unthrottled=true" } : Array.Empty<string>()];
             return new CliOptions(new Uri(baseUri.ToString().TrimEnd('/') + "/"),
                 TimeSpan.FromSeconds(timeoutSeconds), command,

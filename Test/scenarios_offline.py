@@ -732,14 +732,26 @@ def offline_cache_durability(bench):
     _require(bench, "pre-clear cache snapshot is catalogued", bool(saved))
     _require(bench, "pre-clear snapshot has a holder besides the WA", bool(_poll(lambda: len(bench.cluster.get("/registry/global-saves/newest").get("Locations", [])) > 1, 60)))
     bench.cluster.node("wa-1", "/global-save-register-hold?ms=60000", "POST")
-    cleared = bench.cluster.node("wa-1", f"/profiles/cache/clear?key={key}", "POST")
-    _require(bench, "WA-local clear acknowledged", cleared.get("cleared") is True, json.dumps(cleared))
+    operation_key = "native-offline-epoch-clear"
+    body = {"key": key, "expectedEpoch": 0}
+    def clear_request(request_body=body):
+        return bench.cluster._request("POST", "/admin/v1/offline/cache/clear", body=request_body,
+            headers={"Idempotency-Key": operation_key})["data"]
+    cleared = clear_request()
+    _require(bench, "authenticated admin epoch clear acknowledged", cleared.get("state") == "Succeeded"
+             and cleared.get("result", {}).get("epoch") == "1", json.dumps(cleared))
+    bench.check("admin retry replays one durable clear", clear_request()["operationId"] == cleared["operationId"])
+    stale = bench.cluster._request("POST", "/admin/v1/offline/cache/clear", body=body,
+        headers={"Idempotency-Key": operation_key + "-stale"})["data"]
+    bench.check("stale admin epoch cannot clear again", stale["state"] == "Failed" and stale["error"]["code"] == "epoch_mismatch")
     journal = bench.cluster.get("/registry/global-journal?after=0")
     bench.record("cache-clear-journal", journal)
-    _require(bench, "clear was journaled before success", any(e["Subsystem"] == "offline-rates-clear" and e["Payload"] == key for e in journal["Entries"]))
+    _require(bench, "clear was journaled before success", any(e["Subsystem"] == "offline-rates-clear-epoch" and json.loads(e["Payload"]) == {"Key": key, "ExpectedEpoch": 0} for e in journal["Entries"]))
     _require(bench, "no post-clear Final was catalogued before the kill", bench.cluster.get("/registry/global-saves/newest")["SaveId"] == saved["SaveId"])
     _wa_failover(bench, _authority(bench)["Generation"])
     restored = cache("wa-2")
+    bench.check("admin durable retry after WA replacement does not clear again", clear_request()["operationId"] == cleared["operationId"])
+    bench.record("admin-cache-view-after-replacement", bench.cluster.get("/admin/v1/offline/cache"))
     bench.record("cache-after-wa-replacement", restored)
     bench.check("replacement restored the pre-clear snapshot's untouched cache entry", any(e["Key"] == control for e in restored["entries"]))
     bench.check("replacement replays the acknowledged clear over its old snapshot", not any(e["Key"] == key for e in restored["entries"]))

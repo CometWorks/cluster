@@ -215,6 +215,25 @@ internal static partial class OfflineCompensation
 		frames = Frame - c.Since, observed = c.Observations.Count, confidence = c.Last?.Confidence, unknowns = c.Last?.Unknowns }).ToArray();
 	internal static object Profiles(ulong partition, PartitionManager manager) => CensusByGroup.Values.Where(c => c.Members.Any(id => manager.Peek(partition).Members.Contains(id))).Select(c => c.Last).Where(p => p != null).ToArray();
 
+	// Operator reads consume existing census/Final state. They never Evaluate, Capture or profile.
+	internal static object AdminRead(ulong partition, PartitionManager manager, OfflineProfile[] offline = null)
+	{
+		var members = offline == null ? manager.Peek(partition).Members.ToHashSet() : offline.SelectMany(p => p.Members).ToHashSet();
+		var census = CensusByGroup.Values.Where(c => c.Members.Any(members.Contains)).ToArray();
+		var profiles = offline ?? census.Select(c => c.Last).Where(p => p != null).ToArray();
+		return new
+		{
+			capability = "v1",
+			groups = profiles.Select(p => new { group = p.Group, members = p.Members,
+				state = offline == null ? census.FirstOrDefault(c => c.Group == p.Group)?.State : "offline",
+				confidence = p.Confidence, unknowns = p.Unknowns, frozenFrame = p.FrozenFrame, simulatedThrough = p.SimulatedThrough,
+				observations = p.Observations }).Concat(census.Where(c => offline == null && c.Last == null).Select(c => new
+				{ group = c.Group, members = c.Members, state = c.State, confidence = (string)null, unknowns = new List<string>(),
+					frozenFrame = 0L, simulatedThrough = 0L, observations = new List<OfflineObservation>() })).ToArray(),
+			results = Results.Values.Where(r => members.Contains(r.Group)).ToArray(),
+		};
+	}
+
 	private static bool Scripted(MyCubeBlock block)
 	{
 		if (block.GameLogic == null) return false;

@@ -128,6 +128,38 @@ through clean cluster restart, WA replacement, player reconnect and node movemen
 CLI: `player-moderation`, `player-promotion USERID LEVEL EXPECTED_REVISION`, and
 `clear-kick-cooldown USERID`. Mutations accept `--key` as usual.
 
+## Offline partitions
+
+Contract package0.9.0 adds `features.offlinePartitions == "v1"`; wire protocol stays1.
+Absent capability means unsupported. DTOs are in `OfflineContract.cs`.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /admin/v1/offline/partitions` | Typed catalog, exact Final IDs, live holder/proxy node IDs, offline clock, profile confidence/unknowns and pending load reason |
+| `GET /admin/v1/offline/details?node=ID&partition=P` | Existing profiling groups and compensation results for the exact online owner or offline Final holder; per-block electricity, producer fuel, production, chips and zone state |
+| `GET /admin/v1/offline/cache` | Current WA's typed throughput entries, including per-key epochs |
+| `GET /admin/v1/offline/prediction?node=HOLDER&partition=P&hours=H` | Prediction only, finite0..168 hours, exact offline Final; query scope. Never profiles, claims, loads, applies or saves |
+| `POST /admin/v1/triggers/profile?node=OWNER&partition=P` | Exact online owner, generation-checked at the node; normal profiling policy, manage scope and durable operation/idempotency key |
+| `POST /admin/v1/offline/cache/clear` | `{key, expectedEpoch}`; current WA performs atomic epoch CAS within its existing journaled command. Manage scope, durable operation and stable WA ledger operation ID; retries replay the result |
+
+`PartitionSummary` gains defaulted `offline`, `offlineGameFrame`, `profileGroups` and
+`remoteUsers`. Reads return typed summaries, never arbitrary node diagnostics or tokens.
+Targets are registry node IDs; caller URLs and file paths are never accepted. A query
+rechecks ownership/exact Final after reading and refuses a changed target. A node request
+has a bounded cancellation deadline. Error envelopes use `invalid_arguments`400,
+`partition_not_found`404, `offline_target_mismatch`409, `partition_not_offline`409,
+`node_unavailable`503, `offline_unsupported`501 and `node_request_failed`502.
+For cache clear, an epoch conflict is a failed durable operation with `epoch_mismatch`;
+the existing terminal-operation HTTP200 rule applies. Missing `expectedEpoch` is invalid.
+Cache clears retain the existing global-command journal-before-answer path and its
+inherited journal fail-open policy. No new durability mechanism is introduced.
+
+CLI spellings: `offline-partitions`, `offline-details NODE PARTITION`, `offline-cache`,
+`offline-prediction HOLDER PARTITION HOURS`, `offline-cache-clear KEY EXPECTED_EPOCH`
+(last takes `--key`); profile uses `trigger profile --node OWNER --partition P`.
+`--self-test offline-admin` checks HTTP auth/scopes, exact routing, read-only state,
+finite hours, CAS/replay, legacy nodes and audit using a private fake node.
+
 ## Node control
 
 Feature flag: `GET /admin/v1/capabilities` → `data.features.nodeControl == "v1"`. The operator model is
