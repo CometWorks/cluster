@@ -5,14 +5,22 @@ using System.Text.Json;
 using System.Threading;
 using ClusterPlugin;
 using HarmonyLib;
+using Sandbox;
 using Sandbox.Common.ObjectBuilders;
+using Sandbox.Definitions;
+using Sandbox.Game;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Cube;
 using Sandbox.Game.EntityComponents;
 using Sandbox.Game.World;
+using SpaceEngineers.Game.Entities.Blocks.SafeZone;
+using SpaceEngineers.Game.Entities.Blocks;
+using SpaceEngineers.Game.EntityComponents.Blocks;
 using VRage;
 using VRage.Game;
 using VRage.Game.Entity;
+using VRage.Game.ObjectBuilders.Components;
+using VRage.Game.ObjectBuilders.Components.Beacon;
 using VRage.ObjectBuilders;
 using VRage.ObjectBuilders.Private;
 using VRageMath;
@@ -30,6 +38,31 @@ internal static class OfflineTestRoutes
 
     public static void Register()
     {
+        TestRoutes.Add("POST", "/offline-test-zone", context =>
+        {
+            long grid = TestRoutes.Long(context, "grid");
+            int chips = int.Parse(TestRoutes.Query(context, "chips", "3"));
+            double seconds = double.Parse(TestRoutes.Query(context, "seconds", "3600"), System.Globalization.CultureInfo.InvariantCulture);
+            float radius = float.Parse(TestRoutes.Query(context, "radius", "10"), System.Globalization.CultureInfo.InvariantCulture);
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => AddZone(grid, chips, seconds, radius)));
+        });
+        TestRoutes.Add("GET", "/offline-test-zone-state", context =>
+        {
+            long grid = TestRoutes.Long(context, "grid");
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => ZoneState(grid)));
+        });
+        TestRoutes.Add("POST", "/offline-test-limit-fuel", context =>
+        {
+            long grid = TestRoutes.Long(context, "grid");
+            decimal fuel = decimal.Parse(TestRoutes.Query(context, "fuel"), System.Globalization.CultureInfo.InvariantCulture);
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                var reactor = ((MyCubeGrid)MyEntities.GetEntityById(grid)).GetFatBlocks<MyReactor>().Single();
+                reactor.GetInventory().Clear();
+                if (fuel > 0) reactor.GetInventory().AddItems((MyFixedPoint)fuel, MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Ingot>("Uranium"));
+                return new { grid, fuel };
+            }));
+        });
         TestRoutes.Add("POST", "/offline-test-reference", context =>
         {
             ulong partition = ulong.Parse(TestRoutes.Query(context, "partition"));
@@ -70,13 +103,13 @@ internal static class OfflineTestRoutes
         TestRoutes.Add("POST", "/offline-test-rate-fixtures", context =>
         {
             long owner = TestRoutes.Long(context, "owner");
-            int count = int.TryParse(TestRoutes.Query(context, "count"), out int parsed) ? parsed : 20;
+            int count = int.TryParse(TestRoutes.Query(context, "count", "20"), out int parsed) ? parsed : 20;
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => RcTestHarness.RateFixtures(owner, count)));
         });
         TestRoutes.Add("POST", "/offline-test-cache", context =>
         {
             string key = TestRoutes.Query(context, "key");
-            int? epoch = int.TryParse(TestRoutes.Query(context, "epoch"), out int supplied) ? supplied : null;
+            int? epoch = int.TryParse(TestRoutes.Query(context, "epoch", ""), out int supplied) ? supplied : null;
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
             {
                 OfflineRateCache.Measured(key, 1, 1, epoch);
@@ -154,6 +187,51 @@ internal static class OfflineTestRoutes
             builder.Min = new SerializableVector3I(9, -1, 0); builder.Owner = grid.BigOwners.First();
             var reactor = (MyReactor)grid.AddBlock(builder, false).FatBlock;
             reactor.GetInventory().AddItems(10, MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Ingot>("Uranium"));
+        }
+        else if (mode == "battery-off")
+            foreach (var battery in grid.GetFatBlocks<MyBatteryBlock>()) battery.Enabled = false;
+        else if (mode == "empty-production")
+            foreach (var production in grid.GetFatBlocks<MyProductionBlock>()) production.InputInventory.Clear();
+        else if (mode == "restore-production")
+            foreach (var production in grid.GetFatBlocks<MyProductionBlock>())
+            {
+                production.InputInventory.Clear(); production.OutputInventory.Clear();
+                var item = MyDefinitionId.Parse(production is MyRefinery ? "MyObjectBuilder_Ore/Iron" : "MyObjectBuilder_Ingot/Iron");
+                var amount = MyFixedPoint.Min(1000, production.InputInventory.ComputeAmountThatFits(item));
+                production.InputInventory.AddItems(amount, MyObjectBuilderSerializerKeen.CreateNewObject(item));
+            }
+        else if (mode == "full-production")
+            foreach (var production in grid.GetFatBlocks<MyProductionBlock>())
+            {
+                var item = MyDefinitionId.Parse(production is MyRefinery ? "MyObjectBuilder_Ingot/Iron" : "MyObjectBuilder_Component/SteelPlate");
+                production.OutputInventory.AddItems(production.OutputInventory.ComputeAmountThatFits(item), MyObjectBuilderSerializerKeen.CreateNewObject(item));
+            }
+        else if (mode == "radius20")
+        {
+            var block = grid.GetFatBlocks<MySafeZoneBlock>().Single();
+            var manager = block.Components.Get<MySafeZoneComponent>();
+            var zone = (MySafeZone)MyEntities.GetEntityById(manager.SafeZoneEntityId);
+            var settings = (MyObjectBuilder_SafeZone)zone.GetObjectBuilder();
+            settings.Radius = 20;
+            MySessionComponentSafeZones.UpdateSafeZone(settings, sync: true);
+        }
+        else if (mode == "solar-backup")
+        {
+            foreach (var battery in grid.GetFatBlocks<MyBatteryBlock>()) { battery.Enabled = true; battery.ChargeMode = Sandbox.ModAPI.Ingame.ChargeMode.Discharge; }
+            for (int y = 0; y < 5; y++)
+            {
+                var armor = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_CubeBlock>("LargeBlockArmorBlock");
+                armor.Min = new SerializableVector3I(3, y, 0); grid.AddBlock(armor, false);
+            }
+            var builder = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_SolarPanel>("LargeBlockSolarPanel");
+            builder.Min = new SerializableVector3I(3, 5, 0);
+            var panel = (MySolarPanel)(grid.AddBlock(builder, false) ?? throw new InvalidOperationException("backup solar did not fit")).FatBlock;
+            Vector3D normal = ((SpaceEngineers.Game.EntityComponents.GameLogic.MyNewSolarGameLogicComponent)panel.SolarComponent).PanelOrientation;
+            var local = MatrixD.CreateWorld(Vector3D.Zero, normal, Vector3D.CalculatePerpendicularVector(normal));
+            Vector3D sun = MySector.DirectionToSunNormalized;
+            var world = MatrixD.CreateWorld(Vector3D.Zero, sun, Vector3D.CalculatePerpendicularVector(sun));
+            var aligned = MatrixD.Invert(local) * world;
+            aligned.Translation = grid.PositionComp.GetPosition(); grid.WorldMatrix = aligned;
         }
         else if (mode == "stop-rotor")
             foreach (var rotor in grid.GetFatBlocks<MyMotorStator>())
@@ -253,6 +331,59 @@ internal static class OfflineTestRoutes
         return new { grid = id, refinery = block.EntityId, state = Snapshot(new[] { (MyObjectBuilder_CubeGrid)grid.GetObjectBuilder() }) };
     }
 
+    private static object AddZone(long id, int chips, double seconds, float radius)
+    {
+        if (chips is < 0 or > 100 || !double.IsFinite(seconds) || seconds <= 0 || seconds > 14400 || !float.IsFinite(radius)) throw new ArgumentOutOfRangeException();
+        var grid = (MyCubeGrid)MyEntities.GetEntityById(id);
+        if (!grid.GetFatBlocks<MyRefinery>().Any()) AddProduction(id);
+        if (!grid.GetFatBlocks<MyReactor>().Any()) Options(id, "full-auto-reactor");
+        for (int x = 9; x <= 18; x++)
+        {
+            if (grid.GetCubeBlock(new Vector3I(x, -1, 0)) != null) continue;
+            var armor = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_CubeBlock>("LargeBlockArmorBlock");
+            armor.Min = new SerializableVector3I(x, -1, 0); grid.AddBlock(armor, false);
+        }
+        var assemblerBuilder = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Assembler>("LargeAssembler");
+        assemblerBuilder.Min = new SerializableVector3I(14, 0, 0); assemblerBuilder.Owner = grid.BigOwners.First(); assemblerBuilder.UseConveyorSystem = false;
+        var assembler = (MyAssembler)(grid.AddBlock(assemblerBuilder, false) ?? throw new InvalidOperationException("zone assembler did not fit")).FatBlock;
+        assembler.InputInventory.AddItems(1000, MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Ingot>("Iron"));
+        assembler.InsertQueueItem(-1, MyDefinitionManager.Static.GetBlueprintDefinition(MyDefinitionId.Parse("MyObjectBuilder_BlueprintDefinition/SteelPlate")), 1000);
+        var builder = MyObjectBuilderSerializerKeen.CreateNewObject<ObjectBuilders.SafeZone.MyObjectBuilder_SafeZoneBlock>("SafeZoneBlock");
+        builder.Min = new SerializableVector3I(10, 0, 0); builder.Owner = grid.BigOwners.First(); builder.Enabled = true; builder.UseConveyorSystem = false;
+        var block = (MySafeZoneBlock)(grid.AddBlock(builder, false) ?? throw new InvalidOperationException("safe zone did not fit")).FatBlock;
+        var manager = block.Components.Get<MySafeZoneComponent>();
+        if (chips > 0) block.GetInventory().AddItems(chips, MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Component>("ZoneChip"));
+        manager.m_upkeepTime = TimeSpan.FromMilliseconds(MySandboxGame.TotalGamePlayTimeInMilliseconds + seconds * 1000);
+        manager.m_timeLeft = TimeSpan.FromSeconds(seconds);
+        manager.SafeZoneCreate_Server(skipActivationTimer: true);
+        if (!MyEntities.TryGetEntityById(manager.SafeZoneEntityId, out MySafeZone zone)) throw new InvalidOperationException("native safe zone was not created");
+        var settings = (MyObjectBuilder_SafeZone)zone.GetObjectBuilder();
+        settings.Radius = radius;
+        settings.AllowedActions ^= MySafeZoneAction.Welding;
+        MySessionComponentSafeZones.UpdateSafeZone(settings, sync: true);
+        return ZoneState(id);
+    }
+
+    private static object ZoneState(long id)
+    {
+        var grid = (MyCubeGrid)MyEntities.GetEntityById(id);
+        var block = grid.GetFatBlocks<MySafeZoneBlock>().Single();
+        var manager = block.Components.Get<MySafeZoneComponent>();
+        MyEntities.TryGetEntityById(manager.SafeZoneEntityId, out MySafeZone zone);
+        var component = (MyObjectBuilder_SafeZoneComponent)manager.Serialize();
+        var saved = component.SafeZoneOb as MyObjectBuilder_SafeZone;
+        return new { grid = id, frame = OfflineCompensation.Frame, gameplayFrame = MySession.Static.GameplayFrameCounter,
+            block = block.EntityId, blockEnabled = block.Enabled, working = block.IsWorking,
+            powerRequired = block.ResourceSink.RequiredInputByType(MyResourceDistributorComponent.ElectricityId),
+            supplied = block.ResourceSink.CurrentInputByType(MyResourceDistributorComponent.ElectricityId),
+            zone = manager.SafeZoneEntityId, active = zone?.Enabled == true, activating = component.Activating,
+            remainingMs = zone != null && !component.Activating ? component.UpkeepTime : manager.m_timeLeft.TotalMilliseconds, activationMs = component.ActivationTime,
+            radius = zone?.Radius ?? saved?.Radius, shape = (zone?.Shape ?? saved?.Shape)?.ToString(),
+            allowedActions = (zone?.AllowedActions ?? saved?.AllowedActions)?.ToString(),
+            producers = grid.GetFatBlocks<MyReactor>().Select(r => new { block = r.EntityId, output = r.SourceComp.CurrentOutput, maximum = r.MaxOutput }).ToArray(),
+            state = Snapshot(new[] { (MyObjectBuilder_CubeGrid)grid.GetObjectBuilder() }) };
+    }
+
     private static object Snapshot(IEnumerable<MyObjectBuilder_CubeGrid> grids) => grids.Select(g => new
     {
         grid = g.EntityId, isStatic = g.IsStatic,
@@ -261,6 +392,10 @@ internal static class OfflineTestRoutes
         {
             id = b.EntityId, type = b.GetId().ToString(),
             energy = b is MyObjectBuilder_BatteryBlock battery ? (double?)battery.CurrentStoredPower : null,
+            enabled = b is MyObjectBuilder_FunctionalBlock functional ? (bool?)functional.Enabled : null,
+            zone = b is ObjectBuilders.SafeZone.MyObjectBuilder_SafeZoneBlock zoneBlock ? (long?)zoneBlock.SafeZoneId : null,
+            upkeep = b.ComponentContainer?.Components.Select(c => c.Component).OfType<MyObjectBuilder_SafeZoneComponent>()
+                .Select(c => new { remainingMs = c.UpkeepTime, activating = c.Activating, activationMs = c.ActivationTime }).FirstOrDefault(),
             storage = b is MyObjectBuilder_MyProgrammableBlock pb ? pb.Storage : null,
             countdown = b is MyObjectBuilder_TimerBlock timer ? (int?)timer.CurrentTime : null,
             inventories = OfflineCompensation.Inventories(b).Select(i => new

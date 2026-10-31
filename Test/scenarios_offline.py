@@ -301,7 +301,7 @@ def _survival_template(bench):
     bench.cluster.config.world_template = target
 
 
-def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=False, hostile=False, observed=False, rotor=False, api=None):
+def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=False, hostile=False, observed=False, rotor=False, zone=False, api=None):
     if api is None:
         _survival_template(bench)
         api = _join(bench)
@@ -317,6 +317,8 @@ def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=F
     bench.exercised(relay=relay)
     if production:
         bench.record("production-fixture", bench.cluster.node("node-1", f"/offline-test-production?grid={grid}", "POST"))
+    if zone:
+        bench.record("zone-fixture", bench.cluster.node("node-1", f"/offline-test-zone?grid={grid}", "POST"))
     if rotor:
         sibling = bench.cluster.node("node-1", f"/offline-test-sibling?grid={grid}&owner={identity}", "POST")["grid"]
         bench.cluster.node("node-1", f"/offline-test-production?grid={sibling}", "POST")
@@ -580,7 +582,7 @@ def _assert_applied_inventory(bench, profiles, applied, grid, label):
 
 
 def t_oc_09(bench):
-    _, grid, _, partition, _ = _call_fixture(bench, production=True)
+    _, grid, _, partition, _ = _call_fixture(bench, production=True, zone=True)
     profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
     original = bench.cluster.get(f"/registry/saves/newest?partition={partition}")
     bench.record("crash-original-profiles", profiles)
@@ -592,6 +594,10 @@ def t_oc_09(bench):
     _require(bench, "node-2 reached shared apply before instantiation/Final", bool(first))
     bench.record("crash-held-builders", first)
     _assert_applied_inventory(bench, profiles, first, grid, "first apply uses exactly the original stocks plus its interval delta")
+    budget = next(r for r in first["compensation"]["results"] if r["Group"] == grid)
+    _require(bench, "held shared wake debits actual producer fuel for zone and both production blocks", any(
+        values.get("MyObjectBuilder_Ingot/Uranium", 0) > 0 for values in budget["ProducerFuelConsumed"].values())
+        and len(budget["ProductionUnits"]) == 2 and bool(budget["Zones"]), json.dumps(budget))
     latest = bench.cluster.get(f"/registry/saves/newest?partition={partition}")
     _require(bench, "held wake has not advanced the durable Final", latest["SaveId"] == original["SaveId"], json.dumps(latest["SaveId"]))
     bench.cluster.node("node-1", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
@@ -872,6 +878,146 @@ def offline_live_differential(bench):
     bench.exercised(nativeLiveEngineReference=True, frames=result["Frames"], limitation="short clustered-engine reference; six-hour standalone lane, three baselines and full stock-chain differentials remain")
 
 
+def _inventory_totals(profile):
+    totals = {}
+    for inventory in profile["Inventories"]:
+        for stack in inventory["Stacks"]:
+            totals[stack["Item"]] = totals.get(stack["Item"], 0) + stack["Amount"]
+    return totals
+
+
+def _zone_reference(bench, grid, partition, label, seconds=30, blocked=False, depleted=False, renewable=False):
+    _require(bench, label + ": native profile completes", bool(_poll(lambda: bench.cluster.node("node-1",
+        f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))
+    if depleted:
+        bench.cluster.node("node-1", f"/offline-test-limit-fuel?grid={grid}&fuel=0.03", "POST")
+    initial = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}", "POST")
+    _require(bench, label + ": actual player zone and both production blocks are captured", len(initial["Upkeep"]) == 1
+             and initial["Upkeep"][0]["PowerSink"] >= 0 and len(initial["Production"]) == 2)
+    samples = []
+    until = time.monotonic() + seconds
+    while time.monotonic() < until:
+        samples.append(bench.cluster.node("node-1", f"/offline-test-zone-state?grid={grid}"))
+        time.sleep(2)
+    compared = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}")
+    state = bench.cluster.node("node-1", f"/offline-test-zone-state?grid={grid}")
+    bench.record(label + "-reference", {"initial": initial, "comparison": compared, "samples": samples, "zone": state})
+    actual, predicted, result = (compared[k] for k in ("actual", "predicted", "result"))
+    before, observed, modeled = map(_inventory_totals, (initial, actual, predicted))
+    fuel = "MyObjectBuilder_Ingot/Uranium"
+    native_burn, model_burn = before.get(fuel, 0) - observed.get(fuel, 0), before.get(fuel, 0) - modeled.get(fuel, 0)
+    charged = sum(p.get(fuel, 0) for p in result["ProducerFuelConsumed"].values())
+    bench.check(label + ": producer diagnostic equals the single inventory fuel debit", abs(charged - model_burn) < .00001)
+    # A reactor samples current output on its native timer, so retain a single full-output
+    # timer tick as the endpoint envelope, and record raw quantities for longer baselines.
+    reactor = next(s for s in initial["Sources"] if s["Kind"] == "Reactor")
+    allowance = reactor["Maximum"] * 100 * next(m["Amount"] for m in reactor["Fuel"] if m["Item"] == fuel)
+    bench.check(label + ": native fuel burn matches modeled delivered output within one reactor tick", abs(native_burn - model_burn) <= allowance + .00001,
+                json.dumps({"nativeBurn": native_burn, "modeledBurn": model_burn, "oneTick": allowance}))
+    supplied = sum(result["ProducerEnergyMWh"].values())
+    consumed = sum(result["ConsumerEnergyMWh"].values()) + sum(result["StorageInputEnergyMWh"].values())
+    bench.check(label + ": one shared grid budget conserves delivered energy", abs(supplied - consumed) < 1e-8)
+    for production in initial["Production"]:
+        benchmark = next((r for r in production["Recipes"] if r["Id"].endswith("/IronOreToIngot") or r["Id"].endswith("/SteelPlate")), None)
+        if benchmark is None:
+            continue
+        for output in benchmark["Outputs"]:
+            item = output["Item"]
+            tick = benchmark["UnitsPerFrame"] * production["TickFrames"] * output["Amount"] + 1.00001
+            bench.check(label + ": native produced stock stays within one production tick", abs(observed.get(item, 0) - modeled.get(item, 0)) <= tick,
+                        json.dumps({"item": item, "native": observed.get(item, 0), "modeled": modeled.get(item, 0), "oneTick": tick}))
+        if blocked:
+            bench.check(label + ": blocked/empty production uses standby draw", result["ProductionUnits"].get(str(production["Block"]), 0) < .0001
+                        and abs(result["ConsumerEnergyMWh"][str(production["Block"])] - production["IdlePower"] * result["Frames"] * .016 / 3600) < 1e-8)
+    zone = result["Zones"][0]
+    bench.check(label + ": actual bubble agrees with modeled active/activation state", state["active"] == (zone["Exists"] and not zone["Activating"]))
+    bench.check(label + ": power transitions retain functional block switch and settings", state["blockEnabled"] is True
+                and state["radius"] == samples[0]["radius"] and state["allowedActions"] == samples[0]["allowedActions"])
+    bench.check(label + ": paid upkeep agrees with the real manager", abs(state["remainingMs"] - zone["RemainingFrames"] * 1000 / 60) < 3000,
+                json.dumps({"nativeMs": state["remainingMs"], "modeledMs": zone["RemainingFrames"] * 1000 / 60}))
+    if depleted:
+        bench.check(label + ": finite fuel leaves no unsupported enabled bubble", observed.get(fuel, 0) <= .00001
+                    and modeled.get(fuel, 0) <= .00001 and not state["active"] and not zone["Exists"])
+    if renewable:
+        solar_ids = {str(s["Block"]) for s in initial["Sources"] if s["Kind"] == "Environmental"}
+        bench.check(label + ": real solar and battery backup supply costs after reactor fuel is gone", native_burn == 0 and model_burn == 0
+                    and any(result["ProducerEnergyMWh"].get(i, 0) > 0 for i in solar_ids) and state["active"])
+    return compared, state
+
+
+def t_oc_11(bench):
+    """Native running-zone power/production/fuel references, outages, backup and actual shared wake.
+
+    Short real engine intervals exercise transitions; the 4-hour/3-chip standalone lane stays distinct.
+    """
+    _survival_template(bench)
+    api = _join(bench)
+    for node in _nodes(bench):
+        _put_config(bench, node, {"offline.enabled": "false", "offline.quietMeters": "0", "offline.settleFrames": "0",
+                                "offline.wakeMeters": "0", "offline.leadSeconds": "0"})
+    owner = _client_identity(bench)
+    fixture = bench.cluster.node("node-1", f"/rc-test-ensure?owner={owner}", "POST")
+    grid = fixture["grid"]
+    bench.cluster.node("node-1", f"/offline-test-zone?grid={grid}", "POST")
+    partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 60)
+    _require(bench, "powered zone fixture has one owner", bool(partition))
+    _require(bench, "native zone is running before profiling", bool(_poll(lambda:
+        bench.cluster.node("node-1", f"/offline-test-zone-state?grid={grid}")["active"], 30)))
+    bench.cluster.post("/automatic/pause")
+    first, _ = _zone_reference(bench, grid, partition, "zone-radius10")
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=radius20", "POST")
+    larger, _ = _zone_reference(bench, grid, partition, "zone-radius20")
+    first_draw = first["predicted"]["Upkeep"][0]["OperationalPower"]
+    bigger_draw = larger["predicted"]["Upkeep"][0]["OperationalPower"]
+    bench.check("actual radius-dependent sink demand drives the shared budget", bigger_draw > first_draw, f"{first_draw} -> {bigger_draw} MW")
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=empty-production", "POST")
+    _zone_reference(bench, grid, partition, "zone-empty-production", seconds=10, blocked=True)
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=restore-production", "POST")
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=full-production", "POST")
+    _zone_reference(bench, grid, partition, "zone-full-production", seconds=10, blocked=True)
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=restore-production", "POST")
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=battery-off", "POST")
+    _zone_reference(bench, grid, partition, "zone-fuel-exhaustion", depleted=True)
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=solar-backup", "POST")
+    _zone_reference(bench, grid, partition, "zone-solar-battery-recovery", seconds=70, renewable=True)
+    bench.cluster.post("/automatic/resume")
+    # Actual shared recovery: the short, already-paid credit expires while offline, with
+    # electricity/fuel available. No timer shortcut or synthetic result is injected at wake.
+    new = bench.cluster.node("node-1", f"/offline-test-rate-fixtures?owner={owner}&count=1", "POST")[0]
+    target = new["grid"]
+    zone_before = bench.cluster.node("node-1", f"/offline-test-zone?grid={target}&chips=0&seconds=60&radius=10", "POST")
+    target_partition = _poll(lambda: (_owner_of(bench, target) or (None, None))[1], 60)
+    for node in ("node-1", "node-2"):
+        _put_config(bench, node, {"offline.enabled": "true", "offline.minOnlineSeconds": "0", "offline.graceSeconds": "0"})
+    row = _poll(lambda: _offline_row(bench, target_partition), 90)
+    _require(bench, "running player zone does not block ordinary quiet offlining", bool(row))
+    profiles = bench.cluster.node("node-1", f"/profiles?partition={target_partition}")
+    _require(bench, "the Final includes the running zone and its actual draw", any(p["Upkeep"] for p in profiles))
+    time.sleep(65)
+    bench.cluster.node("node-1", f"/offline-test-recovery?grid={target}&ms=0", "POST")
+    # A real radio request must still reach this now-unprotected, powered station.
+    for _ in range(8):
+        characters = bench.cluster.node("node-1", "/characters").get("characters") or []
+        if any(r.get("radioOn") for r in characters if owner in (r.get("controllingIdentity"), r.get("identityOwner"))):
+            break
+        api.key("O")
+        time.sleep(2)
+    opened = _open_terminal(api, target)
+    _require(bench, "real radio wake completes after paid zone credit expires", opened.get("screenOpen") is True, json.dumps(opened))
+    applied = _applied(bench, "node-1")
+    result = _assert_applied_inventory(bench, profiles, applied, target, "zone/production wake debits the immutable Final stocks exactly once")
+    after = bench.cluster.node("node-1", f"/offline-test-zone-state?grid={target}")
+    bench.record("zone-wake-exhausted", {"before": zone_before, "applied": applied, "after": after})
+    bench.check("shared wake leaves no enabled bubble after chip exhaustion and retains block switch/rights", not after["active"] and after["zone"] == 0
+                and after["blockEnabled"] is True and after["allowedActions"] == zone_before["allowedActions"])
+    bench.check("shared wake charges reactor for both production and zone power", any(p.get("MyObjectBuilder_Ingot/Uranium", 0) > 0
+                for p in result["ProducerFuelConsumed"].values()) and len(result["ProductionUnits"]) == 2 and result["DisabledZones"])
+    api.close_remote_terminal()
+    bench.exercised(nativePlayerZone=True, nativeRefineryAssembler=True, sharedBudget=True, finiteFuelOutage=True,
+                    solarBatteryRecovery=True, actualSharedWake=True,
+                    limitation="short clustered-engine references; full 4-hour/3-chip standalone differential and larger baseline envelope remain")
+
+
 def offline_observed_policy(bench):
     """Native external game-logic rate sampling and conservative storage/inventory fallback.
 
@@ -969,4 +1115,5 @@ SCENARIOS_OFFLINE.update({
     "OFF-OBSERVED-POLICY": (offline_observed_policy, "native short-window external rates and conservative script storage/inventory policy", "3"),
     "OFF-LIVE-DIFFERENTIAL": (offline_live_differential, "short native engine reference for full Auto battery and real refinery production", "3"),
     "T-OC-12": (t_oc_12, "twenty native refinery bases share one rotation and remeasure after clear", "2"),
+    "T-OC-11": (t_oc_11, "running player zones, common production power/fuel budget, outage/backup and real shared wake", "3"),
 })
