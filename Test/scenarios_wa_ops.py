@@ -114,13 +114,13 @@ def _client_game_lines(bench, client_id: int, pattern: str, limit: int = 20) -> 
     return lines[-limit:]
 
 
-def _session(bench) -> dict | None:
+def _session(bench, client_id: int = CLIENT_ID) -> dict | None:
     return next((s for s in bench.cluster.get("/transport/status").get("sessions") or []
-                 if s.get("client") == CLIENT_ID), None)
+                 if s.get("client") == client_id), None)
 
 
-def _client_identity(bench) -> int:
-    identity = (_session(bench) or {}).get("identityId")
+def _client_identity(bench, client_id: int = CLIENT_ID) -> int:
+    identity = (_session(bench, client_id) or {}).get("identityId")
     _require(bench, "the Gateway transport status names the client identity", bool(identity), str(identity))
     return identity
 

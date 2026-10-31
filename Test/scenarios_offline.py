@@ -301,16 +301,16 @@ def _survival_template(bench):
     bench.cluster.config.world_template = target
 
 
-def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=False, hostile=False, observed=False, rotor=False, zone=False, api=None):
+def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=False, hostile=False, observed=False, rotor=False, zone=False, api=None, client_id=CLIENT_ID):
     if api is None:
         _survival_template(bench)
-        api = _join(bench)
+        api = _join(bench, client_id=client_id)
     # Offline admission requires fresh geometry reports from the normal automatic loop.
     # Pausing it before the first offline row starves those reports and refuses every offer.
     for node in _nodes(bench):
         if node != "wa-1":
             _put_config(bench, node, {"offline.enabled": "false"})
-    identity = _client_identity(bench)
+    identity = _client_identity(bench, client_id)
     fixture = bench.cluster.node("node-1", f"/rc-test-ensure?owner={identity}&dynamic={str(dynamic).lower()}", "POST")
     bench.record("call-up-fixture", fixture)
     grid, block, relay = fixture["grid"], fixture["block"], fixture["relay"]
@@ -689,10 +689,16 @@ def _denied_call(bench, api, grid, partition, label):
 
 
 def p2_off_call_deny(bench):
-    api, grid, _, partition, _ = _call_fixture(bench, hostile=True)
+    # The local no-Steam service reports the usual fixture id as server owner even
+    # with no promotion-map entry. Negative admission must use an ordinary player.
+    client_id = CLIENT_ID + 1
+    api, grid, _, partition, _ = _call_fixture(bench, hostile=True, client_id=client_id)
+    level = bench.cluster.node("node-1", f"/promote-test?userId={client_id}")
+    bench.record("negative-client-privilege", level)
+    _require(bench, "negative admission client has no moderator bypass", level["level"] == 0)
     _denied_call(bench, api, grid, partition, "hostile-owner")
     _put_config(bench, "node-1", {"offline.enabled": "false"})
-    identity = _client_identity(bench)
+    identity = _client_identity(bench, client_id)
     # A fresh target must not overlap the hostile offline row: vanilla spatial co-location
     # would deliberately wake that row, independently of this denied radio demand.
     fresh = bench.cluster.node("node-1", f"/offline-test-rate-fixtures?owner={identity}&count=1", "POST")[0]
@@ -731,8 +737,37 @@ def p2_off_call_rate(bench):
     _require(bench, "twenty real client requests ran inside one rate window", duration < 60 and all(r.get("replicationRequests", 0) > 0 for r in replies))
     refused = after["outcomes"].get("refused-rate", 0) - before["outcomes"].get("refused-rate", 0)
     bench.check("concurrent call-ups enforce one pending admission", refused >= 19 and after["pending"] <= 1, json.dumps(after))
-    bench.exercised(authenticatedRequests=20, concurrentPendingLimit=True,
-                    limitation="concurrent burst proves one pending; six successive completions/minute remains a separate rate-window leg")
+    _require(bench, "burst admission completes or times out before the successive-window leg", bool(_poll(lambda:
+        bench.cluster.node("node-1", "/offline")["callUps"]["pending"] == 0, 150)))
+    api.close_remote_terminal()
+    # Real wall time, with default six admissions/minute. No counter reset or shortened
+    # window: all seven selected targets must still be absent when their requests begin.
+    time.sleep(60)
+    current = rows()
+    remaining = [(f, r["Partition"]) for f in fixtures for r in current if f["grid"] in r.get("Members", [])]
+    _require(bench, "seven reachable targets remain offline for the actual minute limit", len(remaining) >= 7)
+    completions = []
+    window_started = time.monotonic()
+    for fixture, partition in remaining[:6]:
+        _require(bench, "successive target is absent before its authenticated request", bool(_offline_row(bench, partition)))
+        opened = _open_terminal(api, fixture["grid"], timeout=45)
+        completions.append({"grid": fixture["grid"], "seconds": time.monotonic() - window_started, "answer": opened})
+        bench.record("rate-successive-completions", completions)
+        _require(bench, "successive offline admission completes through the real terminal", opened.get("screenOpen") is True, json.dumps(opened))
+        _require(bench, "completed admission leaves no pending request", bool(_poll(lambda:
+            bench.cluster.node("node-1", "/offline")["callUps"]["pending"] == 0, 10)))
+        api.close_remote_terminal()
+    _require(bench, "six real completions fit inside one native rate window", time.monotonic() - window_started < 55,
+             json.dumps(completions))
+    fixture, partition = remaining[6]
+    before_rate = bench.cluster.node("node-1", "/offline")["callUps"]["outcomes"].get("refused-rate", 0)
+    rejected = api.open_remote_terminal(fixture["grid"], timeout=3)
+    refused = _poll(lambda: bench.cluster.node("node-1", "/offline")["callUps"]["outcomes"].get("refused-rate", 0) > before_rate, 5)
+    bench.record("rate-seventh-in-window", {"seconds": time.monotonic() - window_started, "answer": rejected,
+        "status": bench.cluster.node("node-1", "/offline")["callUps"], "offline": _offline_row(bench, partition)})
+    bench.check("seventh authenticated demand is rate-refused without waking", bool(refused) and bool(_offline_row(bench, partition))
+                and rejected.get("replicationRequests", 0) > 0 and time.monotonic() - window_started < 60)
+    bench.exercised(authenticatedBurstRequests=20, concurrentPendingLimit=True, successiveCompletions=6, seventhRefused=True)
 
 
 def p2_off_call_laser(bench):
@@ -992,6 +1027,27 @@ def _zone_reference(bench, grid, partition, label, seconds=30, blocked=False, de
     return compared, state
 
 
+def offline_zone_settings(bench):
+    """Native builder transaction regression; not shared-wake/crash or cost proof."""
+    _survival_template(bench)
+    _join(bench)
+    for node in _nodes(bench):
+        _put_config(bench, node, {"offline.enabled": "false"})
+    owner = _client_identity(bench)
+    grid = bench.cluster.node("node-1", f"/rc-test-ensure?owner={owner}", "POST")["grid"]
+    bench.cluster.node("node-1", f"/offline-test-zone?grid={grid}", "POST")
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=box-zone", "POST")
+    state = bench.cluster.node("node-1", f"/offline-test-zone-settings?grid={grid}", "POST")
+    bench.record("zone-settings-transaction", state)
+    _require(bench, "native remembered settings differ from later live edits", state["rememberedRadius"] != state["liveRadius"]
+             and state["rememberedRights"] != state["liveRights"])
+    bench.check("removal retains current live radius, shape and rights", state["retainedRadius"] == state["liveRadius"]
+                and state["retainedShape"] == state["liveShape"] and state["retainedRights"] == state["liveRights"])
+    bench.check("removal clears the carried bubble and id while retaining the functional switch", state["carried"] is None
+                and state["zone"] == 0 and state["enabled"] is True)
+    bench.exercised(nativeBuilderTransaction=True, limitation="focused settings regression; not shared-wake, concurrency or fuel proof")
+
+
 def offline_solar_native(bench):
     """Focused regression for native Havok profiling, not the planet/200-panel lane."""
     _survival_template(bench)
@@ -1069,7 +1125,9 @@ def t_oc_11(bench):
     # electricity/fuel available. No timer shortcut or synthetic result is injected at wake.
     new = bench.cluster.node("node-1", f"/offline-test-rate-fixtures?owner={owner}&count=1", "POST")[0]
     target = new["grid"]
-    zone_before = bench.cluster.node("node-1", f"/offline-test-zone?grid={target}&chips=0&seconds=60&radius=10", "POST")
+    bench.cluster.node("node-1", f"/offline-test-zone?grid={target}&chips=0&seconds=60&radius=10", "POST")
+    bench.cluster.node("node-1", f"/offline-test-options?grid={target}&mode=box-zone", "POST")
+    zone_before = bench.cluster.node("node-1", f"/offline-test-zone-state?grid={target}")
     target_partition = _poll(lambda: (_owner_of(bench, target) or (None, None))[1], 60)
     for node in ("node-1", "node-2"):
         _put_config(bench, node, {"offline.enabled": "true", "offline.minOnlineSeconds": "0", "offline.graceSeconds": "0"})
@@ -1093,7 +1151,8 @@ def t_oc_11(bench):
     after = bench.cluster.node("node-1", f"/offline-test-zone-state?grid={target}")
     bench.record("zone-wake-exhausted", {"before": zone_before, "applied": applied, "after": after})
     bench.check("shared wake leaves no enabled bubble after chip exhaustion and retains block switch/rights", not after["active"] and after["zone"] == 0
-                and after["blockEnabled"] is True and after["allowedActions"] == zone_before["allowedActions"])
+                and after["blockEnabled"] is True and after["allowedActions"] == zone_before["allowedActions"]
+                and after["radius"] == zone_before["radius"] and after["shape"] == zone_before["shape"])
     bench.check("shared wake charges reactor for both production and zone power", any(p.get("MyObjectBuilder_Ingot/Uranium", 0) > 0
                 for p in result["ProducerFuelConsumed"].values()) and len(result["ProductionUnits"]) == 2 and result["DisabledZones"])
     admin_after = next((z for z in bench.cluster.node("node-1", "/block-test-safezones")["zones"] if z["entityId"] == admin), {})
@@ -1205,4 +1264,5 @@ SCENARIOS_OFFLINE.update({
     "T-OC-12": (t_oc_12, "twenty native refinery bases share one rotation and remeasure after clear", "2"),
     "T-OC-11": (t_oc_11, "running player zones, common production power/fuel budget, outage/backup and real shared wake", "3"),
     "OFF-SOLAR-NATIVE": (offline_solar_native, "native physics-queue solar profiling crash regression", "2"),
+    "OFF-ZONE-SETTINGS": (offline_zone_settings, "native zone builder retains live settings when remembered state is stale", "2"),
 })

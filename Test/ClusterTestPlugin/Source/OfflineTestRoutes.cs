@@ -142,6 +142,29 @@ internal static class OfflineTestRoutes
                 .GetFatBlocks<MySolarPanel>().Select(p => new { block = p.EntityId,
                     maximum = p.SourceComp.MaxOutput, output = p.SourceComp.CurrentOutput }).ToArray()));
         });
+        TestRoutes.Add("POST", "/offline-test-zone-settings", context =>
+        {
+            long grid = TestRoutes.Long(context, "grid");
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                // A focused builder-transaction regression using an actual native block.
+                // This deliberately exercises removal, not a shared-wake or fuel proof.
+                var builder = (MyObjectBuilder_CubeGrid)((MyCubeGrid)MyEntities.GetEntityById(grid)).GetObjectBuilder();
+                var block = builder.CubeBlocks.OfType<ObjectBuilders.SafeZone.MyObjectBuilder_SafeZoneBlock>().Single();
+                var component = block.ComponentContainer.Components.Select(c => c.Component).OfType<MyObjectBuilder_SafeZoneComponent>().Single();
+                var live = BlockSafeZones.Parse(BlockBuilderEntry.Read(block, BlockSafeZones.Key));
+                var remembered = (MyObjectBuilder_SafeZone)component.SafeZoneOb;
+                var before = new OfflineProfile { Members = new[] { grid } };
+                var after = new OfflineProfile { Upkeep = new() { new OfflineUpkeep { Block = block.EntityId, Enabled = false, Exists = false } } };
+                AccessTools.Method(typeof(OfflineCompensation), "Commit").Invoke(null,
+                    new object[] { before, after, new Dictionary<long, MyObjectBuilder_EntityBase> { [grid] = builder } });
+                var retained = (MyObjectBuilder_SafeZone)component.SafeZoneOb;
+                return new { liveRadius = live.Radius, rememberedRadius = remembered.Radius, retainedRadius = retained.Radius,
+                    liveShape = live.Shape.ToString(), retainedShape = retained.Shape.ToString(),
+                    liveRights = live.AllowedActions.ToString(), rememberedRights = remembered.AllowedActions.ToString(), retainedRights = retained.AllowedActions.ToString(),
+                    carried = BlockBuilderEntry.Read(block, BlockSafeZones.Key), zone = block.SafeZoneId, enabled = block.Enabled };
+            }));
+        });
         TestRoutes.Add("POST", "/offline-test-recovery", context =>
         {
             long grid = TestRoutes.Long(context, "grid"), ms = long.Parse(TestRoutes.Query(context, "ms"), System.Globalization.CultureInfo.InvariantCulture);
@@ -219,8 +242,12 @@ internal static class OfflineTestRoutes
         {
             var block = grid.GetFatBlocks<MySafeZoneBlock>().Single();
             var manager = block.Components.Get<MySafeZoneComponent>();
+            // Native manager settings can predate later edits to the live bubble.
+            // Retain that real stale snapshot to exercise wake/removal precedence.
+            manager.SaveSafeZoneSettings();
             var zone = (MySafeZone)MyEntities.GetEntityById(manager.SafeZoneEntityId);
             var settings = (MyObjectBuilder_SafeZone)zone.GetObjectBuilder();
+            settings.AllowedActions ^= MySafeZoneAction.Drilling;
             settings.Radius = mode == "sphere10" ? 10 : 20;
             settings.Shape = mode == "box-zone" ? MySafeZoneShape.Box : MySafeZoneShape.Sphere;
             if (mode == "box-zone") settings.Size = new Vector3(40, 50, 60);

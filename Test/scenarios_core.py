@@ -99,12 +99,12 @@ def _character(api) -> dict | None:
     return character if character and character.get("state") != "dead" else None
 
 
-def _join(bench, api_name: str = "01-spawned"):
+def _join(bench, api_name: str = "01-spawned", client_id: int = CLIENT_ID):
     bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
-    api = bench.start_client(CLIENT_ID)
-    bench.wait_spawned(CLIENT_ID)
-    bench.ensure_gameplay_focus(CLIENT_ID)
-    bench.screenshot(CLIENT_ID, api_name)
+    api = bench.start_client(client_id)
+    bench.wait_spawned(client_id)
+    bench.ensure_gameplay_focus(client_id)
+    bench.screenshot(client_id, api_name)
     return api
 
 
