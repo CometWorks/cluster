@@ -9,7 +9,7 @@ Native manifests are pinned separately: **2656266** (initial reviewed repairs), 
 (explicit generation-bearing empty presence). Suite/fixture versions and individual results are
 separate evidence. Pending statements below are not passes; a later package inherits no unrun proof.
 
-## R1 — repaired; detached regression passes, native Auto differential pending
+## R1 — repaired; detached and short native Auto differential pass
 
 The model now bounds the full/discharging transition to Update100 and re-evaluates the nonlinear
 near-full demand within 100 frames. Auto charging demand is calculated after ordinary dispatch,
@@ -190,3 +190,118 @@ Closing the UI sent the actual remove, cleared presence, and the station offline
 The complete terminal PNG was visually inspected. Observed small-station open latency was
 22.313036152976565 s on this shared host; no exclusive or large-station performance claim.
 The exact presync-window schedule and two-client interval remain separate proofs.
+
+
+## 2026-10-31 follow-up: required shared safe-zone and production costs
+
+New required scope is implemented in `0f40b8f`: active player-built safe zones use the same
+captured electricity sinks, prioritized producer dispatch, fuel inventories, production state,
+renewables and battery mode/loss accounting as every other modeled consumer. Diagnostics expose
+per-producer delivered energy/fuel, per-consumer energy, storage input, production units, chip
+renewals and final zone state. No separate debit mechanism or background offline executor exists.
+Power loss removes the modeled bubble and pauses paid credit; powered recovery uses vanilla's
+activation delay. Chip exhaustion removes the bubble without changing the functional Enabled
+switch. Transactional Commit retains settings/rights and suppresses the carried enabled bubble
+before instantiation when the modeled costs cannot sustain it. Admin zones remain separate.
+Initially already-paused player zones with no live zone id are not full modeled coverage yet.
+
+The native reference exposed a clock defect: 16ms authority units were being spent as 60Hz
+resource frames, creating approximately4% excess duration. `0f40b8f` converts captured clock units
+to native engine frames (225000 authority units/hour =216000 engine frames/hour). Sun phase and
+external authority stamps remain unchanged; standalone factories state their engine-frame basis.
+Earlier credit amounts prove lifecycle execution only; they are not current accuracy evidence.
+
+At exact product `ef2e01608cf45f883770b91ab768978ee8a3cc30`, package archive
+`bf26a0d0f7397974a695468f7a3ffd99b569c3ec9f1c14274c4dd2fc5541868d`:
+
+- `native-host/results/20261031-191916Z/OFF-LIVE-DIFFERENTIAL`:7/7 pass, actual full Auto
+  battery and live refinery native reference within the tick envelope after clock correction.
+  This supplements R1/R2; the six-hour/three-baseline reference remains missing.
+- `.../T-OC-09`:14/14 pass, extended shared Apply with a running player zone, reactor,
+  refinery and assembler. First held provisional uranium debit0.00900955275; SIGKILL before
+  Final; retry from the same original Final debits0.08629490417 for its later interval,
+  with no stacked first debit. Actual inventory assertions include fuel and produced items.
+  After replicated compensated ordinary Final, a second kill/recovery has no profile/results.
+- `.../OFF-OBSERVED-POLICY`:10/10 pass. Real external components yield multi-sample rates;
+  means survive known-class capture; opaque storage and scripted inventories freeze explicitly;
+  actual radio/shared wake preserves their stocks. Controlled fixture fraction1/1 is not a
+  real-world census or a Measure decision. Full sinusoidal/fuel-script/rotation semantics remain.
+- `native-host/results/20261031-193622Z/T-OC-07`:10/10 pass, actual Block/Freeze admission,
+  PB/timer/ejector unknowns, real radio/UI wake, preserved PB Storage, Frozen confidence and
+  modeled battery debit beside unknown behavior. The previous terminal-open attempt failed
+  and stays recorded as a failure.
+- `.../T-OC-11`:94/95 individual checks passed, whole scenario FAIL. Actual reactor-only
+  references earned radius10(5MW), radius20(7.510204MW), Box shape, input/output stocks,
+  energy conservation, paid credit, empty/full-output standby and finite fuel outage/removal
+  with switch/settings retention. Native uranium0.050750/0.071668 versus integrated modeled
+  0.051400/0.072586 in the two steady radius references. Reactors settle at actual
+  900..3600-frame fuel timers, which are recorded. Rapid Auto-battery sampled native fuel
+  versus integrated delivered-output debit remains a longer-differential limitation.
+  A too-strict zero-output full-inventory assertion ignored MyFixedPoint residual headroom;
+  revised check allows at most one native production tick before standby, with actual stocks.
+
+Solar backup then exposed a native SIGSEGV on a generic .NET Task.Run worker inside
+`MyPhysics.CastRayInternal`, directly called by `OfflineCompensation.SampleSun`. Full2.9GB dump
+and crash report are preserved at `native-host/solar-worker-crash/`. Root fix`6ccf587` uses
+`MyPhysics.CastChainedRaycastsParallel`, whose engine workers hold Havok read state and native
+thread context; one direction/panel/physics pass bounds work. Node/test-plugin compile passed;
+focused OFF-SOLAR-NATIVE and corrected T-OC-11 await a rebuilt-package native pass.
+
+Original laser fixture failed again at ef2e016. Live probes in
+`native-host/results/20261031-193622Z/P2-OFF-CALL-LASER` captured accepted explicit ConnectTo,
+then old online target origin while the row was durable, followed by `offline:21` with source
+still stuck in contact_Rec and no load. Fix`1063947` retains explicit intent across that report
+race and spends the per-source minute allowance only on an actual offline admission. Completed
+online links leave the pending set and cannot become background wake demand. Node compile
+passes; native id/GPS/established-no-wake regression is pending on the rebuilt package.
+
+The original review artifact remains immutable. No synthetic assertion is used as native
+crash/concurrency/UI proof. Safe-zone recovery/chip renewal/shared-wake, the broader original
+acceptance matrix, Quasar UI and exclusive performance obligations still block acceptance.
+
+
+### Earned rebuilt-package follow-up
+
+At exact product1063947af594975ad2fae65259dc39c2ea67ae98, archive
+242b88048f67eb11c62ad10aac2ccb8b45588ac322200ace838830bbe1184f3e:
+`native-host/results/20261031-194947Z/OFF-SOLAR-NATIVE` passes4/4 (native Havok worker crash
+regression). Expanded T-OC-11 passes125/125 in474 seconds: actual zone+production shared draw,
+radius/shape, native chip renewal, fuel/stock conservation, empty/full standby, finite-fuel
+outage/removal,135s solar/battery recovery through120s native activation, ordinary active-zone
+offlining and true radio/shared wake after chip credit expiry. Wake debits0.0820199339 uranium,
+produces2565.08928 refinery units and109 plates, removes unsupported bubble and preserves the
+functional switch/rights; global admin control stays enabled/uncharged. Four-hour/three-chip
+standalone and broader production/producer envelopes remain separate. The following source
+trace found another edge: current carried live-zone settings must win over the manager's stale
+remembered disabled settings when removal suppresses the carried entry. One-line root repair
+and focused actual-native-builder failing/passing fixture are authored, not earned yet.
+
+Laser id wake now loads onto the source node at1063947, proving retained intent across the old
+online report. However both real lasers end idle before pairing; full scenario remains FAIL.
+Focused native state tracing is authored to identify the transition instead of masking it with
+unconditional reconnects. GPS/established-no-wake/radio-chain proof still missing.
+
+
+### Further native trace and corrected hypothesis
+
+The source contains no new settings-precedence repair. Native probe
+`results/20261031-201018Z/OFF-ZONE-SETTINGS/zone-settings-transaction.json` showed remembered and
+live radius20/Box/Drilling+Welding already identical. Its stale-input precondition failed, so the
+hypothesis was not reproduced; the speculative one-line change and extra fixture were removed.
+Native125-check T-OC-11 settings/rights proof remains as recorded above.
+
+Laser trace in the same run identified the next actual cause: immediately after real peer
+registration, vanilla TryUpdateTargetCoords (inlined in Update10) sees the peer still idle and
+idles the source before the1s call-up update. Exact stack is in node-1.log, laser trace idle at
+21:14:44.702 local. Pairing is authored at the existing AddLaser postfix boundary using existing
+MyLaserAntennaSeams.PointBack (idle-peer/first-caller, native access/sync), not an unconditional
+reconnect loop. Before/fresh rebuilt-package pass remains pending.
+
+A separate native trust-boundary defect is repaired in source: radio/respawn admission used
+vanilla GetUserPromoteLevel, which reports every nonzero id as Owner for an OFFLINE backend.
+Actual probe:1234567890 level5, promoted0; authenticated hostile request was accepted and woke.
+Changing fixture ids cannot resolve the OFFLINE shortcut. Admission now reads the already
+replicated promotion map through PromotionService.IsModerator, reused by online-player admin
+reporting. Standalone retains vanilla role behavior. New native fixture asserts no actual
+promotion for negatives and sets a real replicated Moderator for a positive control; pending
+rebuilt-package proof. This supplements the R1-R8 repairs and does not alter their original review.

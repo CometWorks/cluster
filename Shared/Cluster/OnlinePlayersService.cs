@@ -189,11 +189,7 @@ public static class OnlinePlayersService
 	/// ids that are not in the table at all, which would mark every player an admin.
 	/// </summary>
 	private static bool IsAdminOf(ulong steamId)
-	{
-		MySession session = MySession.Static;
-		return session != null && session.PromotedUsers.TryGetValue(steamId, out MyPromoteLevel level)
-			&& level >= MyPromoteLevel.Moderator;
-	}
+		=> PromotionService.IsModerator(steamId);
 
 	private static void ReceiveReport(string origin, string payload)
 	{

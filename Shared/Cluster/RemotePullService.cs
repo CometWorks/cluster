@@ -216,7 +216,7 @@ public static class RemotePullService
 
 	internal static bool CanReach(ulong user, AntennaGraphEntry entry)
 	{
-		if (MySession.Static.GetUserPromoteLevel(user) >= MyPromoteLevel.Moderator) return true;
+		if (PromotionService.IsModerator(user)) return true;
 		MySession.Static.Players.TryGetPlayerBySteamId(user, out MyPlayer player);
 		if (player?.Identity == null) return false;
 		var origins = new List<MyEntity>();
@@ -264,7 +264,7 @@ public static class RemotePullService
 
 	private static bool MaySpawnAt(ClusterRespawnPoint point, ulong user)
 	{
-		if (point.SetFactionToSpawnee || MySession.Static.GetUserPromoteLevel(user) >= MyPromoteLevel.Moderator) return true;
+		if (point.SetFactionToSpawnee || PromotionService.IsModerator(user)) return true;
 		if (MySession.Static.RemoteAdminSettings.TryGetValue(user, out AdminSettingsEnum settings) && (settings & AdminSettingsEnum.UseTerminals) != 0) return true;
 		long identity = MySession.Static.Players.TryGetIdentityId(user);
 		return identity > 0 && MyIDModule.GetRelationPlayerBlock(point.OwnerIdentityId, identity, (MyOwnershipShareModeEnum)point.ShareMode).IsFriendly();

@@ -44,8 +44,7 @@ internal static class LaserCallUpService
 			{ Requests.Remove(pair.Key); continue; }
 			if (MyLaserAntenna.GetLaserById(request.Target) != null)
 			{
-				source.ConnectTo(request.Target); // includes vanilla ownership, ConnectToRec and sync
-				Requests.Remove(pair.Key);
+				TargetAvailable(MyLaserAntenna.GetLaserById(request.Target));
 				continue;
 			}
 			var peer = AntennaGraphService.Entries().FirstOrDefault(x => x.AntennaEntityId == request.Target);
@@ -67,5 +66,20 @@ internal static class LaserCallUpService
 			}
 		}
 		foreach (long old in Last.Where(x => now - x.Value >= 60000 && !Requests.ContainsKey(x.Key)).Select(x => x.Key).ToArray()) Last.Remove(old);
+	}
+
+	/// <summary>Pair immediately after a real laser enters the antenna dictionary. Waiting
+	/// for Update lets vanilla TryUpdateTargetCoords see an idle peer and cancel the source.</summary>
+	internal static void TargetAvailable(MyLaserAntenna target)
+	{
+		foreach (var pair in Requests.Where(x => x.Value.Target == target.EntityId).ToArray())
+		{
+			var source = MyLaserAntenna.GetLaserById(pair.Key);
+			if (source == null || source.MarkedForClose || !source.Enabled || source.m_targetId != target.EntityId) continue;
+			// Reuse the existing first-caller/idle-peer rule. The source is already pointed
+			// here by its explicit proxy request; vanilla pairs the arriving real half.
+			if (target.m_targetId != source.EntityId) MyLaserAntennaSeams.PointBack(target, source.EntityId);
+			Requests.Remove(pair.Key);
+		}
 	}
 }

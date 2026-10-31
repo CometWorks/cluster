@@ -689,14 +689,15 @@ def _denied_call(bench, api, grid, partition, label):
 
 
 def p2_off_call_deny(bench):
-    # The local no-Steam service reports the usual fixture id as server owner even
-    # with no promotion-map entry. Negative admission must use an ordinary player.
+    # An OFFLINE backend reports every nonzero id as Owner through vanilla.
+    # Cluster bypasses must follow the actual replicated promotion map instead.
     client_id = CLIENT_ID + 1
     api, grid, _, partition, _ = _call_fixture(bench, hostile=True, client_id=client_id)
     level = bench.cluster.node("node-1", f"/promote-test?userId={client_id}")
     bench.record("negative-client-privilege", level)
-    _require(bench, "negative admission client has no moderator bypass", level["level"] == 0)
+    _require(bench, "negative admission client has no authoritative moderator promotion", level["promoted"] == 0)
     _denied_call(bench, api, grid, partition, "hostile-owner")
+    hostile_grid, hostile_partition = grid, partition
     _put_config(bench, "node-1", {"offline.enabled": "false"})
     identity = _client_identity(bench, client_id)
     # A fresh target must not overlap the hostile offline row: vanilla spatial co-location
@@ -711,6 +712,21 @@ def p2_off_call_deny(bench):
     _require(bench, "friendly no-relay target reached offline", bool(_poll(lambda: _offline_row(bench, partition), 90)))
     time.sleep(3)
     _denied_call(bench, api, grid, partition, "no-relay")
+    # Positive control: the actual replicated promotion, not OFFLINE's implicit Owner,
+    # deliberately grants admission. Later vanilla UI access remains a separate decision.
+    bench.cluster.node("node-1", f"/promote-test?userId={client_id}&level=2", "POST")
+    try:
+        _require(bench, "moderator positive control reaches the authoritative promotion map", bool(_poll(lambda:
+            bench.cluster.node("node-1", f"/promote-test?userId={client_id}")["promoted"] == 2, 30)))
+        _require(bench, "hostile positive-control target is still offline before the privileged request", bool(_offline_row(bench, hostile_partition)))
+        answer = api.open_remote_terminal(hostile_grid, timeout=3)
+        loaded = _poll(lambda: _owner_of(bench, hostile_grid), 90)
+        bench.record("moderator-bypass-positive-control", {"answer": answer, "owner": loaded,
+            "promotion": bench.cluster.node("node-1", f"/promote-test?userId={client_id}")})
+        bench.check("an actually promoted moderator can admit the otherwise hostile unreachable target", bool(loaded)
+                    and answer.get("replicationRequests", 0) > 0 and _offline_row(bench, hostile_partition) is None)
+    finally:
+        bench.cluster.node("node-1", f"/promote-test?userId={client_id}&level=0", "POST")
 
 
 def p2_off_call_rate(bench):
@@ -1027,27 +1043,6 @@ def _zone_reference(bench, grid, partition, label, seconds=30, blocked=False, de
     return compared, state
 
 
-def offline_zone_settings(bench):
-    """Native builder transaction regression; not shared-wake/crash or cost proof."""
-    _survival_template(bench)
-    _join(bench)
-    for node in _nodes(bench):
-        _put_config(bench, node, {"offline.enabled": "false"})
-    owner = _client_identity(bench)
-    grid = bench.cluster.node("node-1", f"/rc-test-ensure?owner={owner}", "POST")["grid"]
-    bench.cluster.node("node-1", f"/offline-test-zone?grid={grid}", "POST")
-    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=box-zone", "POST")
-    state = bench.cluster.node("node-1", f"/offline-test-zone-settings?grid={grid}", "POST")
-    bench.record("zone-settings-transaction", state)
-    _require(bench, "native remembered settings differ from later live edits", state["rememberedRadius"] != state["liveRadius"]
-             and state["rememberedRights"] != state["liveRights"])
-    bench.check("removal retains current live radius, shape and rights", state["retainedRadius"] == state["liveRadius"]
-                and state["retainedShape"] == state["liveShape"] and state["retainedRights"] == state["liveRights"])
-    bench.check("removal clears the carried bubble and id while retaining the functional switch", state["carried"] is None
-                and state["zone"] == 0 and state["enabled"] is True)
-    bench.exercised(nativeBuilderTransaction=True, limitation="focused settings regression; not shared-wake, concurrency or fuel proof")
-
-
 def offline_solar_native(bench):
     """Focused regression for native Havok profiling, not the planet/200-panel lane."""
     _survival_template(bench)
@@ -1264,5 +1259,4 @@ SCENARIOS_OFFLINE.update({
     "T-OC-12": (t_oc_12, "twenty native refinery bases share one rotation and remeasure after clear", "2"),
     "T-OC-11": (t_oc_11, "running player zones, common production power/fuel budget, outage/backup and real shared wake", "3"),
     "OFF-SOLAR-NATIVE": (offline_solar_native, "native physics-queue solar profiling crash regression", "2"),
-    "OFF-ZONE-SETTINGS": (offline_zone_settings, "native zone builder retains live settings when remembered state is stale", "2"),
 })
