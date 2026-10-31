@@ -135,6 +135,13 @@ internal static class OfflineTestRoutes
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => Snapshot(
                 new[] { (MyObjectBuilder_CubeGrid)((MyCubeGrid)MyEntities.GetEntityById(grid)).GetObjectBuilder() })));
         });
+        TestRoutes.Add("GET", "/offline-test-solar-state", context =>
+        {
+            long grid = TestRoutes.Long(context, "grid");
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => ((MyCubeGrid)MyEntities.GetEntityById(grid))
+                .GetFatBlocks<MySolarPanel>().Select(p => new { block = p.EntityId,
+                    maximum = p.SourceComp.MaxOutput, output = p.SourceComp.CurrentOutput }).ToArray()));
+        });
         TestRoutes.Add("POST", "/offline-test-recovery", context =>
         {
             long grid = TestRoutes.Long(context, "grid"), ms = long.Parse(TestRoutes.Query(context, "ms"), System.Globalization.CultureInfo.InvariantCulture);

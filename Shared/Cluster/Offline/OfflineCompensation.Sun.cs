@@ -22,8 +22,8 @@ internal static partial class OfflineCompensation
 		+ matrix.Right * pivot.X + matrix.Up * pivot.Y + matrix.Forward * pivot.Z;
 	private static bool IsEnvironmental(MyCubeBlock block) => block is MySolarPanel or MyOxygenFarm;
 
-	/// <summary>Snapshot geometry on the game thread, ray-test off-thread, as the engine's own solar
-	/// component does. Neither the world's sun nor a live block's measured output is changed.</summary>
+	/// <summary>Snapshot geometry on the game thread, ray-test through the engine physics queue.
+	/// Its workers hold the Havok read state and initialized native thread context. Neither the world's sun nor a live block's measured output is changed.</summary>
 	private static Task<double[]> SampleSun(MyCubeBlock block)
 	{
 		MatrixD matrix = block.WorldMatrix;
@@ -63,20 +63,23 @@ internal static partial class OfflineCompensation
 		bool rotating = MySession.Static.Settings.EnableSunRotation;
 		int steps = rotating ? Math.Clamp(ClusterConfig.GetInt("offline.solarSteps"), 4, 720) : 1;
 		Vector3D gridPosition = grid.PositionComp.GetPosition();
-		return Task.Run(() =>
+		var curve = new double[steps];
+		if (!functional) return Task.FromResult(curve);
+		var completion = new TaskCompletionSource<double[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+		var hits = new List<MyPhysics.HitInfo>();
+		// One sun direction per panel per physics pass bounds this work without issuing
+		// synchronous Havok calls from an arbitrary .NET thread-pool thread.
+		MyPhysics.CastChainedRaycastsParallel(steps, step =>
 		{
-			var curve = new double[steps];
-			if (!functional) return curve;
-			var hits = new List<MyPhysics.HitInfo>();
-			for (int step = 0; step < steps; step++)
+			try
 			{
 				if (grid.MarkedForClose || block.MarkedForClose) throw new InvalidOperationException("Solar geometry closed while sampling");
 				Vector3 sun = rotating ? Vector3.Normalize(Vector3.Transform(baseSun, Matrix.CreateFromAxisAngle(axis, (float)(step * 2 * Math.PI / steps)))) : currentSun;
 				double angle = Vector3.Dot(normal, sun);
-				if (angle < 0 && !twoSided) continue;
+				if (angle < 0 && !twoSided) return false;
 				var nearest = planets.OrderBy(p => Vector3D.DistanceSquared(p.Center, matrix.Translation)).FirstOrDefault();
 				if (nearest.Maximum > 0 && Vector3D.Distance(matrix.Translation, nearest.Center) <= nearest.Maximum * 1.1
-					&& Vector3D.Dot(sun, Vector3D.Normalize(matrix.Translation - nearest.Center)) < -0.1) continue;
+					&& Vector3D.Dot(sun, Vector3D.Normalize(matrix.Translation - nearest.Center)) < -0.1) return false;
 				bool shadow = planets.Any(p =>
 				{
 					Vector3D offset = gridPosition - p.Center;
@@ -84,7 +87,7 @@ internal static partial class OfflineCompensation
 					double radius = p.Radius > 500 ? p.Radius - 500 : p.Radius * 0.5;
 					return distance <= 0 && -distance <= 20 * p.Radius && (offset - (Vector3D)sun * distance).LengthSquared() < radius * radius;
 				});
-				if (shadow) continue;
+				if (shadow) return false;
 				int lit = 0;
 				for (int i = 0; i < pivots.Length; i++)
 				{
@@ -103,8 +106,14 @@ internal static partial class OfflineCompensation
 					if (visible) lit++;
 				}
 				curve[step] = Math.Clamp(Math.Abs(angle) * lit / pivots.Length, 0, 1); // weather expectation = 1
+				return false;
 			}
-			return curve;
-		});
+			catch (Exception error) { completion.TrySetException(error); return true; }
+		}, _ =>
+		{
+			if (grid.MarkedForClose || block.MarkedForClose) completion.TrySetException(new InvalidOperationException("Solar geometry closed while sampling"));
+			else completion.TrySetResult(curve);
+		}, 1, () => !completion.Task.IsCompleted && !grid.MarkedForClose && !block.MarkedForClose);
+		return completion.Task;
 	}
 }

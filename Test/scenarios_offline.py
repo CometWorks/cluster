@@ -921,6 +921,10 @@ def _zone_reference(bench, grid, partition, label, seconds=30, blocked=False, de
     native_burn, model_burn = before.get(fuel, 0) - observed.get(fuel, 0), before.get(fuel, 0) - modeled.get(fuel, 0)
     charged = sum(p.get(fuel, 0) for p in result["ProducerFuelConsumed"].values())
     bench.check(label + ": producer diagnostic equals the single inventory fuel debit", abs(charged - model_burn) < .00001)
+    chips = "MyObjectBuilder_Component/ZoneChip"
+    bench.check(label + ": native chip stock agrees with the shared upkeep debit", observed.get(chips, 0) == modeled.get(chips, 0)
+                and before.get(chips, 0) - modeled.get(chips, 0) == sum(result["UpkeepConsumed"].values()),
+                json.dumps({"before": before.get(chips, 0), "native": observed.get(chips, 0), "modeled": modeled.get(chips, 0), "debits": result["UpkeepConsumed"]}))
     # A reactor samples current output on its native timer, so retain a single full-output
     # timer tick as the endpoint envelope, and record raw quantities for longer baselines.
     reactor = next(s for s in initial["Sources"] if s["Kind"] == "Reactor")
@@ -950,8 +954,15 @@ def _zone_reference(bench, grid, partition, label, seconds=30, blocked=False, de
                 bench.check(label + ": native input/output inventory stays within one production tick", abs(native_amount - model_amount) <= tick,
                             json.dumps({"block": captured["Block"], "item": item, "native": native_amount, "modeled": model_amount, "oneTick": tick}))
         if blocked:
-            bench.check(label + ": blocked/empty production uses standby draw", result["ProductionUnits"].get(str(production["Block"]), 0) < .0001
-                        and abs(result["ConsumerEnergyMWh"][str(production["Block"])] - production["IdlePower"] * result["Frames"] * .016 / 3600) < 1e-8)
+            # ComputeAmountThatFits rounds to MyFixedPoint: a nominally full output can
+            # retain sub-unit headroom. Bound that last partial batch by one native tick,
+            # and require standby electricity for the remainder of the interval.
+            extra = result["ConsumerEnergyMWh"][str(production["Block"])] - production["IdlePower"] * result["Frames"] * .016 / 3600
+            tick_energy = (production["OperationalPower"] - production["IdlePower"]) * production["TickFrames"] / 216000
+            bench.check(label + ": blocked/empty production settles to standby within one engine tick",
+                        result["ProductionUnits"].get(str(production["Block"]), 0) <= benchmark["UnitsPerFrame"] * production["TickFrames"] + .00001
+                        and -.00000001 <= extra <= tick_energy + .00000001,
+                        json.dumps({"extraMWh": extra, "oneTickMWh": tick_energy, "productionUnits": result["ProductionUnits"].get(str(production["Block"]), 0)}))
     zone = result["Zones"][0]
     for store in actual["Storage"]:
         expected = next(s for s in predicted["Storage"] if s["Block"] == store["Block"])
@@ -974,6 +985,30 @@ def _zone_reference(bench, grid, partition, label, seconds=30, blocked=False, de
     return compared, state
 
 
+def offline_solar_native(bench):
+    """Focused regression for native Havok profiling, not the planet/200-panel lane."""
+    _survival_template(bench)
+    _join(bench)
+    for node in _nodes(bench):
+        _put_config(bench, node, {"offline.enabled": "false", "offline.settleFrames": "0"})
+    owner = _client_identity(bench)
+    grid = bench.cluster.node("node-1", f"/rc-test-ensure?owner={owner}", "POST")["grid"]
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=solar-backup", "POST")
+    partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 60)
+    _require(bench, "solar fixture has a native owner", bool(partition))
+    bench.cluster.post("/automatic/pause")
+    complete = _poll(lambda: bench.cluster.node("node-1", f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)
+    _require(bench, "native physics-queue solar sampling completes without a worker crash", bool(complete))
+    profile = bench.cluster.node("node-1", f"/profiles?partition={partition}")[0]
+    sources = [s for s in profile["Sources"] if s["Kind"] == "Environmental"]
+    native = _poll(lambda: (lambda state: state if state and state[0]["maximum"] > 0 else None)(
+        bench.cluster.node("node-1", f"/offline-test-solar-state?grid={grid}")), 30)
+    bench.record("native-solar-profile", {"profile": profile, "native": native})
+    bench.check("real sun-facing panel and sampled curve both supply nonzero electricity", bool(native) and len(sources) == 1
+                and max(sources[0]["Curve"]) > .5 and all(0 <= v <= 1 for v in sources[0]["Curve"]))
+    bench.exercised(nativeHavokRays=True, panels=1, limitation="focused crash regression; planet/ridge/obstruction differential and exclusive 200-panel timing remain")
+
+
 def t_oc_11(bench):
     """Native running-zone power/production/fuel references, outages, backup and actual shared wake.
 
@@ -989,7 +1024,7 @@ def t_oc_11(bench):
     bench.cluster.node("node-1", f"/block-test-admin-safezone?op=update&id={admin}&radius=50&allowed=Drilling", "POST")
     fixture = bench.cluster.node("node-1", f"/rc-test-ensure?owner={owner}", "POST")
     grid = fixture["grid"]
-    bench.cluster.node("node-1", f"/offline-test-zone?grid={grid}", "POST")
+    bench.cluster.node("node-1", f"/offline-test-zone?grid={grid}&seconds=45", "POST")
     bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=battery-off", "POST")
     bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=restore-production", "POST")
     partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 60)
@@ -1001,6 +1036,8 @@ def t_oc_11(bench):
     bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=radius20", "POST")
     bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=restore-production", "POST")
     larger, _ = _zone_reference(bench, grid, partition, "zone-radius20")
+    bench.check("native paid-credit renewal consumes a chip with electricity available", any(
+        reference["result"]["UpkeepConsumed"] for reference in (first, larger)))
     first_draw = first["predicted"]["Upkeep"][0]["OperationalPower"]
     bigger_draw = larger["predicted"]["Upkeep"][0]["OperationalPower"]
     bench.check("actual radius-dependent sink demand drives the shared budget", bigger_draw > first_draw, f"{first_draw} -> {bigger_draw} MW")
@@ -1160,4 +1197,5 @@ SCENARIOS_OFFLINE.update({
     "OFF-LIVE-DIFFERENTIAL": (offline_live_differential, "short native engine reference for full Auto battery and real refinery production", "3"),
     "T-OC-12": (t_oc_12, "twenty native refinery bases share one rotation and remeasure after clear", "2"),
     "T-OC-11": (t_oc_11, "running player zones, common production power/fuel budget, outage/backup and real shared wake", "3"),
+    "OFF-SOLAR-NATIVE": (offline_solar_native, "native physics-queue solar profiling crash regression", "2"),
 })
