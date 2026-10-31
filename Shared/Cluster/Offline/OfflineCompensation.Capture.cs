@@ -35,6 +35,7 @@ internal static partial class OfflineCompensation
 			SunPeriodFrames = MySession.Static.Settings.EnableSunRotation ? MySession.Static.Settings.SunRotationIntervalMinutes * 60000.0 / 16 : 0 };
 		var definitions = new HashSet<string>(blocks.Select(b => b.BlockDefinition.Id.ToString()));
 		var inventoryIndices = new Dictionary<MyInventory, int>();
+		var blockSinks = new HashSet<MyResourceSinkComponent>();
 		foreach (var block in blocks)
 			for (int i = 0; i < block.InventoryCount; i++)
 			{
@@ -119,6 +120,7 @@ internal static partial class OfflineCompensation
 			if (scripted && !observe) p.Unknowns.Add(block.EntityId + ":mod logic frozen");
 			if (quick && census.Observations.ContainsKey(block.EntityId)) p.Confidence = "Approximate";
 			block.Components.TryGet<MyResourceSinkComponent>(out var sink);
+			if (sink != null) blockSinks.Add(sink);
 			block.Components.TryGet<MyResourceSourceComponent>(out var source);
 			int powerSink = -1;
 			var sources = new List<OfflineSource>();
@@ -344,6 +346,16 @@ internal static partial class OfflineCompensation
 					entry.IdlePower = entry.OperationalPower = powerSink >= 0 ? p.Sinks[powerSink].Required : 0;
 			}
 		}
+		// The distributor also owns grid-system ports (gyro, conveyors, emissives,
+		// wheels/thrust). Read their real demand once, inside the same resource budget.
+		foreach (var grid in grids)
+		foreach (var sink in ElectricalSinks(grid).Where(s => !blockSinks.Contains(s)))
+		{
+			var group = Group(sink.Group, false);
+			p.Sinks.Add(new() { Block = grid.EntityId, Resource = MyResourceDistributorComponent.ElectricityId.ToString(),
+				Group = sink.Group.String, Priority = group.Priority, Adaptible = group.Adaptible,
+				Required = sink.RequiredInputByType(MyResourceDistributorComponent.ElectricityId) });
+		}
 		if (p.Unknowns.Count > 0) p.Confidence = ClusterConfig.Get("offline.unknownBlocks") == "Freeze" || p.Unknowns.Any(x => x.Contains("cannot be separated", StringComparison.Ordinal) || x.Contains("unavailable", StringComparison.Ordinal) || x.Contains("insufficient", StringComparison.Ordinal)
 			|| x.Contains("mod logic frozen", StringComparison.Ordinal) || x.Contains("topology varied", StringComparison.Ordinal)) ? "Frozen" : "Approximate";
 		if (p.Creative) p.Confidence = "Creative";
@@ -352,6 +364,16 @@ internal static partial class OfflineCompensation
 		OfflineModel.Validate(p);
 		return p;
 	}
+	internal static IEnumerable<MyResourceSinkComponent> ElectricalSinks(MyCubeGrid grid)
+	{
+		var distributor = grid.GridSystems.ResourceDistributor;
+		return distributor.m_dataPerType.Where(t => t.TypeId == MyResourceDistributorComponent.ElectricityId)
+			.SelectMany(t => t.SinksByPriority.SelectMany(s => s).Concat(t.InputOutputList.Select(pair => pair.Item1))
+				.Concat(t.ElectricalDistributionGroups.SelectMany(g => g.SinksByPriority.SelectMany(s => s)
+					.Concat(g.InputOutputList.Select(pair => pair.Item1)))))
+			.Where(s => s.Grid == grid).Distinct();
+	}
+
 	private static float PausedZonePower(MySafeZoneBlock block, MyObjectBuilder_SafeZone settings)
 	{
 		// GetMaxPowerDrain uses default geometry when the live id is zero. Use its

@@ -994,6 +994,45 @@ def t_oc_08(bench):
     bench.exercised(nativeRotorSubgrid=True, quietSibling=True, sharedPartition=partition)
 
 
+def offline_grid_power(bench):
+    """Q1: native distributor census and actual battery energy, enabled/disabled gyro controls."""
+    _survival_template(bench)
+    _join(bench)
+    for node in ("node-1", "node-2"):
+        _put_config(bench, node, {"offline.enabled": "false", "offline.quietMeters": "0", "offline.settleFrames": "0"})
+    grid = bench.cluster.node("node-1", f"/rc-test-ensure?owner={_client_identity(bench)}", "POST")["grid"]
+    partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 60)
+    _require(bench, "gyro fixture has a partition", bool(partition))
+    bench.cluster.post("/automatic/pause")
+    for mode in ("grid-gyros", "grid-gyros-off"):
+        bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode={mode}", "POST")
+        time.sleep(3)
+        _require(bench, mode + ": quiet nonoverride gyros permit profile", bool(_poll(lambda:
+            bench.cluster.node("node-1", f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))
+        census = bench.cluster.node("node-1", f"/offline-test-grid-sinks?grid={grid}")
+        initial = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}", "POST")
+        electricity = "MyObjectBuilder_GasProperties/Electricity"
+        captured = sum(s["Required"] for s in initial["Sinks"] if s["Resource"] == electricity)
+        actual = sum(s["required"] for s in census["sinks"])
+        bench.record(mode + "-census", {"native": census, "profile": initial, "nativeRequired": actual, "capturedRequired": captured})
+        bench.check(mode + ": every actual distributor sink is captured once", abs(actual - captured) < 1e-8,
+                    json.dumps({"native": actual, "captured": captured, "sinks": census["sinks"]}))
+        bench.check(mode + ": native gyro switch/runtime multiplier takes effect", (census["gyro"] > .01) == (mode == "grid-gyros"))
+        time.sleep(30)
+        compared = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}")
+        bench.record(mode + "-energy", compared)
+        before = sum(x["Amount"] for x in initial["Storage"] if x["Kind"] == "Battery")
+        native = before - sum(x["Amount"] for x in compared["actual"]["Storage"] if x["Kind"] == "Battery")
+        model = before - sum(x["Amount"] for x in compared["predicted"]["Storage"] if x["Kind"] == "Battery")
+        tolerance = actual * 200 / 216000 + .000001
+        bench.check(mode + ": battery pays full native demand within Update100 phase", abs(native - model) <= tolerance,
+                    json.dumps({"nativeMWh": native, "modeledMWh": model, "timerPhaseBound": tolerance}))
+        energy = sum(compared["result"]["ConsumerEnergyMWh"].values())
+        bench.check(mode + ": captured consumer budget equals battery debit", abs(energy - model) < 1e-9)
+    bench.exercised(nativeDistributorCensus=True, nativeGyroRuntimeMultiplier=100, nativeBatteryDifferential=True,
+                    limitation="short native battery control; six-hour reactor fuel/standalone differential remains separate")
+
+
 def offline_live_differential(bench):
     """Bounded native engine reference, not the six-hour/three-baseline standalone T-OC lane."""
     _survival_template(bench)
@@ -1461,6 +1500,7 @@ SCENARIOS_OFFLINE.update({
     "T-OC-13": (t_oc_13, "parked large dynamic grid offlines and preserves its pose", "2"),
     "T-OC-08": (t_oc_08, "moving rotor subgrid leaves a quiet sibling profiled and reuses its rate when stopped", "2"),
     "OFF-OBSERVED-POLICY": (offline_observed_policy, "native short-window external rates and conservative script storage/inventory policy", "3"),
+    "OFF-GRID-POWER": (offline_grid_power, "Whole native distributor demand and gyro battery debit (Q1)", "3"),
     "OFF-LIVE-DIFFERENTIAL": (offline_live_differential, "short native engine reference for full Auto battery and real refinery production", "3"),
     "T-OC-12": (t_oc_12, "twenty native refinery bases share one rotation and remeasure after clear", "2"),
     "T-OC-11": (t_oc_11, "running player zones, common production power/fuel budget, outage/backup and real shared wake", "3"),

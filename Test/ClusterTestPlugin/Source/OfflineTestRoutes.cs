@@ -202,6 +202,25 @@ internal static class OfflineTestRoutes
                     outputs = g.SourceComp.ResourceTypes.Select(t => g.SourceComp.CurrentOutputByType(t)).ToArray(),
                     ice = (decimal)g.GetInventory().GetItemAmount(MyDefinitionId.Parse("MyObjectBuilder_Ore/Ice")) }).ToArray()));
         });
+        TestRoutes.Add("GET", "/offline-test-grid-sinks", context =>
+        {
+            long id = TestRoutes.Long(context, "grid");
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                var grid = (MyCubeGrid)MyEntities.GetEntityById(id);
+                var distributor = grid.GridSystems.ResourceDistributor;
+                var electricity = MyResourceDistributorComponent.ElectricityId;
+                distributor.ResourceStateByType(electricity, true, grid);
+                var sinks = distributor.m_dataPerType.Where(t => t.TypeId == electricity)
+                    .SelectMany(t => t.SinksByPriority.SelectMany(s => s).Concat(t.InputOutputList.Select(p => p.Item1))
+                        .Concat(t.ElectricalDistributionGroups.SelectMany(g => g.SinksByPriority.SelectMany(s => s).Concat(g.InputOutputList.Select(p => p.Item1)))))
+                    .Where(s => s.Grid == grid).Distinct().ToArray();
+                return new { grid = id, totalInput = distributor.TotalRequiredInputByType(electricity, grid),
+                    gyro = grid.GridSystems.GyroSystem.ResourceSink.RequiredInputByType(electricity),
+                    sinks = sinks.Select(s => new { group = s.Group.String, block = s.Entity?.EntityId,
+                        battery = s.Entity is MyBatteryBlock, required = s.RequiredInputByType(electricity), input = s.CurrentInputByType(electricity) }).ToArray() };
+            }));
+        });
         TestRoutes.Add("POST", "/offline-test-recovery", context =>
         {
             long grid = TestRoutes.Long(context, "grid"), ms = long.Parse(TestRoutes.Query(context, "ms"), System.Globalization.CultureInfo.InvariantCulture);
@@ -256,6 +275,24 @@ internal static class OfflineTestRoutes
             builder.Min = new SerializableVector3I(9, -1, 0); builder.Owner = grid.BigOwners.First();
             var reactor = (MyReactor)grid.AddBlock(builder, false).FatBlock;
             reactor.GetInventory().AddItems(10, MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Ingot>("Uranium"));
+        }
+        else if (mode is "grid-gyros" or "grid-gyros-off")
+        {
+            if (!grid.GetFatBlocks<MyGyro>().Any())
+                for (int i = 0; i < 4; i++)
+                {
+                    var builder = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Gyro>("LargeBlockGyro");
+                    builder.Min = new SerializableVector3I(12 + i, 0, 0);
+                    grid.AddBlock(builder, false);
+                }
+            foreach (var gyro in grid.GetFatBlocks<MyGyro>())
+            {
+                gyro.Enabled = mode == "grid-gyros";
+                gyro.GyroOverride = false;
+                gyro.GyroPower = .75f;
+                ((Sandbox.ModAPI.IMyGyro)gyro).PowerConsumptionMultiplier = 100;
+            }
+            foreach (var battery in grid.GetFatBlocks<MyBatteryBlock>()) battery.ChargeMode = Sandbox.ModAPI.Ingame.ChargeMode.Discharge;
         }
         else if (mode == "gas-idle")
         {

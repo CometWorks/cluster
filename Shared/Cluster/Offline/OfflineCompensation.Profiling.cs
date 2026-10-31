@@ -104,6 +104,7 @@ internal static partial class OfflineCompensation
 				text.Append('|').Append(block.EntityId).Append(':').Append(block.BlockDefinition.Id).Append(':').Append(block.IsFunctional);
 				if (block is MyFunctionalBlock functional) text.Append(':').Append(functional.Enabled);
 				foreach (var upgrade in block.UpgradeValues.OrderBy(v => v.Key)) text.Append(':').Append(upgrade.Key).Append('=').Append(upgrade.Value.ToString("R", CultureInfo.InvariantCulture));
+				if (block is MyGyro gyro) text.Append(':').Append(gyro.RequiredPowerInput.ToString("R", CultureInfo.InvariantCulture));
 				if (block is MyBatteryBlock battery) text.Append(':').Append(battery.ChargeMode);
 				if (block is MyGasTank tank) text.Append(':').Append(((Sandbox.ModAPI.Ingame.IMyGasTank)tank).Stockpile);
 				if (block is MyProductionBlock production)

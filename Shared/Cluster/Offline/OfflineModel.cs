@@ -76,12 +76,12 @@ internal static class OfflineModel
 				for (int i = 0; i < maximum.Length; i++)
 				{
 					int sink = profile.Sources[i].PowerSink;
-					if (maximum[i] > 0 && sink >= 0 && input[sink] + Epsilon < required[sink]) { maximum[i] = 0; changed = true; }
+					if (maximum[i] > 0 && !Powered(profile, sink, required, input)) { maximum[i] = 0; changed = true; }
 				}
 				for (int i = 0; i < workingStorage.Length; i++)
 				{
 					int sink = profile.Storage[i].PowerSink;
-					if (workingStorage[i] && sink >= 0 && input[sink] + Epsilon < required[sink]) { workingStorage[i] = false; changed = true; }
+					if (workingStorage[i] && !Powered(profile, sink, required, input)) { workingStorage[i] = false; changed = true; }
 				}
 				if (!changed) break;
 				if (pass == powerPasses - 1) throw new InvalidDataException("Coupled resource allocation did not settle");
@@ -116,7 +116,7 @@ internal static class OfflineModel
 			{
 				var production = profile.Production[i];
 				var recipe = choice[i];
-				if (recipe == null || production.PowerSink >= 0 && input[production.PowerSink] + Epsilon < required[production.PowerSink]) { choice[i] = null; continue; }
+				if (recipe == null || !Powered(profile, production.PowerSink, required, input)) { choice[i] = null; continue; }
 				if (production.Refinery)
 				{
 					foreach (var material in recipe.Inputs) Change(profile, changes, material, -(decimal)recipe.UnitsPerFrame * material.Amount);
@@ -239,6 +239,24 @@ internal static class OfflineModel
 	/// shortage is proportional. Storage pairs charge after ordinary sinks, stockpiles first.</summary>
 	internal static void Allocate(OfflineProfile p, double[] demand, double[] maximum, double[] input, double[] output, double[] charging, bool[] workingStorage = null)
 	{
+		// Engine intake depends on electrical dispatch, which may follow gas in the census.
+		// Iterate delivered rates together; resource ordering is never a dependency policy.
+		var previous = new double[output.Length];
+		for (int pass = 0; pass < 256; pass++)
+		{
+			AllocatePass(p, demand, maximum, input, output, charging, workingStorage, previous);
+			bool stable = true;
+			for (int i = 0; i < output.Length; i++)
+				if (p.Sources[i].Storage >= 0 && p.Storage[p.Sources[i].Storage].Kind == "Engine"
+					&& Math.Abs(output[i] - previous[i]) > Epsilon + Math.Abs(output[i]) * 1e-10) stable = false;
+			if (stable) return;
+			Array.Copy(output, previous, output.Length);
+		}
+		throw new InvalidDataException("Coupled engine intake/dispatch did not settle");
+	}
+
+	private static void AllocatePass(OfflineProfile p, double[] demand, double[] maximum, double[] input, double[] output, double[] charging, bool[] workingStorage, double[] previous)
+	{
 		Array.Clear(input); Array.Clear(output); Array.Clear(charging);
 		foreach (string resource in p.Sinks.Select(s => s.Resource).Concat(p.Sources.Select(s => s.Resource)).Concat(p.Storage.Select(s => s.Resource)).Distinct())
 		{
@@ -248,7 +266,7 @@ internal static class OfflineModel
 			var ordinary = Enumerable.Range(0, demand.Length).Where(i => p.Sinks[i].Resource == resource)
 				.Select(i => (Index: i, Priority: p.Sinks[i].Priority, Group: p.Sinks[i].Group, Rate: demand[i], Adaptible: p.Sinks[i].Adaptible, Store: false)).ToList();
 			var storageDemands = Enumerable.Range(0, p.Storage.Count).Where(i => p.Storage[i].Resource == resource)
-				.Select(i => (Index: i, Priority: p.Storage[i].Priority, Group: p.Storage[i].Group, Rate: workingStorage?[i] == false ? 0 : StorageDemand(p, i, output), Adaptible: true, Store: true)).ToArray();
+				.Select(i => (Index: i, Priority: p.Storage[i].Priority, Group: p.Storage[i].Group, Rate: workingStorage?[i] == false ? 0 : StorageDemand(p, i, p.Storage[i].Kind == "Engine" ? previous : output), Adaptible: true, Store: true)).ToArray();
 			ordinary.AddRange(storageDemands.Where(s => !p.Storage[s.Index].Pair));
 			foreach (var group in ordinary.GroupBy(s => (s.Priority, s.Group)).OrderBy(g => g.Key.Priority))
 			{
@@ -287,6 +305,11 @@ internal static class OfflineModel
 			Dispatch(used, true);
 		}
 	}
+
+	// MyResourceSinkComponent.SetInputFromDistributor permits positive partial supply for
+	// adaptible groups. Factory still needs full supply; zero input cannot bootstrap gas.
+	private static bool Powered(OfflineProfile p, int sink, double[] required, double[] input) => sink < 0
+		|| (input[sink] > 0 || required[sink] == 0) && (p.Sinks[sink].Adaptible || input[sink] + Epsilon >= required[sink]);
 
 	private static double StorageDemand(OfflineProfile p, int index, double[] output)
 	{
@@ -414,7 +437,7 @@ internal static class OfflineModel
 		bool changed = false;
 		foreach (var zone in p.Upkeep.Where(z => z.Enabled))
 		{
-			bool powered = zone.PowerSink < 0 || input[zone.PowerSink] + Epsilon >= required[zone.PowerSink];
+			bool powered = Powered(p, zone.PowerSink, required, input);
 			if (!powered && zone.Exists) { zone.Exists = false; zone.ActivationRemainingFrames = 0; changed = true; }
 			else if (powered && !zone.Exists && zone.RemainingFrames > Epsilon)
 			{
