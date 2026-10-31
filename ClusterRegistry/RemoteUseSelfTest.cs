@@ -34,6 +34,9 @@ internal static partial class SelfTest
             Check(!registry.HasRemoteUse(17), "closing UI/disconnect clears remote presence");
             var offline = registry.TakeOffline(offer);
             Check(offline.OfflineGameFrame == 100 && offline.ProfileSummary?.GetArrayLength() == 1, "profile summary survives the offline offer");
+            Check(registry.OfflineRow(17)?.OfflineGameFrame == 100 && registry.OfflineRow(17)?.ProfileSummary?.GetArrayLength() == 1
+                && registry.OfflinePartitions(0).Partitions.Single().ProfileSummary?.GetArrayLength() == 1,
+                "API snapshots preserve the offline frame and profile summary");
             Check(registry.RequestOfflineLoad(17, "missing", "remote") == "no-target" && offline.LoadRequestedNode == null,
                 "radio call-up never redirects away from an unavailable caller");
             Check(registry.RequestOfflineLoad(17, null, "laser") == "no-target" && offline.LoadRequestedNode == null,

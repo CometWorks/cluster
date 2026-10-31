@@ -295,7 +295,7 @@ def _survival_template(bench):
     bench.cluster.config.world_template = target
 
 
-def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=False, hostile=False, api=None):
+def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=False, hostile=False, observed=False, api=None):
     if api is None:
         _survival_template(bench)
         api = _join(bench)
@@ -311,9 +311,11 @@ def _call_fixture(bench, *, pb=False, dynamic=False, production=False, unknown=F
     bench.exercised(relay=relay)
     if production:
         bench.record("production-fixture", bench.cluster.node("node-1", f"/offline-test-production?grid={grid}", "POST"))
-    if unknown or hostile:
-        mode = "unknown" if unknown else "hostile"
+    if unknown or hostile or observed:
+        mode = "unknown" if unknown else "hostile" if hostile else "observed"
         bench.record(mode + "-fixture", bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode={mode}", "POST"))
+    if observed:
+        _put_config(bench, "node-1", {"offline.observeSeconds": "8", "offline.longObservation": "Skip", "offline.unknownBlocks": "Mean"})
     partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 90)
     _require(bench, "remote fixture has an owned partition", bool(partition), json.dumps(fixture))
     # Suit broadcasting is an explicit player action in vanilla.
@@ -501,6 +503,10 @@ def t_oc_09(bench):
     bench.cluster.kill(slot="node-2")
     def retry():
         bench.cluster.post("/registry/leases/expire")
+        # An offline row remains demand-driven after a failed claim. A fresh caller must
+        # reassert demand; generic recovery must not wake unrelated offline content.
+        if _offline_row(bench, partition):
+            bench.cluster.post(f"/registry/partitions/offline/load?partition={partition}&node=node-1&reason=remote")
         return _applied(bench, "node-1")
     second = _poll(retry, 240, 2)
     _require(bench, "another node actually recovered after SIGKILL in the apply window", bool(second))
@@ -513,6 +519,10 @@ def t_oc_09(bench):
     bench.cluster.start_node("node-2")
     bench.cluster.wait_node_log("node-2", "Game ready", timeout=180)
     _put_config(bench, "node-2", {"offline.enabled": "false"})
+    replicated = _poll(lambda: (lambda s: s if s["SaveId"]["Generation"] >= final["SaveId"]["Generation"]
+                       and len(s.get("Locations", [])) > 1 else None)(bench.cluster.get(f"/registry/saves/newest?partition={partition}")), 120, 2)
+    _require(bench, "compensated Final has a recoverable second holder before its owner dies", bool(replicated))
+    bench.record("crash-compensated-final-replicated", replicated)
     bench.cluster.node("node-2", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
     bench.cluster.kill(slot="node-1")
     def after_final():
@@ -699,6 +709,37 @@ def t_oc_13(bench):
     api.close_remote_terminal()
 
 
+def offline_observed_policy(bench):
+    """Native external game-logic rate sampling and conservative storage/inventory fallback.
+
+    This exercises phase-5 short windows, not the unimplemented Measure/full-rotation leg of T-OC-06.
+    """
+    api, grid, _, partition, _ = _call_fixture(bench, observed=True)
+    profile = next(p for p in bench.cluster.node("node-1", f"/profiles?partition={partition}") if grid in p["Members"])
+    bench.record("observed-native-profile", profile)
+    observations = {o["Block"]: o for o in profile["Observations"]}
+    _require(bench, "real external components produce multi-sample rate observations", len(observations) >= 2
+             and all(o["Samples"] >= 2 for o in observations.values()))
+    for block, observation in observations.items():
+        sources = [s for s in profile["Sources"] if s["Block"] == block]
+        offset = len([s for s in profile["Sinks"] if s["Block"] == block])
+        for index, source in enumerate(sources):
+            bench.check("captured known-class source retains observed mean", abs(source["Maximum"] - observation["Mean"][offset + index]) < 1e-9,
+                        json.dumps({"block": block, "maximum": source["Maximum"], "mean": observation["Mean"][offset + index]}))
+    _require(bench, "opaque storage and script inventory effects are explicitly frozen", profile["Confidence"] == "Frozen" and any("script-driven storage" in u for u in profile["Unknowns"])
+             and any("script inventory changes" in u for u in profile["Unknowns"]))
+    bench.cluster.node("node-1", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
+    answer = api.open_remote_terminal(grid, timeout=120)
+    _require(bench, "observed/unknown group wakes through real radio", answer.get("screenOpen") is True, json.dumps(answer))
+    applied = _applied(bench, "node-1")
+    bench.record("observed-applied", applied)
+    _assert_applied_inventory(bench, [profile], applied, grid, "scripted inventories remain their frozen stock without invented mean output")
+    # Every group in this controlled native fixture is observed; this is not an Octahedron census.
+    bench.exercised(nativeObservedGroups=1, nativeProfiledGroups=1, fixtureOnlyFraction=1.0,
+                    limitation="no real-world observed fraction or Measure/full-sun-rotation decision")
+    api.close_remote_terminal()
+
+
 SCENARIOS_OFFLINE.update({
     "P2-OFF-CALL-TERMINAL": (p2_off_call_terminal, "offline radio terminal, caller-node wake, pin and sweep lifecycle", "3"),
     "P2-OFF-CALL-RC": (p2_off_call_rc, "offline dynamic drone radio control, raw client driving and presence", "3"),
@@ -711,4 +752,5 @@ SCENARIOS_OFFLINE.update({
     "P2-OFF-CALL-LASER": (p2_off_call_laser, "native id/GPS laser wake and established-link no-wake", "3"),
     "T-OC-10": (t_oc_10, "real changed-mod bytes skip compensation and leave the woken partition healthy", "3"),
     "T-OC-13": (t_oc_13, "parked large dynamic grid offlines and preserves its pose", "2"),
+    "OFF-OBSERVED-POLICY": (offline_observed_policy, "native short-window external rates and conservative script storage/inventory policy", "3"),
 })

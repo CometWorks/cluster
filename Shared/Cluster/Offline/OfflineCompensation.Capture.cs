@@ -315,7 +315,8 @@ internal static partial class OfflineCompensation
 					entry.IdlePower = entry.OperationalPower = powerSink >= 0 ? p.Sinks[powerSink].Required : 0;
 			}
 		}
-		if (p.Unknowns.Count > 0) p.Confidence = ClusterConfig.Get("offline.unknownBlocks") == "Freeze" || p.Unknowns.Any(x => x.Contains("cannot be separated", StringComparison.Ordinal) || x.Contains("unavailable", StringComparison.Ordinal) || x.Contains("insufficient", StringComparison.Ordinal)) ? "Frozen" : "Approximate";
+		if (p.Unknowns.Count > 0) p.Confidence = ClusterConfig.Get("offline.unknownBlocks") == "Freeze" || p.Unknowns.Any(x => x.Contains("cannot be separated", StringComparison.Ordinal) || x.Contains("unavailable", StringComparison.Ordinal) || x.Contains("insufficient", StringComparison.Ordinal)
+			|| x.Contains("mod logic frozen", StringComparison.Ordinal) || x.Contains("topology varied", StringComparison.Ordinal)) ? "Frozen" : "Approximate";
 		if (p.Creative) p.Confidence = "Creative";
 		p.Definitions = definitions.OrderBy(x => x, StringComparer.Ordinal).ToArray();
 		p.ContentHash = ContentHash(p.Definitions);

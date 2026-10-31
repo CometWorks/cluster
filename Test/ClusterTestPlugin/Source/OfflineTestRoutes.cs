@@ -103,6 +103,23 @@ internal static class OfflineTestRoutes
             antenna.Enabled = true; antenna.EnableBroadcasting = true; antenna.BroadcastRadius = 1000;
             grid.AddBlock(antenna, false);
         }
+        else if (mode == "observed")
+        {
+            var solar = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_SolarPanel>("LargeBlockSolarPanel");
+            solar.Min = new SerializableVector3I(3, 0, 0);
+            OfflineObservedLogic.Attach(grid.AddBlock(solar, false).FatBlock);
+            var generator = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_OxygenGenerator>("LargeBlockOxygenGenerator");
+            generator.Min = new SerializableVector3I(6, 0, 0); generator.UseConveyorSystem = false;
+            var gas = grid.AddBlock(generator, false).FatBlock;
+            gas.GetInventory().AddItems(1000, MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Ore>("Ice"));
+            OfflineObservedLogic.Attach(gas);
+            // A scripted reservoir is deliberately opaque, and a scripted cargo invents items.
+            // Both must freeze while the independent source remains observable.
+            OfflineObservedLogic.Attach(grid.GetFatBlocks<MyBatteryBlock>().Single());
+            var cargo = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_CargoContainer>("LargeBlockSmallContainer");
+            cargo.Min = new SerializableVector3I(2, 1, 0);
+            OfflineObservedLogic.Attach(grid.AddBlock(cargo, false).FatBlock, inventory: true);
+        }
         else if (mode == "hostile")
         {
             long hostile = MySession.Static.Players.CreateNewIdentity("Offline hostile fixture", initialPlayer: true).IdentityId;

@@ -456,6 +456,7 @@ internal sealed partial class GatewayRegistry
         Partition = row.Partition, Save = row.Save, X = row.X, Y = row.Y, Z = row.Z, Radius = row.Radius,
         MemberSpheres = row.MemberSpheres, Members = row.Members, EstimatedSnapshotBytes = row.EstimatedSnapshotBytes,
         Antennas = row.Antennas, RespawnPoints = row.RespawnPoints, OfflineBy = row.OfflineBy, OfflineAt = row.OfflineAt,
+        OfflineGameFrame = row.OfflineGameFrame, ProfileSummary = row.ProfileSummary,
         LoadRequestedNode = row.LoadRequestedNode, LoadRequestedAt = row.LoadRequestedAt, LoadReason = row.LoadReason,
         LoadClaims = row.LoadClaims, Npc = row.Npc,
     };
