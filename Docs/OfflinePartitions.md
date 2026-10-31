@@ -140,58 +140,112 @@ clustering-plan patches are prepared outside this checkout for an isolated docum
 
 ## Verification / acceptance map
 
-Actual local proof on Linux THE-RIG:
+This remains an implementation draft. All results below come from Linux THE-RIG; a native
+fixture, a detached assertion and a full standalone differential are different proof.
 
-```
+The isolated host now works. `CLUSTER_TEST_HOST_ENV` points at a task-owned env file under
+`/home/owendb/tm/offline-partitions/native-host`, with copied Magnetar 2.4.3.7, Pulsar 2.4.3,
+matching client/server **01_210_014**, compiler, prepared Remote driver, planet archive and actual
+TestPlan. Ports use offset 700 and Remote base 24900. Roots/caches/packages are task-owned;
+shared sessions and Steam installations were preserved. Doctor passes between runs. Correctness
+runs retain the RAM/disk floors; this shared host supplies no exclusive timing benchmark.
+
+Private `Build/release.sh` packages passed their build/check/manifest/binary-hash gates:
+
+| Product commit | Archive SHA256 | Earned native result |
+|---|---|---|
+| `265626630f4f80d42c5f0c36ef5fecc2ce6afcef` | `73081deb6a13317ecbab7dbc781447d8b04798e29a7879e448afe59cefc7904b` | Survival RC drive and pre-Final WA-local clear/replacement; IGC no-wake; partial terminal production |
+| `42fd3a0a2756d00c1869cabf7c732c347bb088e2` | `bdbbaa1f7899990f927693667ed670af6435aa982ba25575c8ec9e23e2bb8ed5` | Actual shared-apply crash/retry and post-Final recovery, T-OC-09 |
+| `e76821b5fdd93ea0420f04db08ea398e7c119630` | `485d8b923bac8edc5f6e96eb77e686f5cb0b630d9a762d6479f9b3a87b215ef8` | Full Survival terminal/radio/production/pin-close-offline lifecycle passed; other follow-ups running |
+
+Evidence root: `/home/owendb/tm/offline-partitions/native-host`.
+
+- `results/20261031-182113Z/T-OC-09`: **13 checks passed**. Hold actual shared Apply before
+  instantiation; immutable Final 4:1:2 remains catalogued. First SIGKILL aborts 119.55216 iron of
+  provisional credit. Retry on another node reads that original Final and recomputes 1022.46144
+  iron for its later interval, without stacking the first credit. New ordinary Final 4:3:1 is
+  replicated to a second holder before the owner is killed. Its recovery carries no profile to
+  credit again. These are real game processes, builders, catalog/replica transitions and kills.
+- `results/20261031-180240Z/P2-OFF-CALL-RC`: **9 checks passed** in Survival, actual authenticated
+  take on caller node and **113.88727569580149 m** of server-side drone motion from raw client W.
+  Final PNG is complete and visually inspected. Earlier empty PNGs are excluded.
+- `results/20261031-180240Z/OFF-CACHE-DURABILITY`: **9 checks passed**. WA-local clear was journaled
+  before success; later global Final registration was held, WA killed, replacement replayed clear
+  over its pre-clear snapshot. A strengthened rerun also checks untouched entry and old/new epochs.
+- `results/20261031-175308Z/P2-OFF-CALL-IGC`: real unicast returned false and target stayed offline.
+  This early Creative batch is not production proof; its individual IGC assertions are valid.
+- `results/20261031-183835Z/P2-OFF-CALL-TERMINAL`: **full lifecycle passed at e76821b**,
+  actual radio/UI/caller node/pin/source capture refusal/Survival compensation/close/offline.
+  Credited **434.79072 iron over 1422 frames**. Small-station observed open latency **22.313 s**
+  on the shared host (not a large-station/exclusive benchmark); complete PNG visually inspected.
+- Earlier Survival terminal partial run `results/20261031-180240Z/P2-OFF-CALL-TERMINAL` reached real UI,
+  caller-node wake, active pin, source capture refusal `remote-use`, and actual shared credit of
+  **449.16144 iron over 1469 frames**. Its close leg failed due an old Remote driver; it is not a
+  full scenario pass. Driver/source refresh and client antenna readiness retries are now authored.
+
+Native runs also confirmed all three declared production patch method hashes on running node/WA
+logs ("Verified 3 patch method(s) against declared body hashes"). Resolved hashes remain
+`d24b196b`, `a90270cc`, `d6d1e890` against the installed game build.
+
+R1/R2/R3 regressions failed before their repairs and pass after; the original 28 detached model
+assertions still pass. Added cases cover Auto full-state transition, downstream production input
+thresholds/conservation, electrically gated tank discharge/charge, and positive controls. Cold
+game-math tests cover explicit Forward-Z solar pivots and exclusion of Repeat assemblers from
+queue-shrinkage measurement. Save-container compatibility/structure assertions pass. Registry
+`remote-use` covers no-report/liveness, sampled generations, explicit empty records and missing
+records; the final missing-record regression failed before e76821b and passes after. None of
+these is a native planet ray, six-hour reference, UI conflict or performance measurement.
+
+Useful commands (from repository root unless otherwise shown):
+
+```sh
 dotnet run --project Tools/OfflineCompensationCheck -c Release -p:RunPostBuildEvent=Never
-# 28 synthetic model assertions
-
-dotnet run --project Tools/OfflineCompensationCheck -c Release -p:RunPostBuildEvent=Never -- \
-  --save-container ClusterNodePlugin/bin/Release/net10.0/ClusterNode.dll /path/to/DedicatedServer64
-# 10 container structural/compatibility assertions; loads assemblies, starts no game
-
 dotnet ClusterRegistry/bin/Release/net10.0/ClusterRegistry.dll --self-test remote-use
 dotnet ClusterRegistry/bin/Release/net10.0/ClusterRegistry.dll --self-test offline-partitions
+# From Test/, with CLUSTER_TEST_HOST_ENV set to an isolated host contract:
+uv run python doctor.py --json
+uv run python run_suite.py T-OC-09 OFF-CACHE-DURABILITY P2-OFF-CALL-TERMINAL
+uv run python -m unittest test_offline_config test_bench_artifacts -v
 ```
 
-Node, WA and Registry compile with post-build deployment disabled. New production patch hashes
-were resolved against local DS binaries (`d24b196b`, `a90270cc`, replicable request `d6d1e890`);
-confirmation against an actual running-node hash dump remains pending. The always-on CI job runs
-the detached model proof. No version was bumped.
+The suite builds the test plugin against the exact package. Native fixture fixes include Survival
+world selection, preserving prior config overrides, proper terminal demand/close bookkeeping in
+an isolated Remote copy, complete-PNG detection and failure records for interrupted scenarios.
+Old zero-check interrupted `result.json` files are excluded. Failed native runs stay failed;
+compiled/authored fixtures are not promoted to executed proof.
 
-The vendored plugin-protocol hash check also passes, and the existing CLI suite passes
-153 tests with one skip. These do not exercise a game or a remote terminal.
-
-| Required scenario | Current proof / remaining obligation |
+| Required scenario | Earned proof / remaining obligation |
 |---|---|
-| T-OC-01 | Battery/reactor priorities, recharge loss and shared fuel synthetic checks; 6-hour game differential missing |
-| T-OC-02 | Ore order, conservation/output stall and atomic multi-product checks; upgraded two-refinery/network differential missing |
-| T-OC-03 | Sun breakpoint synthetic check; planet/ridge/own-grid ray differential missing |
-| T-OC-04 | Coupled ice/gas/engine synthetic exhaustion check; engine differential ordering/times missing |
-| T-OC-05 | Measure-node decision and fixture pending real-world evidence |
-| T-OC-06 | Short observation implementation; sinusoidal mod/long-window acceptance and Measure decision pending |
-| T-OC-07 | Freeze/Mean/Block paths authored; real PB/timer/ejection fixture missing |
-| T-OC-08 | Independent group census and signature cache authored; rotor/quiet-sibling fixture missing |
-| T-OC-09 | Deterministic retry/zero-repeat/cap checks plus immutable-source container proofs; apply-to-Final crash-injection game run missing |
-| T-OC-10 | Content/mod-byte mismatch gate authored; changed-mod wake/healthy-partition game run missing |
-| T-OC-11 | Chip exhaustion synthetic check; real zone removal/upkeep differential missing |
-| T-OC-12 | Shared measured cache, per-block fallback and epoch invalidation authored; 20-base rotation/cache game proof missing |
-| T-OC-13 | Velocity/acceleration/self-propulsion gate authored; dynamic parked-ship pose differential missing |
-| PRF-OC-01 | No 200-panel/exclusive timing proof; no performance claim |
-| P2-OFF-CALL-TERMINAL | Native runner authored for terminal, caller node, pin/sweep/close/shared wake; not run |
-| P2-OFF-CALL-RC | Native station take/presence runner authored; not run; dynamic drone driving fixture missing |
-| P2-OFF-CALL-DENY | Admission code authored; authenticated packet/no-relay/hostile native fixture missing |
-| P2-OFF-CALL-RATE | Bounded admission code authored; 20 reachable offline grids/minute native fixture missing |
-| P2-OFF-CALL-CONFLICT | Registry heartbeat/ownership/balance and first-caller proofs passed; two-live-client/no-ping-pong fixture missing |
-| P2-OFF-CALL-LASER | Id/GPS directed wake and real-connect replay authored; native established-link/no-wake fixture missing |
-| P2-OFF-CALL-IGC | Native no-wake unicast runner authored; not run |
+| T-OC-01 | R1 detached fail/pass; short native live-engine battery/refinery comparison authored; full six-hour standalone differential and uranium tolerance missing |
+| T-OC-02 | R2 detached fail/pass and actual Survival refinery wake/stock conservation; full upgraded three-ore/two-refinery/output-full standalone differential missing |
+| T-OC-03 | Cold Forward-Z game-math regression; native planet/ridge/own-grid obstruction differential missing |
+| T-OC-04 | Electrically gated tank regressions and coupled stock checks; native exhaustion order/timing and cold-bootstrap differential missing |
+| T-OC-05 | Real-world observed-group fraction and Measure decision pending; no speculative role added |
+| T-OC-06 | External native game-logic short-window/frozen-fallback fixture authored; full-rotation/Measure acceptance missing |
+| T-OC-07 | Real Update100 PB, timer and ejector Block/Freeze reached native profiling/offline; full wake/storage/UI rerun pending |
+| T-OC-08 | Real rotor top and independent quiet production sibling runner authored; execution pending |
+| T-OC-09 | Native shared Apply/pre-Final kill/retry/replicated ordinary Final/second-kill no-repeat passed at 42fd3a0; long-cap differential remains separate |
+| T-OC-10 | Real locally staged changed-mod-byte wake/healthy-skip runner authored; execution pending |
+| T-OC-11 | Detached chip exhaustion check; real safe-zone removal/upkeep differential missing |
+| T-OC-12 | Native twenty-base run exposed cold readiness and replica propagation assumptions; corrected runner compiled; acceptance rerun pending |
+| T-OC-13 | Parked large dynamic grid true radio wake/pose runner authored; execution pending |
+| PRF-OC-01 | 200-panel planet fixture and exclusive frame-budget measurement missing |
+| P2-OFF-CALL-TERMINAL | Full actual Survival radio/UI/caller-node/pin/source refusal/production/close/offline lifecycle passed at e76821b |
+| P2-OFF-CALL-RC | Actual Survival authenticated take, presence and dynamic raw-input drone drive passed at 2656266 |
+| P2-OFF-CALL-DENY | Real authenticated negative packet runners authored; server-outcome/relay/spatial setup corrected; rerun pending |
+| P2-OFF-CALL-RATE | Twenty real reachable offline bases/concurrent-pending runner authored; full successive per-minute completion leg still missing |
+| P2-OFF-CALL-CONFLICT | Two-live-client/different-node/two-grid/three-minute no-ping-pong runner authored; execution pending |
+| P2-OFF-CALL-LASER | Id/GPS/established-link no-wake native runner authored; execution and radio chain behind offline laser pending |
+| P2-OFF-CALL-IGC | Actual unicast false/no load passed at 2656266 |
 
-`Test/coverage.py` explicitly maps all these IDs, including missing fixtures as plan gaps; it
-never aliases model/container assertions to a native differential or GUI pass. Native doctor
-failed for absent release package, configured launchers/compiler/client profile/Remote API and
-planet fixture. No game/server/client was started to bypass that host contract. Actual latency,
-large-station frozen window/bytes/traffic, call frequency/conflicts and frame benchmarks remain
-unmeasured. Those omissions and Quasar integration block declaring either ticket complete.
+`Test/coverage.py` maps all 21 required IDs. Thirteen have native runners (some still partial or
+unrun); eight retain explicit fixture/decision/performance gaps. Extra native regressions
+`OFF-CACHE-DURABILITY`, `OFF-OBSERVED-POLICY` and `OFF-LIVE-DIFFERENTIAL` state their narrower scope.
+A short clustered-engine comparison is not the full standalone/three-baseline differential lane.
+
+Large-station frozen window, bytes, handover traffic, call frequency/conflicts and latency remain
+unmeasured at the required scale. Quasar UI and real-world Measure evidence remain parent-owned
+follow-ups. These obligations block declaring either ticket accepted.
 
 ## Rollback boundary
 

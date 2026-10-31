@@ -160,8 +160,9 @@ dotnet run --project Tools/OfflineCompensationCheck -c Release -p:RunPostBuildEv
 
 Run it from the repository root. Registry policy sections are `remote-use` and
 `offline-partitions`. Native `P2-OFF-CALL-TERMINAL`, `P2-OFF-CALL-RC` and
-`P2-OFF-CALL-IGC` require the normal doctor/isolated-package contract; they have not been
-validated on THE-RIG. The RC station runner does not cover dynamic drone driving.
-Other T-OC/P2-OFF-CALL fixtures are explicit gaps in `coverage.py`, not aliases to synthetic
-proofs. Do not claim differential game, GUI, crash-injection or frame/traffic benchmarks from
+`P2-OFF-CALL-IGC` require the normal doctor/isolated-package contract; their actual per-package results are recorded in `Docs/OfflinePartitions.md`. RC includes
+a dynamic drone and raw client thrust. Additional native runners cover shared recovery crashes,
+cache replacement, unknown/modded policy, admission, conflicts, laser and pose. Authored or partial
+runners do not establish all of their plan obligations; remaining full differentials/decisions
+are explicit in `coverage.py` and the acceptance map. Do not claim differential game, GUI, crash-injection or frame/traffic benchmarks from
 model/container checks.
