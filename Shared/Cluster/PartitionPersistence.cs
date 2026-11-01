@@ -2556,6 +2556,9 @@ internal sealed partial class PartitionPersistence
 		uint generation;
 		lock (m_owned) generation = m_owned[partition];
 		m_partitions.Adopt(partition, Array.Empty<long>(), mature: true);
+		// SE-897: the count the registry thread reads is from the top of this frame and still has the grid. A slow frame lets
+		// the empty Final be catalogued and a heartbeat run first, and that reads "it has members again" and forgets the release.
+		m_partitionMembers = new Dictionary<ulong, int>(m_partitionMembers) { [partition] = 0 };
 		if (QueueCapture(m_partitions.Peek(partition), "Final", waitForSlot: false) == null) return "the save queue filled up";
 		m_emptyRecoveries[partition] = (generation, DateTime.UtcNow);
 		MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] partition " + partition + " generation " + generation
