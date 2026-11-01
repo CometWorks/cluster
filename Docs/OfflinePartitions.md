@@ -1,57 +1,60 @@
 # Offline wake implementation draft (SE-346 / SE-347)
 
 This branch is **not acceptance complete**. It implements wake-time compensation and antenna
-call-ups in the production `Shared/Cluster` / `ClusterRegistry` architecture. No deployment,
-release or game/GUI/performance acceptance is established by its compile/model checks.
+call-ups in the production `Shared/Cluster` / `ClusterRegistry` architecture. Native proofs below
+establish their stated scope only. No deployment, release or complete GUI/performance acceptance is
+claimed.
 
 ## Lifecycle and ownership
 
-Quiet logical groups settle and profile during the normal offline grace. A moving sibling
-blocks offlining the partition, while quiet groups retain their profiling state. Velocity,
-acceleration and self-propulsion checks replace the large-grid sleep flag by default. Online
-characters/controllers, joining seats, remote pins, imports, saves, fences, drain, proximity
-and fast-partition guards remain. Encounter content is excluded. The old sleep gate is
-available through `offline.velocityReadiness=false`.
+Quiet logical groups settle and profile during the normal offline grace. A moving sibling blocks
+offlining the partition, while quiet groups retain their profiling state. Velocity, acceleration and
+self-propulsion checks replace the large-grid sleep flag by default. Online characters/controllers,
+joining seats, remote pins, imports, saves, fences, drain, proximity and fast-partition guards
+remain. Encounter content is excluded. The old sleep gate is available through
+`offline.velocityReadiness=false`.
 
-Immediately before physics is disabled, capture resource ports, storage, inventory stacks,
-conveyor paths, recipes/queues, upgrades, timed upkeep and the final authority-frame stamp.
-Profiles travel **inside the checksummed Final**, in an MPS version 2 entity/profile section
-pair. Version 1 saves remain readable and ordinary saves remain version 1. No sidecar or
-registry-only inventory truth is introduced. The offline row carries `OfflineGameFrame` and
-`ProfileSummary`; its Final reference remains the durable source.
+Immediately before physics is disabled, capture resource ports, storage, inventory stacks, conveyor
+paths, recipes/queues, upgrades, timed upkeep and the final authority-frame stamp. Profiles travel
+**inside the checksummed Final**, in an MPS version 2 entity/profile section pair. Version 1 saves
+remain readable and ordinary saves remain version 1. No sidecar or registry-only inventory truth is
+introduced. The offline row carries `OfflineGameFrame` and `ProfileSummary`; its Final reference
+remains the durable source.
 
-Every directed wake (approach, join, respawn, radio, laser) uses the existing recovery claim
-and `LoadRecovery`. After cover merge and before instantiation, apply only profiles whose
-entire group came from that cover entry. Wait for the authority clock/offset and asynchronous
-mod-content fingerprint before evaluating a profile. Definitions, mod bytes, game version,
-upgrades captured in rates, session multipliers and relevant environment inputs fence the
-model. A mismatch skips compensation with an explicit diagnostic. Source files are immutable.
+Every directed wake (approach, join, respawn, radio, laser) uses the existing recovery claim and
+`LoadRecovery`. After cover merge and before instantiation, apply only profiles whose entire group
+came from that cover entry. Wait for the authority clock/offset and asynchronous mod-content
+fingerprint before evaluating a profile. Definitions, mod bytes, game version, upgrades captured in
+rates, session multipliers and relevant environment inputs fence the model. A mismatch skips
+compensation with an explicit diagnostic. Source files are immutable.
 
-The model runs on detached profile state. Builder writes are prepared and validated as a
-transaction per group, including inventory stock identity, mass/volume bounds and retained item
-metadata/IDs. An apply failure leaves that group's builders untouched. A crash before the
-new-generation save reloads the original Final and recomputes; a catalogued ordinary Final
-contains the compensated state and no profile to credit again. The existing deferred-Final
-recovery cover behavior is retained. `CompensatedTo` is reported in the node result; offline
-rows already end at the first member heartbeat in the current registry, so no durable claim is
-made that a vanished row retains that diagnostic.
+The model runs on detached profile state. Builder writes are prepared and validated as a transaction
+per group, including inventory stock identity, mass/volume bounds and retained item metadata/IDs. An
+apply failure leaves that group's builders untouched. A crash before the new-generation save reloads
+the original Final and recomputes; a catalogued ordinary Final contains the compensated state and no
+profile to credit again. The existing deferred-Final recovery cover behavior is retained.
+`CompensatedTo` is reported in the node result; offline rows already end at the first member
+heartbeat in the current registry, so no durable claim is made that a vanished row retains that
+diagnostic.
 
-No component advances offline partitions continuously. The interval is
-`floor((WA elapsed milliseconds - sun offset) / 16)` frames; a full authority hour is 225,000
-frames. Captured profiles convert authority units to native engine frames before applying rates:
-225,000 authority units/hour become216,000 engine frames/hour. Storage/gas convert at60 frames/second,
-refinery formulas use16 ms per native frame, and assembler formulas retain the engine's rounded unit duration. Native reference testing found and corrected the earlier4% duration error. Sun changes add no production time;
-the captured sun phase advances with real authority frames and admin sun steps take effect at
-interval end. The default 168 **authority-hour** cap forfeits excess time rather than banking
-it for another wake. Shutdown wall time earns nothing.
+No component advances offline partitions continuously. The interval is `floor((WA elapsed
+milliseconds - sun offset) / 16)` frames; a full authority hour is 225,000 frames. Captured profiles
+convert authority units to native engine frames before applying rates: 225,000 authority units/hour
+become216,000 engine frames/hour. Storage/gas convert at60 frames/second, refinery formulas use16 ms
+per native frame, and assembler formulas retain the engine's rounded unit duration. Native reference
+testing found and corrected the earlier4% duration error. Sun changes add no production time; the
+captured sun phase advances with real authority frames and admin sun steps take effect at interval
+end. The default 168 **authority-hour** cap forfeits excess time rather than banking it for another
+wake. Shutdown wall time earns nothing.
 
 ## Modeled behavior and conservative policies
 
 The detached model allocates grouped sinks by priority (whole-group blackout or proportional
-adaptible shortage), charges storage after ordinary sinks, honors source priorities, and does
-not recharge auto storage from extra discharge of its peers. Events include storage/fuel
-boundaries, inventory capacity, production units/stacks, sun breakpoints and upkeep deadlines.
-Shared inventory indices prevent multiple producers from independently spending the same stock.
+adaptible shortage), charges storage after ordinary sinks, dispatches paired reservoir sources
+before ordinary producer priority groups, and does not recharge auto storage from extra discharge of
+its peers. Events include storage/fuel boundaries, inventory capacity, production units/stacks, sun
+breakpoints and upkeep deadlines. Shared inventory indices prevent multiple producers from
+independently spending the same stock.
 
 Reactor fuels, ice/generator/gas/tank/engine chains, battery charge loss, jump charging, damaged
 tank leakage, refinery ordering, assembler whole units/repeat/disassembly, survival-kit efficiency
@@ -62,100 +65,119 @@ simulation serves all demands while modeled fuel still burns.
 
 Throughput observes ordinary engine timer ticks. Refineries rotate a selected input stack;
 assemblers rotate only between units with enough input/output headroom. Original inventory/queue
-order is restored. Incomplete/stock-limited measurement leaves an uncached formula and
-`Approximate` confidence. A measured formula disagreement remains per-block rather than becoming
-a shared exact rate. The WA publishes and persists the cache. Clearing a key increments its
-epoch so stale contributions cannot resurrect it.
+order is restored. Incomplete/stock-limited measurement leaves an uncached formula and `Approximate`
+confidence. A measured formula disagreement remains per-block rather than becoming a shared exact
+rate. The WA publishes and persists the cache. Clearing a key increments its epoch so stale
+contributions cannot resurrect it.
 
 Solar/farm sampling snapshots pivots, transforms and planet geometry on the game thread and
-ray-tests through the engine physics queue without changing the world's sun. Generic .NET
-workers must not invoke synchronous Havok rays: a native crash exposed that invalid context.
-The sampler now uses `CastChainedRaycastsParallel`, one direction/panel/pass, under the engine's
-physics read state and native thread initialization. Armor/partial-block edits, group pose,
-mod content and sun basis invalidate the curve. Wind uses settled placement and atmospheric speed
-with weather multiplier one. Curve/performance fidelity still needs the planet differential lane.
+ray-tests through the engine physics queue without changing the world's sun. Generic .NET workers
+must not invoke synchronous Havok rays: a native crash exposed that invalid context. The sampler now
+uses `CastChainedRaycastsParallel`, one direction/panel/pass, under the engine's physics read state
+and native thread initialization. Armor/partial-block edits, group pose, mod content and sun basis
+invalidate the curve. Wind uses settled placement and atmospheric speed with weather multiplier one.
+Planet/farm point fidelity and the exclusive sampling budget are separate checks; current outcomes
+are below.
 
 Script-driven resource rates get short-window means/variance; `InPlace` can wait a full sun
 rotation, while the default `Skip` uses the short window. PB/timer/ejection execution is never
-replayed. `Freeze` leaves opaque behavior unchanged while modeled siblings compensate; `Block`
-keeps the partition online. `Mean` handles observable resource rates, but inventory changes that
-cannot be separated from conveyor transfers freeze that block with a diagnostic rather than
-inventing an inventory source/sink. This conservative fallback is a material limitation to validate
-with the intended modded-world fixtures. No Measure node was added: real Octahedron observed-world
-fractions are unavailable, so phase 6 remains an evidence-gated decision.
+replayed. `Freeze` leaves opaque behavior unchanged while modeled siblings compensate; `Block` keeps
+the partition online. `Mean` handles observable resource rates, but inventory changes that cannot be
+separated from conveyor transfers freeze that block with a diagnostic rather than inventing an
+inventory source/sink. Ordinary reactor fuel settlements are now observed at the guarded native
+ConsumeFuel boundary and normalized out of its inventory fingerprint. Conveyor pulls, arbitrary
+additions/removals, extra inventories and bottle-state edits keep the conservative fingerprint. This
+observer never adds a second fuel debit; the model uses the captured native timer and stock
+semantics. The full InPlace learning and independent native reference now pass for a varying source
+and genuinely varying ModAPI reactor fuel, with an opaque-inventory negative control; the
+initialized cluster scheduler and representative-world census remain unproved. No Measure node was
+added: real Octahedron observed-world fractions are unavailable, so phase 6 remains an
+evidence-gated decision.
 
-The model refuses a partial result after its fixed event budget. It reports the skip; it does
-not silently apply an incomplete interval. Arbitrary script inventory semantics, assembler
-cooperation, refinery per-tick ore-switch under-credit and changing external occluders are not
-claimed to reproduce engine replay.
+The model refuses a partial result after its fixed event budget. It reports the skip; it does not
+silently apply an incomplete interval. Arbitrary script inventory semantics, assembler cooperation,
+refinery per-tick ore-switch under-credit and changing external occluders are not claimed to
+reproduce engine replay.
 
 ## Required running safe-zone and common power budget
 
 Running player-built safe zones are required SE-347 scope. Their actual engine sink supplies
 shape/radius-dependent operational draw; refinery/assembler idle versus working demand, upgrades,
-all other captured consumers and storage charging share that same group allocation. Dispatch
-honors source/consumer priorities, renewable contributions, battery modes/recharge losses, fuel
-and inventory bounds. Fuel is consumed according to each producer's delivered output and
-captured definition rate, rather than its nameplate maximum. Results include per-producer
-energy/fuel, per-consumer energy, storage input, production units, chip renewal and zone state.
-There is no separate accounting service, second debit layer or background offline simulation.
-Gas generators now select standby versus operational draw from delivered gas in the same
-allocator; oxygen/hydrogen ports share one electrical sink. Power/production multipliers and
-the oxygen setting remain respected. A blocked working draw cannot bootstrap gas production.
-Older profiles without these optional rates retain their captured constant demand. The expanded
-39-check shared-budget proof is detached; the fresh native gas-standby comparison is separate.
+actual block and grid-system consumers and storage charging share that same group allocation.
+Capture enumerates actual distributor ports once per grid, deduplicates block-exposed ports and
+includes gyro/conveyor/emissive and other registered electrical sinks. Native gyro runtime
+multipliers invalidate the profile. Dispatch honors source/consumer priorities, renewable
+contributions, battery modes/recharge losses, fuel and inventory bounds. Fuel is consumed according
+to each producer's delivered output and captured definition rate, rather than its nameplate maximum.
+Results include per-producer energy/fuel, per-consumer energy, storage input, production units, chip
+renewal and zone state. There is no separate accounting service, second debit layer or background
+offline simulation. Gas generators now select standby versus operational draw from delivered gas in
+the same allocator; oxygen/hydrogen ports share one electrical sink. Power/production multipliers
+and the oxygen setting remain respected. A nonadaptible blocked working draw cannot bootstrap gas
+production. Positive partial input powers adaptible groups according to the native predicate; output
+is not assumed to scale linearly. Engine gas intake and electrical dispatch settle together
+independently of resource enumeration order. Older profiles without these optional rates retain
+their captured constant demand. The expanded 39-check shared-budget proof is detached; the fresh
+native gas-standby comparison is separate.
 
-Vanilla only advances upkeep while the block works. Power loss removes the modeled bubble and
-pauses paid credit. Recovery recreates it through the native activation delay, then resumes
-credit/chip renewal; chip exhaustion removes the bubble while retaining the functional switch,
-settings and rights. `BlockSafeZones` already carries zone XML in the grid builder: source close
-removes the old bubble, and compensation changes the carried state before target instantiation.
-Unsupported bubbles cannot be restored enabled. Active bubbles do not independently block
-quiet offlining; the existing approach/interaction wake path remains responsible for loading
-content before interaction. Admin zones follow their separate global-state rules and incur no
-player-block chip or producer-fuel debit.
+Vanilla only advances upkeep while the block works. Power loss removes the modeled bubble and pauses
+paid credit. Recovery recreates it through the native activation delay, then resumes credit/chip
+renewal; chip exhaustion removes the bubble while retaining the functional switch, settings and
+rights. `BlockSafeZones` already carries zone XML in the grid builder: source close removes the old
+bubble, and compensation changes the carried state before target instantiation. Cold incoming active
+bubbles begin inactive while the carried desired entry/paid credit waits for thaw and native
+electrical-group capacity. Native activation and an actual allocation check restore protection only
+with real supply; saved builders and pending offline captures preserve the desired state and costs.
+Native functional On/Off cancels pending restoration. Unsupported bubbles cannot be restored
+enabled. Active bubbles do not independently block quiet offlining; the existing
+approach/interaction wake path remains responsible for loading content before interaction. Admin
+zones follow their separate global-state rules and incur no player-block chip or producer-fuel
+debit.
 
 Capture also records an enabled zone already paused by power loss, with id0 and retained paid
 credit/settings. It uses the paused manager credit, not its stale serialized wall deadline. A
 powered manually removed zone stays off. A restored modeled bubble uses the existing carried-zone
-path, retaining its former entity id and rights; native proof of this added path is pending.
-Unpowered production keeps its formula fallback rather than waiting forever for a stopped timer. Native reactors settle fuel at900..3600-frame timers;
-the model integrates delivered energy. Short steady-load comparisons record raw native and
-modeled quantities plus the actual native timer envelope. A rapidly changing Auto-battery load
-needs the longer differential; these short checks do not establish its native sampled-fuel fidelity.
+path, retaining its former entity id and rights; native
+id0/credit/settings/rights/activation/manual-off controls pass. A standalone native interval now
+demonstrates natural solar restoration during the modeled offline interval, including native
+activation, paid-credit quantization and the shared energy budget. Actual cluster environmental-restoration shared wake now passes17/17 with cold-producer admission, pending save/capture and native functional-off controls. Unpowered production keeps its formula fallback rather than waiting
+forever for a stopped timer. Reactor profiles retain the native900..3600-frame fuel settlement phase
+and tier transition; the model samples delivered output at that boundary and carries the unpaid
+phase into the restored builder. Three six-hour standalone baselines now establish
+Auto/Recharge/Discharge/renewable priority stock fidelity within1% of actual stock. They do not
+certify every possible rapid load waveform.
 
 ## Radio / laser admission and presence
 
-Only an authenticated client's explicit absent-replicable add request starts radio call-up.
-The original endpoint, interacted entity, medical ID and pin flags survive. Remove requests
-cancel pending work. Proxy relay reach and friendly ownership/remote sharing are checked before
-waking; moderators bypass those checks, never rate limits. Cluster moderator bypasses read the replicated promotion map; vanilla OFFLINE backend
-Owner shortcuts do not grant a bypass. The service permits one pending
-request per client, a 10-second entity cooldown and six offline admissions per minute.
+Only an authenticated client's explicit absent-replicable add request starts radio call-up. The
+original endpoint, interacted entity, medical ID and pin flags survive. Remove requests cancel
+pending work. Proxy relay reach and friendly ownership/remote sharing are checked before waking;
+moderators bypass those checks, never rate limits. Cluster moderator bypasses read the replicated
+promotion map; vanilla OFFLINE backend Owner shortcuts do not grant a bypass. The service permits
+one pending request per client, a 10-second entity cooldown and six offline admissions per minute.
 
-A directed request loads onto the caller's node and reasserts while pending; an unavailable
-caller is refused without redirecting. A same-node approach refresh preserves the reservation.
-A second caller cannot steal a live reserved remote/laser target. Once local, vanilla rights are checked before
-pinning and forcing replication (also for online pulls). A brief receiver-settle retry covers the
-Update100 gap between entity registration and antenna graph readiness. HUD notices start after
+A directed request loads onto the caller's node and reasserts while pending; an unavailable caller
+is refused without redirecting. A same-node approach refresh preserves the reservation. A second
+caller cannot steal a live reserved remote/laser target. Once local, vanilla rights are checked
+before pinning and forcing replication (also for online pulls). A brief receiver-settle retry covers
+the Update100 gap between entity registration and antenna graph readiness. HUD notices start after
 two seconds, repeat every ten, and report failure at denial/timeout. Default timeout: 120 seconds.
 
-Permanent replicables, remote controllers and admitted pending wakes count as presence. Reports
-and ownership-fenced heartbeats carry `remoteUsers`. Sweep/offline admission, balancing and
-clientless pulls respect it; conflicting pulls return `remote-use`. Co-location is allowed to
-end a remote session when the spatial invariant requires moving that content. No Plan B client
-reattachment was introduced.
+Permanent replicables, remote controllers and admitted pending wakes count as presence. Reports and
+ownership-fenced heartbeats carry `remoteUsers`. Sweep/offline admission, balancing and clientless
+pulls respect it; conflicting pulls return `remote-use`. Co-location is allowed to end a remote
+session when the spatial invariant requires moving that content. No Plan B client reattachment was
+introduced.
 
-The existing GPS proxy/point-back fixes on main were retained. An explicit id/GPS connection queues bounded intent across the durable-offline-row/antenna-report
-race, then directs an offline wake and runs vanilla `ConnectTo` against both real blocks. A
-completed online link leaves that pending set; the source minute allowance is spent on an actual
-offline admission.
-Retarget, disable and timeout cancel it; one source can start at most once per minute.
-The arriving real peer is paired at laser registration before vanilla Update10 can idle its
-caller. A durable offline row wins over retained source reports until its admitted target
-reports live; a bridge ends once the authority publishes the new origin. An established proxy
-link does not create a wake demand. IGC does not wake offline PBs: unicast
-returns false and no broadcast listener exists there.
+The existing GPS proxy/point-back fixes on main were retained. An explicit id/GPS connection queues
+bounded intent across the durable-offline-row/antenna-report race, then directs an offline wake and
+runs vanilla `ConnectTo` against both real blocks. A completed online link leaves that pending set;
+the source minute allowance is spent on an actual offline admission. Retarget, disable and timeout
+cancel it; one source can start at most once per minute. The arriving real peer is paired at laser
+registration before vanilla Update10 can idle its caller. A durable offline row wins over retained
+source reports until its admitted target reports live; a bridge ends once the authority publishes
+the new origin. An established proxy link does not create a wake demand. IGC does not wake offline
+PBs: unicast returns false and no broadcast listener exists there.
 
 ## Operator surface
 
@@ -163,302 +185,166 @@ All routes retain the existing node admin-token gate.
 
 - `GET /cluster/offline`: profiling state, confidence, skips/results, cache and call-up counters.
 - `GET /cluster/profiles?partition=N`: captured online records, or the exact offline Final's
-  records on a holder host. It does not claim a recovery or instantiate entities.
+records on a holder host. It does not claim a recovery or instantiate entities.
 - `POST /cluster/trigger/profile?partition=N`: the normal profiling pass, with its policy gates.
 - `POST /cluster/trigger/compensate-dry-run?partition=N&hours=H`: read the exact offline Final
-  on that holder host and return modeled results without loading/applying/saving it.
+on that holder host and return modeled results without loading/applying/saving it.
 - `POST /cluster/compensate-dry-run?hours=H`: same model for an uploaded MPS file, capped at
-  512 MiB input and 0..168 authority hours. No caller-supplied file path is opened.
+512 MiB input and 0..168 authority hours. No caller-supplied file path is opened.
 - `POST /cluster/profiles/cache/clear?key=...`: journaled WA cache invalidation for that key.
 
-`python3 Tools/offline-compensate.py http://NODE:PORT/cluster --partition N --hours 6`
-or `--save exact-final.mps` uses that dry-run API. It reads `CLUSTER_ADMIN_TOKEN` from the
-environment and never prints it.
+`python3 Tools/offline-compensate.py http://NODE:PORT/cluster --partition N --hours 6` or `--save
+exact-final.mps` uses that dry-run API. It reads `CLUSTER_ADMIN_TOKEN` from the environment and
+never prints it.
 
 New defaults: `offline.compensate=true`, `velocityReadiness=true`, `settleFrames=300`,
 `observeSeconds=180`, `rotateProduction=true`, `solarSteps=72`, `cacheTolerance=0.02`,
 `unknownBlocks=Freeze`, `longObservation=Skip`, `compensateMaxHours=168`, `callUp=true`,
-`callUpSeconds=120`, `callUpPerMinute=6`, `callUpNoticeSeconds=2` (all under `offline.`).
-Existing grace/minOnline defaults stay 180/60 seconds.
+`callUpSeconds=120`, `callUpPerMinute=6`, `callUpNoticeSeconds=2` (all under `offline.`). Existing
+grace/minOnline defaults stay 180/60 seconds.
 
-The Quasar partition/cache UI is a separate repository task. The exact follow-up contract and
-clustering-plan patches are prepared outside this checkout for an isolated documentation pass.
+The authenticated Gateway AdminContract0.9.0 / wire1 seam advertises
+`features.offlinePartitions="v1"`. Older nodes explicitly refuse unsupported operations. Quasar
+PR317 at84f6bfd vendors the exact bb65a32 DTOs; later boundary repairs keep them unchanged. Gateway
+routes are:
 
-## Verification / acceptance map
+- GET `/admin/v1/offline/partitions`, `/offline/details?node=N&partition=P`, `/offline/cache`.
+- GET `/admin/v1/offline/prediction?node=HOLDER&partition=P&hours=H`, finite0..168 hours.
+- POST `/admin/v1/triggers/profile?node=OWNER&partition=P`.
+- POST `/admin/v1/offline/cache/clear` with `{key,expectedEpoch}`.
 
-This remains an implementation draft. All results below come from Linux THE-RIG; a native
-fixture, a detached assertion and a full standalone differential are different proof.
+Reads require query scope; mutations require manage scope and Idempotency-Key. Routing resolves
+exact registry owner/Final-holder identities without caller URLs/paths or node credentials.
+Reads/prediction never load, claim, apply, save or wake. Profile revalidates its original target
+after preflight and before success; native admission requires serving, unfenced, current local
+generation and non-frozen members before Prepare. Cache clear uses the original operation GUID
+through the existing WA ledger and epoch CAS. A failure after dispatch settles as
+`offline_clear_uncertain`: retry the SAME key and body to reconcile that identity. It never asserts
+no effect after a lost/malformed reply. Terminal success/CAS mismatch replay normally.
 
-The isolated host now works. `CLUSTER_TEST_HOST_ENV` points at a task-owned env file under
-`/home/owendb/tm/offline-partitions/native-host`, with copied Magnetar 2.4.3.7, Pulsar 2.4.3,
-matching client/server **01_210_014**, compiler, prepared Remote driver, planet archive and actual
-TestPlan. Ports use offset 700 and Remote base 24900. Roots/caches/packages are task-owned;
-shared sessions and Steam installations were preserved. Doctor passes between runs. Correctness
-runs retain the RAM/disk floors; this shared host supplies no exclusive timing benchmark.
+Node metadata is bounded to8MiB with deadline/cancellation on stream acquisition and every read;
+this includes the earlier peer-rejection reader. Timeout/size/schema/transport failures use stable
+errors. Uploaded Finals retain their separate512MiB limit. Existing journal policy can fail open
+when disabled/unsupported or after1500ms; this work does not establish unconditional durability.
+Actual non-loopback Gateway bearer proof passes21/21 with missing/query/manage token and named audit
+controls, including the real source-release race. Interactive Quasar/Blazor service proof remains
+absent. Static renders and cold HTTP tests retain their narrower credit.
 
-Private `Build/release.sh` packages passed their build/check/manifest/binary-hash gates:
+## Verification and current acceptance status
 
-| Product commit | Archive SHA256 | Earned native result |
-|---|---|---|
-| `265626630f4f80d42c5f0c36ef5fecc2ce6afcef` | `73081deb6a13317ecbab7dbc781447d8b04798e29a7879e448afe59cefc7904b` | Survival RC drive and pre-Final WA-local clear/replacement; IGC no-wake; partial terminal production |
-| `42fd3a0a2756d00c1869cabf7c732c347bb088e2` | `bdbbaa1f7899990f927693667ed670af6435aa982ba25575c8ec9e23e2bb8ed5` | Actual shared-apply crash/retry and post-Final recovery, T-OC-09 |
-| `e76821b5fdd93ea0420f04db08ea398e7c119630` | `485d8b923bac8edc5f6e96eb77e686f5cb0b630d9a762d6479f9b3a87b215ef8` | Full Survival terminal/radio/production/pin-close-offline lifecycle passed; other follow-ups running |
+**Acceptance remains incomplete.** Linux THE-RIG has a working isolated native host. Correctness
+runs preserve10GiB available RAM and100GiB disk; no exclusive frame/CPU claims are made on this
+shared machine. Game01_210_014, task-owned Magnetar/Pulsar copies, roots/caches/ports and exact
+package hashes are recorded under `/home/owendb/tm/offline-partitions/native-host`. No live cluster,
+shared interactive install, Steam update, deployment or release was touched.
 
-Evidence root: `/home/owendb/tm/offline-partitions/native-host`.
+Canonical evidence: `/home/owendb/tm/offline-partitions/implementation-evidence.json`;
+`review-round1-response.md`, `review-round2-response.md`, `quasar-ui/review-round1-response.md` and
+`quasar-admin-seam.md`. Original reviews, failed/interrupted runs and old-product results remain
+immutable. They are not promoted to latest-head proof. Historical detailed logs formerly repeated
+here remain in Git and `offline-partitions-doc-before-consolidation-3a033aa.md`; current results are
+consolidated below.
 
-Current private package: **4109242cf4ecb17b3c04f74d9fd45ed5a336ae51**, archive SHA256
-`c81472f8a694222afa40db4cb5ebbb6befd36af746ddb14ffb7663132ccec262`.
-Its full private release build, registry/CLI and exact binary/symbol checks pass. Node logs
-confirm all3 declared patch method hashes. Source93c2fa3 changes only the test hold scheduler;
-package source stays4109242. The native primary lane now uses this package.
+Every row names its **actual tested product**. Current source c307bba is based on main10fd567;
+`rebase-10fd567-range-diff.txt` preserves61/61 ticket commits unchanged. The earlier main-deb6b69
+rebase likewise preserves53/53 patches. The latest main changes offline-grid mass reporting, not
+compensation/admin semantics. The fresh c307bba private package passes all release gates; its actual environmental shared-wake17/17 result is separate from the historical rows below. Earlier rows never
+imply that an old package contains subsequent repairs.
 
-`results/20261031-213001Z/T-OC-10` passes**7/7**: actual locally staged mod bytes change,
-replacement pid/Serving readiness, immutable offline Final, actual shared recovery, explicit
-`content mismatch` skip and healthy loaded ownership. At b3feac1, a real native load read its
-Final once and then never resumed: asynchronous mod hashing returned DeferredLoad without a
-queue owner.4109242 retains that claimed load in a bounded pass, checks readiness before any
-repeated file read, and preserves census/fencing checks. The old native failure is retained.
-The same run passes **OFF-REMOTE-CAPTURE-RACE10/10** (complete terminal PNG viewed)
-and **T-OC-09 18/18**,262s. The actual pin starts after the gateway read and refuses source
-freeze/ownership movement. Shared crash proof consumes1 chip and0.0799590741902 uranium
-on its first provisional Apply, then1 chip and0.1563608327776 uranium on retry from the same
-immutable Final for its later interval; the second post-Final recovery retains2 of3 chips and
-has no compensation profile. This is actual common zone/production/fuel/upkeep recovery.
+| Actual product / native result under native-host | Earned scope |
+|---|---|
+|8d9912e / results/20261031-221514Z | Q1 actual distributor census, nonoverride gyro enabled/disabled battery debit12/12; combined zone/fuel/production/chips/shared wake125/125 |
+|8d9912e / gas-results/20261031-222137Z | Definition-only adaptible generator positive partial input, zero/bootstrap and constant Factory negative controls |
+|3a033aa / gas-results/20261031-225713Z-standalone | Heavy-gyro versus disabled-gyro real reactor fuel differential2/2; native3.2003202MW versus0.20032012MW, uranium9.653303 versus modeled9.653298973 |
+|b51c3b7 / gas-results/20261031-230816Z-standalone | Upgraded three-ore/two-refinery/conveyor/downstream queued assembler and output-full differential2/2 over36000 real frames |
+|b51c3b7 / gas-results/20261031-231140Z and231659Z | Frozen new-pin/source-transfer denial10/10; actual spatial co-location exemption10/10, each with live client controls |
+|7b92c60 / bridge-results/20261031-233440Z-standalone | Four-hour864000-frame/three-chip zone reference; native/model uranium80.000070, chips0, bubble removed, functional switch retained |
+|7b92c60 / gas-results/20261031-235337Z | Full laser id/GPS/established no-wake plus two-hop radio chain behind offline laser12/12; broken-middle negative and restored-path positive |
+|72992ec / results/20261031-224058Z/OFF-CACHE-DURABILITY | WA epoch CAS/replay/stale refusal/journal-before-ack/pre-Final kill/replacement15/15; inherited fail-open policy explicit |
+|a19514c / bridge-results/20261101-000429Z-standalone | Three independent1296000-frame six-hour baselines,12/12 strict one-percent native stock comparisons; normal versus bounded-fast native engine-time equivalence |
+|a19514c / bridge-results/20261101-002017Z and002317Z-standalone | Five coupled gas cases with oxygen on/off: final stocks, ICE→TANK→ENGINE order, exhaustion timing, real empty-engine battery bootstrap, cold negative, disconnected circuit and Factory blackout;160-frame native tick/sample bound |
+|a19514c / bridge-results/20261101-002031Z-standalone | Natural solar restoration during108000-frame zone interval; native activation/settings/actions, supported bubble, real common energy; paid-credit error892.98frames within6099.9996-frame sun-bin+Update100 bound |
+|a19514c / results/20261101-002016Z/OFF-ADMIN-PROFILE-RACE | Actual non-loopback bearer query/manage/missing-token/CAS/replay/audit and held-preflight/committed-handover/held-source-release refusal21/21 |
+|a19514c / results/20261101-001523Z/T-OC-09 | Shared zone/fuel/production/chip pre-Final kill/retry and ordinary-Final second kill18/18; separate admin setup failure in that run stays failed |
+|a19514c / bridge-results/20261101-004309Z/T-OC-11 | Fresh combined common-power/zone/production/outage/backup/shared-wake132/132 after native sun-boundary repair; source claim acknowledgement is an explicit precondition |
+|a19514c / results/20261101-003112Z/OFF-LARGE-ONLINE-PULL | Three actual terminal pulls of10203 native blocks,24/24 controls; raw freeze/bytes/transport/latency measurements on shared host |
+|79a67df / bridge-results/20261101-012523Z-standalone | Full450000-frame Prepare/InPlace learning plus450000-frame independent observed varying-source/ModAPI fuel/opaque-inventory reference passes;4501samples, fuel0.833338/0.833375 within1% |
+|89dffe9 / results/20261101-012931Z/T-OC-09 | Cold-zone repair package shared pre-Final retry/ordinary-Final second-kill18/18 |
+|c636a46 / results/20261101-014046Z/T-OC-11 | Latest combined common-budget/radius/shape/production/fuel/chips/outage/backup/shared-wake140/140, atomic game-thread reference capture |
+|c636a46 / gas-results/20261101-014432Z/OFF-ZONE-PAUSED | Native paused id0/paid-credit/shared recovery/settings/120s activation/manual-off15/15 |
+|c307bba / results/20261101-020139Z/OFF-ZONE-ENVIRONMENT | Actual environmental shared-wake17/17: cold native supply/no unsupported active frame, pending save/capture paid credit/costs, settings/rights and real functional-off cancellation |
 
-Gas-standby package **1e51d8e57c53b1cc08391ce52b91cbeb10bebfcd**, archive
-`540aca599dac6ccd99009adca85f2a6657c8537bd99833286aa819e1e211ad54`, earns
-`gas-results/20261031-212653Z/OFF-GAS-IDLE`,**7/7**:
-real generator1kW standby/both gas outputs0/ice unchanged; modeled0.0000055688891534MWh
-versus native0.0000055688888889MWh, and all electrical consumers conserve delivered energy.
-The old b3feac1 native case failed6/7 at500 times the real standby draw. Six added detached
-checks cover standby, working draw, two-output one-sink accounting and insufficient-power
-fallback; the exact old model fails. Full native coupled gas/cold-bootstrap remains separate.
-`gas-results/20261031-212653Z/OFF-ZONE-PAUSED` passes**14/14**: exact paid-credit pause,
-real shared recovery without a debit/bubble, native120s reactivation with edited Box/rights,
-and powered manual-off stays off. The prior b3feac1 run is13/14 FAIL only for an erroneous
-dictionary-emptiness assertion on an explicit zero fuel diagnostic; the numeric check is fixed.
-Environmental power recovery during the offline interval still lacks native proof.
+The standalone engine advances stocks independently while ClusterNode is a dormant capture/model
+library. Bounded native max-speed pacing was compared with3600 ordinary60Hz updates: gameplay and
+elapsed-sun counters and battery/fuel endpoints agree. No update is skipped and no sun/time counter
+is assigned.1296000 engine updates are six resource hours; the native elapsed-sun clock
+advances5.76h, and the model boundary explicitly maps them to1350000 authority units. The energy
+cases disable sun rotation; planetary and full-rotation observed cases are separate.
 
-At9f128a7, `results/20261031-203241Z` also earns **Conflict23/23** (two live clients,
-different nodes, repeated authenticated sibling requests,3min no ping-pong; complete final
-terminal PNG viewed), **T-OC-08 6/6**, **T-OC-13 5/5**, **Terminal12/12**, **RC9/9**
-(raw-W drone motion112.9460601807m) and **IGC5/5**. Terminal/RC complete PNGs were viewed.
-The whole historical suite is11/14: laser/denial were fixed in the later6423447 lane, and its
-changed-mod case failed before reaching the assertion. Whole-suite failure is retained.
-
-`bridge-results/20261031-210020Z/T-OC-09` at6423447 passes**18/18**,300s: actual paid
-credit expiry, first shared apply consumes1 chip and0.0997225080014 uranium, pre-Final
-SIGKILL, retry debits1 chip and0.1259399743134 uranium from the same original Final without
-stacking the abandoned attempt; second post-Final kill/recovery carries no profile and retains
-2 of original3 chips. The original14-check passes did not include actual chip renewal.
-
-Historical bridge package: **6423447** (full SHA in its manifest), archive SHA256
-`58bf6cc64c4787a7da5729054a412224fa5bb739e4136bf894f638ce9891009b`.
-This adds durable offline-row precedence over retained source antenna reports and drops the
-bridge when the authority publishes its new origin. Native bridge lane uses separate caches,
-roots, port offset10000 and Remote34900; no rendering/screenshot or benchmark proof is claimed
-there. Primary correctness lane remains at9f128a7/offset700/Remote24900 and its per-package
-results stay separate. Both retain resource floors; no shared deployment is touched.
-
-`bridge-results/20261031-205109Z` now passes at6423447: **laser8/8** (actual id wake,
-established proxy/no wake, GPS wake, both real ends connected) and **Deny14/14** (ordinary
-hostile/no-relay refusals with authoritative promotion0, actual Moderator positive control).
-This is native correctness evidence without rendering; the radio-chain-behind-laser leg remains.
-The earlier9f128a7 laser7/8 failure drove the durable-row/bridge repair; its Deny13/14 failure
-was the final ownership-heartbeat observation race. Both historical failures remain failures.
-
-At9f128a7, `results/20261031-203241Z` also passes **T-OC-11 125/125** (476.6s),
-**T-OC-09 14/14**, **T-OC-12 47/47**, **OFF-CACHE-DURABILITY12/12**, and **Rate29/29**.
-The warm-output cache fixture now proves twenty real refinery bases use one measured formula,
-then exactly one remeasurement after a journaled clear/epoch increment. Crash proof in that historical14-check case covers fuel/production; the later18-check6423447
-and4109242 passes above also exercise actual chip renewal. This primary batch has now ended.
-
-A focused native paused-zone runner is authored: power-removed bubble/id0, paid credit,
-settings/rights through shared recovery, real120s power restoration, and a powered manual-off
-control. Initial id0 capture remains a source gap pending its fail/fix/fresh-package proof. An
-authored runner is not a native pass.
-
-Prior private package: **9f128a7bc2715cc2f0bbb0522715ffb6b7d39380**, archive SHA256
-`d837fc659fc7f4276f092dc2337bb89ab6f3193ae60feb47957b8977eba7f3a4`.
-It includes the promotion-map and registration-boundary repairs and is rebased onto main
-`dcc444ece0d473eefb516d660b8f2172fd353708`. All23 feature commits rebased without conflict;
-`rebase-range-diff.txt` records the unchanged patches. Native suite at
-`results/20261031-203241Z` uses this package; pending cases are not passes. Test-only follow-up
-30d928f waits for actual refinery output before counting rotations and anchors a second caller's
-relay at that caller's position. Source semantic changes require fresh package proof; old
-package results below retain their own exact manifests.
-
-- `results/20261031-201018Z/P2-OFF-CALL-RATE`:**29/29 passed** at1063947. Twenty real
-  concurrent client requests produced19 refusals/one completion. After an actual minute wait,
-  six successive absent-grid requests completed actual terminal/UI wakes in16.573 seconds;
-  the seventh was rate-refused and stayed offline. The implicit OFFLINE owner bypass does
-  not bypass rate limits. Ordinary-player admission is rerunning with the promotion-map repair.
-- `results/20261031-201018Z/OFF-CACHE-DURABILITY`:**12/12 passed** at1063947, strengthened
-  WA-local journal-before-success/pre-Final kill/replacement replay with untouched-entry and
-  stale/new-epoch controls. This supplements the earlier nine-check2656266 proof.
-- `results/20261031-201018Z/T-OC-12`:FAIL. The first electrically working cold refinery had
-  not produced yet; its incomplete measurement used the explicit formula fallback. A second
-  measured base populated the shared cache. Warm-output readiness is authored for the fresh
-  run; clear propagation/epoch remeasurement checks passed separately in the failed run.
-
-
-Historical rebuilt package with the 125-check zone pass: **1063947af594975ad2fae65259dc39c2ea67ae98**, archive SHA256
-`242b88048f67eb11c62ad10aac2ccb8b45588ac322200ace838830bbe1184f3e`.
-This includes the common zone/production budget, authority/native-frame conversion, physics-queue
-solar fix and explicit laser-intent retention. OFF-SOLAR-NATIVE and the expanded T-OC-11 passed
-on that package. Pending arms have no pass implied by its successful build. The prior budget package at
-`ef2e01608cf45f883770b91ab768978ee8a3cc30` has archive SHA256
-`bf26a0d0f7397974a695468f7a3ffd99b569c3ec9f1c14274c4dd2fc5541868d`.
-
-- `results/20261031-194947Z/OFF-SOLAR-NATIVE`:4/4, native physics-queue crash regression;
-  actual and sampled sun-facing panel supply nonzero electricity. This is not a planet differential.
-- `results/20261031-194947Z/T-OC-11`:**125/125 checks passed,474 seconds** at1063947.
-  Real radius/shape demand, refinery/assembler inputs/outputs, chip renewal, all-sink energy,
-  delivered reactor fuel, empty/full-output standby, finite uranium exhaustion/removal,
-  solar/battery recovery spanning native120s activation, enabled switch/settings retention,
-  ordinary active-zone quiet offlining and true radio/shared wake after paid credit expiry.
-  Shared wake debited0.0820199339 uranium, produced2565.08928 refinery units and109 plates,
-  removed the unsupported bubble and left the global admin-zone control enabled/uncharged.
-  Full four-hour/three-chip standalone differential and broader priority envelope remain.
-
-- `results/20261031-191916Z/OFF-LIVE-DIFFERENTIAL`:7/7, full Auto battery plus short actual
-  refinery reference after the clock correction; production agrees within one engine tick.
-- `results/20261031-191916Z/T-OC-09`:14/14, extended cost crash proof with a real running
-  player zone, reactor, refinery and assembler. First provisional uranium debit0.00900955275,
-  SIGKILL before Final, later retry from the same original Final debits0.08629490417 without
-  stacking the first attempt; second post-Final recovery has no profile/results to debit again.
-- `results/20261031-191916Z/OFF-OBSERVED-POLICY`:10/10, actual external-component means,
-  preserved observed source rates and conservative scripted inventory/storage freeze through
-  real radio/shared wake. Its1/1 controlled fixture fraction is not a real-world census.
-- `results/20261031-193622Z/T-OC-07`:10/10, real Block/Freeze, PB Storage, timer/ejector,
-  radio/UI/shared wake, Frozen confidence and modeled battery debit. Previous UI failure stays failed.
-- `results/20261031-193622Z/T-OC-11`: whole scenario FAIL,94/95 individual checks. Real
-  radius10/20 and Box demand/production/stock/energy/upkeep references and finite-fuel outage
-  were exercised. Full-output zero-production check failed on fixed-point residual headroom;
-  the corrected bound allows at most one native production tick before standby. Solar backup
-  then crashed in the generic worker Havok ray; full dump/report preserved at
-  `solar-worker-crash/`. That failure drove the physics-queue fix and focused native regression.
-- `results/20261031-193622Z/P2-OFF-CALL-LASER`: FAIL. Live probes show an accepted explicit
-  connection against the old online report, then `offline:21` while stuck in contact_Rec with
-  no load. This drove retained explicit intent; its fixed native id/GPS/no-wake run is pending.
-
-
-- `results/20261031-182113Z/T-OC-09`: **13 checks passed**. Hold actual shared Apply before
-  instantiation; immutable Final 4:1:2 remains catalogued. First SIGKILL aborts 119.55216 iron of
-  provisional credit. Retry on another node reads that original Final and recomputes 1022.46144
-  iron for its later interval, without stacking the first credit. New ordinary Final 4:3:1 is
-  replicated to a second holder before the owner is killed. Its recovery carries no profile to
-  credit again. These are real game processes, builders, catalog/replica transitions and kills.
-- `results/20261031-180240Z/P2-OFF-CALL-RC`: **9 checks passed** in Survival, actual authenticated
-  take on caller node and **113.88727569580149 m** of server-side drone motion from raw client W.
-  Final PNG is complete and visually inspected. Earlier empty PNGs are excluded.
-- `results/20261031-180240Z/OFF-CACHE-DURABILITY`: **9 checks passed**. WA-local clear was journaled
-  before success; later global Final registration was held, WA killed, replacement replayed clear
-  over its pre-clear snapshot. A strengthened rerun also checks untouched entry and old/new epochs.
-- `results/20261031-175308Z/P2-OFF-CALL-IGC`: real unicast returned false and target stayed offline.
-  This early Creative batch is not production proof; its individual IGC assertions are valid.
-- `results/20261031-183835Z/P2-OFF-CALL-TERMINAL`: **full lifecycle passed at e76821b**,
-  actual radio/UI/caller node/pin/source capture refusal/Survival compensation/close/offline.
-  Its historical credit amount precedes the authority/native-frame conversion fix and establishes
-  lifecycle execution only; it is not current production accuracy evidence. Small-station observed open latency **22.313 s**
-  on the shared host (not a large-station/exclusive benchmark); complete PNG visually inspected.
-- Earlier Survival terminal partial run `results/20261031-180240Z/P2-OFF-CALL-TERMINAL` reached real UI,
-  caller-node wake, active pin, source capture refusal `remote-use`, and actual shared credit of
-  historical production credit (before the clock fix; execution proof only). Its close leg failed due an old Remote driver; it is not a
-  full scenario pass. Driver/source refresh and client antenna readiness retries are now authored.
-
-Native runs also confirmed all three declared production patch method hashes on running node/WA
-logs ("Verified 3 patch method(s) against declared body hashes"). Resolved hashes remain
-`d24b196b`, `a90270cc`, `d6d1e890` against the installed game build.
-
-R1/R2/R3 regressions failed before their repairs and pass after; the original 28 detached model
-assertions still pass. Added cases cover Auto full-state transition, downstream production input
-thresholds/conservation, electrically gated tank discharge/charge, and positive controls. Cold
-game-math tests cover explicit Forward-Z solar pivots and exclusion of Repeat assemblers from
-queue-shrinkage measurement. Save-container compatibility/structure assertions pass. Registry
-`remote-use` covers no-report/liveness, sampled generations, explicit empty records and missing
-records; the final missing-record regression failed before e76821b and passes after. None of
-these is a native planet ray, six-hour reference, UI conflict or performance measurement.
-
-Useful commands (from repository root unless otherwise shown):
-
-```sh
-dotnet run --project Tools/OfflineCompensationCheck -c Release -p:RunPostBuildEvent=Never
-dotnet ClusterRegistry/bin/Release/net10.0/ClusterRegistry.dll --self-test remote-use
-dotnet ClusterRegistry/bin/Release/net10.0/ClusterRegistry.dll --self-test offline-partitions
-# From Test/, with CLUSTER_TEST_HOST_ENV set to an isolated host contract:
-uv run python doctor.py --json
-uv run python run_suite.py T-OC-09 OFF-CACHE-DURABILITY P2-OFF-CALL-TERMINAL
-uv run python -m unittest test_offline_config test_bench_artifacts -v
-```
-
-The suite builds the test plugin against the exact package. Native fixture fixes include Survival
-world selection, preserving prior config overrides, proper terminal demand/close bookkeeping in
-an isolated Remote copy, complete-PNG detection and failure records for interrupted scenarios.
-Old zero-check interrupted `result.json` files are excluded. Failed native runs stay failed;
-compiled/authored fixtures are not promoted to executed proof.
+Native traces exposed and repaired paired-source priority, queued assembler working draw, sampled
+reactor fuel phase/tier and fractional sun-bin livelock. Each root has a
+failing-before/passing-after regression. R1–R8 were independently resolved at immutableb1e393f for
+their specific defects; Q1–Q3 and U1–U3 repairs have exact responses and proof artifacts. No
+subsequent independent review of the final combined source is claimed. A failed first
+reactor-observer run also exposed representation-sensitive decimal stock hashes; canonical G29
+formatting repairs that fingerprint. The full 450000-frame learning plus 450000-frame native
+reference subsequently passes: actual/model fuel debit0.833338/0.833375 within1%, battery
+error−0.0000297683MWh, nonzero rate variance and opaque inventory freezing. Original
+constant-clamped and first fingerprint failures remain failed.
 
 | Required scenario | Earned proof / remaining obligation |
 |---|---|
-| T-OC-01 | R1 detached fail/pass and short native full-Auto/refinery reference passed at ef2e016; full six-hour standalone differential and uranium tolerance missing |
-| T-OC-02 | R2 detached fail/pass and actual Survival refinery wake/stock conservation; full upgraded three-ore/two-refinery/output-full standalone differential missing |
-| T-OC-03 | Cold Forward-Z game-math regression; native planet/ridge/own-grid obstruction differential missing |
-| T-OC-04 | Electrically gated tank regressions; native gas-standby power fail/pass and detached coupled power controls; full native exhaustion order/timing/cold bootstrap missing |
-| T-OC-05 | Real-world observed-group fraction and Measure decision pending; no speculative role added |
-| T-OC-06 | Native external-logic short-window means and conservative storage/inventory fallback passed,10 checks at ef2e016; full-rotation/Measure acceptance missing |
-| T-OC-07 | Native Block/Freeze, PB/timer/ejector, radio/UI/shared wake, Storage/Frozen confidence and modeled battery debit passed,10 checks at ef2e016 |
-| T-OC-08 | Native6/6 passed at9f128a7, real moving rotor top, independent quiet sibling and stopped-rate reuse |
-| T-OC-09 | Native18/18 passed at6423447 and4109242, real zone/fuel/production/chip renewal, pre-Final kill/immutable retry/replicated ordinary Final/second kill no-repeat; long-cap differential separate |
-| T-OC-10 | Native7/7 passed at4109242 after real asynchronous-readiness lost-claim failure; changed mod bytes explicitly skip and leave a healthy loaded partition |
-| T-OC-11 | Expanded native125-check combined zone/production/fuel/chip-renewal/outage/backup/true-radio-shared-wake fixture passed at1063947. four-hour/three-chip standalone differential and broader producer envelope still required |
-| T-OC-12 | Native47/47 passed at9f128a7: twenty real refinery bases share one formula, journaled clear propagates and one fresh epoch measurement follows |
-| T-OC-13 | Native5/5 passed at9f128a7: parked large dynamic grid, true radio wake, unchanged pose |
-| PRF-OC-01 | 200-panel planet fixture and exclusive frame-budget measurement missing |
-| P2-OFF-CALL-TERMINAL | Native12/12 passed at9f128a7, actual Survival radio/UI/caller-node/pin/source refusal/refinery/close/offline; actual gateway-to-source race10/10 at4109242 |
-| P2-OFF-CALL-RC | Native9/9 passed at9f128a7, actual Survival take/presence/raw-W dynamic drone drive112.946m |
-| P2-OFF-CALL-DENY | Native14/14 passed at6423447, ordinary hostile/no-relay refusals and actual promoted Moderator positive control |
-| P2-OFF-CALL-RATE | Native29/29 passed at9f128a7 after role repair:20 concurrent requests, real minute wait,6 completed terminal wakes/seventh refused |
-| P2-OFF-CALL-CONFLICT | Native23/23 passed at9f128a7, two live clients/different nodes/two grids/3min no ping-pong, first terminal stays pinned |
-| P2-OFF-CALL-LASER | Native8/8 passed at6423447, id/GPS wake and established proxy/no wake with both real ends connected; radio chain behind offline laser still missing |
-| P2-OFF-CALL-IGC | Native5/5 passed at9f128a7, actual offline unicast false/no load |
+|T-OC-01|Three six-hour standalone baselines and12/12 strict stock cases above; broad arbitrary rapidly varying load waveforms remain outside that envelope|
+|T-OC-02|Full upgraded3-ore/two-refinery/conveyor/output-full/queued downstream assembler reference above; native ore-switch tolerance is one captured tick per switch|
+|T-OC-03|Loaded-voxel ridge/own-grid/nearby obstruction/panel/farm675000-frame geometry point reference passes872 comparisons at max0.001161; ordinary live rolling-pivot max0.165844 exceeds the original0.02 bound, so full T-OC-03 remains incomplete|
+|T-OC-04|Five-case native coupled stock/trajectory/oxygen-toggle/exhaustion/cold/circuit proofs above; variable Factory standby/working cycling still differs from the steady model|
+|T-OC-05|Only controlled test worlds available; no safe representative observed-group census or Octahedron access; no speculative Measure role|
+|T-OC-06|Actual Prepare/InPlace450000-frame learning plus independent450000-frame native varying source/fuel/opaque-inventory reference passes at79a67df; initialized cluster scheduler and representative-world census remain unproved|
+|T-OC-07|Native Block/Freeze/PB/timer/ejector/storage policy/shared wake10/10 at ef2e016; arbitrary script stock semantics remain conservatively Frozen|
+|T-OC-08|Native6/6 at9f128a7: moving rotor top, quiet sibling and stopped-rate reuse|
+|T-OC-09|Fresh shared crash/retry/ordinary-Final no-repeat18/18 above; long-cap reference distinct|
+|T-OC-10|Changed actual mod bytes7/7 at4109242; real asynchronous-readiness race repaired|
+|T-OC-11|Four-hour/three-chip native reference, combined140/140 and paused15/15; fresh c307bba actual environmental shared-wake17/17 additionally proves cold supply, pending save/capture and native functional-off cancellation|
+|T-OC-12|Twenty real refinery bases share cache formula and journaled epoch-clear controls47/47 at9f128a7|
+|T-OC-13|Parked large dynamic grid, actual radio wake and unchanged pose5/5 at9f128a7|
+|PRF-OC-01|Exclusive200-panel per-frame sampling budget unavailable on this shared host; no exclusive claim|
+|P2-OFF-CALL-TERMINAL|Actual Survival radio/UI/caller-node/pin/refinery/close/offline12/12 at9f128a7; actual source-pin capture race10/10 at4109242|
+|P2-OFF-CALL-RC|Native take/presence/raw-W dynamic drone drive112.946m9/9 at9f128a7|
+|P2-OFF-CALL-DENY|Ordinary hostile/no-relay denial and authoritative Moderator positive14/14 at6423447|
+|P2-OFF-CALL-RATE|Twenty concurrent requests, real minute wait, six completed wakes/seventh refusal29/29 at9f128a7|
+|P2-OFF-CALL-CONFLICT|Two live clients/different nodes/two grids/three-minute no-ping-pong and retained first terminal23/23 at9f128a7|
+|P2-OFF-CALL-LASER|Full offline-laser/two-radio-hop chain and break/restore controls12/12 above; main-deb6b69 affected-path rerun12/12 at2495d4b, bridge-results/20261101-005401Z|
+|P2-OFF-CALL-IGC|Native unicast false/no load5/5 at9f128a7 and fresh main-deb6b69 affected-path rerun5/5 at2495d4b, bridge-results/20261101-005401Z|
 
-`Test/coverage.py` maps all 21 required IDs. Fourteen have native runners (several discharge only part of their full differential obligation);
-seven retain explicit fixture/decision/performance gaps. Extra native regressions
-`OFF-CACHE-DURABILITY`, `OFF-OBSERVED-POLICY`, `OFF-LIVE-DIFFERENTIAL`, `OFF-SOLAR-NATIVE`,
-`OFF-GAS-IDLE`, `OFF-ZONE-PAUSED` and `OFF-REMOTE-CAPTURE-RACE` state their narrower scope.
-A short clustered-engine comparison is not the full standalone/three-baseline differential lane.
+The large station's three raw source-freeze→target-physics-thaw intervals are851.990,460.845 and
+277.054ms. Snapshot payloads are57565 sector bytes and92236..92297 network-state bytes, with no
+client-state payload. Terminal-visible latency is5.796,54.173 and52.322s; later pulls include the
+ordinary gateway partition cooldown. Gateway node-byte deltas are52396,462909 and444952; external
+relay aggregate bidirectional deltas are374205,2578805 and2446841. These observation windows include
+ordinary node/global traffic and cooldown time, so they are **not transfer-only byte counts**. Only
+three synthetic station observations were made: no population percentile, production conflict rate
+or week-long usage frequency is inferred. Full transport snapshots/monotonic traces remain in
+`large-online-pull-samples.json` for review.
 
-Large-station frozen window, bytes, handover traffic, call frequency/conflicts and latency remain
-unmeasured at the required scale. Quasar UI and real-world Measure evidence remain parent-owned
-follow-ups. These obligations block declaring either ticket accepted.
+Known unresolved implementation/proof limits are Factory power cycling, native rolling-pivot
+live-output fidelity, initialized cluster observation scheduler,
+representative-world Measure evidence, exclusive200-panel frame cost, production-frequency/week
+statistics and live Quasar/Blazor operation. The host works; these are not generic host blockers.
+Parent owns plan PR12 and Quasar PR317. No acceptance obligation is removed by a confidence label.
+
+Useful focused commands:
+
+```sh
+dotnet run --project Tools/OfflineCompensationCheck -c Release -p:RunPostBuildEvent=Never
+dotnet ClusterRegistry/bin/Release/net10.0/ClusterRegistry.dll --self-test offline-admin
+# From Test/, using the exact isolated host/package contract:
+uv run python run_suite.py OFF-ADMIN-PROFILE-RACE OFF-CACHE-DURABILITY
+uv run python offline_reference.py --proof-only
+```
 
 ## Rollback boundary
 
-No live/deployed cluster was touched. Before any future deployment, retain a pre-change cluster
-snapshot and binary package. Old readers cannot read profile-bearing v2 Finals or the newly
-appended WA cache section. `offline.compensate=false` stops new profiling/credit; it is not a
-binary-format downgrade tool. Rollback must restore a compatible snapshot/package together.
-
-
-## Follow-up native failures and pending repairs
-
-At1063947, an explicit laser now directs a real load onto its source node, but pairing still
-failed. Test-only native state tracing at fixture81544eb captured vanilla
-`TryUpdateTargetCoords` (inlined in Update10) idling the source immediately after the idle real
-peer entered the antenna dictionary, before the1s service update could pair it. Pairing is now
-authored at the real `AddLaser` completion boundary, using the existing idle-peer/first-caller
-`PointBack` path and its vanilla ownership/synchronization. Fresh rebuilt-package native proof
-is pending; no unconditional reconnect loop or relaxed cancellation was introduced.
-
-Hostile/no-relay requests at1063947 were accepted because the backend session is OFFLINE:
-vanilla `GetUserPromoteLevel` returns Owner for every nonzero id, even with promoted-map entry0.
-This is not a valid normal-player bypass policy. The new source uses the existing replicated
-promotion map through `PromotionService.IsModerator` for radio and respawn admission, and
-consolidates the existing online-player predicate there. Standalone calls retain vanilla role
-semantics. The native negative fixture now asserts the actual promotion-map entry and includes
-an explicitly promoted moderator positive control. Fresh native refusal/bypass proof is pending.
-
-An exploratory stale-settings fixture failed its precondition: native serialization already
-remembered the latest live radius/shape/rights. It did not reproduce a settings defect. The
-speculative priority change and redundant fixture were removed; that failed precondition is
-preserved in results/20261031-201018Z/OFF-ZONE-SETTINGS and is not an acceptance or defect proof.
+Before any future deployment, retain a pre-change cluster snapshot and binary package. Version1
+saves remain readable; old readers cannot read profile-bearing v2 Finals or the appended WA cache
+section. `offline.compensate=false` stops new profiling/credit and does not downgrade the format.
+Rollback must restore a compatible snapshot/package together. No migration/deployment was performed.
