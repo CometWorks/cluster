@@ -577,15 +577,16 @@ Rollback must restore a compatible snapshot/package together. No migration/deplo
 
 ### Round-seven loaded-world lifetime and required JSON discriminators
 
-Round-eight review found a remaining early-stop ordering gap at core `d257347`:
-stopping before its first accounting update retained only the already loaded claim
-rows, leaving uncovered members live. The current core pin `8d3039a` reuses pending
-group recovery during Stop, before cancelling host callbacks. This path performs
-the existing complete-group validation/quarantine without cache restoration,
-observation or profiling. Targeted cold checks pass; focused native first-update
-failure/disposal proof and independent review remain pending. Evidence is under
-`/home/owendb/tm/offline-partitions/extraction-round8-repairs/`.
-
+Round-eight review found an early-stop gap at core `d257347`: stopping before
+its first accounting update retained only loaded rows, leaving uncovered members
+live. The `8d3039a` repair reuses pending recovery during Stop before cancelling
+host callbacks. The subsequent native review supports missing-root/member
+containment through real first-update failure and early disposal, saves/restarts,
+unchanged own-world stocks/phases and unrelated live production on both loaders.
+That review separately found R9-1: genuine complete saved rotor groups were
+rejected while their guarded native saved-ID attachment was still pending.
+Historical failures remain scoped in the round-nine review; they are not full
+acceptance passes.
 The core pin retains standalone claim/legacy metadata serialization and whole-group
 update guards after a manager update failure or explicit plugin disposal while the
 same world remains loaded. Scheduling, commands, observation and measurement stop;
@@ -607,3 +608,32 @@ The focused regression commands are Concealment `tests/runtime`,
 loader identities are recorded separately by the implementation handoff. New
 independent review and the initialized authority-clock differential remain required;
 the dormant-facade duration references keep their earlier bounded scope.
+
+### Native mechanical reconnection recovery (R9-1)
+
+The current immutable core pin reconstructs only reciprocal saved mechanical
+base/top links before validating loaded physical/logical membership. The native
+base's saved-ID structural method runs on the owning game thread with production
+and update guards retained. Saved claims, world/entity/block identities, current
+closure, reciprocal targets and stocks are checked before and after attachment;
+missing, stale, foreign or mismatched evidence still quarantines the group.
+There is no nearest-top search, replacement part, synthetic claim/profile,
+production thaw, unrestricted one-frame callback or change to the accounting model.
+Rotor and piston paths share the native mechanical base.
+
+Reconstructed native constraints stay held until paid reveal. This prevents their
+solver from moving a concealed checkpoint. Original pose evidence is retained;
+validation permits only its exact native double-to-cluster-float-to-double
+publication (including body center/offset), with no positional tolerance added.
+Ordinary movement still refuses. The same owner retains unpaid state during early
+failure/disposal and releases native constraints only after successful settlement.
+
+Focused commands are Concealment `tests/accounting-mechanical/run.py`,
+`tests/accounting-recovery/run.py`, portable runtime and production-DLL clock/JSON
+checks. The actual saved rotor/piston, source-compiler/precompiled, stock/receipt,
+save/restart/early-stop/negative-link and true-unload evidence and all failed
+attempts are retained in `/home/owendb/tm/offline-partitions/mechanical-recovery-repairs/`.
+The implementation response records exact source, product and fixture identities.
+New independent review remains required. Initialized Cluster authority-duration
+and the external acceptance gates above remain open. Contract2/schema2, known
+unpaid schema1 migration, Admin0.10/wire1, costs, clocks and solar policy are unchanged.
