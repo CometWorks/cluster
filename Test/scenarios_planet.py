@@ -299,7 +299,17 @@ def start_standalone(bench, world_dir: Path, name: str = "stock", hub_plugins: l
     slot = port_slot if port_slot is not None else max(node.epoch for node in config.nodes) + 1
     while True:
         spec = config.node_spec(name, slot)
-        if not any(port_open(*split_endpoint(endpoint)) for endpoint in (spec.backend, spec.control)):
+        # The native game endpoint is UDP. A TCP-only probe misses a live
+        # Gateway data-plane socket on a shared isolated host.
+        import socket
+        game_host, game_port_number = split_endpoint(spec.backend)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            try:
+                probe.bind((game_host, game_port_number))
+                game_available = True
+            except OSError:
+                game_available = False
+        if game_available and not port_open(*split_endpoint(spec.control)):
             break
         slot += 1
     game_port = spec.backend.rpartition(":")[2]

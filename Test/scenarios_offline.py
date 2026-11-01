@@ -1321,13 +1321,11 @@ def offline_partial_gas(bench):
     time.sleep(3)
     _require(bench, "cycling Factory profile completes", bool(_poll(lambda:
         bench.cluster.node("node-1", f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))
-    initial = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}", "POST")
     bench.cluster.node("node-1", f"/offline-test-gas-cycle?grid={grid}", "POST")
     time.sleep(20)
     capture = bench.cluster.node("node-1", "/offline-test-gas-cycle")
     trace = capture["trace"]
-    compared = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}")
-    bench.record("cycling-Factory", {"initial": capture["initial"], "trace": trace, "comparison": compared})
+    bench.record("cycling-Factory", {"initial": capture["initial"], "trace": trace})
     bench.check("cycling Factory native produces partial-time gas", any(t["output"] > 0 for t in trace) and any(t["output"] == 0 for t in trace))
     bench.exercised(definitionOnlyMod=True, partialAdaptible=True, zeroInput=True, factoryNegative=True,
                     limitation="bounded gas-generator differential; complete coupled chain/long baselines remain")
@@ -1873,8 +1871,14 @@ def offline_observed_scheduler(bench):
     bench.cluster.node("node-1", f"/offline-test-observed-control?grid={grid}&moving=false", "POST")
     _require(bench, "quiet eligibility starts a fresh window", bool(_poll(lambda: census(grid), 15)))
     profiles = []
+    history = []
+    def completed(f):
+        snapshot = state()
+        history.append(snapshot)
+        bench.record("scheduler-window-history", history)
+        return any(c["state"] == "complete" and f["grid"] in c["members"] for c in snapshot["status"]["profiling"])
     for f, partition in zip(fixtures, partitions):
-        _require(bench, "automatic full-rotation profile completes", bool(_poll(lambda f=f: (census(f["grid"]) or {}).get("state") == "complete", 100)))
+        _require(bench, "automatic full-rotation profile completes", bool(_poll(lambda f=f: completed(f), 100, 2)))
         profiles.append(bench.cluster.node("node-1", f"/profiles?partition={partition}")[0])
     bench.record("scheduler-profiles", profiles)
     for i, profile in enumerate(profiles):
@@ -1905,7 +1909,7 @@ def offline_observed_scheduler(bench):
     _require(bench, "observed profile uses real shared recovery", bool(_poll(lambda: _applied(bench, "node-2"), 90)))
     applied = _applied(bench, "node-2")
     bench.record("scheduler-shared-wake", applied)
-    bench.check("shared wake computes observed fuel and energy on detached original stocks", any(r.get("ProducerFuelConsumed") for r in applied["results"]))
+    bench.check("shared wake computes observed fuel and energy on detached original stocks", any(r.get("ProducerFuelConsumed") for r in applied["compensation"]["results"]))
     bench.exercised(initializedCluster=True, normalSweep=True, naturalPeriodMinutes=1, nativeFuel=True, opaqueInventory=True,
                     propulsionInvalidation=True, ordinaryOffline=True, sharedWake=True,
                     limitation="controlled bounded scheduler proof; 120-minute 450000+450000-frame rate fidelity is a separate pinned reference, not a representative-world census")

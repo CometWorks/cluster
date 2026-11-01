@@ -107,6 +107,7 @@ internal static class OfflineModel
 			if (elapsed + Epsilon >= duration) break;
 			var changes = new Dictionary<(int Inventory, string Item), decimal>();
 			var storageRate = new double[profile.Storage.Count];
+			var productionRate = new double[profile.Production.Count];
 			for (int i = 0; i < output.Length; i++)
 			{
 				var source = profile.Sources[i];
@@ -139,13 +140,16 @@ internal static class OfflineModel
 			{
 				var production = profile.Production[i];
 				var recipe = choice[i];
-				if (recipe == null || !Powered(profile, production.PowerSink, required, input)) { choice[i] = null; continue; }
+				double duty = production.PowerSink < 0 ? 1 : feedback?.PoweredFraction[production.PowerSink]
+					?? (Powered(profile, production.PowerSink, required, input) ? 1 : 0);
+				if (recipe == null || duty <= Epsilon) { choice[i] = null; continue; }
+				productionRate[i] = recipe.UnitsPerFrame * duty;
 				if (production.Refinery)
 				{
-					foreach (var material in recipe.Inputs) Change(profile, changes, material, -(decimal)recipe.UnitsPerFrame * material.Amount);
-					foreach (var material in recipe.Outputs) Change(profile, changes, material, (decimal)recipe.UnitsPerFrame * material.Amount);
+					foreach (var material in recipe.Inputs) Change(profile, changes, material, -(decimal)productionRate[i] * material.Amount);
+					foreach (var material in recipe.Outputs) Change(profile, changes, material, (decimal)productionRate[i] * material.Amount);
 				}
-				else step = Math.Min(step, Math.Max(Epsilon, (1 - production.Progress) / recipe.UnitsPerFrame));
+				else step = Math.Min(step, Math.Max(Epsilon, (1 - production.Progress) / productionRate[i]));
 			}
 			// Revisit an infeasible recipe when upstream flow supplies ingredients or frees output
 			// room. Exact single-material thresholds are events; shared/atomic capacity interactions
@@ -257,8 +261,8 @@ internal static class OfflineModel
 				var production = profile.Production[i];
 				var recipe = choice[i];
 				if (recipe == null) continue;
-				if (production.Refinery) { result.ProductionUnits[production.Block] = result.ProductionUnits.GetValueOrDefault(production.Block) + recipe.UnitsPerFrame * step; continue; }
-				production.Progress += recipe.UnitsPerFrame * step;
+				if (production.Refinery) { result.ProductionUnits[production.Block] = result.ProductionUnits.GetValueOrDefault(production.Block) + productionRate[i] * step; continue; }
+				production.Progress += productionRate[i] * step;
 				if (production.Progress < 1 - Epsilon) continue;
 				if (RecipeTransaction(profile, recipe, 1, true))
 				{
@@ -298,7 +302,7 @@ internal static class OfflineModel
 		return result;
 	}
 
-	private sealed record FeedbackCycle(int Period, bool Steady, bool[] NextPowered, bool[] NextProducing, double[] SettlementOutput);
+	private sealed record FeedbackCycle(int Period, bool Steady, bool[] NextPowered, bool[] NextProducing, double[] SettlementOutput, double[] PoweredFraction);
 
 	/// <summary>Native BeforeSimulation distributor / deferred working callback / AfterSimulation
 	/// demand feedback. Stocks are held only while finding the finite allocation cycle; the ordinary
@@ -322,7 +326,7 @@ internal static class OfflineModel
 				{
 					var phase = phases[0];
 					Array.Copy(phase.Input, input, input.Length); Array.Copy(phase.Output, output, output.Length); Array.Copy(phase.Charging, charging, charging.Length);
-					return new(1, false, phase.Powered, phase.Producing, phase.Output);
+					return new(1, false, phase.Powered, phase.Producing, phase.Output, phase.Powered.Select(v => v ? 1d : 0).ToArray());
 				}
 				Array.Clear(input); Array.Clear(output); Array.Clear(charging);
 				foreach (var phase in phases)
@@ -331,7 +335,8 @@ internal static class OfflineModel
 					for (int i = 0; i < output.Length; i++) output[i] += phase.Output[i] / phases.Count;
 					for (int i = 0; i < charging.Length; i++) charging[i] += phase.Charging[i] / phases.Count;
 				}
-				return new(phases.Count, phases.Count == 1, powered, producing, phases[^1].Output);
+				return new(phases.Count, phases.Count == 1, powered, producing, phases[^1].Output,
+					Enumerable.Range(0, input.Length).Select(i => phases.Count(phase => phase.Powered[i]) / (double)phases.Count).ToArray());
 			}
 			if (phases.Count >= 256) throw new InvalidDataException("Native resource feedback cycle did not repeat");
 			states.Add(key, phases.Count);

@@ -292,7 +292,7 @@ internal static class OfflineTestRoutes
                 cycleGrid = TestRoutes.Long(context, "grid"); cycleStart = MySession.Static.GameplayFrameCounter;
                 CycleTrace.Clear();
                 var grid = (MyCubeGrid)MyEntities.GetEntityById(cycleGrid);
-                cycleProfile = OfflineCompensation.CaptureFor(ClusterRuntime.m_partitions.Get(ClusterRuntime.PluginEntityPartition(cycleGrid).Partition), quick: true).Single();
+                cycleProfile = OfflineCompensation.CaptureFor(ClusterRuntime.m_partitions.Get(ClusterRuntime.PluginEntityPartition(cycleGrid).Partition), quick: true).Single(p => p.Members.Contains(cycleGrid));
                 CycleTrace.Add(GasCycleState(grid));
                 return new { cycleGrid, cycleStart };
             })));

@@ -43,6 +43,16 @@ internal static class FeedbackChecks
             OfflineModel.Simulate(p, 1200, 1200);
             Check((p.Storage[1].Amount > 0) == (supply >= .001001), "Factory zero/standby/working availability");
         }
+        var sharedProduction = Fixture();
+        sharedProduction.Sinks.Add(new() { Block = 6, Resource = OfflineModel.Electricity, Group = "Factory", Priority = 30, Required = .02 });
+        sharedProduction.Items["ore"] = new() { Volume = 1, Mass = 1 };
+        sharedProduction.Items["iron"] = new() { Volume = 1, Mass = 1 };
+        sharedProduction.Inventories.Add(new() { MaxVolume = 100000, MaxMass = 100000, Stacks = [new() { Item = "ore", Amount = 10000 }] });
+        sharedProduction.Production.Add(new() { Block = 6, Refinery = true, Enabled = true, PowerSink = 3, IdlePower = .001, OperationalPower = .02,
+            Recipes = [new() { Id = "iron", UnitsPerFrame = 1, Inputs = [new() { Item = "ore", Amount = 1, Inventories = [1] }], Outputs = [new() { Item = "iron", Amount = 1, Inventories = [1] }] }] });
+        var shared = OfflineModel.Simulate(sharedProduction, 1200, 1200);
+        Check(Math.Abs(OfflineModel.Amount(sharedProduction.Inventories[1], "iron") - 600m) < .00001m, "production follows endogenous powered phases in shared Factory group");
+        Check(Math.Abs(shared.ProducerEnergyMWh.Values.Sum() - shared.ConsumerEnergyMWh.Values.Sum()) < 1e-9, "shared production and gas use one conserved producer debit");
         var finite = Fixture(ice: 1);
         OfflineModel.Simulate(finite, 1200, 1200);
         Check(Math.Abs(finite.Storage[1].Amount - 20) < 1e-5 && OfflineModel.Amount(finite.Inventories[0], "ice") < .000001m, "finite ice ends cycle without free output");

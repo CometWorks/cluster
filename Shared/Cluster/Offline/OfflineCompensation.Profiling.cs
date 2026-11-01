@@ -221,7 +221,7 @@ internal static partial class OfflineCompensation
 	}
 
 	private static object ProfilingStatus() => CensusByGroup.Values.Select(c => new { group = c.Group, members = c.Members, state = c.State,
-		frames = Frame - c.Since, observed = c.Observations.Count, confidence = c.Last?.Confidence, unknowns = c.Last?.Unknowns }).ToArray();
+		frames = Frame - c.Since, observationFrames = Frame - c.ObservationSince, samples = c.Observations.Values.Select(s => s.Count).ToArray(), observed = c.Observations.Count, confidence = c.Last?.Confidence, unknowns = c.Last?.Unknowns }).ToArray();
 	internal static object Profiles(ulong partition, PartitionManager manager) => CensusByGroup.Values.Where(c => c.Members.Any(id => manager.Peek(partition).Members.Contains(id))).Select(c => c.Last).Where(p => p != null).ToArray();
 
 	// Operator reads consume existing census/Final state. They never Evaluate, Capture or profile.
