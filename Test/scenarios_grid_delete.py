@@ -13,6 +13,9 @@ way trash or combat closes a grid (the test plugin's /test-close-entity) as the 
   deletes exactly those; A stays. B's and C's partitions, emptied by the delete, get an empty Final and are
   reaped by the registry, so no recovery can load the grids back. E's emptied partition keeps its row and its
   last save, which still holds E: the state the delete has to avoid (the earned red, in the same run).
+* ``P2-GRID-DELETE-SLOW-FRAME`` - SE-897: the game thread stalls right after the delete of a partition's only grid
+  (/test-empty-release-stall), so heartbeats run on the member counts published before it. The partition is still
+  released and reaped, not "left alone: it has members again" until the drain.
 """
 from __future__ import annotations
 
@@ -32,6 +35,7 @@ STARTED = [NODE, "wa-1"]
 FAR = 600_000.0
 SWEEP = Path(__file__).resolve().parent.parent / "Tools" / "leftover-ship-sweep.py"
 REAP_TIMEOUT = 120
+STALL_MS = 3000
 
 
 def _require(bench, label: str, passed, detail: str = "") -> None:
@@ -147,6 +151,42 @@ def p2_grid_delete(bench) -> None:
     bench.exercised(grids=grids, partitions=homes, swept=swept)
 
 
+def p2_grid_delete_slow_frame(bench) -> None:
+    bench.start_cluster(nodes=STARTED)
+    probe = bench.cluster.node(NODE, f"/trash-test-spawn?x={FAR}&y=0&z=0&static=false&blocks=27", "POST")
+    grid, name = int(probe["grid"]), probe["name"]
+    try:
+        partition = wait_until(lambda: (lambda home: home if home and _all_partitions(bench).get(home) == NODE else None)(
+            _members(bench).get(grid)), 120, "the probe in a partition node-1 owns")
+    except ClusterError:
+        partition = None
+    _require(bench, "setup: the probe is in a partition node-1 owns", partition, json.dumps(_members(bench))[:300])
+    bench.cluster.node(NODE, f"/save-capture?partition={partition}", "POST")
+    try:
+        wait_until(lambda: (_newest_entities(bench, partition) or 0) >= 1, 90, "a save of the probe")
+        saved = True
+    except ClusterError:
+        saved = False
+    _require(bench, "setup: the partition has a catalogued save holding the probe", saved)
+
+    # Long enough for the empty Final to be catalogued and a heartbeat (1 s apart) to run inside the stall.
+    bench.record("armed", bench.cluster.node(NODE, f"/test-empty-release-stall?ms={STALL_MS}", "POST"))
+    answer = bench.cluster.node(NODE, f"/grid-delete?{urllib.parse.urlencode({'entityId': grid, 'name': name})}", "POST")
+    bench.record("delete", answer)
+    _require(bench, "the delete queued the empty release", answer.get("deleted") and answer.get("emptyRelease") == "queued",
+             json.dumps(answer))
+    bench.check("the game thread stalled after the delete", bool(_lines(bench, NODE, rf"empty-release-stall partition {partition}\b")))
+    try:
+        wait_until(lambda: partition not in _rows(bench), REAP_TIMEOUT, "the emptied partition's row reaped")
+        reaped = True
+    except ClusterError:
+        reaped = False
+    bench.check("the release was not given up", not _lines(bench, NODE, rf"empty recovery {partition} generation \d+ left alone"))
+    bench.check("the registry reaped the emptied partition", reaped, json.dumps(_rows(bench).get(partition))[:400])
+    bench.exercised(grid=grid, partition=partition)
+
+
 SCENARIOS_GRID_DELETE = {
     "P2-GRID-DELETE": (p2_grid_delete, "#1334: the leftover-ship sweep deletes unpiloted grids on their node, and an emptied partition is reaped", "3"),
+    "P2-GRID-DELETE-SLOW-FRAME": (p2_grid_delete_slow_frame, "SE-897: a slow frame right after the delete does not cost the emptied partition its release", "3"),
 }

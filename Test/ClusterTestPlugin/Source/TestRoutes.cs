@@ -65,6 +65,7 @@ internal static class TestRoutes
         BlockCoverageHarness.Register(); // SE1-0163 one fixture per vanilla functional block type
         ContractTestRoutes.Register(); // SE1-0232 contract offers across handover and restart
         GridDeleteFaultRoutes.Register(); // #1295 a grid whose BeforeDelete throws in a cluster close
+        EmptyReleaseStallRoutes.Register(); // SE-897 a slow frame right after an admin delete empties a partition
         CommandResponseDropRoutes.Register(); // #1271 World Authority answers lost on the way back
         EarlyMirrorPassHarness.Register(); // SE-732 a member message sent before the world request
         GlobalSaveHoldRoutes.Register(); // #1270 a global save held before its registration
