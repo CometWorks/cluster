@@ -1637,7 +1637,7 @@ def t_oc_11(bench):
 
 
 def offline_zone_environment_wake(bench):
-    """Natural solar recovery is compensated before a real radio wake, with no sun jumps."""
+    """Natural solar recovery is compensated by actual shared recovery, with no sun jumps."""
     _survival_template(bench, sun_rotation_minutes=10)
     api = _join(bench)
     api, grid, _, partition, _ = _call_fixture(bench, api=api, zone=True, zone_seconds=600, take_offline=False)
@@ -1668,9 +1668,12 @@ def offline_zone_environment_wake(bench):
         time.sleep(5)
     _put_config(bench, "node-1", {"offline.enabled": "false"})
     bench.cluster.node("node-1", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
-    opened = _open_terminal(api, grid)
-    _require(bench, "actual radio terminal wakes the solar-restored zone", opened.get("screenOpen") is True, json.dumps(opened))
-    applied = _applied(bench, "node-1")
+    # The antenna was genuinely unpowered at freeze and has no offline proxy.
+    # Exercise the ordinary shared load claim, as approach/join would, rather
+    # than inventing a radio path for an antenna that was not broadcasting.
+    bench.cluster.post(f"/registry/partitions/offline/load?partition={partition}&node=node-1&reason=remote")
+    applied = _poll(lambda: _applied(bench, "node-1"), 90)
+    _require(bench, "ordinary claim reaches actual shared environmental recovery", bool(applied))
     result = _assert_applied_inventory(bench, profiles, applied, grid, "environment shared wake applies exact immutable-Final stocks")
     after = bench.cluster.node("node-1", f"/offline-test-zone-state?grid={grid}")
     bench.record("environment-shared-wake", {"before": before, "paused": paused, "result": result, "after": after})
@@ -1683,8 +1686,8 @@ def offline_zone_environment_wake(bench):
     bench.check("solar common budget pays for the zone without disabled-reactor fuel or invented chips", sum(result["ProducerEnergyMWh"].values()) > 0
         and abs(sum(result["ProducerEnergyMWh"].values()) - sum(result["ConsumerEnergyMWh"].values()) - sum(result["StorageInputEnergyMWh"].values())) < 1e-8
         and not result["UpkeepConsumed"] and all(v == 0 for p in result["ProducerFuelConsumed"].values() for v in p.values()))
-    api.close_remote_terminal()
-    bench.exercised(actualEnvironmentalOfflineRecovery=True, actualRadioWake=True, naturalSun=True, nativeActivation=True, sharedBudget=True)
+    bench.exercised(actualEnvironmentalOfflineRecovery=True, actualSharedRecoveryClaim=True, naturalSun=True, nativeActivation=True, sharedBudget=True,
+        limitation="explicit ordinary load claim; unpowered antenna had no offline proxy, so no radio wake is claimed")
 
 
 def offline_zone_paused(bench):
@@ -1896,7 +1899,7 @@ SCENARIOS_OFFLINE.update({
     "T-OC-11": (t_oc_11, "running player zones, common production power/fuel budget, outage/backup and real shared wake", "3"),
     "OFF-SOLAR-NATIVE": (offline_solar_native, "native physics-queue solar profiling crash regression", "2"),
     "OFF-ZONE-PAUSED": (offline_zone_paused, "native power-paused zone credit, shared recovery, vanilla reactivation and manual-off control", "3"),
-    "OFF-ZONE-ENVIRONMENT": (offline_zone_environment_wake, "Natural solar restoration during offline interval and actual shared radio wake", "3"),
+    "OFF-ZONE-ENVIRONMENT": (offline_zone_environment_wake, "Natural solar restoration during offline interval and actual shared recovery", "3"),
     "OFF-REMOTE-CAPTURE-RACE": (offline_remote_capture_race, "native terminal pin acquired after gateway read refuses source capture", "3"),
     "OFF-GAS-IDLE": (offline_gas_idle, "native gas generator standby shares the actual grid power budget", "2"),
 })

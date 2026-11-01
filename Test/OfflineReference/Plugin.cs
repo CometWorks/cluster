@@ -249,7 +249,7 @@ public sealed partial class Plugin : IPlugin
             working = g.IsWorking, pendingGas = g.m_gasOutputAggregate.ToDictionary(p => p.Key.ToString(), p => p.Value),
             outputs = g.SourceComp.ResourceTypes.Select(t => g.SourceComp.CurrentOutputByType(t)).ToArray() }).ToArray(),
         solar = grid.GetFatBlocks<MySolarPanel>().Select(p => new { output = p.SourceComp.CurrentOutput, maximum = p.SourceComp.MaxOutput, enabled = p.Enabled }).ToArray(),
-        reactors = grid.GetFatBlocks<MyReactor>().Select(r => new { fuel = (decimal)r.GetInventory().GetItems().Sum(i => (decimal)i.Amount),
+        reactors = grid.GetFatBlocks<MyReactor>().Select(r => new { fuel = (decimal)r.GetInventory().GetItemAmount(MyDefinitionId.Parse("MyObjectBuilder_Ingot/Uranium")),
             output = r.SourceComp.CurrentOutput, timer = r.m_timer.TimerTickInFrames, sinceTrigger = r.m_timer.FramesFromLastTrigger }).ToArray(),
     };
 

@@ -3,6 +3,28 @@ using ClusterPlugin;
 
 internal static class NativeObservedCheck
 {
+    internal static void RunShort(string reference, string output)
+    {
+        using var final = JsonDocument.Parse(File.ReadAllBytes(reference));
+        var rows = final.RootElement.GetProperty("results").EnumerateArray().ToArray();
+        OfflineProfile Profile(JsonElement r, string key) => r.GetProperty(key).Deserialize<OfflineProfile>(OfflineProfile.Json)!;
+        decimal Fuel(OfflineProfile p) => p.Inventories.SelectMany(i => i.Stacks).Where(s => s.Item.EndsWith("/Uranium")).Sum(s => s.Amount);
+        var row = rows.Single(r => r.GetProperty("native").GetProperty("name").GetString() == "observed-fuel-policy");
+        var initial = Profile(row, "initial");
+        decimal nativeDebit = Fuel(initial) - Fuel(Profile(row, "actual")), modelDebit = Fuel(initial) - Fuel(Profile(row, "modeled"));
+        var opaque = rows.Single(r => r.GetProperty("native").GetProperty("name").GetString() == "observed-inventory-policy");
+        bool knownFuel = initial.Confidence == "Approximate" && initial.Unknowns.Count == 0 && initial.Observations.Count == 1;
+        bool frozenEdit = Profile(opaque, "initial") is {} unknown && unknown.Confidence == "Frozen"
+            && unknown.Unknowns.Any(u => u.Contains("inventory changes")) && Fuel(unknown) == Fuel(Profile(opaque, "modeled"));
+        bool passed = final.RootElement.GetProperty("nativeFrames").GetInt64() == 3600
+            && final.RootElement.GetProperty("observationFrames").GetInt64() >= 7200 && knownFuel && frozenEdit
+            && nativeDebit > 0 && modelDebit > 0 && Math.Abs(nativeDebit - modelDebit) <= .00001m;
+        File.WriteAllText(output, JsonSerializer.Serialize(new { reference, knownFuel, frozenEdit, nativeDebit, modelDebit, passed,
+            limitation = "short native eligibility/stock regression; no full-rotation acceptance" }, new JsonSerializerOptions { WriteIndented = true }));
+        Console.WriteLine($"Native observed short: passed={passed}, native/model fuel={nativeDebit}/{modelDebit}");
+        if (!passed) throw new InvalidOperationException("Native observed short regression failed");
+    }
+
     internal static void Run(string directory, string output)
     {
         using var final = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(directory, "result.json")));
@@ -28,6 +50,10 @@ internal static class NativeObservedCheck
             && fi.Unknowns.Count == 0 && nativeDebit > .1m && modelDebit > .1m;
         decimal fuelTolerance = Math.Max(.000001m, nativeDebit * .01m);
         bool fuelScriptDifferentialPassed = knownNativeFuel && Math.Abs(nativeDebit - modelDebit) <= fuelTolerance;
+        var fuelResult = fuel.GetProperty("result").Deserialize<OfflineResult>(OfflineProfile.Json)!;
+        bool commonBudget = Math.Abs(fuelResult.ProducerEnergyMWh.Values.Sum() - fuelResult.ConsumerEnergyMWh.Values.Sum()
+            - fuelResult.StorageInputEnergyMWh.Values.Sum()) < 1e-9
+            && fuelResult.ProducerFuelConsumed.Values.Sum(v => v.Where(p => p.Key.EndsWith("/Uranium")).Sum(p => p.Value)) == modelDebit;
         var opaque = rows.SingleOrDefault(r => r.GetProperty("native").GetProperty("name").GetString() == "observed-inventory-policy");
         decimal Iron(OfflineProfile p) => p.Inventories.SelectMany(i => i.Stacks).Where(s => s.Item.EndsWith("/Iron")).Sum(s => s.Amount);
         bool conservativePolicy = opaque.ValueKind != JsonValueKind.Undefined && Profile(opaque, "initial") is {} oi
@@ -38,10 +64,10 @@ internal static class NativeObservedCheck
             // ordinary fuel still burns there while Frozen preserves model stock.
             && Iron(oi) > 0 && Iron(Profile(opaque, "actual")) >= Iron(oi)
             && Fuel(Profile(opaque, "actual")) < Fuel(oi);
-        bool passed = fullRotation && scheduledInPlace && varyingCaptured && observedWithinVariance && fuelScriptDifferentialPassed && conservativePolicy;
+        bool passed = fullRotation && scheduledInPlace && varyingCaptured && observedWithinVariance && fuelScriptDifferentialPassed && commonBudget && conservativePolicy;
         File.WriteAllText(output, JsonSerializer.Serialize(new { directory, fullRotation, scheduledInPlace, varyingCaptured, observedWithinVariance,
             energyErrorMWh = energyError, varianceBoundMWh, observation.Samples, observation.Mean, observation.Variance,
-            conservativePolicy, knownNativeFuel, nativeFuelDebit = nativeDebit, modeledFuelDebit = modelDebit, fuelTolerance, fuelScriptDifferentialPassed, passed,
+            conservativePolicy, knownNativeFuel, nativeFuelDebit = nativeDebit, modeledFuelDebit = modelDebit, fuelTolerance, fuelScriptDifferentialPassed, commonBudget, passed,
             applicableObservedPassed = fullRotation && varyingCaptured && observedWithinVariance,
             acceptanceComplete = false,
             limitation = "ordinary Prepare InPlace admission across a full learning rotation then an independent full native reference; no initialized cluster scheduler or real-world observed census" }, new JsonSerializerOptions { WriteIndented = true }));

@@ -30,6 +30,13 @@ internal sealed class OfflineObservedLogic : MyGameLogicComponent
         else if (Entity.Components.TryGet<MyResourceSourceComponent>(out var source))
         {
             float rate = (float)(.1 + .05 * (sun ? MySector.DirectionToSunNormalized.X : Math.Sin(MySession.Static.GameplayFrameCounter * Math.PI / 300)));
+            if (sun && Entity is MyReactor reactor)
+            {
+                // The supported mod API owns native reactor maximum updates;
+                // direct SourceComp writes are reset by its ordinary Update100.
+                ((Sandbox.ModAPI.IMyReactor)reactor).PowerOutputMultiplier = rate / reactor.BlockDefinition.MaxPowerOutput;
+                return;
+            }
             foreach (var resource in source.ResourceTypes)
                 source.SetMaxOutputByType(resource, resource == MyResourceDistributorComponent.ElectricityId ? rate : 200 + rate * 1000);
         }
