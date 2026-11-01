@@ -18,8 +18,8 @@ internal static class NativeFeedbackCheck
             long frames = actual.GetProperty("frame").GetInt64();
             var model = JsonSerializer.Deserialize<OfflineProfile>(JsonSerializer.Serialize(profile, OfflineProfile.Json), OfflineProfile.Json);
             long elapsedTicks = actual.GetProperty("elapsedTicks").GetInt64() - baseline.GetProperty("elapsedTicks").GetInt64();
-            long units = elapsedTicks / 160000;
-            if (elapsedTicks != checked(frames * 160000)) throw new InvalidDataException("Native phase/world-clock reference disagrees");
+            long units = actual.GetProperty("elapsedTicks").GetInt64() / 160000 - baseline.GetProperty("elapsedTicks").GetInt64() / 160000;
+            if (elapsedTicks != checked(frames * 160000) || units != frames) throw new InvalidDataException("Reference must use the actual native/authority frame clock, not a regular node's independently slewed clock");
             var result = OfflineModel.Simulate(model, model.SimulatedThrough + units, units);
             double gas = actual.GetProperty("tank").GetDouble() - baseline.GetProperty("tank").GetDouble();
             double modelGas = model.Storage.Single(s => s.Kind == "Tank").Amount - profile.Storage.Single(s => s.Kind == "Tank").Amount;

@@ -14,12 +14,14 @@ internal static class NativeClockChecks
         foreach (var row in document.RootElement.GetProperty("rows").EnumerateArray())
         {
             long frames = row.GetProperty("nativeFrames").GetInt64(), ticks = row.GetProperty("elapsedTicks").GetInt64();
-            long units = ticks / 160000;
+            long units = row.TryGetProperty("elapsedStartTicks", out var startTicks)
+                ? row.GetProperty("elapsedEndTicks").GetInt64() / 160000 - startTicks.GetInt64() / 160000 : ticks / 160000;
             var initial = row.GetProperty("initial").Deserialize<OfflineProfile>(OfflineProfile.Json)!;
             var actual = row.GetProperty("actual").Deserialize<OfflineProfile>(OfflineProfile.Json)!;
             var model = row.GetProperty("initial").Deserialize<OfflineProfile>(OfflineProfile.Json)!;
             var result = OfflineModel.Simulate(model, initial.SimulatedThrough + units, 72L * 225000);
-            bool clock = ticks == frames * 160000 && units == frames && units == row.GetProperty("hostUnits").GetInt64()
+            long clockDrift = units - frames;
+            bool clock = ticks == frames * 160000 && clockDrift == 0 && units == row.GetProperty("hostUnits").GetInt64()
                 && initial.Schema == 2 && initial.ClockFrameSeconds == 1d / 60 && result.Frames == units;
             Dictionary<string, decimal> Items(OfflineProfile p) => p.Inventories.SelectMany(i => i.Stacks).GroupBy(s => s.Item).ToDictionary(g => g.Key, g => g.Sum(s => s.Amount));
             var before = Items(initial); var nativeItems = Items(actual); var modeledItems = Items(model);
@@ -63,7 +65,7 @@ internal static class NativeClockChecks
             }).ToArray();
             bool ok = clock && items.All(i => i.passed) && storage.All(s => s.passed) && zones.All(z => z.passed);
             passed &= ok;
-            rows.Add(new { name = row.GetProperty("name").GetString(), frames, ticks, units, clock, items, storage, zones, passed = ok });
+            rows.Add(new { name = row.GetProperty("name").GetString(), frames, ticks, units, clockDrift, clock, items, storage, zones, passed = ok });
         }
         File.WriteAllText(output, JsonSerializer.Serialize(new { source = Path.GetFullPath(path), rows, passed,
             method = "actual captured host clock/raw elapsed ticks/native phases; one native production tick, 1% fuel DEBIT, explicit native pending ice, 160-frame gas and Update100 storage bounds" },
