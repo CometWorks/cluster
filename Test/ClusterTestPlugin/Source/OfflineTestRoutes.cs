@@ -72,7 +72,7 @@ internal static class OfflineTestRoutes
         });
         TestRoutes.Add("GET", "/offline-test-zone-cancel", context => TestRoutes.Json(context, 200, new { cancelled = Volatile.Read(ref restoredZoneCancelled) != 0 }));
         var traceHarmony = new Harmony("ClusterTestPlugin.offline-transfer-observer");
-        traceHarmony.Patch(AccessTools.Method(typeof(BlockSafeZones), "Restore"), postfix: new HarmonyMethod(typeof(OfflineTestRoutes), nameof(CancelRestoredZone)));
+        traceHarmony.Patch(AccessTools.Method(typeof(BlockSafeZones), "Restore"), prefix: new HarmonyMethod(typeof(OfflineTestRoutes), nameof(CancelRestoredZone)));
         traceHarmony.Patch(AccessTools.Method(typeof(ClusterRuntime), "MarkFrozen"), postfix: new HarmonyMethod(typeof(OfflineTestRoutes), nameof(TraceFrozen)));
         traceHarmony.Patch(AccessTools.Method(typeof(ClusterRuntime), "ClearFrozen", new[] { typeof(long), typeof(Guid) }), postfix: new HarmonyMethod(typeof(OfflineTestRoutes), nameof(TraceCleared)));
         TestRoutes.Add("POST", "/offline-test-transfer-trace", context =>
@@ -277,9 +277,13 @@ internal static class OfflineTestRoutes
         TestRoutes.Add("POST", "/offline-test-reference", context =>
         {
             ulong partition = ulong.Parse(TestRoutes.Query(context, "partition"));
+            bool prepare = TestRoutes.Query(context, "prepare", "false") == "true";
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
             {
-                reference = OfflineCompensation.CaptureFor(ClusterRuntime.m_partitions.Get(partition)).Single();
+                var candidate = ClusterRuntime.m_partitions.Get(partition);
+                if (prepare && !OfflineCompensation.Prepare(candidate)) return JsonSerializer.SerializeToElement(new { complete = false });
+                reference = OfflineCompensation.CaptureFor(candidate).Single();
+                if (prepare) return JsonSerializer.SerializeToElement(new { complete = true, profile = reference }, OfflineProfile.Json);
                 return JsonSerializer.SerializeToElement(reference, OfflineProfile.Json);
             }));
         });
@@ -412,9 +416,11 @@ internal static class OfflineTestRoutes
     private static void CancelRestoredZone(MySafeZoneBlock __0)
     {
         if (__0.CubeGrid.EntityId != Interlocked.Read(ref cancelRestoredZoneGrid) || Volatile.Read(ref restoredZoneCancelled) != 0) return;
+        if (ClusterRuntime.IsFrozen(__0.CubeGrid.EntityId)) return; // an operator cannot edit an uncommitted import
         if (MyEntities.TryGetEntityById(__0.m_safeZoneManager.SafeZoneEntityId, out MySafeZone zone) && !zone.Enabled)
         {
-            __0.m_safeZoneManager.SafeZoneRemove_Server(); // the actual native manual-off operation
+            __0.Enabled = false; // actual terminal On/Off, not deletion while still enabled/unpowered
+            __0.m_safeZoneManager.SafeZoneRemove_Server();
             Volatile.Write(ref restoredZoneCancelled, 1);
         }
     }

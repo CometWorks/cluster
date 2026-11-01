@@ -1411,6 +1411,9 @@ def _inventory_totals(profile):
 
 
 def _zone_reference(bench, grid, partition, label, seconds=30, blocked=False, depleted=False, renewable=False):
+    def capture():
+        value = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}&prepare=true", "POST")
+        return value.get("profile") if value.get("complete") else None
     # Registry publication precedes the source's ordinary claim acknowledgement.
     # Wait for that real local admission rather than racing the maintenance guard.
     _require(bench, label + ": source claim is locally confirmed", bool(_poll(lambda:
@@ -1425,14 +1428,16 @@ def _zone_reference(bench, grid, partition, label, seconds=30, blocked=False, de
             bench.cluster.node("node-1", f"/offline-test-zone-state?grid={grid}")), prior["timerFrames"] / 60 + 10, .2)
         _require(bench, label + ": observed a real reactor fuel timer settlement", bool(tick_state))
         producer = tick_state["producers"][0]
-        profile = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}", "POST")
+        profile = _poll(capture, 60)
+        _require(bench, label + ": native fuel reference captured atomically", bool(profile))
         source = next(s for s in profile["Sources"] if s["Block"] == producer["block"])
         rate = next(m["Amount"] for m in source["Fuel"] if m["Item"] == "MyObjectBuilder_Ingot/Uranium")
         quota = max(.000001, math.floor(producer["output"] * producer["timerFrames"] * rate * 1000000) / 1000000 - .000002)
         bench.record(label + "-native-timer", {"state": tick_state, "quota": quota})
         bench.cluster.node("node-1", f"/offline-test-limit-fuel?grid={grid}&fuel={quota:.6f}", "POST")
         seconds = producer["timerFrames"] / 60 + 5
-    initial = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}", "POST")
+    initial = _poll(capture, 60)
+    _require(bench, label + ": live queue profile and reference captured atomically", bool(initial))
     _require(bench, label + ": actual player zone and both production blocks are captured", len(initial["Upkeep"]) == 1
              and initial["Upkeep"][0]["PowerSink"] >= 0 and len(initial["Production"]) == 2)
     samples = []
@@ -1707,7 +1712,7 @@ def offline_zone_environment_wake(bench):
     cancelled = bench.cluster.node("node-2", f"/offline-test-zone-state?grid={grid}")
     bench.record("environment-manual-off-control", cancelled)
     bench.check("pending restore never resurrects a manually removed zone", cancelled["zone"] == 0 and not cancelled["active"]
-        and cancelled["blockEnabled"] and cancelled["allowedActions"] == before["allowedActions"])
+        and not cancelled["blockEnabled"] and cancelled["allowedActions"] == before["allowedActions"])
     bench.exercised(actualEnvironmentalOfflineRecovery=True, actualSharedRecoveryClaim=True, naturalSun=True, nativeActivation=True, sharedBudget=True,
         limitation="explicit ordinary load claim; unpowered antenna had no offline proxy, so no radio wake is claimed")
 
@@ -1735,6 +1740,8 @@ def offline_zone_paused(bench):
     _require(bench, "vanilla power loss removes the bubble and retains paid credit", bool(paused))
     bench.record("paused-zone-native", paused)
     partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 60)
+    _require(bench, "paused zone source claim is locally confirmed", bool(_poll(lambda:
+        bench.cluster.node("node-1", f"/offline-test-admin-hold?grid={grid}&partition={partition}")["generation"] > 0, 20)))
     _require(bench, "paused zone profile completes", bool(_poll(lambda: bench.cluster.node("node-1", f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))
     captured = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}", "POST")
     bench.record("paused-zone-profile", captured)
