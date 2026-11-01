@@ -30,8 +30,11 @@ Known native debits and unexpected inventory edits are separate positive/negativ
 The planet lane initializes native voxel physics without changing terrain, then prefetches shapes
 as native targeting does. Ordinary live rolling-pivot output and fresh unregistered native
 component-point computations are recorded separately. Passing instantaneous geometry does not
-establish the original2% live-output bound: `check_offline_solar.py` requires both and reports
-each result explicitly. No sun counter is assigned in either lane.
+change the historical2% live-output verdict: `check_offline_solar.py` retains both oracles and
+reports each explicitly. The user now selects fresh all-pivot geometric catch-up, accepting rolling
+history as an approximation. `OfflineCompensationCheck --solar-shadow-reference NATIVE_DIR OUTPUT`
+replays the retained geometry through the separately bounded mixed-pivot shadow allowance; it is not
+a fresh native run or a relabeling of that older strict audit. No sun counter is assigned in either lane.
 
 Evidence includes initial profiles, real stocks/timer phase, native frame/time counters,
 package/source provenance, progress and final modeled-versus-native quantities. A failed

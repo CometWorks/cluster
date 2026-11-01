@@ -1993,7 +1993,10 @@ def offline_observed_scheduler(bench):
     bench.record("scheduler-offline-profiles", offline_profiles)
     # Native reactors settle at captured timer boundaries. An immediate wake can
     # legitimately have positive energy but no fuel debit yet; cross one boundary.
-    wait_until = time.monotonic() + source["FuelTickFrames"] / 60 + 5
+    # Full grace can move the native reactor from Tier1 to Tier2. Use the
+    # frozen Final's timer, not the earlier online reference's shorter period.
+    frozen_source = next(s for p in offline_profiles for s in p["Sources"] if s["Block"] == source["Block"])
+    wait_until = time.monotonic() + frozen_source["FuelTickFrames"] / 60 + 5
     while time.monotonic() < wait_until:
         if not _offline_row(bench, partition): raise ClusterError("observed group woke before its explicit claim")
         time.sleep(5)
