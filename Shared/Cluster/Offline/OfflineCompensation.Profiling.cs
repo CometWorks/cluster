@@ -280,7 +280,7 @@ internal static partial class OfflineCompensation
 					.ToDictionary(g => g.Key, g => g.Sum(item => (decimal)item.Amount));
 				if (census.ReactorDebits.TryGetValue(block.EntityId, out var debits))
 					foreach (var debit in debits) amounts[debit.Key] = amounts.GetValueOrDefault(debit.Key) + debit.Value;
-				stock = string.Join("|", amounts.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key + ":" + p.Value.ToString(CultureInfo.InvariantCulture)));
+				stock = string.Join("|", amounts.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key + ":" + p.Value.ToString("G29", CultureInfo.InvariantCulture)));
 			}
 			else stock = string.Join("|", block.GetInventory(i).GetItems().Select(item => item.ItemId + ":" + item.Content.GetId() + ":" + ((decimal)item.Amount).ToString(CultureInfo.InvariantCulture)
 				+ (item.Content is MyObjectBuilder_GasContainerObject gas ? ":" + gas.GasLevel.ToString("R", CultureInfo.InvariantCulture) : "")));
