@@ -7,7 +7,6 @@
   <Tooltip>Rank-aware cluster diagnostics in the F11 menu.</Tooltip>
   <Description>Current node diagnostics for players; node roster, World Authority and registry diagnostics for admins and owners. Requires a cluster release with client diagnostics support.</Description>
   <SourceDirectories><Directory>ClientDiagnosticsPlugin</Directory><Directory>Shared/Cluster/Diagnostics/Protocol</Directory></SourceDirectories>
-  <NuGetReferences><PackageReference Include="Lib.Harmony" Version="2.4.2" /><PackageReference Include="Mono.Cecil" Version="0.11.6" /></NuGetReferences>
-  <Commit></Commit>
-  <Runtimes>NETFramework,NETCoreApp</Runtimes>
+  <Commit>TODO</Commit>
+  <Runtimes>CLR,CoreCLR</Runtimes>
 </PluginData>
