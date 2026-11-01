@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>ClusterTestWA</AssemblyName>
+    <ClusterAssembly>WorldAuthority</ClusterAssembly>
+  </PropertyGroup>
+  <Import Project="../ClusterTest.props" />
+</Project>

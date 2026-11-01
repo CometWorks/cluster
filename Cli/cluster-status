@@ -1,0 +1,1197 @@
+#!/usr/bin/env python3
+"""cluster-status — concise overview of which entities live on which cluster node.
+
+Runs `cli/cluster.py diag --depth entities --registry summary` and prints, per node: its age and rotation state, the EntityId range it allocates
+from (cluster Docs/Gateway/EntityIdRanges.md) and how far it is consumed, its
+partitions, and inside each partition the grids and player characters it
+currently owns.  A cluster-wide section lists every range the registry issued
+and the next free one.  Meant for visually
+verifying partition handovers and player character movement between nodes.
+
+Node control (T-0320): when the registry serves GET /admin/v1/node-control, the report opens with the
+`cluster nodes list` text (per host serving/spare counts against their targets and the hosts file,
+every live node as `#k node-N @host pid PID age AGE STATE partitions clients`, a stop's who/why/force
+deadline, and what is not counted) plus the legend of the six operator states - Starting, Serving,
+Spare, Draining, Stopping, Failed - and that same line heads each node's section. The registry's
+internal Active/Closed/Empty states are not shown. An older registry (404) keeps the old header.
+`--json` output then carries the view under "nodeControl", so `--from` renders it again.
+
+Hot spares (registry `Spare`, HotSpareNodes.md) are labelled as such, hold no
+PCU by design and are kept out of the balance spread; their line says whether
+they are warm enough to be activated.  A spare's lifetime is counted from
+activation, not registration, as the rotator counts it.
+
+An "in flight" section lists everything BETWEEN steady states — handovers in
+flight, blocked handovers with their abort clocks, partitions recovering or
+unowned, partitions whose registry owner and reporting node disagree, locked
+(frozen) partitions and switching clients.  All of it is meant to be transient,
+so the interesting case is a row that is still there on the next refresh: under
+`-w` each row is stamped with how long this run has been seeing it (handover
+records carry no start timestamp of their own, so that is the only age
+available; blocked rows do carry real abort times).
+
+PCU (the game's block-complexity budget) is summed from entity rows. The node
+load shown alongside it is the Registry's effective load from its latest
+/partitions report, including the sim-speed override. The raw partition sum is
+shown separately when it differs. An older Registry without this field is
+labelled as partition load, not effective load. diag reports PCU only on entities, so a node whose
+entity rows were paged out shows its PCU total as a lower bound (">=").
+
+Positions are printed as Space Engineers GPS strings labelled with the entity
+name (partition spheres with "P<id> r<radius>"), so any line's `GPS:...:` run
+can be pasted into the game chat or the GPS panel to get a named waypoint.
+
+Usage:
+  cluster-status                 one snapshot
+  cluster-status -w [SECONDS]    refresh continuously (default every 2 s)
+  cluster-status --from FILE     format a previously captured diag JSON (- = stdin)
+  cluster-status --json          dump the raw diag JSON instead of formatting
+  cluster-status --root DIR      the cluster's run root (else CLUSTER_ROOT, as for cli/cluster)
+
+It ships in the cluster archive as cli/cluster-status next to cli/cluster.py, which
+it runs directly (`python3 cli/cluster.py --root <run root> diag --depth entities
+--registry summary`). diag only reads the run root and the live registry, so this
+skips the cli/cluster wrapper and its checks for a game install, Magnetar and plugin
+binaries: a status read needs none of them.
+
+Environment:
+  CLUSTER_ROOT      run root (or --root; CLUSTER_RUN_ROOT is accepted as an alias)
+  CLUSTER_ARCHIVE   archive dir containing cli/cluster.py (default: the archive this
+                    script lives in, symlinks followed)
+  CLUSTER_NODE_LIFETIME
+                    maximum age of a regular node, in seconds, for the rotation
+                    column; 0 or "none" turns the column off. Node rotation is
+                    driven from outside the cluster, so the diag JSON does not know it.
+  CLUSTER_NODE_LIFETIMES_FILE
+                    optional JSON an external rotator publishes: {"configuredLifetime": s,
+                    "rotatorPid": pid, "nodes": {"node-1": {"lifetime": s}, ...}}. Trusted
+                    only while that pid is alive; gives each node its own lifetime and,
+                    without CLUSTER_NODE_LIFETIME, the fleet lifetime.
+"""
+
+import argparse
+import datetime
+import json
+import math
+import os
+import subprocess
+import sys
+import time
+
+RUN_ROOT = None   # --root, else CLUSTER_ROOT / CLUSTER_RUN_ROOT (set in main)
+
+
+def find_archive():
+    """The archive this script ships in (<archive>/cli/cluster-status), unless CLUSTER_ARCHIVE says otherwise."""
+    override = os.environ.get("CLUSTER_ARCHIVE")
+    archive = override or os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    if not os.path.isfile(os.path.join(archive, "cli", "cluster.py")):
+        sys.exit(f"cluster-status: no cli/cluster.py in {archive} "
+                 f"({'CLUSTER_ARCHIVE' if override else 'the archive this script lives in'})")
+    return archive
+
+
+def run_diag():
+    archive = find_archive()
+    if not RUN_ROOT:
+        sys.exit("cluster-status: no run root: pass --root or set CLUSTER_ROOT (as for cli/cluster)")
+    run_root = RUN_ROOT
+    env = dict(os.environ)
+    cmd = [sys.executable, os.path.join(archive, "cli", "cluster.py"),
+           "--root", run_root, "diag", "--depth", "entities"]
+    # T-0227: --registry summary drops the retired partition rows and the full
+    # EntityId issue log (34.7 MB of the 35 MB snapshot on w32, pulled every
+    # second by sim-speed-trace).  A CLI from before the flag rejects it with a
+    # usage error; take the full snapshot from that one.
+    proc = subprocess.run(cmd + ["--registry", "summary"], capture_output=True, text=True, env=env, cwd=archive)
+    if proc.returncode == 2 and "--registry" in proc.stderr:
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=archive)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr)
+        sys.exit(f"cluster-status: diag failed with exit code {proc.returncode}")
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        sys.stderr.write(proc.stdout[:2000])
+        sys.exit(f"\ncluster-status: diag output is not valid JSON: {exc}")
+
+
+def run_node_control():
+    """T-0320: `cluster.py nodes list --json` (GET /admin/v1/node-control), or None when this registry
+    has no node control (404) or the call fails - the report then keeps the old per-node header."""
+    archive = find_archive()
+    cmd = [sys.executable, os.path.join(archive, "cli", "cluster.py"), "--root", RUN_ROOT, "nodes", "list", "--json"]
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=dict(os.environ), cwd=archive)
+    if proc.returncode != 0:
+        return None
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+def node_control_formatter():
+    """cluster.py beside this script (cli/ in the archive, Cli/ in a checkout) as a module, for the one
+    `nodes list` line format both tools print; None if it cannot be imported."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+        import cluster
+        return cluster
+    except (SystemExit, Exception):
+        return None
+
+
+# ---------------------------------------------------------------- formatting
+
+def clean_name(name):
+    """Drop private-use glyphs (faction icons etc.) and control chars."""
+    if not name:
+        return "?"
+    cleaned = "".join(
+        c for c in name
+        if c.isprintable() and not (0xE000 <= ord(c) <= 0xF8FF)
+    ).strip()
+    return cleaned or "?"
+
+
+GPS_COLOR = "#FF75C9F1"   # the game's default GPS colour
+
+
+def fmt_gps(label, pos, color=GPS_COLOR):
+    """Space Engineers GPS string, pasteable straight into the game.
+
+    Copy the whole `GPS:...:` run into the chat or the GPS panel's "New from
+    clipboard" and the game creates a waypoint named after the entity.
+    """
+    if not pos or len(pos) != 3 or any(not isinstance(c, (int, float)) for c in pos):
+        return ""
+    # ':' is the field separator, so it can never appear inside the label.
+    label = clean_name(label).replace(":", "-")
+    return "GPS:{}:{:.2f}:{:.2f}:{:.2f}:{}:".format(label, pos[0], pos[1], pos[2], color)
+
+
+def speed_of(vel):
+    if not vel or len(vel) != 3:
+        return 0.0
+    return math.sqrt(sum(v * v for v in vel))
+
+
+def compact_ranges(numbers):
+    """[1,2,3,7,9,10] -> '1-3, 7, 9-10'"""
+    numbers = sorted(numbers)
+    if not numbers:
+        return ""
+    parts, start, prev = [], numbers[0], numbers[0]
+    for n in numbers[1:]:
+        if n == prev + 1:
+            prev = n
+            continue
+        parts.append(f"{start}-{prev}" if start != prev else f"{start}")
+        start = prev = n
+    parts.append(f"{start}-{prev}" if start != prev else f"{start}")
+    return ", ".join(parts)
+
+
+# ---------------------------------------------------------- EntityId ranges
+
+#: cluster Docs/Gateway/EntityIdRanges.md (layout since 291cf9d2 / 66a0781):
+#: the 56-bit unique number is rangeIndex(32b) << 24 | offset(24b) - the wide
+#: field goes to the index because it is the world-lifetime budget (one index
+#: per node start or refill); 16.7 M ids per range suffice for a node.
+UNIQUE_BITS = 56
+RANGE_BITS = 24
+INDEX_BITS = UNIQUE_BITS - RANGE_BITS
+RANGE_SIZE = 1 << RANGE_BITS
+MAX_INDEX = (1 << INDEX_BITS) - 1
+
+
+def range_bits_of(start, end):
+    """Offset width implied by a reported range; falls back to RANGE_BITS.
+
+    The diag JSON does not state the layout, but a range's bounds do: the
+    width is log2(end - start + 1).  Reading it keeps the display right if
+    the split moves again (it already did once, 24/32 -> 32/24).
+    """
+    if isinstance(start, int) and isinstance(end, int) and end >= start:
+        size = end - start + 1
+        if size & (size - 1) == 0:
+            return size.bit_length() - 1
+    return RANGE_BITS
+
+
+def fmt_pct(part, whole):
+    """Percentage, with enough digits that a tiny-but-nonzero share is visible."""
+    pct = 100.0 * part / whole if whole else 0.0
+    if pct == 0:
+        return "0%"
+    if pct >= 1:
+        return f"{pct:.1f}%"
+    if pct >= 0.01:
+        return f"{pct:.2f}%"
+    return "<0.01%"
+
+
+def fmt_range_bounds(index, bits=RANGE_BITS):
+    start = index << bits
+    return f"#{index} = 0x{start:014X}..0x{start + (1 << bits) - 1:014X}"
+
+
+def entity_id_note(node, reg_ranges):
+    """One line on the EntityId segment a node allocates from.
+
+    Preferred source is the node's own diag section (entityIdRange, reported
+    by the allocator itself: consumption and prefetch state included).  Nodes
+    running a build without it fall back to the registry's issue log: the
+    newest range issued to this node incarnation (Node + Epoch), which is the
+    one it draws from - consumption is then unknown.
+    """
+    section = node.get("section") or {}
+    live = section.get("entityIdRange")
+    if live:
+        index = live.get("index", 0)
+        bits = range_bits_of(live.get("start"), live.get("end"))
+        used = live.get("used", 0) or 0
+        parts = [f"EntityId range {fmt_range_bounds(index, bits)}",
+                 f"{fmt_pct(used, 1 << bits)} used"]
+        if live.get("prefetchedIndex"):
+            parts.append(f"next #{live['prefetchedIndex']} prefetched")
+        elif live.get("prefetching"):
+            parts.append("prefetching next")
+        return "  |  ".join(parts)
+    if reg_ranges is None:
+        return "EntityId range: unknown (gateway build predates diag.registry.entityIdRanges)"
+    mine = [r for r in reg_ranges
+            if r.get("Node") == node.get("nodeId") and r.get("Epoch") == node.get("epoch")]
+    if not mine:
+        return "EntityId range: none issued to this incarnation"
+    current = max(mine, key=lambda r: r.get("Index", 0))
+    extra = f", {len(mine) - 1} earlier exhausted" if len(mine) > 1 else ""
+    return (f"EntityId range {fmt_range_bounds(current.get('Index', 0))}"
+            f"  (from the registry issue log{extra}; node build does not report usage)")
+
+
+# ------------------------------------------------------------ node rotation
+
+#: ForceDrainAt is the Gateway's drain deadline, not an execution: whatever is
+#: still on the node then leaves by forced reconnect, and the rotator SIGKILLs
+#: the process this long after it (the regression harness's rotator).
+ROTATOR_KILL_GRACE = 30.0
+#: A hot spare is only activatable once it is WARM: registered this long ago and
+#: reachable on its control endpoint (the harness rotator's TARGET_WARM_SECONDS).  Until then it is up but not yet usable, which is exactly the
+#: distinction "fully up" is about, so it is shown rather than assumed.
+SPARE_WARM_SECONDS = 120.0
+
+
+def is_spare(reg):
+    """Registry's own hot-spare flag (HotSpareNodes.md).
+
+    The authority, not an inference from an empty node: the Gateway excludes
+    exactly `Spare` nodes from placement (GatewayRegistry.ChooseNode), and a
+    normal node that merely happens to hold nothing right now is still a
+    placement target.  False on a gateway that predates the flag, where every
+    node is a normal node.
+    """
+    return bool((reg or {}).get("Spare"))
+
+
+def spare_note(reg, now):
+    """Hot-spare state of one node: warm and ready, or still warming up."""
+    registered = parse_time((reg or {}).get("Registered"))
+    if not (reg or {}).get("ControlEndpoint"):
+        return "HOT SPARE, no control endpoint yet (not activatable)"
+    if registered is None:
+        return "HOT SPARE, readiness unknown (no Registered stamp)"
+    warm_in = registered + SPARE_WARM_SECONDS - now
+    if warm_in > 0:
+        return f"HOT SPARE, warming up ({fmt_duration(warm_in)} to warm)"
+    return "HOT SPARE, warm and ready for activation"
+
+
+def parse_time(text):
+    """ISO timestamp from the diag JSON -> epoch seconds (None if absent/odd)."""
+    try:
+        return datetime.datetime.fromisoformat(text).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def fmt_duration(seconds):
+    """125 -> '2m05s', 4021 -> '1h07m', 9 -> '9s'."""
+    seconds = int(round(abs(seconds)))
+    if seconds >= 3600:
+        return f"{seconds // 3600}h{seconds % 3600 // 60:02d}m"
+    if seconds >= 60:
+        return f"{seconds // 60}m{seconds % 60:02d}s"
+    return f"{seconds}s"
+
+
+def fmt_clock(epoch_seconds):
+    return time.strftime("%H:%M:%S", time.localtime(epoch_seconds))
+
+
+def find_lifetime():
+    """Maximum age of a regular node before an external rotator retires it: (seconds, source).
+
+    Rotation is not part of the shipped cluster, so the diag JSON does not know it. CLUSTER_NODE_LIFETIME
+    wins; otherwise the configured lifetime from CLUSTER_NODE_LIFETIMES_FILE while its rotator lives.
+    Seconds is None when nothing knows the value.
+    """
+    override = os.environ.get("CLUSTER_NODE_LIFETIME")
+    if override:
+        if override.strip().lower() in ("none", "off", "0"):
+            return None, "off"
+        try:
+            return float(override), "CLUSTER_NODE_LIFETIME"
+        except ValueError:
+            return None, None
+    configured = trusted_lifetimes_file().get("configuredLifetime")
+    if configured:
+        return float(configured), "CLUSTER_NODE_LIFETIMES_FILE"
+    return None, None
+
+
+def trusted_lifetimes_file():
+    """CLUSTER_NODE_LIFETIMES_FILE, or {} when unset, unreadable, or its rotatorPid is no longer alive.
+
+    Since T-0175 the regression rotator gives every node its own lifetime (the first wave is staggered
+    over the cycle, later incarnations draw jittered values), so one fleet-wide countdown was wrong for
+    most nodes. A dead writer pid means a leftover from a previous run: confident countdowns for a
+    cluster not running those numbers are worse than none.
+    """
+    path = os.environ.get("CLUSTER_NODE_LIFETIMES_FILE")
+    if not path:
+        return {}
+    try:
+        with open(path) as fh:
+            published = json.load(fh) or {}
+    except Exception:
+        return {}
+    pid = published.get("rotatorPid")
+    if pid:
+        try:
+            os.kill(int(pid), 0)
+        except (OSError, ValueError, TypeError):
+            return {}
+    return published
+
+
+def assigned_lifetimes(lifetime):
+    """{nodeId: the lifetime the rotator dealt THAT node}, or {} when it cannot be trusted
+    (no file, a dead writer, or written for a different configured lifetime)."""
+    published = trusted_lifetimes_file()
+    if published.get("configuredLifetime") not in (None, lifetime):
+        return {}
+    return {node_id: row.get("lifetime")
+            for node_id, row in (published.get("nodes") or {}).items()
+            if row.get("lifetime")}
+
+
+def rotation_note(node, reg, now, lifetime, next_to_rotate):
+    """Age, lifetime budget and phase-out state of one node, as one line.
+
+    `reg` is the node's registry row (registry.status.nodes[]), which carries
+    Registered (the age clock of this incarnation, reset by every rotation) and
+    ForceDrainAt (the deadline after which the Gateway stops draining gently and
+    the rotator kills the process).
+    """
+    registered = parse_time((reg or {}).get("Registered"))
+    age = None if registered is None else now - registered
+    parts = [f"age {fmt_duration(age)}" if age is not None
+             else "age ? (not in the registry status)"]
+
+    # The rotator counts a node's lifetime from when it started SERVING, which
+    # for a spare is its activation and not its registration
+    # (regression.rotation.serving_since) - a spare that idled an hour is not
+    # overdue.  Registered is the fallback for normal nodes and for gateways
+    # that predate the Activated stamp.
+    activated = parse_time((reg or {}).get("Activated"))
+    serving = None if activated is None else now - activated
+    if activated is not None and registered is not None and serving != age:
+        parts.append(f"serving {fmt_duration(serving)}")
+
+    force = parse_time((reg or {}).get("ForceDrainAt"))
+    phasing = node.get("state") != "Active" or force is not None
+    if is_spare(reg) and not phasing:
+        # A spare's lifetime clock has not started, so printing a countdown
+        # against it would announce a rotation that is not coming.
+        parts.append(spare_note(reg, now))
+    elif node.get("role") != "Regular":
+        parts.append(f"{node.get('role', '?')} node, not rotated")
+    elif phasing:
+        # A deadline on a node the registry still calls Active is the Gateway
+        # arming a force-drain by itself (lost lease, stalled simulation).
+        note = ("PHASING OUT (" + node.get("state", "?") + ")" if node.get("state") != "Active"
+                else "FORCE-DRAIN ARMED while still Active")
+        if force is None:
+            note += ", no force-drain deadline set"
+        elif force >= now:
+            note += (f", drain deadline in {fmt_duration(force - now)}"
+                     f" ({fmt_clock(force)} local), killed in"
+                     f" {fmt_duration(force + ROTATOR_KILL_GRACE - now)}")
+        else:
+            kill_in = force + ROTATOR_KILL_GRACE - now
+            note += (f", drain deadline passed {fmt_duration(now - force)} ago"
+                     + (f", killed in {fmt_duration(kill_in)}" if kill_in > 0
+                        else ", kill overdue"))
+        parts.append(note)
+    elif lifetime and (serving if serving is not None else age) is not None:
+        # The rotator's own assignment for THIS node beats the configured lifetime; see
+        # trusted_lifetimes_file(). Marked "(assigned)" so the reader can tell a real per-node
+        # value from the fleet-wide fallback rather than having to know which is which.
+        own = assigned_lifetimes(lifetime).get(node.get("nodeId") or "")
+        shown, tag = (own, " (assigned)") if own else (lifetime, "")
+        left = shown - (serving if serving is not None else age)
+        parts.append(f"lifetime {fmt_duration(shown)}{tag}, "
+                     + (f"{fmt_duration(left)} left" if left >= 0
+                        else f"OVERDUE by {fmt_duration(-left)}"))
+        if next_to_rotate:
+            parts.append("rotates next: longest overdue" if left < 0
+                         else "rotates next: least time left")
+    elif lifetime is None:
+        parts.append("lifetime unknown")
+    return "  |  ".join(parts)
+
+
+#: key -> (capturedAt of the FIRST snapshot it was seen in, sightings). A
+#: handover record carries no start timestamp (GatewayRegistry.HandoverRecord),
+#: so a single snapshot cannot say how long one has been in flight; watching
+#: does. Lives for the process, i.e. it fills up under `-w` and stays empty for
+#: a one-shot run, which is why ages are reported as "seen ... ago" and not as
+#: the handover's true age.
+FIRST_SEEN = {}
+
+
+def track(key, now):
+    """Record a sighting; return (seconds since first sighting, sightings)."""
+    first, count = FIRST_SEEN.get(key, (now, 0))
+    FIRST_SEEN[key] = (first, count + 1)
+    return now - first, count + 1
+
+
+def seen_note(key, now):
+    """How long this run has been watching something, when that is known."""
+    age, count = track(key, now)
+    if count < 2:
+        return ""
+    return f"  [seen {fmt_duration(age)} ago, {count} snapshots]"
+
+
+def one_line(text, limit=140):
+    """First line of a multi-line reason, clipped."""
+    text = str(text or "").strip().splitlines()
+    if not text:
+        return ""
+    return text[0][:limit] + ("..." if len(text[0]) > limit else "")
+
+
+def clients_list(diag):
+    return diag.get("clients") or []
+
+
+def partition_pcu(part):
+    """PCU a partition's reported entities add up to.
+
+    Grids carry `pcu` in the diag entity rows; characters report 0.  The
+    partition rows themselves do NOT carry a PCU field (the gateway's
+    PartitionInfo the BALANCER sees does, but that report is not part of diag),
+    so the totals here are summed from the entities and are only as complete as
+    the entity page — see `section_truncated`.
+    """
+    return sum(e.get("pcu") or 0 for e in (part.get("entities") or []))
+
+
+def section_truncated(section):
+    """True when the node's entity rows were cut short by diag's page limit.
+
+    Then every PCU total derived from them is a LOWER BOUND, and printing it as
+    a fact would be a balancing decision made on half a node.
+    """
+    return (section or {}).get("nextCursor") is not None
+
+
+def fmt_pcu(value, truncated=False):
+    return ("\u2265" if truncated else "") + f"{value:,}"
+
+
+def build_client_names(diag):
+    """steamId -> player name, from every node's client list."""
+    names = {}
+    for node in diag.get("nodes") or []:
+        for client in (node.get("section") or {}).get("clients") or []:
+            cid = client.get("clientId")
+            name = clean_name(client.get("playerName"))
+            if cid and name != "?":
+                names[cid] = name
+    return names
+
+
+def client_label(cid, names):
+    name = names.get(cid)
+    return f"{name} ({cid})" if name else str(cid)
+
+
+def entity_line(ent, names):
+    kind = ent.get("kind", "?")
+    name = clean_name(ent.get("displayName"))
+    spd = speed_of(ent.get("velocity"))
+    spd_txt = f"{spd:.1f} m/s" if spd >= 0.05 else "still"
+    flags = []
+    if ent.get("frozen"):
+        flags.append("frozen")
+    if kind == "character":
+        cid = ent.get("controlledByClientId") or 0
+        who = f"player {client_label(cid, names)}" if cid else "uncontrolled"
+        marker = "CHAR"
+        detail = who
+    else:
+        marker = kind.ljust(4)[:4]
+        detail = f"{ent.get('blockCount', 0)} blocks, PCU {ent.get('pcu', 0)}"
+        if ent.get("controlledByClientId"):
+            flags.append(f"piloted by {client_label(ent['controlledByClientId'], names)}")
+    flag_txt = ("  [" + ", ".join(flags) + "]") if flags else ""
+    gps = fmt_gps(ent.get("displayName"), ent.get("position"))
+    gps_txt = ("  " + gps) if gps else ""
+    return (f"      {marker}  {name:<32.32s}"
+            f"  {spd_txt:>9s}  {detail}{flag_txt}{gps_txt}")
+
+
+def node_hosts(diag, node_control):
+    """node id -> host: the node-control view's placement first, else the host the node's own diag names."""
+    hosts = {}
+    for node in diag.get("nodes") or []:
+        host = (node.get("section") or {}).get("host")
+        if host:
+            hosts[node.get("nodeId")] = host
+    for entry in (node_control or {}).get("nodes") or []:
+        if entry.get("host"):
+            hosts[entry.get("node")] = entry["host"]
+    return hosts
+
+
+def paths_line(sections):
+    """T-0321 P6: the calls these nodes MADE per channel (CHANNELS.md id), local vs lan, from the diag `transport`
+    section; served requests are the other side's calls and are left out so nothing counts twice. None when no
+    node reports the section (a build before t0321-core)."""
+    channels, seen = {}, False
+    for section in sections:
+        transport = section.get("transport")
+        if not isinstance(transport, dict):
+            continue
+        seen = True
+        for channel, cell in (transport.get("channels") or {}).items():
+            total = channels.setdefault(channel, {"local": 0, "lan": 0, "fallback": 0, "p99": None})
+            for path in ("local", "lan"):
+                total[path] += int(((cell.get(path) or {}).get("n")) or 0)
+            total["fallback"] += int(cell.get("fallback") or 0)
+            p99 = (cell.get("lan") or {}).get("p99Ms")
+            if isinstance(p99, (int, float)) and (total["p99"] is None or p99 > total["p99"]):
+                total["p99"] = p99
+    if not seen:
+        return None
+    parts = []
+    for channel in sorted(channels):
+        total = channels[channel]
+        if not (total["local"] or total["lan"] or total["fallback"]):
+            continue
+        text = f"{channel} local {total['local']:,} / lan {total['lan']:,}"
+        if total["lan"] and total["p99"] is not None:
+            text += f" (lan p99 <={total['p99']:g}ms)"
+        if total["fallback"]:
+            text += f" fallback {total['fallback']:,}"
+        parts.append(text)
+    return "paths: " + (" | ".join(parts) if parts else "no calls counted yet")
+
+
+def host_lines(diag, node_control, node_effective_load, balanceable):
+    """T-0321 P6: one block per host - node count, effective sim-load and sim speed of its nodes, and the paths
+    line. Empty when no node names a host (an older snapshot)."""
+    hosts = node_hosts(diag, node_control)
+    order = [entry.get("host") for entry in (node_control or {}).get("hosts") or [] if entry.get("host")]
+    for host in sorted(set(hosts.values())):
+        if host not in order:
+            order.append(host)
+    if not order:
+        return []
+    by_id = {node.get("nodeId"): node for node in diag.get("nodes") or []}
+    lines = ["", f"--- hosts ({len(order)}) ---"]
+    for host in order:
+        ids = sorted((node_id for node_id, name in hosts.items() if name == host and node_id in by_id), key=str)
+        loads = [node_effective_load[n] for n in ids if n in node_effective_load]
+        balance = [n for n in ids if n in balanceable]
+        sims = [((by_id[n].get("section") or {}).get("health") or {}).get("simSpeed") for n in ids]
+        sims = [s for s in sims if isinstance(s, (int, float))]
+        text = f"  {host}: {len(ids)} node(s), {len(balance)} balanceable"
+        if loads:
+            text += (f"  |  effective sim-load {sum(loads) / 1000:.1f}ms/s"
+                     f" (mean {sum(loads) / len(loads) / 1000:.1f}ms/s)")
+        if sims:
+            text += f"  |  sim min {min(sims):.2f}x mean {sum(sims) / len(sims):.2f}x"
+        lines.append(text)
+        paths = paths_line((by_id[n].get("section") or {}) for n in ids)
+        if paths is not None:
+            lines.append(f"    {paths}")
+    return lines
+
+
+def print_report(diag, out=sys.stdout):
+    w = out.write
+    names = build_client_names(diag)
+    registry = diag.get("registry") or {}
+    status = registry.get("status") or {}
+
+    w(f"Cluster diag @ {diag.get('capturedAt', '?')}\n")
+    # T-0193: offline partitions are hosted by no node (content on disk, loaded on
+    # demand), so no node section below shows them - count them up front.
+    offline_count = status.get("offlinePartitions")
+    if offline_count is None:
+        offline_count = sum(1 for p in registry.get("partitions") or []
+                            if p.get("Offline") and not p.get("Retired"))
+    w(f"Offline partitions: {offline_count} (hosted by no node, loaded on demand)\n")
+
+    # Node rotation: ages are measured against the capture, so a snapshot read
+    # from a file still shows what the cluster looked like when it was taken.
+    now = parse_time(diag.get("capturedAt")) or time.time()
+    lifetime, lifetime_source = find_lifetime()
+    reg_nodes = {n.get("Node"): n for n in status.get("nodes") or []}
+    node_control = diag.get("nodeControl")
+    node_control_lines, node_control_states = {}, {}
+    if node_control is not None:
+        formatter = node_control_formatter()
+        if formatter is None:
+            node_control = None
+        else:
+            w("Nodes (node control):\n")
+            for line in formatter.format_node_control(node_control, now):
+                w(line + "\n")
+            w(f"  states: {formatter.STATE_LEGEND}\n")
+            for entry in node_control.get("nodes") or []:
+                node_control_lines[entry.get("node")] = formatter.format_node_line(entry, now)
+                node_control_states[entry.get("node")] = entry.get("state")
+            for entry in node_control.get("notCounted") or []:
+                node_control_lines[entry.get("node")] = formatter._not_counted_item(entry) + " (not counted)"
+            # A stopped node keeps its registry row (Empty: a save holder; Dead) and diag lists it, but under node
+            # control it is in the history, not a node: no section, no balance line. Its port slot may serve a new
+            # node by now, so a section under its name would be that node's twice (bench run 3). A Failed node is
+            # still in the live view and keeps its section.
+            stopped = [n.get("nodeId") for n in diag.get("nodes") or []
+                       if n.get("role") == "Regular" and n.get("state") in ("Empty", "Dead")
+                       and n.get("nodeId") not in node_control_lines]
+            if stopped:
+                w(f"  {len(stopped)} stopped node row(s) not shown (cluster nodes history): {', '.join(stopped)}\n")
+                diag = {**diag, "nodes": [n for n in diag.get("nodes") or [] if n.get("nodeId") not in stopped]}
+    w("Node lifetime: " + (f"{fmt_duration(lifetime)} (from {lifetime_source})" if lifetime
+                           else "off (CLUSTER_NODE_LIFETIME)" if lifetime_source == "off"
+                           else "unknown — no rotator running, set CLUSTER_NODE_LIFETIME") + "\n")
+    # Which node rotates next. Same rule as regression.rotation.candidate: the
+    # rotator takes the Active regulars past THEIR OWN lifetime and retires the
+    # oldest of those, so the question is "who comes due first", and serving time
+    # only breaks the tie once several are already due.
+    #
+    # Since T-0175 staggered the first wave that is no longer the oldest node. At a
+    # fresh start all four ages are within a second of each other, so ordering by age
+    # picked arbitrarily among equals - on 2026-09-19 05:41 it labelled the node
+    # holding 41m43s as the next to rotate while the one holding 11m43s actually was.
+    # Staggering is exactly what breaks the age ordering, so that misread at every
+    # start, not once. A designated spare is not a candidate at all (its clock starts
+    # at activation), and neither is a node with no lifetime to be due against.
+    serving_at = {node_id: max(parse_time(reg.get("Registered")),
+                               parse_time(reg.get("Activated")) or 0.0)
+                  for node_id, reg in reg_nodes.items()
+                  if reg.get("Role") == 0 and reg.get("State") == 0
+                  and not is_spare(reg)
+                  and parse_time(reg.get("Registered")) is not None}
+    node_lifetimes = assigned_lifetimes(lifetime)
+
+    def rotation_order(node_id):
+        """Sort key: due nodes first (oldest-serving first), then by time remaining."""
+        served = now - serving_at[node_id]
+        own = node_lifetimes.get(node_id) or lifetime
+        if not own:
+            return (2, 0.0)          # no lifetime known: never claimed to be next
+        return (0, -served) if served >= own else (1, own - served)
+
+    oldest = min(serving_at, key=rotation_order) if serving_at else None
+    if oldest is not None and rotation_order(oldest)[0] == 2:
+        oldest = None
+
+    # Registry-side partition assignment, for cross-checking node reports.
+    reg_parts = registry.get("partitions") or []
+    assigned = {}   # node -> [partition ids]
+    unassigned, recovering, orphaned, blocked_rows = [], [], [], []
+    offline = []
+    recovering_husks = []
+    for p in reg_parts:
+        if p.get("Recovering"):
+            # Retired rows keep whatever Recovering flag they died with, so a
+            # retired+recovering row is stale bookkeeping and not a partition
+            # anybody is waiting for. Counting those as live recoveries would
+            # raise an alarm on every snapshot of a healthy cluster.
+            (recovering_husks if p.get("Retired") else recovering).append(p["Partition"])
+        if p.get("HandoverBlocked"):
+            blocked_rows.append(p)
+        node = p.get("Node")
+        if node is None:
+            unassigned.append(p["Partition"])
+            # A retired row is a husk that still names its old node and is NOT
+            # waiting for anything (the same trap that made node-lifecycle-audit
+            # bill every husk as stuck); an unowned row that is NOT retired is a
+            # partition with content and nobody to run it.
+            # T-0193: an OFFLINE row is unowned by design - its content is in the
+            # catalogued Final and it loads on demand - so it is not an orphan.
+            if p.get("Offline") and not p.get("Retired"):
+                offline.append(p["Partition"])
+            elif not p.get("Retired"):
+                orphaned.append(p["Partition"])
+        else:
+            assigned.setdefault(node, []).append(p["Partition"])
+    # One lookup for the whole report: the registry can hold five figures of
+    # retired rows, and a per-partition scan of that is not free at -w 2.
+    part_owner = {p["Partition"]: p.get("Node") for p in reg_parts}
+
+    # EntityId ranges issued by the registry (None on a gateway build that
+    # does not export them yet; [] when it does and nothing has been issued).
+    reg_ranges = registry.get("entityIdRanges")
+    range_summary = registry.get("entityIdRangeSummary")
+    if range_summary is None and reg_ranges is not None:
+        # Full snapshot (older gateway, or --from a saved one): summarise it the
+        # same way the gateway does for registry=summary.
+        indexes = [r.get("Index", 0) for r in reg_ranges]
+        by_node = {}
+        for r in reg_ranges:
+            by_node[r.get("Node")] = by_node.get(r.get("Node"), 0) + 1
+        live_epochs = {(n.get("nodeId"), n.get("epoch")) for n in diag.get("nodes") or []}
+        range_summary = {
+            "issued": len(reg_ranges),
+            "firstIndex": min(indexes) if indexes else None,
+            "lastIndex": max(indexes) if indexes else None,
+            "byNode": by_node,
+            "current": [r for r in reg_ranges if (r.get("Node"), r.get("Epoch")) in live_epochs],
+        }
+    if range_summary is not None:
+        # entity_id_note only looks up the running incarnations' ranges.
+        reg_ranges = range_summary.get("current") or []
+    next_range = registry.get("nextEntityIdRange")
+    if next_range is None:
+        next_range = status.get("nextEntityIdRange")
+
+    # PCU per partition and per node, summed from the entity rows (the only
+    # place diag reports it).  Balancing is what PCU is for, so the per-node
+    # totals are collected up front and printed again side by side at the end.
+    pcu_by_partition, node_pcu, pcu_incomplete, balanceable = {}, {}, set(), []
+    # CLUSTER-SIM-COST: measured us of sim work per wall second, the balancer's new
+    # load dimension (diag rows carry simLoadUs since ddf16194; absent -> None).
+    simload_by_partition, node_partition_load, node_effective_load = {}, {}, {}
+    reported_by = {}   # partition id -> [nodes reporting it]
+    for node in diag.get("nodes") or []:
+        section = node.get("section") or {}
+        total = 0
+        sim_total, sim_seen = 0, False
+        for part in section.get("partitions") or []:
+            pcu = partition_pcu(part)
+            pcu_by_partition[part.get("partitionId")] = pcu
+            if part.get("simLoadUs") is not None:
+                sim_seen = True
+                simload_by_partition[part.get("partitionId")] = part["simLoadUs"]
+                sim_total += part["simLoadUs"]
+            reported_by.setdefault(part.get("partitionId"), []).append(node.get("nodeId"))
+            total += pcu
+        node_pcu[node.get("nodeId")] = total
+        if sim_seen:
+            node_id = node.get("nodeId")
+            node_partition_load[node_id] = sim_total
+        if not node.get("stale") and isinstance(node.get("balanceLoadUs"), (int, float)):
+            node_id = node.get("nodeId")
+            node_effective_load[node_id] = node["balanceLoadUs"]
+            if isinstance(node.get("balancePartitionLoadUs"), (int, float)):
+                node_partition_load[node_id] = node["balancePartitionLoadUs"]
+        if section_truncated(section):
+            pcu_incomplete.add(node.get("nodeId"))
+        # Balance targets are exactly what the Gateway will place on: Active
+        # regulars that are not designated hot spares (GatewayRegistry.ChooseNode).
+        # A hot spare holds nothing ON PURPOSE, so counting it into the spread
+        # would report a permanent imbalance the balancer will never act on.
+        if (node.get("role") == "Regular" and node.get("state") == "Active"
+                and not is_spare(reg_nodes.get(node.get("nodeId")))):
+            balanceable.append(node.get("nodeId"))
+
+    # ---- per node -----------------------------------------------------
+    for node in diag.get("nodes") or []:
+        node_id = node.get("nodeId", "?")
+        section = node.get("section") or {}
+        health = section.get("health") or {}
+        load = section.get("load") or {}
+        role = node.get("role", "?")
+        state = node.get("state", "?")
+        sim = health.get("simSpeed")
+        sim_txt = f"sim {sim:.2f}x" if isinstance(sim, (int, float)) else "sim ?"
+        # T-0320: the operator view's line (ID @host pid age STATE partitions clients) heads the node;
+        # the registry's internal Active/Closed/Empty state is not shown.
+        control_line = node_control_lines.get(node_id)
+        head = (control_line.strip() + "  |" if control_line is not None
+                else f"{node_id}  [{role}] (not in node control)  |" if node_control is not None
+                else f"{node_id}  [{role}/{state}]")
+        w(f"\n=== {head}  {sim_txt}"
+          f"  frame {section.get('simFrameCounter', '?')}"
+          f"  |  {load.get('partitionCount', 0)} partitions,"
+          f" {load.get('entityCount', 0)} entities,"
+          f" {load.get('clientCount', 0)} clients,"
+          f" PCU {fmt_pcu(node_pcu.get(node_id, 0), section_truncated(section))}"
+          + (f", load {node_effective_load[node_id] / 1000:.1f}ms/s"
+             f" (partitions {node_partition_load[node_id] / 1000:.1f}ms/s)"
+             if node_id in node_effective_load
+             and node_id in node_partition_load
+             and node_effective_load[node_id] > node_partition_load[node_id]
+             else f", load {node_effective_load[node_id] / 1000:.1f}ms/s"
+             if node_id in node_effective_load
+             else f", partition load {node_partition_load[node_id] / 1000:.1f}ms/s"
+             if node_id in node_partition_load else "")
+          + ("  |  HOT SPARE" if is_spare(reg_nodes.get(node_id)) else "") + " ===\n")
+        op_state = node_control_states.get(node_id)
+        if op_state is None or op_state == "Serving" or role != "Regular":
+            # Under node control the header carries every other state (and a stop's who/why/force).
+            w("    " + rotation_note(node, reg_nodes.get(node_id), now, lifetime,
+                                     node_id == oldest) + "\n")
+        w("    " + entity_id_note(node, reg_ranges) + "\n")
+        if node.get("sectionError"):
+            w(f"    !! section error: {node['sectionError']}\n")
+        if node.get("stale"):
+            w("    !! node data is STALE\n")
+
+        reported = []
+        for part in section.get("partitions") or []:
+            pid = part.get("partitionId")
+            reported.append(pid)
+            sphere = part.get("sphere") or {}
+            radius = sphere.get("radius") or 0
+            center = fmt_gps(f"P{pid} r{radius:.0f}",
+                             [sphere.get("x"), sphere.get("y"), sphere.get("z")])
+            attached = part.get("attachedClients") or []
+            att_txt = ""
+            if attached:
+                att_txt = "  clients: " + ", ".join(client_label(c, names) for c in attached)
+            lock_txt = "  LOCKED" if part.get("locked") else ""
+            w(f"    partition {pid} (gen {part.get('generation', '?')})"
+              f"  r={radius:.0f} m"
+              f"  {part.get('memberCount', 0)} members"
+              f"  PCU {fmt_pcu(partition_pcu(part), section_truncated(section))}"
+              + (f"  load {part['simLoadUs'] / 1000:.1f}ms/s"
+                 if part.get("simLoadUs") is not None else "")
+              + f"{att_txt}{lock_txt}"
+              f"{('  ' + center) if center else ''}\n")
+            entities = sorted(
+                part.get("entities") or [],
+                key=lambda e: (e.get("kind") != "character",
+                               clean_name(e.get("displayName")).lower()),
+            )
+            for ent in entities:
+                w(entity_line(ent, names) + "\n")
+
+        # Registry says this node owns more partitions than it reported
+        # entities for — usually just empty partitions, but worth seeing.
+        idle = sorted(set(assigned.get(node_id, [])) - set(reported))
+        if idle:
+            w(f"    (also assigned, no entities reported: {compact_ranges(idle)})\n")
+        foreign = sorted(set(reported) - set(assigned.get(node_id, [])))
+        if foreign:
+            w(f"    !! reported but not assigned to this node in the registry:"
+              f" {compact_ranges(foreign)}\n")
+
+    # ---- cluster-wide extras ------------------------------------------
+    w("\n--- partitions (registry) ---\n")
+    cluster_pcu = sum(node_pcu.values())
+    for node_id in sorted(assigned):
+        # PCU of the partitions the registry assigns to this node, taken from
+        # wherever they were REPORTED: an assigned partition the node has not
+        # reported entities for contributes nothing and is counted as unknown,
+        # so the share never silently credits a node for content it may not
+        # hold yet (mid-handover the same partition can be reported by neither).
+        known = [p for p in assigned[node_id] if p in pcu_by_partition]
+        pcu = sum(pcu_by_partition[p] for p in known)
+        unknown = len(assigned[node_id]) - len(known)
+        notes = []
+        if unknown:
+            notes.append(f"{unknown} partition{'s' if unknown != 1 else ''} unreported")
+        # Assigned and reported disagree while a partition is in flight: it is
+        # assigned here but its entities still come from the other node.
+        if node_pcu.get(node_id, 0) != pcu:
+            notes.append(f"node itself reports {node_pcu.get(node_id, 0):,}")
+        w(f"    {node_id}: {compact_ranges(assigned[node_id])}"
+          f"  ({len(assigned[node_id])})"
+          f"  PCU {fmt_pcu(pcu, node_id in pcu_incomplete)}"
+          f" ({fmt_pct(pcu, cluster_pcu)})"
+          + (", " + ", ".join(notes) if notes else "") + "\n")
+    counts = registry.get("partitionCounts")
+    if counts:
+        # Summary snapshot: retired rows are counted by the gateway, not listed.
+        n_retired = counts.get("retired", 0)
+        n_unowned = n_retired + counts.get("offline", 0) + counts.get("unowned", 0)
+    else:
+        n_retired = len(unassigned) - len(orphaned) - len(offline)
+        n_unowned = len(unassigned)
+    if n_unowned:
+        # Almost all of these are retired husks; the interesting ones are broken
+        # out into the in-flight section below.
+        w(f"    unowned: {n_unowned} partitions"
+          f" ({n_retired} retired,"
+          f" {len(offline)} offline,"
+          f" {len(orphaned)} live)\n")
+    if offline:
+        w(f"    offline: {compact_ranges(offline)}  ({len(offline)})\n")
+
+    # The balancing read: how far apart the loaded nodes are.  Node totals come
+    # from what each node itself reported (not the registry assignment above),
+    # which is the same side the gateway's PCU tie-break looks at.
+    balanced = {n: node_pcu[n] for n in balanceable}
+    if balanced:
+        lightest = min(balanced, key=balanced.get)
+        heaviest = max(balanced, key=balanced.get)
+        w(f"    cluster PCU {fmt_pcu(cluster_pcu, bool(pcu_incomplete))}"
+          f"  |  over {len(balanced)} balanceable nodes:"
+          f" mean {sum(balanced.values()) // len(balanced):,},"
+          f" spread {balanced[heaviest] - balanced[lightest]:,}"
+          f" ({heaviest} {balanced[heaviest]:,} vs {lightest} {balanced[lightest]:,})\n")
+    # The same read in the measured metric, which is what the balancer now acts
+    # on when every node reports it (gateway f3e127b): us of sim work per wall
+    # second, shown as ms/s.
+    sim_balanced = {n: node_effective_load[n] for n in balanceable if n in node_effective_load}
+    if sim_balanced:
+        sl_light = min(sim_balanced, key=sim_balanced.get)
+        sl_heavy = max(sim_balanced, key=sim_balanced.get)
+        w(f"    cluster effective sim-load {sum(node_effective_load.values()) / 1000:.1f}ms/s"
+          f"  |  over {len(sim_balanced)} balanceable nodes:"
+          f" mean {sum(sim_balanced.values()) / len(sim_balanced) / 1000:.1f}ms/s,"
+          f" spread {(sim_balanced[sl_heavy] - sim_balanced[sl_light]) / 1000:.1f}ms/s"
+          f" ({sl_heavy} {sim_balanced[sl_heavy] / 1000:.1f} vs"
+          f" {sl_light} {sim_balanced[sl_light] / 1000:.1f})\n")
+    others = [n for n in node_pcu if n not in balanced]
+    if others:
+        def why(node_id):
+            reg = reg_nodes.get(node_id)
+            node = next((x for x in diag.get("nodes") or []
+                         if x.get("nodeId") == node_id), {})
+            if is_spare(reg):
+                return "hot spare"
+            if node.get("role") != "Regular":
+                return str(node.get("role", "?"))
+            if node_id in node_control_states:
+                return str(node_control_states[node_id])
+            return f"state {node.get('state', '?')}"
+        w("    not balance targets: "
+          + ", ".join(f"{n} PCU {node_pcu[n]:,} ({why(n)})"
+                      for n in sorted(others, key=str)) + "\n")
+    if pcu_incomplete:
+        w("    !! PCU is a lower bound on " + ", ".join(sorted(pcu_incomplete))
+          + ": diag paged out entity rows (nextCursor set)\n")
+
+    # ---- per host (T-0321) ----------------------------------------------
+    for line in host_lines(diag, node_control, node_effective_load, balanceable):
+        w(line + "\n")
+
+    # ---- EntityId ranges (registry) -----------------------------------
+    # The registry is the durable authority for the next range; the WA is a
+    # rotating node and consumes ranges like every other node
+    # (cluster Docs/Gateway/EntityIdRanges.md).
+    w("\n--- EntityId ranges (registry) ---\n")
+    if next_range is not None:
+        w(f"    next free: {fmt_range_bounds(next_range)}"
+          f"  ({RANGE_SIZE:,} ids each, {fmt_pct(next_range - 1, MAX_INDEX)}"
+          f" of the index space used)\n")
+    else:
+        w("    next free: unknown (gateway build predates diag.registry.nextEntityIdRange)\n")
+    if range_summary and range_summary.get("issued"):
+        # Only the allocated span, not every index: ranges are issued in index
+        # order, one per node start or refill, so the span is the whole story.
+        first, last = range_summary.get("firstIndex"), range_summary.get("lastIndex")
+        w(f"    allocated: #{first}..#{last}  ({range_summary['issued']} ranges issued)\n")
+        by_node = range_summary.get("byNode") or {}
+        if by_node:
+            w("    issued per node: " + ", ".join(f"{n} {by_node[n]}" for n in sorted(by_node, key=str)) + "\n")
+        current = sorted(range_summary.get("current") or [], key=lambda r: (str(r.get("Node")), r.get("Index", 0)))
+        if current:
+            latest = {}
+            for r in current:
+                latest[r.get("Node")] = r.get("Index", 0)
+            w("    in use by running incarnations: "
+              + ", ".join(f"{n} #{latest[n]}" for n in sorted(latest, key=str)) + "\n")
+
+    # ---- in flight ------------------------------------------------------
+    # Everything that is BETWEEN steady states: a partition here is mid-move,
+    # waiting for an owner, or barred from moving. All of it is supposed to be
+    # transient, so anything that is still listed one refresh later is the
+    # observation worth having - `-w` stamps each row with how long this run has
+    # been seeing it (the records themselves carry no start time, except the
+    # blocked ones, which carry real abort timestamps).
+    # T-0296 runtime invariant audit: the registry's own verdict, already past its grace (InvariantAudit.cs).
+    audit = registry.get("invariants") or {}
+    violations = audit.get("Active") or audit.get("active") or []
+    if violations:
+        w(f"\n--- INVARIANT VIOLATIONS ({len(violations)} active, {audit.get('Total', audit.get('total', '?'))} since the gateway start) ---\n")
+        for v in violations:
+            since = parse_time(v.get("Since") or v.get("since"))
+            w(f"    !! {v.get('Kind') or v.get('kind')} P{v.get('Partition') or v.get('partition')}"
+              + (f" for {fmt_duration(now - since)}" if since is not None else "")
+              + f": {v.get('Detail') or v.get('detail')}\n")
+    # T-0323: the registry's replica capacity alarm (ReplicaPacing.cs): the save copies do not keep up with the recycles.
+    alarm = status.get("replicaAlarm") or {}
+    if alarm.get("active"):
+        since = parse_time(alarm.get("since"))
+        eta = alarm.get("etaMinutes")
+        w("\n--- REPLICA CAPACITY BELOW INVALIDATION RATE"
+          + (f" (for {fmt_duration(now - since)})" if since is not None else "") + " ---\n")
+        w(f"    !! {alarm.get('reason')}: {alarm.get('depth')} save(s) queued, {alarm.get('copiesPerMinute', 0):.0f} copies/min, "
+          + ("no end in sight" if eta is None else f"{eta:.0f} min to clear")
+          + f", recycle interval {alarm.get('intervalMinutes', 0):.0f} min\n")
+    handovers = registry.get("handovers") or []
+    blocked = registry.get("handoverBlocked") or []
+    incomplete = status.get("incompleteHandovers", 0)
+    locked = [(node.get("nodeId"), part)
+              for node in diag.get("nodes") or []
+              for part in (node.get("section") or {}).get("partitions") or []
+              if part.get("locked")]
+    switching = [c for c in clients_list(diag) if c.get("switching")]
+    mismatched = sorted((pid, holders, part_owner.get(pid))
+                        for pid, holders in reported_by.items()
+                        if len(holders) > 1
+                        or part_owner.get(pid) not in (None, holders[0]))
+    if (handovers or blocked or incomplete or recovering or recovering_husks
+            or orphaned or locked or switching or mismatched):
+        w("\n--- in flight ---\n")
+    for h in handovers:
+        pid = h.get("Partition")
+        w(f"    handover P{pid}: {h.get('SourceNode', '?')}"
+          f" (gen {h.get('SourceGeneration', '?')}) -> {h.get('TargetNode', '?')}"
+          f"  {h.get('State', '?')}"
+          f"  id {h.get('Id', '?')}"
+          + ("  committed gen " + str(h["CommittedGeneration"])
+             if h.get("CommittedGeneration") is not None else "")
+          + seen_note(("handover", h.get("Id")), now) + "\n")
+    for h in blocked:
+        # These carry their own clock: FirstAbort/LastAbort/BackoffUntil.
+        first, last = parse_time(h.get("FirstAbort")), parse_time(h.get("LastAbort"))
+        until = parse_time(h.get("BackoffUntil"))
+        bits = [f"{h.get('Attempts', '?')} attempts"]
+        if first is not None:
+            bits.append(f"first {fmt_duration(now - first)} ago ({fmt_clock(first)})")
+        if last is not None:
+            bits.append(f"last {fmt_duration(now - last)} ago")
+        if until is not None:
+            bits.append(f"backoff {fmt_duration(until - now)} left" if until > now
+                        else "backoff expired, retryable")
+        w(f"    !! blocked P{h.get('Partition')}: " + ", ".join(bits) + "\n")
+        w(f"         sig {h.get('Signature', '?')}  {one_line(h.get('Reason'))}\n")
+    if recovering:
+        # Recovery is claimed one partition per request (GatewayRegistry .Take(1)),
+        # so a long list here is an outage in the making, not a queue draining.
+        w(f"    !! recovering: {compact_ranges(recovering)}  ({len(recovering)})"
+          + seen_note(("recovering", tuple(sorted(recovering))), now) + "\n")
+    if recovering_husks:
+        w(f"    {len(recovering_husks)} retired partitions still flagged recovering"
+          f" (stale registry state, nothing is waiting on them)\n")
+    # The registry's owner and the node actually holding the members disagree
+    # while a handover is in flight - and keep disagreeing when one is stuck.
+    for pid, holders, owner in mismatched:
+        if len(holders) > 1:
+            w(f"    !! P{pid} reported by {len(holders)} nodes:"
+              f" {', '.join(str(h) for h in holders)}"
+              f" (registry owner {owner})"
+              + seen_note(("multi", pid), now) + "\n")
+        elif owner is not None and holders[0] != owner:
+            w(f"    P{pid} held by {holders[0]}, registry owner is {owner}"
+              + seen_note(("moved", pid), now) + "\n")
+    if orphaned:
+        w(f"    !! unowned and not retired: {compact_ranges(orphaned)}"
+          f"  ({len(orphaned)}) — waiting for a node to claim them"
+          + seen_note(("orphaned", tuple(sorted(orphaned))), now) + "\n")
+    for node_id, part in locked:
+        # Frozen members: the partition is mid-freeze/import on its own node.
+        w(f"    locked P{part.get('partitionId')} on {node_id}:"
+          f" {part.get('memberCount', 0)} members frozen"
+          + seen_note(("locked", part.get("partitionId")), now) + "\n")
+    for client in switching:
+        w(f"    client {client_label(client.get('clientId'), names)} SWITCHING backend"
+          f" (routed to {client.get('routedNodeId', '?')})"
+          + seen_note(("switching", client.get("clientId")), now) + "\n")
+    if incomplete:
+        w(f"    !! incomplete handovers: {incomplete}\n")
+
+    # ---- players -------------------------------------------------------
+    w("\n--- players ---\n")
+    locations = {}  # steamId -> (partition, entityId)
+    for entry in registry.get("clientPartitions") or []:
+        loc = entry.get("location") or {}
+        locations[entry.get("client")] = (loc.get("Partition"), loc.get("Entity"))
+    clients = clients_list(diag)
+    if not clients:
+        w("    (no connected clients)\n")
+    for client in clients:
+        cid = client.get("clientId")
+        partition, entity = locations.get(cid, (None, None))
+        node = part_owner.get(partition, "?") if partition is not None else "?"
+        switching = "  [SWITCHING]" if client.get("switching") else ""
+        w(f"    {client_label(cid, names)}: partition {partition} on {node}"
+          f"  (routed to {client.get('routedNodeId', '?')},"
+          # "Entity" is whatever anchors this client's location: the CHARACTER
+          # when the pilot is on foot, but the SHIP once it is seated. Calling
+          # it "character" unconditionally sent one debugging session chasing a
+          # character/ship id mix-up that did not exist (2026-08-18) - the id
+          # printed here was a Visitor Atmo that was wrecked minutes later.
+          f" {client.get('transport', '?')}, entity {entity}){switching}\n")
+
+    global_age = (status.get("lifecycle") or {}).get("GlobalSaveAgeSeconds")
+    if global_age is not None:
+        w(f"\nNewest global save: {fmt_duration(global_age)} ago\n")
+    degraded = ((status.get("lifecycle") or {}).get("DegradedReasons")) or []
+    if degraded:
+        w("\n!! degraded: " + "; ".join(str(r) for r in degraded) + "\n")
+    out.flush()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="cluster-status",
+        description="Show which entities are on which Magnetar cluster node.")
+    parser.add_argument("--json", action="store_true",
+                        help="print the raw diag JSON instead of the report")
+    parser.add_argument("--from", dest="from_file", metavar="FILE",
+                        help="read diag JSON from FILE ('-' = stdin) instead of running diag")
+    parser.add_argument("-w", "--watch", nargs="?", const=2.0, type=float,
+                        metavar="SECONDS",
+                        help="refresh continuously (default interval: 2 s)")
+    parser.add_argument("--root", default=os.environ.get("CLUSTER_ROOT") or os.environ.get("CLUSTER_RUN_ROOT") or None,
+                        help="the cluster's run root (default: CLUSTER_ROOT, as for cli/cluster; CLUSTER_RUN_ROOT is an alias)")
+    args = parser.parse_args()
+    global RUN_ROOT
+    RUN_ROOT = args.root
+
+    def snapshot():
+        if args.from_file:
+            if args.from_file == "-":
+                return json.load(sys.stdin)
+            with open(args.from_file) as fh:
+                return json.load(fh)
+        diag = run_diag()
+        control = run_node_control()
+        if control is not None:
+            diag["nodeControl"] = control
+        return diag
+
+    if args.watch and not args.from_file:
+        try:
+            while True:
+                diag = snapshot()
+                sys.stdout.write("\033[H\033[2J")  # clear screen, keep scrollback
+                print_report(diag)
+                time.sleep(args.watch)
+        except KeyboardInterrupt:
+            return
+    else:
+        diag = snapshot()
+        if args.json:
+            json.dump(diag, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+        else:
+            print_report(diag)
+
+
+if __name__ == "__main__":
+    main()

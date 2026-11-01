@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- T-0242 (#260): offline mod compatibility report. Compiles each mod folder's Data/Scripts the way the
+       game's script manager does (one assembly per subfolder, the same using header) with the Roslyn the
+       Dedicated Server ships, then runs Shared/Cluster/ModCompatScanner.cs - the file the plugin runs at
+       session load, compiled in here, not a copy - and prints the automatic class, placement and evidence.
+
+       usage: dotnet ModCompatScan.dll [options] MOD_FOLDER...
+       options: dedicated64 DIR, json, expect FILE (each with a double-dash prefix); the expect file holds
+       "<mod id> <class>" per line and the tool exits 1 when a scanned mod's automatic class differs. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>13.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <RootNamespace>ModCompatScan</RootNamespace>
+    <AssemblyName>ModCompatScan</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RunPostBuildEvent>Never</RunPostBuildEvent>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="../../Shared/Cluster/ModCompatScanner.cs" Link="ModCompatScanner.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="Microsoft.CodeAnalysis">
+      <HintPath>$(Dedicated64Dir)Microsoft.CodeAnalysis.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.CSharp">
+      <HintPath>$(Dedicated64Dir)Microsoft.CodeAnalysis.CSharp.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>

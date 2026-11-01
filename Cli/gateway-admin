@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Thin admin CLI over the Gateway's versioned /admin/v1 API (docs/AdminAPI.md): one command per
+# HTTP operation, Gateway JSON printed unchanged. Run without arguments for the command list.
+#
+#   CLUSTER_GATEWAY_URL   the Gateway control listener (default: the one the cluster CLI binds)
+#   CLUSTER_ADMIN_TOKEN   sent as the bearer token when set (required beyond loopback)
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# CLUSTER_PORT_BASE: the same port offset the cluster CLI applies (Gateway control 29416 + base).
+export CLUSTER_GATEWAY_URL="${CLUSTER_GATEWAY_URL:-http://127.0.0.1:$((29416 + ${CLUSTER_PORT_BASE:-0}))}"
+exec dotnet "$ROOT/cli/ClusterRegistry.Cli/ClusterRegistry.Cli.dll" "$@"

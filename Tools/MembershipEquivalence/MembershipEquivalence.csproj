@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Differential test for Shared/Cluster/PartitionMembership.cs. The live file is compiled in
+       beside Reference.cs, a FROZEN copy of the algorithm as it stood before the T-0101 speed work,
+       and the two are driven in lockstep over randomized worlds: same layouts, same partition ids,
+       same Change list including the Why text, pass after pass.
+
+       PartitionMembership has no game dependencies at all, which is what makes this possible - it is
+       plain geometry over ids. Every speed change in that file has been claimed to be exact
+       ("the chosen layout and the tie-break are unchanged", "neither can change which pair wins");
+       this is what actually checks the claim.
+
+       Reference.cs is frozen ON PURPOSE. When the algorithm changes for a REASON - as the merge
+       distance did on 2026-08-24 - this tool is supposed to fail, and the fix is to re-freeze it
+       from the commit that made the deliberate change, not to weaken the comparison. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>13.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <RootNamespace>MembershipEquivalence</RootNamespace>
+    <AssemblyName>MembershipEquivalence</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RunPostBuildEvent>Never</RunPostBuildEvent>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Bench2.cs" />
+    <Compile Include="Reference.cs" />
+    <Compile Include="../../Shared/Cluster/PartitionMembership.cs" Link="PartitionMembership.cs" />
+    <Compile Include="../../Shared/Cluster/MembershipFlapping.cs" Link="MembershipFlapping.cs" />
+    <Compile Include="../../Shared/Cluster/RegistryApplyQueue.cs" Link="RegistryApplyQueue.cs" />
+    <Compile Include="../../Shared/Cluster/RegistryApplyScenarios.cs" Link="RegistryApplyScenarios.cs" />
+  </ItemGroup>
+</Project>

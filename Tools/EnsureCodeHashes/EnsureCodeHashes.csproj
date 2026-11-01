@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- T-0122. Offline body-hash reporter.
+
+       EnsureCode.ReportHashes needs the game assemblies LOADED, not decompiled: the hash comes
+       from PatchProcessor.GetCurrentInstructions, which reads the method as the runtime sees it.
+       That does not require a game though - it requires the same DLL files, loaded into a
+       process, and read BEFORE any Harmony patch is applied. A node start satisfies that; so
+       does this console program, and this one does not need a cluster grant or an outage.
+
+       WHAT THIS DOES NOT ESTABLISH: that an offline hash equals the hash the same method reports
+       inside a running node. It should - same file, same reader, unpatched in both - but "should"
+       is not a measurement, and a wrong hash in [EnsureCode] stops a node from STARTING. So the
+       hashes this prints are to be diffed against one CLUSTER_PATCH_HASHES=1 node dump before
+       they are injected. This tool removes the wait, not the check. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>13.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>EnsureCodeHashes</AssemblyName>
+    <RootNamespace>EnsureCodeHashes</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RunPostBuildEvent>Never</RunPostBuildEvent>
+    <!-- The game DLLs are x64 native-interop assemblies; resolving them by path at runtime is the
+         whole point, so suppress the "reference not copied" style noise rather than vendoring. -->
+    <NoWarn>$(NoWarn);MSB3277</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+</Project>

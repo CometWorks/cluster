@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<PluginData xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="GitHubPlugin">
+
+    <Id>cluster-wa</Id>
+    <RepoId>CometWorks/cluster</RepoId>
+
+    <FriendlyName>Cluster World Authority</FriendlyName>
+    <Author>CometWorks</Author>
+
+    <Tooltip>Space Engineers cluster: World Authority node (dedicated server)</Tooltip>
+    <Description>Turns this dedicated server into the World Authority of a Space Engineers cluster: the
+        single writer of identities, factions, GPS, economy, chat, encounters, weather and the
+        game clock that every regular node follows, and the owner of the global save. Started
+        with CLUSTER_NODE_ROLE=WA by the cluster CLI. Requires the Direct Transport plugin.
+    </Description>
+
+    <SourceDirectories>
+        <Directory>WorldAuthorityPlugin</Directory>
+        <Directory>Shared</Directory>
+    </SourceDirectories>
+
+    <NuGetReferences>
+        <PackageReference Include="System.IO.Hashing" Version="10.0.0" />
+        <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
+        <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
+        <PackageReference Include="LiteNetLib" Version="1.3.1" />
+    </NuGetReferences>
+
+    <DependencyIds>
+        <Id>direct-transport</Id>
+    </DependencyIds>
+
+    <Runtimes>CoreCLR</Runtimes>
+
+    <Hidden>true</Hidden>
+
+    <Commit>TODO</Commit>
+
+</PluginData>

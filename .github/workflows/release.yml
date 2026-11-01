@@ -1,0 +1,489 @@
+name: Release
+
+# Publishes the cluster deployment package as a GitHub release.
+#
+# The version comes from one place, <Version> in Version.Build.props, and a
+# release is only ever built when that version changes:
+#
+#   * push to main      -> build and publish a public "latest" release when the
+#                          version is strictly higher than the latest existing
+#                          release (the first release ever counts as newer).
+#                          Otherwise the run is skipped.
+#   * pull request      -> compare <Version> against the PR's base branch. When
+#                          it changed, build and publish a DRAFT release tagged
+#                          v<version>-pr.<number>, so the package can be tried
+#                          before the merge. An unchanged version skips the run.
+#                          Draft pull requests are skipped until they are marked
+#                          ready for review (the two meanings of "draft" are
+#                          unrelated: the state of the pull request, and the
+#                          kind of GitHub release produced). Pull requests from
+#                          forks are skipped too: their GITHUB_TOKEN is read-only
+#                          and could not create a release.
+#   * manual dispatch   -> always build the current version. The "draft" input
+#                          (default true) decides between a draft build and a
+#                          public "latest" release.
+#
+# The package is Build/release.sh's ClusterForLinux-<version>.tar.gz: the Gateway, its Rust data
+# plane gateway-rs (built by the gateway-rs job, T-0229),
+# the compiled node and World Authority plugins (Magnetar local plugins), the
+# MagnetarWorld tool, the admin CLI, the cluster CLI and the documentation,
+# without Direct Transport (the hub supplies it), Magnetar or any game binary
+# (Build/release-README.md). No repository secrets are needed. The Gateway links
+# against the Steam pair and the Linux EOS SDK from the latest linux-dependencies
+# release, and against EOSSDK.dll of the dedicated server, which steamcmd
+# downloads (anonymous login, library set only, cached by the depot's build id);
+# public releases compile against the required public Magnetar release. Pull-request
+# review packages use the pinned SDK source until that release is published.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # "ready_for_review" is not in the default set, but without it a pull
+    # request opened as a draft would only build on its next push.
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: "Publish as a DRAFT release (uncheck for a public 'latest' release)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+# One release run per pull request: a new push supersedes the draft build of the
+# previous one. Pushes to main and manual dispatches are never cancelled.
+concurrency:
+  group: release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Steam app id of the Space Engineers Dedicated Server (free, anonymous login).
+env:
+  SE_DS_APPID: "298740"
+
+jobs:
+  # Always run, including draft/fork PRs and changes that do not bump the version.
+  verify-contract:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Select SDK source
+        id: sdk
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = pull_request ]; then
+            echo "ref=$(cat Build/pr-magnetar-sdk-revision.txt)" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=v2.4.3.9" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v6
+        with:
+          repository: CometWorks/magnetar
+          ref: ${{ steps.sdk.outputs.ref }}
+          path: .magnetar-sdk-source
+          persist-credentials: false
+      - name: Verify cross-repository protocol and CLI
+        run: |
+          python3 Build/verify-plugin-protocol.py .magnetar-sdk-source
+          python3 -m unittest discover -s Cli -p 'test_*.py'
+
+  # gateway-rs (T-0229): the Rust data plane, built apart from the .NET build and consumed by it
+  # as an artifact (GATEWAY_RS_DIR). Always runs, like verify-contract: clippy, the workspace
+  # tests and the LiteNetLib interop suite against C# LiteNetLib 1.3.1 guard every change. The
+  # artifact is only uploaded when build-linux will use it, to stay inside the artifact quota.
+  gateway-rs:
+    needs: version-check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install the pinned Rust toolchain
+        working-directory: GatewayRs
+        # rustup ships on ubuntu-latest; rust-toolchain.toml names the version and components.
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: GatewayRs
+      - name: Install .NET SDK (interop peer)
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - name: Build, clippy and tests
+        run: Build/build-gateway-rs.sh dist/gateway-rs
+      - name: LiteNetLib interop (C# 1.3.1 <-> Rust)
+        run: GatewayRs/interop/run.sh
+      # upload-artifact drops the executable bit: ship a tarball.
+      - name: Pack
+        if: needs.version-check.outputs.should_build == 'true'
+        run: tar -C dist -czf gateway-rs.tar.gz gateway-rs
+      - uses: actions/upload-artifact@v7
+        if: needs.version-check.outputs.should_build == 'true'
+        with:
+          name: gateway-rs
+          path: gateway-rs.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+
+  # ---------------------------------------------------------------------------
+  # Gate: decide whether to build, which version, and draft vs latest.
+  # ---------------------------------------------------------------------------
+  version-check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.decide.outputs.version }}
+      should_build: ${{ steps.decide.outputs.should_build }}
+      draft: ${{ steps.decide.outputs.draft }}
+      base_version: ${{ steps.decide.outputs.base_version }}
+      ds_buildid: ${{ steps.dsbuild.outputs.buildid }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Decide release plan
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Version.Build.props is the single source of truth for the tag.
+          version="$(grep -oPm1 '(?<=<Version>)[^<]+' Version.Build.props)"
+          if [ -z "$version" ]; then
+            echo "ERROR: could not parse <Version> from Version.Build.props" >&2
+            exit 1
+          fi
+          echo "Cluster version: $version"
+
+          base_version=""
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual run: always build, the operator asked for it. The "draft"
+            # input decides draft vs. public "latest" release.
+            draft="${{ inputs.draft }}"
+            echo "Manual dispatch -> unconditional build (draft=$draft)."
+            should_build=true
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            # Pull request: build a DRAFT RELEASE when the PR changes <Version>.
+            # $draft is the kind of GitHub release; .pull_request.draft below is
+            # the state of the pull request itself.
+            draft=true
+
+            if [ "${{ github.event.pull_request.draft }}" = "true" ]; then
+              echo "Draft pull request -> skip until it is marked ready for review."
+              should_build=false
+            elif [ "${{ github.event.pull_request.head.repo.full_name }}" \
+                   != "${{ github.repository }}" ]; then
+              echo "Pull request from a fork -> skip (GITHUB_TOKEN cannot create releases)."
+              should_build=false
+            else
+              # Base version straight from the base commit, not from a local
+              # checkout: the PR is checked out as a merge commit, and its
+              # history is not guaranteed to be fetched.
+              base_version="$(gh api \
+                -H "Accept: application/vnd.github.raw" \
+                "repos/${{ github.repository }}/contents/Version.Build.props?ref=${{ github.event.pull_request.base.sha }}" \
+                | grep -oPm1 '(?<=<Version>)[^<]+' || true)"
+              if [ -z "$base_version" ]; then
+                echo "ERROR: could not parse <Version> from Version.Build.props on the base branch (${{ github.event.pull_request.base.ref }})" >&2
+                exit 1
+              fi
+
+              if [ "$version" = "$base_version" ]; then
+                echo "Version $version unchanged vs. base ${{ github.event.pull_request.base.ref }} -> skip."
+                should_build=false
+              else
+                echo "Version changed vs. base ${{ github.event.pull_request.base.ref }}: $base_version -> $version; build a draft."
+                # A downgrade is still built (a draft is never "latest"), but it
+                # is almost always a mistake, so say so.
+                if [ "$(printf '%s\n%s\n' "$version" "$base_version" | sort -V | tail -1)" != "$version" ]; then
+                  echo "::warning::Version $version is lower than the base branch's $base_version."
+                fi
+                should_build=true
+              fi
+            fi
+          else
+            # Push to main: build only if strictly newer than the latest release.
+            # /releases/latest returns HTTP 404 when no release exists yet, so
+            # only trust the output on success.
+            latest=""
+            if tag="$(gh api "repos/${{ github.repository }}/releases/latest" \
+                        --jq '.tag_name' 2>/dev/null)"; then
+              latest="${tag#v}"
+            fi
+
+            if [ -z "$latest" ]; then
+              echo "No existing release -> first release counts as newer."
+              should_build=true
+            elif [ "$version" = "$latest" ]; then
+              echo "Version $version equals latest release $latest -> skip."
+              should_build=false
+            elif [ "$(printf '%s\n%s\n' "$version" "$latest" | sort -V | tail -1)" = "$version" ]; then
+              echo "Version $version > latest release $latest -> build."
+              should_build=true
+            else
+              echo "Version $version <= latest release $latest -> skip."
+              should_build=false
+            fi
+            draft=false
+          fi
+
+          {
+            echo "version=$version"
+            echo "should_build=$should_build"
+            echo "draft=$draft"
+            echo "base_version=$base_version"
+          } >> "$GITHUB_OUTPUT"
+
+      # The DS depot build id keys the cached library set: when Keen ships a new
+      # DS version the build id changes, so the next release build misses the
+      # cache and re-fetches; an unchanged version is restored instantly. Probed
+      # cheaply via app_info_print (no depot download). Only when building.
+      - name: Probe Dedicated Server build id
+        id: dsbuild
+        if: steps.decide.outputs.should_build == 'true'
+        run: |
+          set -euo pipefail
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends lib32gcc-s1 ca-certificates curl
+          mkdir -p steamcmd
+          curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz \
+            | tar -xz -C steamcmd
+
+          # Parse branches.public.buildid out of the appinfo VDF dump; the line
+          # is `"buildid"  "<n>"`, so strip non-digits.
+          buildid=""
+          for attempt in 1 2 3 4 5; do
+            out="$(./steamcmd/steamcmd.sh +login anonymous +app_info_update 1 \
+                     +app_info_print "$SE_DS_APPID" +quit 2>/dev/null || true)"
+            buildid="$(printf '%s' "$out" | tr -d '\r' | awk '
+              /"branches"/              { in_branches = 1 }
+              in_branches && /"public"/ { in_public = 1 }
+              in_public && /"buildid"/  { gsub(/[^0-9]/, "", $2); print $2; exit }
+            ')"
+            [ -n "$buildid" ] && break
+            echo "build id probe attempt $attempt empty; retrying..."
+            sleep 5
+          done
+
+          if [ -z "$buildid" ]; then
+            # Don't let a probe hiccup wedge the release: fall back to a unique
+            # key so the DS cache simply misses (full download) this run.
+            echo "WARNING: could not determine DS build id; DS cache will miss this run." >&2
+            buildid="norev-${{ github.run_id }}"
+          fi
+          echo "DS public build id: $buildid"
+          echo "buildid=$buildid" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # Linux build: Build/release.sh -> dist/ClusterForLinux-<version>.tar.gz
+  # ---------------------------------------------------------------------------
+  build-linux:
+    needs: [version-check, verify-contract, gateway-rs]
+    if: needs.version-check.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      # --- Dedicated Server libraries (cached by DS build id) ----------------
+      # Only the ~186 MB DedicatedServer64/ library set is cached, not the
+      # multi-GB Content. The Gateway references its EOSSDK.dll and the world
+      # tool the game assemblies; neither ends up in the package.
+      - name: Cache Dedicated Server libraries
+        id: dscache
+        uses: actions/cache@v5
+        with:
+          path: ds64
+          key: ds64-linux-${{ needs.version-check.outputs.ds_buildid }}
+
+      - name: Download Dedicated Server (steamcmd)
+        if: steps.dscache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          # steamcmd is a 32-bit binary; install its runtime only on a cache miss.
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends lib32gcc-s1
+          mkdir -p steamcmd dsfull
+          curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz \
+            | tar -xz -C steamcmd
+
+          # A brand-new steamcmd self-updates on its first run, which makes an
+          # in-session app_update abort with "Missing configuration". Bootstrap
+          # once, then retry the install (steamcmd is flaky enough in CI that a
+          # couple of retries are worthwhile). SE DS has no native Linux depot,
+          # so force the Windows files.
+          ./steamcmd/steamcmd.sh +quit || true
+
+          ok=0
+          for attempt in 1 2 3 4 5; do
+            ./steamcmd/steamcmd.sh \
+              +@sSteamCmdForcePlatformType windows \
+              +force_install_dir "$PWD/dsfull" \
+              +login anonymous \
+              +app_update "$SE_DS_APPID" validate \
+              +quit || true
+            if [ -f "$PWD/dsfull/DedicatedServer64/SpaceEngineersDedicated.exe" ]; then
+              ok=1; break
+            fi
+            echo "steamcmd attempt $attempt did not complete the DS install; retrying..."
+            sleep 5
+          done
+          if [ "$ok" != 1 ]; then
+            echo "ERROR: steamcmd failed to install the Dedicated Server." >&2
+            exit 1
+          fi
+
+          # Keep only the library set so just ~186 MB gets cached; drop Content.
+          # ds64/ is populated only after the marker check passes, so a failed
+          # download never caches a partial/empty tree.
+          mkdir -p ds64
+          cp -a "$PWD/dsfull/DedicatedServer64/." ds64/
+          rm -rf dsfull
+          echo "Cached DS library set:"; du -sh ds64
+
+      # Steamworks.NET.dll + libsteam_api.so and libEOSSDK-Linux-Shipping.so,
+      # from the latest linux-dependencies release (the tag used is logged).
+      - name: Fetch Linux dependencies
+        env:
+          LINUX_DEPENDENCIES: ${{ github.workspace }}/linux-deps
+        run: Build/fetch-linux-dependencies.sh
+
+      # Before Magnetar is released, PR packages compile against an exact public
+      # source commit. Public/manual releases retain the released-SDK requirement.
+      - name: Read review SDK pin
+        if: github.event_name == 'pull_request'
+        id: sdk
+        run: echo "ref=$(cat Build/pr-magnetar-sdk-revision.txt)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v6
+        if: github.event_name == 'pull_request'
+        with:
+          repository: CometWorks/magnetar
+          ref: ${{ steps.sdk.outputs.ref }}
+          path: .magnetar-sdk-source
+          persist-credentials: false
+
+      - name: Fetch Magnetar SDK
+        env:
+          MAGNETAR_SDK: ${{ github.workspace }}/magnetar-sdk
+          DEDICATED64: ${{ github.workspace }}/ds64
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = pull_request ]; then
+            Build/fetch-magnetar.sh --source .magnetar-sdk-source
+          else
+            Build/fetch-magnetar.sh
+          fi
+
+      - name: Download gateway-rs
+        uses: actions/download-artifact@v8
+        with:
+          name: gateway-rs
+          path: gateway-rs-artifact
+
+      - name: Unpack gateway-rs
+        run: tar -C gateway-rs-artifact -xzf gateway-rs-artifact/gateway-rs.tar.gz
+
+      - name: Build and package
+        env:
+          GATEWAY_RS_DIR: ${{ github.workspace }}/gateway-rs-artifact/gateway-rs
+          DEDICATED64: ${{ github.workspace }}/ds64
+          LINUX_DEPENDENCIES: ${{ github.workspace }}/linux-deps
+          MAGNETAR_SDK: ${{ github.workspace }}/magnetar-sdk
+          VERSION: ${{ needs.version-check.outputs.version }}
+        run: |
+          set -euo pipefail
+          Build/release.sh dist
+          test -f "dist/ClusterForLinux-${VERSION}.tar.gz"
+          ls -l dist
+
+      - name: Test client diagnostics contract and Manager publication bridge
+        run: |
+          dotnet run --project Test/ClientDiagnostics/ClientDiagnostics.csproj -c Release
+          (cd Cli && python3 -m unittest test_client_diagnostics)
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: cluster-linux
+          path: |
+            dist/ClusterForLinux-*.tar.gz
+            dist/ClusterSymbols-*.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 3
+
+  # ---------------------------------------------------------------------------
+  # Release: attach the package to a GitHub release.
+  # ---------------------------------------------------------------------------
+  release:
+    needs: [version-check, build-linux]
+    if: needs.version-check.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download package
+        uses: actions/download-artifact@v8
+        with:
+          name: cluster-linux
+          path: dist
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version-check.outputs.version }}
+          BASE_VERSION: ${{ needs.version-check.outputs.base_version }}
+          DRAFT: ${{ needs.version-check.outputs.draft }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          echo "Assets to attach:"
+          ls -l dist
+
+          tag="v$VERSION"
+          if [ -n "$PR_NUMBER" ]; then
+            # Pull request draft: one refreshed draft per PR, on a tag that can
+            # never collide with the real v<version> release the merge to main
+            # publishes later. Drafts create no git tag, so replacing the
+            # previous one just drops its stale package.
+            tag="v$VERSION-pr.$PR_NUMBER"
+            gh release delete "$tag" --repo "${{ github.repository }}" --yes >/dev/null 2>&1 || true
+            gh release create "$tag" \
+              --repo "${{ github.repository }}" \
+              --draft \
+              --target "$PR_HEAD_SHA" \
+              --title "Cluster $tag" \
+              --notes "Draft build of pull request #$PR_NUMBER, which bumps the version from $BASE_VERSION to $VERSION." \
+              dist/ClusterForLinux-*.tar.gz dist/ClusterSymbols-*.tar.gz dist/SHA256SUMS
+          elif [ "$DRAFT" = "true" ]; then
+            # Keep the tag unique so a manual draft never collides with an
+            # existing release of the same version.
+            if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+              tag="v$VERSION-build.${{ github.run_number }}"
+            fi
+            gh release create "$tag" \
+              --repo "${{ github.repository }}" \
+              --draft \
+              --title "Cluster $tag" \
+              --notes "Manual draft build of cluster $VERSION." \
+              dist/ClusterForLinux-*.tar.gz dist/ClusterSymbols-*.tar.gz dist/SHA256SUMS
+          else
+            gh release create "$tag" \
+              --repo "${{ github.repository }}" \
+              --latest \
+              --target "${{ github.sha }}" \
+              --title "Cluster v$VERSION" \
+              --notes "Automated release of cluster $VERSION." \
+              dist/ClusterForLinux-*.tar.gz dist/ClusterSymbols-*.tar.gz dist/SHA256SUMS
+          fi

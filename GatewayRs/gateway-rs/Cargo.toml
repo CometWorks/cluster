@@ -1,0 +1,27 @@
+[package]
+name = "gateway-rs"
+version = "0.1.0"
+edition = "2024"
+description = "Rust data plane of the cluster gateway: Direct/Steam client legs and node links, driven by ClusterRegistry over the relay IPC (T-0229)"
+license = "AGPL-3.0-only"
+publish = false
+build = "build.rs"
+
+[dependencies]
+relay = { path = "../relay" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+socket2 = { version = "0.6", features = ["all"] }
+crossbeam-channel = "0.5"
+lnl = { path = "../lnl" }
+mio = { version = "1", features = ["os-poll", "net"] }
+# Steam GameServer (T-0229 milestone 5). steamworks-sys bundles libsteam_api.so (SDK interfaces
+# SteamGameServer015 / SteamNetworking006, as ClusterRegistry's); build.rs stages it next to the binary.
+steamworks = "=0.13.1"
+steamworks-sys = "=0.13.0"
+
+[build-dependencies]
+# Only so that steamworks-sys's build script (which unpacks libsteam_api.so) has run before
+# build.rs looks for the library to stage it.
+steamworks-sys = "=0.13.0"

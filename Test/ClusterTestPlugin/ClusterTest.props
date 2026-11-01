@@ -1,0 +1,78 @@
+<Project>
+  <!-- Shared build of the test utility plugin. Node/ClusterTestNode.csproj and
+       WA/ClusterTestWA.csproj import this with ClusterAssembly set to the cluster plugin they
+       extend (ClusterNode or WorldAuthority); both compile Source/. Build with build.sh, which
+       points ClusterPlugins at the release package under test. -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>ClusterTestPlugin</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>14</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PlatformTarget>x64</PlatformTarget>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <DefineConstants>$(DefineConstants);TRACE;MAGNETAR;LOCAL_BUILD</DefineConstants>
+    <!-- The package's plugins/ folder (ClusterNode/ClusterNode.dll, WorldAuthority/WorldAuthority.dll). -->
+    <ClusterPlugins Condition=" '$(ClusterPlugins)' == '' ">$(CLUSTER_PACKAGE)/plugins</ClusterPlugins>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <PublicizerClearCacheOnClean>true</PublicizerClearCacheOnClean>
+    <PublicizerRuntimeStrategies>Unsafe;IgnoresAccessChecksTo</PublicizerRuntimeStrategies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)Source/**/*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="$(ClusterAssembly)">
+      <HintPath>$(ClusterPlugins)/$(ClusterAssembly)/$(ClusterAssembly).dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="PluginSdk">
+      <HintPath>$(MagnetarBinDir)PluginSdk.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Dedicated Server assemblies the routes use (provided by the game at runtime). -->
+  <ItemGroup>
+    <Reference Include="Sandbox.Common"><HintPath>$(Dedicated64Dir)Sandbox.Common.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="Sandbox.Game"><HintPath>$(Dedicated64Dir)Sandbox.Game.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="SpaceEngineers.Game"><HintPath>$(Dedicated64Dir)SpaceEngineers.Game.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="SpaceEngineers.ObjectBuilders"><HintPath>$(Dedicated64Dir)SpaceEngineers.ObjectBuilders.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="VRage"><HintPath>$(Dedicated64Dir)VRage.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="VRage.Game"><HintPath>$(Dedicated64Dir)VRage.Game.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="VRage.Library"><HintPath>$(Dedicated64Dir)VRage.Library.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="VRage.Math"><HintPath>$(Dedicated64Dir)VRage.Math.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="HavokWrapper"><HintPath>$(Dedicated64Dir)HavokWrapper.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="VRage.Network"><HintPath>$(Dedicated64Dir)VRage.Network.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="VRage.Scripting"><HintPath>$(Dedicated64Dir)VRage.Scripting.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="VRage.Dedicated"><HintPath>$(Dedicated64Dir)VRage.Dedicated.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="ProtoBuf.Net.Core"><HintPath>$(Dedicated64Dir)ProtoBuf.Net.Core.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="ProtoBuf.Net"><HintPath>$(Dedicated64Dir)ProtoBuf.Net.dll</HintPath><Private>False</Private></Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Lib.Harmony" Version="2.4.2" ExcludeAssets="runtime" />
+    <PackageReference Include="Krafs.Publicizer" Version="2.3.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Publicize Include="$(ClusterAssembly)" />
+    <Publicize Include="Sandbox.Game" />
+    <Publicize Include="Sandbox.Common" />
+    <Publicize Include="SpaceEngineers.Game" />
+    <Publicize Include="VRage" />
+    <Publicize Include="VRage.Game" />
+    <Publicize Include="VRage.Library" />
+    <Publicize Include="VRage.Math" />
+    <DoNotPublicize Include="Sandbox.Game:Sandbox.Game.Entities.MyEntities.OnEntityAdd"/>
+    <DoNotPublicize Include="Sandbox.Game:Sandbox.Game.Entities.MyEntities.OnEntityRemove"/>
+  </ItemGroup>
+</Project>

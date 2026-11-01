@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Cluster CLI wrapper for an unpacked deployment package. Points cluster.py at the packaged
+# Gateway, world tool, compiled plugins and example world, derives the game-install variable
+# from SPACE_ENGINEERS_SERVER, and checks that the pieces a package may not carry are reachable:
+#
+#   SPACE_ENGINEERS_SERVER    root of a SpaceEngineersDedicatedServer install (required unless
+#                             SPACE_ENGINEERS_BIN64 names its DedicatedServer64 folder directly)
+#   MAGNETAR_HOME             Magnetar install tree holding MagnetarInterim.bin. Default: the
+#                             package's magnetar/ when it ships one, else ~/.config/Magnetar
+#                             (XDG_CONFIG_HOME/Magnetar when that is set).
+#   CLUSTER_PLUGIN_BINARIES   compiled node / WA plugins, the folder holding ClusterNode/ and
+#                             WorldAuthority/ (each <Name>.dll + <Name>.xml + dependencies).
+#                             Default: the package's plugins/. Installed as Magnetar LOCAL
+#                             plugins into each node's config dir; never taken from the hub.
+#   CLUSTER_PLUGIN_SOURCE     developer override: a cluster checkout (ClusterNode.xml and
+#                             WorldAuthority.xml) registered as dev folders Magnetar compiles,
+#                             instead of the packaged binaries.
+#   DIRECT_TRANSPORT_SOURCE   developer override: a Direct Transport checkout
+#                             (DirectTransportServer.xml) as a dev folder. Unset: the plugin
+#                             comes from the Magnetar hub (id direct-transport).
+#   DIRECT_TRANSPORT_BINARIES compiled, pinned DirectTransport/ bundle (DLL, XML and
+#                             LiteNetLib.dll); mutually exclusive with SOURCE. Installed
+#                             locally without resolving or compiling transport on nodes.
+#   CLUSTER_ROOT              run root, the default of --root. Without it --root is required.
+#
+# Everything after the wrapper name is passed to cluster.py unchanged; see docs/ClusterCLI.md.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# first_with FILE DIR... -> the first DIR holding FILE, else the last DIR (for the error message)
+first_with() {
+    local file="$1" dir; shift
+    for dir; do [[ -f "$dir/$file" ]] && { echo "$dir"; return; }; done
+    echo "$dir"
+}
+
+if [[ -n "${SPACE_ENGINEERS_SERVER:-}" ]]; then
+    export SPACE_ENGINEERS_BIN64="${SPACE_ENGINEERS_BIN64:-$SPACE_ENGINEERS_SERVER/DedicatedServer64}"
+fi
+[[ -n "${SPACE_ENGINEERS_BIN64:-}" ]] || { echo "SPACE_ENGINEERS_BIN64 is not set (set SPACE_ENGINEERS_SERVER or SPACE_ENGINEERS_BIN64)" >&2; exit 1; }
+[[ -f "$SPACE_ENGINEERS_BIN64/SpaceEngineersDedicated.exe" ]] || { echo "not a DedicatedServer64 directory: $SPACE_ENGINEERS_BIN64" >&2; exit 1; }
+
+export MAGNETAR_HOME="${MAGNETAR_HOME:-$(first_with MagnetarInterim.bin "$ROOT/magnetar" "${XDG_CONFIG_HOME:-$HOME/.config}/Magnetar")}"
+[[ -x "$MAGNETAR_HOME/MagnetarInterim.bin" ]] || { echo "no Magnetar launcher at $MAGNETAR_HOME/MagnetarInterim.bin (set MAGNETAR_HOME; see README.md)" >&2; exit 1; }
+if [[ -n "${CLUSTER_PLUGIN_SOURCE:-}" ]]; then
+    [[ -f "$CLUSTER_PLUGIN_SOURCE/ClusterNode.xml" ]] || { echo "no cluster plugin sources at $CLUSTER_PLUGIN_SOURCE (CLUSTER_PLUGIN_SOURCE)" >&2; exit 1; }
+elif [[ -z "${CLUSTER_PLUGIN_BINARIES:-}" && ! -f "$ROOT/plugins/ClusterNode/ClusterNode.dll" && -f "$ROOT/plugins/cluster/ClusterNode.xml" ]]; then
+    # Bench archive (Build/package.sh): plugin sources as one-commit repositories, no binaries.
+    export CLUSTER_PLUGIN_SOURCE="$ROOT/plugins/cluster"
+else
+    export CLUSTER_PLUGIN_BINARIES="${CLUSTER_PLUGIN_BINARIES:-$ROOT/plugins}"
+    for plugin in ClusterNode WorldAuthority; do
+        [[ -f "$CLUSTER_PLUGIN_BINARIES/$plugin/$plugin.dll" && -f "$CLUSTER_PLUGIN_BINARIES/$plugin/$plugin.xml" ]] \
+            || { echo "no compiled $plugin plugin under $CLUSTER_PLUGIN_BINARIES (set CLUSTER_PLUGIN_BINARIES, or CLUSTER_PLUGIN_SOURCE for a checkout; see README.md)" >&2; exit 1; }
+    done
+fi
+if [[ -n "${DIRECT_TRANSPORT_BINARIES:-}" ]]; then
+    [[ -z "${DIRECT_TRANSPORT_SOURCE:-}" ]] || { echo "DIRECT_TRANSPORT_BINARIES and DIRECT_TRANSPORT_SOURCE are mutually exclusive" >&2; exit 1; }
+    for file in DirectTransport.dll DirectTransport.xml LiteNetLib.dll; do
+        [[ -s "$DIRECT_TRANSPORT_BINARIES/$file" ]] || { echo "missing compiled transport file: $DIRECT_TRANSPORT_BINARIES/$file" >&2; exit 1; }
+    done
+elif [[ -z "${DIRECT_TRANSPORT_SOURCE:-}" && -f "$ROOT/plugins/direct-transport/DirectTransportServer.xml" ]]; then
+    export DIRECT_TRANSPORT_SOURCE="$ROOT/plugins/direct-transport"  # bench archive lineage
+fi
+if [[ -n "${DIRECT_TRANSPORT_SOURCE:-}" && "${DIRECT_TRANSPORT_SOURCE,,}" != hub ]]; then
+    [[ -f "$DIRECT_TRANSPORT_SOURCE/DirectTransportServer.xml" ]] || { echo "no Direct Transport plugin sources at $DIRECT_TRANSPORT_SOURCE (DIRECT_TRANSPORT_SOURCE)" >&2; exit 1; }
+fi
+
+export MAGNETAR_GATEWAY_DLL="${MAGNETAR_GATEWAY_DLL:-$ROOT/registry/ClusterRegistry.dll}"
+export MAGNETAR_WORLD_TOOL="${MAGNETAR_WORLD_TOOL:-$ROOT/tools/MagnetarWorld/MagnetarWorld.dll}"
+export CLUSTER_WORLD_TEMPLATE="${CLUSTER_WORLD_TEMPLATE:-$ROOT/examples/Cluster-Simple}"
+
+exec python3 "$ROOT/cli/cluster.py" "$@"

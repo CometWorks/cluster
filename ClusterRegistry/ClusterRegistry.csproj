@@ -1,0 +1,78 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>14</LangVersion>
+    <UseAppHost>true</UseAppHost>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Steamworks.NET (Valve's managed binding, not an SE assembly) with libsteam_api.so, and the
+         Linux EOS SDK, come from the CometWorks linux-dependencies release that
+         Build/fetch-linux-dependencies.sh lays out under $(LinuxDependencies) (Directory.Build.props).
+         A built Magnetar tree carries the same Steam pair, so a checkout beside one builds without
+         the fetch as long as the EOS library is there. -->
+    <SteamworksDir>$(LinuxDependencies)/steam/</SteamworksDir>
+    <SteamworksDir Condition="!Exists('$(SteamworksDir)Steamworks.NET.dll') and Exists('$(MagnetarBinDir)Steamworks.NET.dll')">$(MagnetarBinDir)</SteamworksDir>
+    <EosNativeDir>$(LinuxDependencies)/se1/</EosNativeDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../Shared/Cluster/Diagnostics/Protocol/DiagnosticsProtocol.cs" Link="Protocol/DiagnosticsProtocol.cs" />
+    <Compile Include="../Shared/Cluster/CharacterReapPermit.cs" Link="Protocol/CharacterReapPermit.cs" />
+    <!-- T-0321: the node's addressing/credential rules, so the registry self-test covers them without a live node. -->
+    <Compile Include="../Shared/Cluster/ClusterNet.cs" Link="Protocol/ClusterNet.cs" />
+    <Compile Include="../Shared/Cluster/ProxiedSavePath.cs" Link="Protocol/ProxiedSavePath.cs" />
+    <!-- T-0347: the node's journal of Final saves the registry never catalogued, so the registry self-test reads what the node writes. -->
+    <Compile Include="../Shared/Cluster/UnregisteredFinals.cs" Link="Protocol/UnregisteredFinals.cs" />
+    <!-- T-0368: the node's voxel carry policy, so its rules run in the registry self-test (the plugin's sections need a live node). -->
+    <Compile Include="../Shared/Cluster/VoxelCarryPolicy.cs" Link="Protocol/VoxelCarryPolicy.cs" />
+    <!-- T-0396: what a client-view adopt destroys before it re-delivers a replicable still on its way. -->
+    <Compile Include="../Shared/Cluster/RedeliverPolicy.cs" Link="Protocol/RedeliverPolicy.cs" />
+    <!-- T-0340: the per-host save store's paths and no-replace install, shared with both plugins. -->
+    <Compile Include="../Shared/Cluster/HostSaveStore.cs" Link="Protocol/HostSaveStore.cs" />
+    <!-- T-0340 step 5: the save-file worker and streaming, so the listener-latency test runs in the registry self-test. -->
+    <Compile Include="../Shared/Cluster/SaveFileServing.cs" Link="Protocol/SaveFileServing.cs" />
+    <!-- T-0324: TCP_NODELAY for the control HttpListener, shared with the node control server. -->
+    <Compile Include="../Shared/Cluster/HttpListenerNoDelay.cs" Link="Protocol/HttpListenerNoDelay.cs" />
+    <Compile Include="../Shared/Cluster/HttpListenerLengthRequired.cs" Link="Protocol/HttpListenerLengthRequired.cs" />
+    <!-- SE-796: the world settings hash of node admission, shared with the node's registration. -->
+    <Compile Include="../Shared/Cluster/WorldSettingsHash.cs" Link="Protocol/WorldSettingsHash.cs" />
+    <!-- SE1-0018: the PluginSdk contract the cluster needs, shared with the plugins' runtime check. -->
+    <Compile Include="../Shared/Cluster/PluginSdkContract.cs" Link="Protocol/PluginSdkContract.cs" />
+    <!-- T-0374: the placeholder id range a Closed node may claim for its drain handover. -->
+    <Compile Include="../Shared/Cluster/PlaceholderPartitionIds.cs" Link="Protocol/PlaceholderPartitionIds.cs" />
+    <PackageReference Include="LiteNetLib" Version="1.3.1" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+    <ProjectReference Include="../ClusterRegistry.AdminContract/ClusterRegistry.AdminContract.csproj" />
+    <Reference Include="Steamworks.NET">
+      <HintPath>$(SteamworksDir)Steamworks.NET.dll</HintPath>
+    </Reference>
+    <None Include="$(SteamworksDir)libsteam_api.so" Link="libsteam_api.so" CopyToOutputDirectory="PreserveNewest" />
+    <!-- EOS: the managed binding is the game's EOSSDK.dll from DedicatedServer64. It imports the
+         Windows library name, so the Linux shared object is staged under both names for the
+         DllImport resolver. -->
+    <Reference Include="EOSSDK">
+      <HintPath>$(Dedicated64Dir)EOSSDK.dll</HintPath>
+      <!-- Packaging build: EOSSDK.dll is a game binary; the deployment package excludes it and
+           Program resolves it at runtime from the user-supplied DedicatedServer64
+           (SPACE_ENGINEERS_BIN64). -->
+      <Private Condition="'$(MagnetarPackaging)' == 'true'">false</Private>
+    </Reference>
+    <None Include="$(EosNativeDir)libEOSSDK-Linux-Shipping.so" Link="libEOSSDK-Linux-Shipping.so" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(EosNativeDir)libEOSSDK-Linux-Shipping.so" Link="EOSSDK-Shipping.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="CheckNativeInputs" BeforeTargets="BeforeBuild">
+    <Error Condition="!Exists('$(SteamworksDir)Steamworks.NET.dll') or !Exists('$(SteamworksDir)libsteam_api.so')" Text="Steamworks.NET.dll and libsteam_api.so not found under $(SteamworksDir): run Build/fetch-linux-dependencies.sh or set LinuxDependencies in Directory.Build.props.user" />
+    <Error Condition="!Exists('$(EosNativeDir)libEOSSDK-Linux-Shipping.so')" Text="libEOSSDK-Linux-Shipping.so not found under $(EosNativeDir): run Build/fetch-linux-dependencies.sh or set LinuxDependencies in Directory.Build.props.user" />
+    <Error Condition="!Exists('$(Dedicated64Dir)EOSSDK.dll')" Text="EOSSDK.dll not found under $(Dedicated64Dir): point Dedicated64 at a DedicatedServer64 folder (Directory.Build.props.user or -p:Dedicated64=...)" />
+  </Target>
+
+  <Target Name="BuildSteamApiShim" AfterTargets="Build" Inputs="Native/steam_api64_shim.c" Outputs="$(OutDir)libsteam_api64.so">
+    <!-- Steamworks.NET imports steam_api64; the shim forwards the renamed GameServer init symbol. -->
+    <Exec Command="gcc -shared -fPIC -Wl,-rpath,'$ORIGIN' -L&quot;$(SteamworksDir)&quot; -o &quot;$(OutDir)libsteam_api64.so&quot; Native/steam_api64_shim.c -lsteam_api" />
+  </Target>
+</Project>

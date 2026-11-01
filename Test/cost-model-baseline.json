@@ -1,0 +1,6 @@
+{
+  "alphaMsPerByte": 0.00033,
+  "gammaMsPerSwitch": 254.0,
+  "interceptMs": 93.0,
+  "blessed": "P3-CST-01 run g-cst01-2, 2026-07-31, 18 samples (buckets 10/12k/24k/48k blocks x3 + 6 character transfers)"
+}

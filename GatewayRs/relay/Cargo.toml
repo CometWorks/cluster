@@ -1,0 +1,9 @@
+[package]
+name = "relay"
+version = "0.1.0"
+edition = "2024"
+description = "gateway-rs data-plane core: per-client routing state and the per-packet relay rules (sans-IO)"
+license = "AGPL-3.0-only"
+publish = false
+
+[dependencies]

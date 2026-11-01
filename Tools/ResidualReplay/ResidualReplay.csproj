@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Replays a retained handover-diff dump pair through the REAL residual walk in the BUILT
+       plugin assembly, by reflection, and prints every residual plus the signature.
+
+       Why reflection and not a project reference: this tool must not contain a copy of any part
+       of the comparison. On 2026-09-13 I reimplemented NormalizeDocument offline to explain an
+       abort's residuals=20, published a per-cause split, corrected it, published a second, and
+       withdrew that too - the replica had 2 of the normalizer's ~25 passes, and matched the
+       logged TOTAL only because two errors of opposite sign cancelled. A matching total reads as
+       validation and is not.
+
+       VALIDATE IT BEFORE YOU USE IT. Point it at a dump pair whose abort is in a node log and
+       check it reproduces that line's residuals=N AND residual-signature. If it does not, the
+       assembly, the dump or the invocation is wrong and nothing it prints means anything.
+       Unmodified 74b95d1 reproduces partition 4087's 20 / 75e913f6e3fcf0f9 on all four pairs.
+
+       usage: dotnet ResidualReplay.dll <ClusterNode.dll> <source.xml> <target.xml> [gameDir] -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AssemblyName>ResidualReplay</AssemblyName>
+    <RootNamespace>ResidualReplay</RootNamespace>
+    <RunPostBuildEvent>Never</RunPostBuildEvent>
+  </PropertyGroup>
+</Project>

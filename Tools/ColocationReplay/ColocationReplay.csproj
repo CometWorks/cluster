@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Replays REAL recorded node partition reports through the REAL ChooseMove in the BUILT
+       ClusterRegistry assembly, by reflection, at two ColocationEngageFraction values, and
+       reports what the hysteresis would have changed.
+
+       Why reflection and not a project reference: this tool must not contain a copy of any part
+       of the placement rule. An offline replica of a pipeline produced two wrong published
+       answers on 2026-09-13 by matching a logged total through cancelling errors.
+
+       VALIDATE IT BEFORE YOU USE IT: at fraction 1.0 it must reproduce co-location decisions
+       that are in gateway.log. If it does not, the assembly, the snapshots or the invocation is
+       wrong and nothing it prints means anything.
+
+       usage: dotnet ColocationReplay.dll <ClusterRegistry.dll> <node-log> [more node-logs...] -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AssemblyName>ColocationReplay</AssemblyName>
+    <RootNamespace>ColocationReplay</RootNamespace>
+    <RunPostBuildEvent>Never</RunPostBuildEvent>
+  </PropertyGroup>
+</Project>

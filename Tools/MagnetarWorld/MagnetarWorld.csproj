@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- World tool of the cluster: splits a vanilla world into partition seeds, verifies and converts
+       partition saves. Built against the stock DedicatedServer64 assemblies; at runtime it resolves
+       them from SPACE_ENGINEERS_BIN64 (see Program.cs), so the deployment archive carries only the
+       tool itself. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>13.0</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <RootNamespace>MagnetarWorld</RootNamespace>
+    <AssemblyName>MagnetarWorld</AssemblyName>
+    <NoWarn>$(NoWarn);CS8632;CS0162</NoWarn>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <RunPostBuildEvent>Never</RunPostBuildEvent>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Bootstrap.cs" />
+    <Compile Include="CompatPatches.cs" />
+    <Compile Include="../../Shared/Cluster/PartitionSaveFile.cs" Link="PartitionSaveFile.cs" />
+    <Compile Include="../../Shared/Cluster/HostSaveStore.cs" Link="HostSaveStore.cs" />
+    <Compile Include="../../Shared/Cluster/GlobalSaveFile.cs" Link="GlobalSaveFile.cs" />
+    <Compile Include="../../Shared/Cluster/ShipStorageRecord.cs" Link="ShipStorageRecord.cs" />
+    <Compile Include="../../Shared/Cluster/VoxelJournalCodec.cs" Link="VoxelJournalCodec.cs" />
+    <Compile Include="../../Shared/Cluster/BlockBuilderEntry.cs" Link="BlockBuilderEntry.cs" />
+    <Compile Include="../../Shared/Cluster/BlockSafeZones.Entry.cs" Link="BlockSafeZones.Entry.cs" />
+    <Compile Include="../../Shared/Cluster/AdminSafeZones.Record.cs" Link="AdminSafeZones.Record.cs" />
+    <PackageReference Include="System.IO.Hashing" Version="10.0.0" />
+    <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
+    <PackageReference Include="Lib.Harmony" Version="2.4.2" />
+    <PackageReference Include="Krafs.Publicizer" Version="2.3.0" PrivateAssets="all" />
+    <Publicize Include="VRage.Game" />
+    <Publicize Include="VRage" />
+    <Publicize Include="VRage.Platform.Windows" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="Sandbox.Common"><HintPath>$(Dedicated64Dir)Sandbox.Common.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Sandbox.Game"><HintPath>$(Dedicated64Dir)Sandbox.Game.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="SpaceEngineers.Game"><HintPath>$(Dedicated64Dir)SpaceEngineers.Game.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="SpaceEngineers.ObjectBuilders"><HintPath>$(Dedicated64Dir)SpaceEngineers.ObjectBuilders.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="VRage"><HintPath>$(Dedicated64Dir)VRage.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="VRage.Game"><HintPath>$(Dedicated64Dir)VRage.Game.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="VRage.Library"><HintPath>$(Dedicated64Dir)VRage.Library.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="VRage.Math"><HintPath>$(Dedicated64Dir)VRage.Math.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="VRage.Platform.Windows"><HintPath>$(Dedicated64Dir)VRage.Platform.Windows.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="ProtoBuf.Net"><HintPath>$(Dedicated64Dir)ProtoBuf.Net.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="ProtoBuf.Net.Core"><HintPath>$(Dedicated64Dir)ProtoBuf.Net.Core.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

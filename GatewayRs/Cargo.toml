@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = ["lnl", "relay", "gateway-rs", "interop"]
+
+[workspace.package]
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+rust-version = "1.98"
+
+# Keep debug information for release crash symbolication; packaging separates it from the runtime.
+[profile.release]
+debug = 2
+strip = false

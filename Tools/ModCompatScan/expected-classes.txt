@@ -1,0 +1,26 @@
+# Automatic class per mod: "<mod id> <class>". The fixtures under TestMods pin each rule; the Workshop ids are
+# the T-0242 test corpus (#260 section 3) plus its dependencies, as staged for T-0290 on 2026-09-29
+# (~/cluster-runs/regression/tools/t0290/workshop/244850 on polaris).
+fixture-a-data          A
+fixture-b-gamelogic     B
+fixture-b-client-half   B
+fixture-c-setvariable   C
+fixture-d-scan          D
+fixture-d-adapted       D
+fixture-d-reference     D
+# T-0242 corpus (2026-10-21 scan, game 1.210.014)
+801185519   B   # Colorful Icons: settings in global storage only
+1469072169  B   # HUD Compass: config in global storage only
+1939935505  B   # AQD Armor Expansion: has scripts (a session component and a log file), so not A
+3752735978  A   # Max Speed 1000 m/s
+3154379105  D   # Defense Shields: client messaging
+500818376   D   # Paint Gun: client messaging, world scans
+3099489876  D   # Nanobot Build and Repair (maintained fork): client messaging, world scans
+2687324923  D   # Radio Spectrometry: physics raycasts
+3154371364  D   # WeaponCore
+1521905890  D   # Modular Encounters Systems
+1359618037  D   # Relative Top Speed (dropped from the corpus, still staged)
+1135484957  B   # Parallax Concepts (MES dependency)
+2756894170  B   # Definition Extension API
+758597413   B   # Text HUD API
+806331071   B   # Camera Panning
