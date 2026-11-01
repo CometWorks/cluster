@@ -289,9 +289,10 @@ class PluginManifestsTest(unittest.TestCase):
         return ET.parse(Path(__file__).resolve().parent.parent / name).getroot()
 
     def test_every_manifest_names_runtimes_the_loader_knows(self):
-        for name in ("ClusterNode.xml", "WorldAuthority.xml", "ClusterDiagnosticsClient.xml"):
+        for name, runtimes in (("ClusterNode.xml", "CoreCLR"), ("WorldAuthority.xml", "CoreCLR"),
+                               ("ClusterDiagnosticsClient.xml", "CLR,CoreCLR")):
             with self.subTest(name):
-                self.assertEqual(self.manifest(name).findtext("Runtimes"), "CoreCLR")
+                self.assertEqual(self.manifest(name).findtext("Runtimes"), runtimes)
                 self.assertEqual(self.manifest(name).findtext("Commit"), "TODO")
 
     def test_the_server_plugins_are_linux_only_like_their_transport(self):
