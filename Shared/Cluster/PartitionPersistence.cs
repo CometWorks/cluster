@@ -770,6 +770,7 @@ internal sealed partial class PartitionPersistence
 	public uint GetGeneration(ulong partitionId) => GetState(partitionId).Generation;
 	public void SetGeneration(ulong partitionId, uint generation)
 	{
+		if (OwnedGeneration(partitionId) != generation) OfflineCompensation.CancelScope(partitionId);
 		State state = GetState(partitionId);
 		state.Generation = generation;
 		state.Sequence = 0;
@@ -778,6 +779,7 @@ internal sealed partial class PartitionPersistence
 
 	public void ForgetOwnership(ulong partitionId)
 	{
+		OfflineCompensation.CancelScope(partitionId);
 		lock (m_owned) m_owned.Remove(partitionId);
 		m_partitions.Remove(partitionId);
 	}
@@ -1799,7 +1801,7 @@ internal sealed partial class PartitionPersistence
 				m_apply.Finish(operation);
 				continue;
 			}
-			foreach (ulong input in change.Inputs) { m_state.TryRemove(input, out _); lock (m_owned) m_owned.Remove(input); }
+			foreach (ulong input in change.Inputs) { OfflineCompensation.CancelScope(input); m_state.TryRemove(input, out _); lock (m_owned) m_owned.Remove(input); }
 			foreach ((ulong id, uint generation) in operation.Answer)
 			{
 				m_state[id] = new State { Generation = generation };

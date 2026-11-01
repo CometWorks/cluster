@@ -1,6 +1,14 @@
 using Concealment.Accounting;
 using System.Text.Json;
 
+if (args.Length == 5 && args[0] == "--model-profile")
+{
+    var profile = JsonSerializer.Deserialize<OfflineProfile>(File.ReadAllBytes(args[1]), OfflineProfile.Json)!;
+    var result = OfflineModel.Simulate(profile, long.Parse(args[3]), long.Parse(args[4]));
+    File.WriteAllText(args[2], JsonSerializer.Serialize(new { profile, result }, OfflineProfile.Json));
+    return;
+}
+
 if (args.Length == 1 && args[0] == "--cap") { CapChecks.Run(); return; }
 if (args.Length == 1 && args[0] == "--reservoir") { ReservoirChecks.Run(); return; }
 

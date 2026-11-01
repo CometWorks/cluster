@@ -3149,6 +3149,7 @@ internal sealed partial class ClusterControlServer
 	/// validation sees the source's velocities and the thaw enables and moves it as the source had it.</param>
 	private static void Freeze(Transfer transfer, IEnumerable<MyEntity> entities, IReadOnlyDictionary<long, DeferredBody> deferred = null)
 	{
+		OfflineCompensation.CancelScope(transfer.Partition);
 		foreach (MyEntity entity in entities)
 		{
 			if (entity == null || transfer.Frozen.ContainsKey(entity.EntityId)) continue;

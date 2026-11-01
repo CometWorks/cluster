@@ -947,6 +947,8 @@ internal static class OfflineTestRoutes
         {
             id = b.EntityId, type = b.GetId().ToString(),
             energy = b is MyObjectBuilder_BatteryBlock battery ? (double?)battery.CurrentStoredPower : null,
+            gasRatio = b is MyObjectBuilder_GasTank tank ? (double?)tank.FilledRatio : null,
+            engineGas = b is MyObjectBuilder_FueledPowerProducer engine ? (double?)engine.Capacity : null,
             enabled = b is MyObjectBuilder_FunctionalBlock functional ? (bool?)functional.Enabled : null,
             zone = b is ObjectBuilders.SafeZone.MyObjectBuilder_SafeZoneBlock zoneBlock ? (long?)zoneBlock.SafeZoneId : null,
             upkeep = b.ComponentContainer?.Components.Select(c => c.Component).OfType<MyObjectBuilder_SafeZoneComponent>()
