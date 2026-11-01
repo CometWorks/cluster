@@ -32,6 +32,7 @@
     </DependencyIds>
 
     <Runtimes>CoreCLR</Runtimes>
+    <Platforms>Linux</Platforms>
 
     <Hidden>true</Hidden>
 

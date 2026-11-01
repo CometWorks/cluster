@@ -282,5 +282,23 @@ class PackagedPluginsTest(unittest.TestCase):
                 share.assert_not_called()
 
 
+class PluginManifestsTest(unittest.TestCase):
+    """Pulsar compares Runtimes and Platforms with these names and refuses to load a plugin that names none of them."""
+
+    def manifest(self, name):
+        return ET.parse(Path(__file__).resolve().parent.parent / name).getroot()
+
+    def test_every_manifest_names_runtimes_the_loader_knows(self):
+        for name in ("ClusterNode.xml", "WorldAuthority.xml", "ClusterDiagnosticsClient.xml"):
+            with self.subTest(name):
+                self.assertEqual(self.manifest(name).findtext("Runtimes"), "CoreCLR")
+                self.assertEqual(self.manifest(name).findtext("Commit"), "TODO")
+
+    def test_the_server_plugins_are_linux_only_like_their_transport(self):
+        for name in ("ClusterNode.xml", "WorldAuthority.xml"):
+            with self.subTest(name):
+                self.assertEqual(self.manifest(name).findtext("Platforms"), "Linux")
+
+
 if __name__ == "__main__":
     unittest.main()
