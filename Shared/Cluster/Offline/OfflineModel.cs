@@ -121,7 +121,8 @@ internal static class OfflineModel
 			{
 				int count = profile.Sources.Where(s => s.Curve is { Length: > 1 }).Max(s => s.Curve.Length);
 				double width = profile.SunPeriodFrames / count;
-				step = Math.Min(step, (width - Mod(angleFrame, width)) * engineFramesPerClockFrame);
+				double position = SunPosition(angleFrame, profile.SunPeriodFrames, count);
+				step = Math.Min(step, (Math.Floor(position) + 1 - position) * width * engineFramesPerClockFrame);
 			}
 			for (int i = 0; i < choice.Length; i++)
 			{
@@ -267,8 +268,17 @@ internal static class OfflineModel
 		if (source.Storage >= 0 && p.Storage[source.Storage].Amount <= Epsilon) return 0;
 		if (source.Fuel.Any(f => Available(p, f) < 0.000001m)) return 0;
 		double curve = source.Curve is { Length: > 0 } ? source.Curve[p.SunPeriodFrames <= 0 ? 0
-			: Math.Min(source.Curve.Length - 1, (int)(Mod(sunFrame, p.SunPeriodFrames) / p.SunPeriodFrames * source.Curve.Length))] : 1;
+			: (int)SunPosition(sunFrame, p.SunPeriodFrames, source.Curve.Length) % source.Curve.Length] : 1;
 		return source.Maximum * curve;
+	}
+
+	private static double SunPosition(double frame, double period, int count)
+	{
+		double position = Mod(frame, period) / period * count;
+		// Use the same snapped boundary for rate selection and the next event.
+		// Native float periods can otherwise leave a remainder below the clock's ULP.
+		double boundary = Math.Round(position);
+		return Math.Abs(position - boundary) <= Epsilon ? boundary : position;
 	}
 
 	/// <summary>Priority groups: non-adaptible blackout leaves supply for lower groups, adaptible
