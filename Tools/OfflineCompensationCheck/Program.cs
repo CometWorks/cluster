@@ -9,6 +9,8 @@ if (args.Length == 3 && args[0] == "--zone-environment") { NativeEnvironmentChec
 if (args.Length == 3 && args[0] == "--observed-reference") { NativeObservedCheck.Run(args[1], args[2]); return; }
 if (args.Length == 3 && args[0] == "--observed-short-reference") { NativeObservedCheck.RunShort(args[1], args[2]); return; }
 
+if (args.Length == 3 && args[0] == "--solar-shadow-reference") { NativeSolarShadowCheck.Run(args[1], args[2]); return; }
+
 if (args.Length == 1 && args[0] == "--solar-shadow") { SolarShadowChecks.Run(); return; }
 
 if (args.Length == 1 && args[0] == "--feedback") { FeedbackChecks.Run(); return; }
@@ -16,7 +18,7 @@ if (args.Length == 1 && args[0] == "--feedback") { FeedbackChecks.Run(); return;
 if (args.Length == 2 && args[0] == "--review") { ReviewChecks.Run(args[1]); return; }
 if (args.Length == 1 && args[0] == "--power-budget") { PowerBudgetChecks.Run(); return; }
 
-if (args.Length == 3 && args[0] is "--save-container" or "--solar-pivots")
+if (args.Length == 3 && args[0] is "--save-container" or "--solar-pivots" or "--observation-clock")
 {
     string plugin = Path.GetFullPath(args[1]);
     string[] probes = [Path.GetDirectoryName(plugin), Path.GetFullPath(args[2])];
@@ -38,6 +40,18 @@ if (args.Length == 3 && args[0] is "--save-container" or "--solar-pivots")
         return candidate == null || !File.Exists(candidate) ? null : System.Reflection.Assembly.LoadFrom(candidate);
     };
     var assembly = System.Reflection.Assembly.LoadFrom(plugin);
+    if (args[0] == "--observation-clock")
+    {
+        var convert = assembly.GetType("ClusterPlugin.OfflineCompensation", true).GetMethod("ObservationClockFrames", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        foreach (int seconds in new[] { 0, 1, 5, 180, 600 })
+        {
+            long units = (long)convert.Invoke(null, [seconds]);
+            if (units * 16 < seconds * 1000L || seconds > 0 && (units - 1) * 16 >= seconds * 1000L)
+                throw new Exception("short observation duration must round up in authority units");
+            Console.WriteLine($"PASS {seconds}s => {units} authority units => {units * 16}ms");
+        }
+        return;
+    }
     var method = assembly.GetType("ClusterPlugin.ClusterSelfTest", throwOnError: true).GetMethod(args[0] == "--solar-pivots" ? "OfflineSolarPivots" : "OfflineSaveSections", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
     try { method.Invoke(null, null); }
     catch (System.Reflection.TargetInvocationException e) { throw e.InnerException; }

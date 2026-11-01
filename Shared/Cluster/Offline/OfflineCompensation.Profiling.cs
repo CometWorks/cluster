@@ -237,7 +237,9 @@ internal static partial class OfflineCompensation
 		return profiles.ToArray();
 	}
 
-	private static long RequiredObservationFrames => Math.Max(ClusterConfig.GetInt("offline.observeSeconds") * 60L,
+	// Observation uses the offset-free 16ms authority clock, not native resource frames.
+	internal static long ObservationClockFrames(int seconds) => (seconds * 1000L + 15) / 16;
+	private static long RequiredObservationFrames => Math.Max(ObservationClockFrames(ClusterConfig.GetInt("offline.observeSeconds")),
 		ClusterConfig.Get("offline.longObservation") == "InPlace" ? (long)((MySession.Static?.Settings.SunRotationIntervalMinutes ?? 0) * 60000.0 / 16) : 0);
 
 	private static object ProfilingStatus() => CensusByGroup.Values.Select(c => new { group = c.Group, members = c.Members, state = c.State,
