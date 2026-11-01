@@ -40,6 +40,7 @@ internal static partial class OfflineCompensation
 		public string Signature, EnvironmentSignature;
 		public readonly Dictionary<long, Task<double[]>> Curves = new();
 		public readonly Dictionary<long, List<double[]>> Observations = new();
+		public readonly Dictionary<long, Dictionary<string, decimal>> ReactorDebits = new();
 		public string State = "settling";
 		public OfflineProfile Last;
 	}
@@ -268,10 +269,50 @@ internal static partial class OfflineCompensation
 		if (source != null) foreach (var type in source.ResourceTypes) values.Add(source.CurrentOutputByType(type));
 		for (int i = 0; i < block.InventoryCount; i++)
 		{
-			string stock = string.Join("|", block.GetInventory(i).GetItems().Select(item => item.ItemId + ":" + item.Content.GetId() + ":" + ((decimal)item.Amount).ToString(CultureInfo.InvariantCulture)
+			var census = block is MyReactor && i == 0 && !block.GetInventory(i).GetItems().Any(item => item.Content is MyObjectBuilder_GasContainerObject)
+				? CensusByGroup.Values.FirstOrDefault(c => c.Observations.ContainsKey(block.EntityId)) : null;
+			string stock;
+			if (census != null)
+			{
+				// Only debits observed at the guarded native ConsumeFuel boundary
+				// are normalized. Conveyor pulls and arbitrary mod edits stay visible.
+				var amounts = block.GetInventory(i).GetItems().GroupBy(item => item.Content.GetId().ToString())
+					.ToDictionary(g => g.Key, g => g.Sum(item => (decimal)item.Amount));
+				if (census.ReactorDebits.TryGetValue(block.EntityId, out var debits))
+					foreach (var debit in debits) amounts[debit.Key] = amounts.GetValueOrDefault(debit.Key) + debit.Value;
+				stock = string.Join("|", amounts.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key + ":" + p.Value.ToString(CultureInfo.InvariantCulture)));
+			}
+			else stock = string.Join("|", block.GetInventory(i).GetItems().Select(item => item.ItemId + ":" + item.Content.GetId() + ":" + ((decimal)item.Amount).ToString(CultureInfo.InvariantCulture)
 				+ (item.Content is MyObjectBuilder_GasContainerObject gas ? ":" + gas.GasLevel.ToString("R", CultureInfo.InvariantCulture) : "")));
 			values.Add(BitConverter.ToUInt64(SHA256.HashData(Encoding.UTF8.GetBytes(stock))) & ((1UL << 53) - 1));
 		}
 		return values.ToArray();
+	}
+
+	internal static Action ObserveReactorFuel(MyReactor reactor, float milliseconds)
+	{
+		// Observation must not interfere with the engine if it is unavailable.
+		try
+		{
+			var census = CensusByGroup.Values.FirstOrDefault(c => c.Observations.ContainsKey(reactor.EntityId));
+			if (census == null || Sandbox.Engine.Utils.MyFakes.ENABLE_INFINITE_REACTOR_FUEL
+				|| !reactor.SourceComp.HasCapacityRemaining || reactor.SourceComp.CurrentOutput == 0) return null;
+			var inventory = reactor.GetInventory();
+			float ratio = reactor.SourceComp.CurrentOutput / reactor.BlockDefinition.MaxPowerOutput;
+			var debits = reactor.BlockDefinition.FuelInfos.Select(f =>
+			{
+				// Exact guarded native fixed-point debit, including its minimum quantum.
+				float rate = ratio * f.ConsumptionPerSecond_Items / 1000f;
+				var amount = (VRage.MyFixedPoint)(milliseconds * rate);
+				if (amount == 0) amount = VRage.MyFixedPoint.SmallestPossibleValue;
+				return (Item: f.FuelId.ToString(), Amount: (decimal)VRage.MyFixedPoint.Min(inventory.GetItemAmount(f.FuelId), amount));
+			}).ToArray();
+			return () =>
+			{
+				if (!census.ReactorDebits.TryGetValue(reactor.EntityId, out var totals)) census.ReactorDebits[reactor.EntityId] = totals = new();
+				foreach (var debit in debits) totals[debit.Item] = totals.GetValueOrDefault(debit.Item) + debit.Amount;
+			};
+		}
+		catch { return null; } // The unchanged inventory fingerprint then freezes this block.
 	}
 }
