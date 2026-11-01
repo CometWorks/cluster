@@ -59,5 +59,20 @@ internal static class FeedbackChecks
         var disconnected = Fixture(); disconnected.Storage[1].Resource = "h2#isolated";
         OfflineModel.Simulate(disconnected, 1200, 1200);
         Check(disconnected.Storage[1].Amount == 0 && OfflineModel.Amount(disconnected.Inventories[0], "ice") == 1000, "disconnected circuit consumes no ice");
+        var sampled = Fixture();
+        sampled.Sinks[2].Required = 0;
+        sampled.Storage[0].TickFrames = 100;
+        var sampleResult = OfflineModel.Simulate(sampled, 400, 400);
+        Check(3 - sampled.Storage[0].Amount > sampleResult.ProducerEnergyMWh.Values.Sum() * 1.5,
+            "native Update100 battery cost samples a phase rather than averaging fast feedback");
+        Check(Math.Abs(sampleResult.ProducerEnergyMWh.Values.Sum() - sampleResult.ConsumerEnergyMWh.Values.Sum()) < 1e-10,
+            "sampled stock cost does not change conserved delivered electricity");
+        var tankFeedback = Fixture();
+        tankFeedback.Sinks[1].Required = .001; // capture during a native gas-transfer phase
+        tankFeedback.Storage[1].IdlePower = .000001;
+        tankFeedback.Storage[1].OperationalPower = .001;
+        var tankResult = OfflineModel.Simulate(tankFeedback, 400, 400);
+        Check(tankResult.ConsumerEnergyMWh[3] > 0 && tankResult.ConsumerEnergyMWh[3] < .001 * 400 / 216000 / 2,
+            "tank standby and transfer draw follow endogenous gas flow");
     }
 }

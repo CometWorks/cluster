@@ -30,19 +30,24 @@ internal static class NativeFeedbackCheck
             double modelElectrical = result.ConsumerEnergyMWh.GetValueOrDefault(producer);
             double nativeBattery = baseline.GetProperty("battery").GetDouble() - actual.GetProperty("battery").GetDouble();
             double modelBattery = profile.Storage.Single(s => s.Kind == "Battery").Amount - model.Storage.Single(s => s.Kind == "Battery").Amount;
-            // CurrentStoredPower is float. At 3 MWh the per-frame standby debit can
-            // round away; expose that stock limit instead of claiming 1% stock fidelity.
+            bool sampledStorage = profile.Storage.Single(s => s.Kind == "Battery").TickFrames > 0;
+            // Stock is sampled on Update100, not the integral of the four-frame
+            // output cycle. Keep delivered energy and settled native cost visible.
             float battery = (float)baseline.GetProperty("battery").GetDouble();
-            double nativeFloatBound = frames * (MathF.BitIncrement(battery) - battery) / 2d;
-            double nativeStorageTimerBound = .0011 * 100 / 216000;
+            double nativeFloatBound = (sampledStorage ? 2 : frames / 2d) * (MathF.BitIncrement(battery) - battery);
+            double nativeStorageTimerBound = .002001 * 100 / 216000;
+            double? nativeTotalElectrical = baseline.TryGetProperty("batteryOutput", out _) ? trace.Where(t => t.GetProperty("frame").GetInt64() > 0
+                && t.GetProperty("frame").GetInt64() <= frames).Sum(t => t.GetProperty("batteryOutput").GetDouble()) / 216000 : null;
             bool ok = Math.Abs(gas - modelGas) <= 500d / 60 * 8 + .1 && Math.Abs(settledAndPendingIce - modelIce) <= 25d / 60 * 8 + .01
                 && Math.Abs(nativeElectrical - modelElectrical) < .001 * 8 / 216000 + 1e-10
                 && Math.Abs(result.ProducerEnergyMWh.Values.Sum() - result.ConsumerEnergyMWh.Values.Sum()) < 1e-10
-                && Math.Abs(modelBattery - result.ProducerEnergyMWh.Values.Sum()) < 1e-10
-                && Math.Abs(nativeBattery - modelBattery) <= nativeFloatBound + nativeStorageTimerBound;
+                && (sampledStorage || Math.Abs(modelBattery - result.ProducerEnergyMWh.Values.Sum()) < 1e-10)
+                && Math.Abs(nativeBattery - modelBattery) <= nativeFloatBound + nativeStorageTimerBound
+                && (!nativeTotalElectrical.HasValue || Math.Abs(nativeTotalElectrical.Value - result.ProducerEnergyMWh.Values.Sum()) <= .002001 * 8 / 216000 + 1e-10);
             rows.Add(new { frames, nativeGas = gas, modeledGas = modelGas, nativeIce = ice, pendingGas = pending,
                 nativeSettledAndPendingIce = settledAndPendingIce, modeledIce = modelIce,
                 nativeElectricalMWh = nativeElectrical, modeledElectricalMWh = modelElectrical,
+                nativeTotalElectricalMWh = nativeTotalElectrical, modeledTotalElectricalMWh = result.ProducerEnergyMWh.Values.Sum(), sampledStorage,
                 nativeBatteryDebitMWh = nativeBattery, modeledBatteryDebitMWh = modelBattery,
                 nativeFloatStorageBoundMWh = nativeFloatBound, nativeStorageTimerBoundMWh = nativeStorageTimerBound,
                 events = result.Events, passed = ok });

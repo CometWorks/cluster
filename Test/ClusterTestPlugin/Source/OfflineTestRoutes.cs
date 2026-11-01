@@ -47,6 +47,8 @@ internal static class OfflineTestRoutes
     private static object GasCycleState(MyCubeGrid grid)
     {
         var gas = grid.GetFatBlocks<MyGasGenerator>().Single();
+        var tank = grid.GetFatBlocks<MyGasTank>().Single();
+        var battery = grid.GetFatBlocks<MyBatteryBlock>().Single();
         return new { frame = MySession.Static.GameplayFrameCounter - cycleStart,
             working = gas.IsWorking, enabled = gas.SourceComp.Enabled,
             required = gas.ResourceSink.RequiredInputByType(MyResourceDistributorComponent.ElectricityId),
@@ -54,7 +56,10 @@ internal static class OfflineTestRoutes
             output = gas.SourceComp.CurrentOutputByType(MyResourceDistributorComponent.HydrogenId),
             pending = gas.m_gasOutputAggregate.Values.Sum(),
             ice = (decimal)gas.GetInventory().GetItemAmount(MyDefinitionId.Parse("MyObjectBuilder_Ore/Ice")),
-            battery = grid.GetFatBlocks<MyBatteryBlock>().Single().CurrentStoredPower,
+            battery = battery.CurrentStoredPower, batteryOutput = battery.SourceComp.CurrentOutput,
+            batteryElapsed = MySession.Static.GameplayFrameCounter - battery.m_lastUpdateTime,
+            tankRequired = tank.ResourceSink.RequiredInputByType(MyResourceDistributorComponent.ElectricityId),
+            tankInput = tank.ResourceSink.CurrentInputByType(MyResourceDistributorComponent.ElectricityId),
             tank = grid.GetFatBlocks<MyGasTank>().Single().FilledRatio * grid.GetFatBlocks<MyGasTank>().Single().Capacity };
     }
     private static long target, until;

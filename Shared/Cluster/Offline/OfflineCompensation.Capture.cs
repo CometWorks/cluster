@@ -191,7 +191,8 @@ internal static partial class OfflineCompensation
 				var d = battery.BlockDefinition; int index = p.Storage.Count;
 				p.Storage.Add(new() { Block = block.EntityId, Kind = "Battery", Resource = Resource(MyResourceDistributorComponent.ElectricityId, block),
 					Amount = battery.CurrentStoredPower, Capacity = battery.MaxStoredPower, MaxInput = d.RequiredPowerInput, InputConversion = 1.0 / 216000,
-					Mode = (int)battery.ChargeMode, Pair = true, Enabled = enabled, Full = battery.m_isFull, RechargeEfficiency = d.RechargeMultiplier });
+					Mode = (int)battery.ChargeMode, Pair = true, Enabled = enabled, Full = battery.m_isFull, RechargeEfficiency = d.RechargeMultiplier,
+					ElapsedFrames = Math.Clamp(MySession.Static.GameplayFrameCounter - battery.m_lastUpdateTime, 0, 100) });
 				foreach (var port in sources) { port.Storage = index; port.StorageCost = 1.0 / 216000; port.Kind = "Battery"; port.Maximum = enabled && battery.ChargeMode != Sandbox.ModAPI.Ingame.ChargeMode.Recharge ? d.MaxPowerOutput : 0; }
 			}
 			else if (block is MyGasTank tank)
@@ -200,7 +201,9 @@ internal static partial class OfflineCompensation
 				bool gasEnabled = enabled && (MySession.Static.Settings.EnableOxygen || d.StoredGasId != MyResourceDistributorComponent.OxygenId);
 				p.Storage.Add(new() { Block = block.EntityId, Kind = "Tank", Resource = Resource(d.StoredGasId, block), Amount = tank.FilledRatio * d.Capacity,
 					Capacity = d.Capacity, MaxInput = d.Capacity * 0.05, InputConversion = 1.0 / 60, Mode = ((Sandbox.ModAPI.Ingame.IMyGasTank)tank).Stockpile ? 1 : 0,
-					Pair = true, Enabled = gasEnabled, PowerSink = powerSink, LeakPerFrame = block.IsFunctional ? 0 : d.Capacity * d.LeakPercent / 100.0 });
+					Pair = true, Enabled = gasEnabled, PowerSink = powerSink, LeakPerFrame = block.IsFunctional ? 0 : d.Capacity * d.LeakPercent / 100.0,
+					IdlePower = gasEnabled ? d.StandbyPowerConsumption : 0, OperationalPower = gasEnabled ? d.OperationalPowerConsumption : 0,
+					Transferring = tank.SourceComp.CurrentOutputByType(d.StoredGasId) > 0 || tank.ResourceSink.CurrentInputByType(d.StoredGasId) > 0 });
 				foreach (var port in sources) { port.Storage = index; port.StorageCost = 1.0 / 60; port.Kind = "Tank"; port.PowerSink = powerSink; port.Maximum = gasEnabled && !((Sandbox.ModAPI.Ingame.IMyGasTank)tank).Stockpile ? d.Capacity * 0.05 : 0; }
 			}
 			else if (block is MyGasFueledPowerProducer engine)
@@ -371,6 +374,10 @@ internal static partial class OfflineCompensation
 		if (p.Creative) p.Confidence = "Creative";
 		p.Definitions = definitions.OrderBy(x => x, StringComparer.Ordinal).ToArray();
 		p.ContentHash = ContentHash(p.Definitions);
+		// Fast gas feedback can alias Update100. Preserve its actual sampled storage
+		// settlement rather than charging the averaged electrical waveform to stock.
+		if (p.Sources.Any(s => s.PowerFeedback))
+			foreach (var store in p.Storage.Where(s => s.Kind == "Battery")) store.TickFrames = 100;
 		OfflineModel.Validate(p);
 		return p;
 	}

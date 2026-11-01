@@ -120,8 +120,11 @@ internal static class OfflineModel
 				var store = profile.Storage[i];
 				storageRate[i] += charging[i] * store.InputConversion - store.LeakPerFrame;
 				if (store.Kind == "Battery" && storageRate[i] > 0) storageRate[i] *= store.RechargeEfficiency;
+				if (store.TickFrames > 0) storageRate[i] = 0;
 			}
 			double step = duration - elapsed;
+			foreach (var store in profile.Storage.Where(s => s.TickFrames > 0 && s.Enabled))
+				step = Math.Min(step, Math.Max(1, store.TickFrames - store.ElapsedFrames));
 			for (int i = 0; i < profile.Sources.Count; i++)
 			{
 				var source = profile.Sources[i];
@@ -254,6 +257,21 @@ internal static class OfflineModel
 			{
 				var store = profile.Storage[i];
 				store.Amount = Math.Clamp(store.Amount + storageRate[i] * step, 0, store.Capacity);
+				if (store.TickFrames > 0 && store.Enabled)
+				{
+					store.ElapsedFrames += step;
+					if (store.ElapsedFrames + Epsilon >= store.TickFrames)
+					{
+						double[] phaseOutput = feedback?.SettlementOutput ?? output, phaseCharging = feedback?.SettlementCharging ?? charging;
+						float delivered = (float)profile.Sources.Select((source, index) => source.Storage == i ? phaseOutput[index] : 0).Sum();
+						float received = (float)phaseCharging[i];
+						float net = store.Mode == 2 ? -delivered : store.Mode == 1 ? received : received - delivered;
+						float delta = ((float)store.ElapsedFrames * (1f / 60f) * 1000f) * (net / 3600000f);
+						if (net > 0) delta *= (float)store.RechargeEfficiency;
+						store.Amount = Math.Clamp((float)store.Amount + delta, 0, store.Capacity);
+						store.ElapsedFrames = 0;
+					}
+				}
 				if (store.Kind == "Battery") { if (store.Amount >= store.Capacity - Epsilon) store.Full = true; else if (store.Amount < store.Capacity - Epsilon) store.Full = false; }
 			}
 			for (int i = 0; i < choice.Length; i++)
@@ -285,6 +303,7 @@ internal static class OfflineModel
 				{
 					for (int i = 0; i < profile.Sinks.Count; i++) profile.Sinks[i].Powered = feedback.NextPowered[i];
 					for (int i = 0; i < profile.Sources.Count; i++) profile.Sources[i].Producing = feedback.NextProducing[i];
+					for (int i = 0; i < profile.Storage.Count; i++) profile.Storage[i].Transferring = feedback.NextTransferring[i];
 					profile.ResourceFrameRemaining = 1;
 				}
 			}
@@ -302,7 +321,7 @@ internal static class OfflineModel
 		return result;
 	}
 
-	private sealed record FeedbackCycle(int Period, bool Steady, bool[] NextPowered, bool[] NextProducing, double[] SettlementOutput, double[] PoweredFraction);
+	private sealed record FeedbackCycle(int Period, bool Steady, bool[] NextPowered, bool[] NextProducing, bool[] NextTransferring, double[] SettlementOutput, double[] SettlementCharging, double[] PoweredFraction);
 
 	/// <summary>Native BeforeSimulation distributor / deferred working callback / AfterSimulation
 	/// demand feedback. Stocks are held only while finding the finite allocation cycle; the ordinary
@@ -312,9 +331,10 @@ internal static class OfflineModel
 	{
 		bool[] powered = p.Sinks.Select(s => s.Powered).ToArray();
 		bool[] producing = p.Sources.Select(s => s.Producing).ToArray();
+		bool[] transferring = p.Storage.Select(s => s.Transferring).ToArray();
 		var states = new Dictionary<string, int>();
-		var phases = new List<(double[] Input, double[] Output, double[] Charging, bool[] Powered, bool[] Producing)>();
-		string Key() => string.Concat(powered.Select(v => v ? '1' : '0')) + ":" + string.Concat(producing.Select(v => v ? '1' : '0'));
+		var phases = new List<(double[] Input, double[] Output, double[] Charging, bool[] Powered, bool[] Producing, bool[] Transferring)>();
+		string Key() => string.Concat(powered.Select(v => v ? '1' : '0')) + ":" + string.Concat(producing.Select(v => v ? '1' : '0')) + ":" + string.Concat(transferring.Select(v => v ? '1' : '0'));
 		while (true)
 		{
 			string key = Key();
@@ -326,7 +346,7 @@ internal static class OfflineModel
 				{
 					var phase = phases[0];
 					Array.Copy(phase.Input, input, input.Length); Array.Copy(phase.Output, output, output.Length); Array.Copy(phase.Charging, charging, charging.Length);
-					return new(1, false, phase.Powered, phase.Producing, phase.Output, phase.Powered.Select(v => v ? 1d : 0).ToArray());
+					return new(1, false, phase.Powered, phase.Producing, phase.Transferring, phase.Output, phase.Charging, phase.Powered.Select(v => v ? 1d : 0).ToArray());
 				}
 				Array.Clear(input); Array.Clear(output); Array.Clear(charging);
 				foreach (var phase in phases)
@@ -335,7 +355,7 @@ internal static class OfflineModel
 					for (int i = 0; i < output.Length; i++) output[i] += phase.Output[i] / phases.Count;
 					for (int i = 0; i < charging.Length; i++) charging[i] += phase.Charging[i] / phases.Count;
 				}
-				return new(phases.Count, phases.Count == 1, powered, producing, phases[^1].Output,
+				return new(phases.Count, phases.Count == 1, powered, producing, transferring, phases[^1].Output, phases[^1].Charging,
 					Enumerable.Range(0, input.Length).Select(i => phases.Count(phase => phase.Powered[i]) / (double)phases.Count).ToArray());
 			}
 			if (phases.Count >= 256) throw new InvalidDataException("Native resource feedback cycle did not repeat");
@@ -343,6 +363,9 @@ internal static class OfflineModel
 			var demand = (double[])required.Clone();
 			foreach (var ports in p.Sources.Select((s, i) => (Source: s, Index: i)).Where(s => s.Source.PowerFeedback).GroupBy(s => s.Source.PowerSink))
 				demand[ports.Key] = ports.Any(s => producing[s.Index]) ? ports.Max(s => s.Source.OperationalPower) : ports.Max(s => s.Source.IdlePower);
+			for (int i = 0; i < p.Storage.Count; i++)
+				if (p.Storage[i].PowerSink >= 0 && p.Storage[i].IdlePower >= 0)
+					demand[p.Storage[i].PowerSink] = transferring[i] ? p.Storage[i].OperationalPower : p.Storage[i].IdlePower;
 			var available = (double[])maximum.Clone();
 			for (int i = 0; i < available.Length; i++)
 				if (p.Sources[i].PowerSink >= 0 && !powered[p.Sources[i].PowerSink]) available[i] = 0;
@@ -350,8 +373,10 @@ internal static class OfflineModel
 			Allocate(p, demand, available, input, output, charging, stores);
 			bool[] nextPowered = Enumerable.Range(0, p.Sinks.Count).Select(i => Powered(p, i, demand, input)).ToArray();
 			bool[] nextProducing = output.Select(v => v > Epsilon).ToArray();
-			phases.Add(((double[])input.Clone(), (double[])output.Clone(), (double[])charging.Clone(), nextPowered, nextProducing));
-			powered = nextPowered; producing = nextProducing;
+			bool[] nextTransferring = Enumerable.Range(0, p.Storage.Count).Select(i => charging[i] > Epsilon
+				|| Enumerable.Range(0, p.Sources.Count).Any(j => p.Sources[j].Storage == i && nextProducing[j])).ToArray();
+			phases.Add(((double[])input.Clone(), (double[])output.Clone(), (double[])charging.Clone(), nextPowered, nextProducing, nextTransferring));
+			powered = nextPowered; producing = nextProducing; transferring = nextTransferring;
 		}
 	}
 
@@ -618,6 +643,10 @@ internal static class OfflineModel
 		foreach (var s in p.Storage)
 			if (!double.IsFinite(s.Amount) || !double.IsFinite(s.Capacity) || s.Amount < -Epsilon || s.Amount > s.Capacity + Epsilon
 				|| s.PowerSink < -1 || s.PowerSink >= p.Sinks.Count
+				|| !double.IsFinite(s.IdlePower) || s.IdlePower < 0 && s.IdlePower != -1 || !double.IsFinite(s.OperationalPower) || s.OperationalPower < 0
+				|| !double.IsFinite(s.TickFrames) || s.TickFrames < 0 || s.TickFrames > 100
+				|| !double.IsFinite(s.ElapsedFrames) || s.ElapsedFrames < 0 || s.ElapsedFrames > 100
+				|| s.TickFrames > 0 && s.Kind != "Battery"
 				|| s.Capacity < 0 || !double.IsFinite(s.MaxInput) || s.MaxInput < 0 || !double.IsFinite(s.InputConversion) || s.InputConversion < 0)
 				throw new InvalidDataException("Invalid offline reservoir");
 		foreach (var source in p.Sources)

@@ -96,6 +96,10 @@ internal sealed class OfflineStorage
 	public int PowerSink = -1;
 	public bool Pair, Enabled = true, Full;
 	public double RechargeEfficiency = 1;
+	public double IdlePower = -1, OperationalPower;
+	public bool Transferring;
+	// Native batteries sample current input/output on Update100, like reactor fuel.
+	public double TickFrames, ElapsedFrames;
 }
 internal sealed class OfflineRecipe
 {
