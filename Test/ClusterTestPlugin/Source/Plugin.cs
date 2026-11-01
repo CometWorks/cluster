@@ -31,6 +31,7 @@ public class Plugin : IPlugin
     public void Update()
     {
         FastTestHarness.Update();   // T-0292 speed drives
+        OfflineTestRoutes.ObserveZoneRestore();
     }
 
     public void Dispose()

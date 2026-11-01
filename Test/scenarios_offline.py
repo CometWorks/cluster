@@ -1664,10 +1664,11 @@ def offline_zone_environment_wake(bench):
     started = time.monotonic()
     while time.monotonic() - started < 180:
         row = _offline_row(bench, partition)
-        if not row or row.get("LoadRequestedNode"): raise ClusterError("environment fixture woke before explicit radio action")
+        if not row or row.get("LoadRequestedNode"): raise ClusterError("environment fixture woke before its explicit shared recovery claim")
         time.sleep(5)
     _put_config(bench, "node-1", {"offline.enabled": "false"})
     bench.cluster.node("node-1", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
+    bench.cluster.node("node-1", f"/offline-test-zone-watch?grid={grid}", "POST")
     # The antenna was genuinely unpowered at freeze and has no offline proxy.
     # Exercise the ordinary shared load claim, as approach/join would, rather
     # than inventing a radio path for an antenna that was not broadcasting.
@@ -1675,7 +1676,13 @@ def offline_zone_environment_wake(bench):
     applied = _poll(lambda: _applied(bench, "node-1"), 90)
     _require(bench, "ordinary claim reaches actual shared environmental recovery", bool(applied))
     result = _assert_applied_inventory(bench, profiles, applied, grid, "environment shared wake applies exact immutable-Final stocks")
-    after = bench.cluster.node("node-1", f"/offline-test-zone-state?grid={grid}")
+    after = _poll(lambda: (lambda s: s if s["active"] and s["supplied"] >= s["powerRequired"] - .00001 else None)(
+        bench.cluster.node("node-1", f"/offline-test-zone-state?grid={grid}")), 60)
+    _require(bench, "native cold solar startup eventually supplies the carried zone", bool(after))
+    trace = bench.cluster.node("node-1", "/offline-test-zone-watch")
+    bench.record("environment-native-restoration-frames", trace)
+    bench.check("no observed native frame has active protection without real supply", bool(trace) and any(s["active"] for s in trace)
+        and all(not s["active"] or s["working"] and s["input"] >= s["required"] - .00001 for s in trace))
     bench.record("environment-shared-wake", {"before": before, "paused": paused, "result": result, "after": after})
     zone = next(z for z in result["Zones"] if z["Block"] == before["block"])
     bench.check("compensation restores the zone DURING offline time before native instantiation", zone["Exists"] and not zone["Activating"]

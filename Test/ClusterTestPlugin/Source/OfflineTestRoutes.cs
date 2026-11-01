@@ -48,9 +48,17 @@ internal static class OfflineTestRoutes
     private static readonly ManualResetEventSlim AdminPreflightRelease = new(true), AdminSourceRelease = new(true);
     private static long tracedGrid;
     private static readonly ConcurrentQueue<object> TransferTrace = new();
+    private static long watchedZoneGrid;
+    private static readonly ConcurrentQueue<object> ZoneRestoreTrace = new();
 
     public static void Register()
     {
+        TestRoutes.Add("POST", "/offline-test-zone-watch", context =>
+        {
+            Interlocked.Exchange(ref watchedZoneGrid, TestRoutes.Long(context, "grid")); ZoneRestoreTrace.Clear();
+            TestRoutes.Json(context, 200, new { watching = Interlocked.Read(ref watchedZoneGrid) });
+        });
+        TestRoutes.Add("GET", "/offline-test-zone-watch", context => TestRoutes.Json(context, 200, ZoneRestoreTrace.ToArray()));
         var traceHarmony = new Harmony("ClusterTestPlugin.offline-transfer-observer");
         traceHarmony.Patch(AccessTools.Method(typeof(ClusterRuntime), "MarkFrozen"), postfix: new HarmonyMethod(typeof(OfflineTestRoutes), nameof(TraceFrozen)));
         traceHarmony.Patch(AccessTools.Method(typeof(ClusterRuntime), "ClearFrozen", new[] { typeof(long), typeof(Guid) }), postfix: new HarmonyMethod(typeof(OfflineTestRoutes), nameof(TraceCleared)));
@@ -386,6 +394,19 @@ internal static class OfflineTestRoutes
         // Deliberately no game-thread dispatch: a held game thread cannot answer a dispatched probe.
         TestRoutes.Add("GET", "/offline-test-recovery", context =>
             TestRoutes.Json(context, 200, new { target = Interlocked.Read(ref target), applied = Volatile.Read(ref applied) }));
+    }
+
+    internal static void ObserveZoneRestore()
+    {
+        long grid = Interlocked.Read(ref watchedZoneGrid);
+        if (grid == 0 || ZoneRestoreTrace.Count >= 2048 || !MyEntities.TryGetEntityById(grid, out MyEntity entity) || entity is not MyCubeGrid native) return;
+        var block = native.GetFatBlocks<MySafeZoneBlock>().FirstOrDefault();
+        if (block == null) return;
+        var manager = block.Components.Get<MySafeZoneComponent>();
+        MyEntities.TryGetEntityById(manager.SafeZoneEntityId, out MySafeZone zone);
+        ZoneRestoreTrace.Enqueue(new { frame = MySession.Static.GameplayFrameCounter, active = zone?.Enabled == true,
+            required = block.ResourceSink.RequiredInputByType(MyResourceDistributorComponent.ElectricityId),
+            input = block.ResourceSink.CurrentInputByType(MyResourceDistributorComponent.ElectricityId), working = block.IsWorking });
     }
 
     private static void TraceFrozen(long __0, Guid __1) => TraceTransfer(__0, __1, "frozen");

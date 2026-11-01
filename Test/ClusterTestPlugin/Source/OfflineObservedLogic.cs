@@ -34,7 +34,8 @@ internal sealed class OfflineObservedLogic : MyGameLogicComponent
             {
                 // The supported mod API owns native reactor maximum updates;
                 // direct SourceComp writes are reset by its ordinary Update100.
-                ((Sandbox.ModAPI.IMyReactor)reactor).PowerOutputMultiplier = rate / reactor.BlockDefinition.MaxPowerOutput;
+                // Stay above the native0.01 multiplier floor for the whole sine.
+                ((Sandbox.ModAPI.IMyReactor)reactor).PowerOutputMultiplier = 4 * rate / reactor.BlockDefinition.MaxPowerOutput;
                 return;
             }
             foreach (var resource in source.ResourceTypes)
