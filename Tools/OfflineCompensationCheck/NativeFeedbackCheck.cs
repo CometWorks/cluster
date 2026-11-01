@@ -28,7 +28,7 @@ internal static class NativeFeedbackCheck
             double nativeElectrical = trace.Where(t => t.GetProperty("frame").GetInt64() > 0 && t.GetProperty("frame").GetInt64() <= frames).Sum(t => t.GetProperty("input").GetDouble()) / 216000;
             long producer = model.Sources.First(s => s.Kind == "Generator").Block;
             double modelElectrical = result.ConsumerEnergyMWh.GetValueOrDefault(producer);
-            double nativeBattery = baseline.GetProperty("battery").GetDouble() - actual.GetProperty("battery").GetDouble();
+            double nativeBattery = (double)baseline.GetProperty("battery").GetSingle() - actual.GetProperty("battery").GetSingle();
             double modelBattery = profile.Storage.Single(s => s.Kind == "Battery").Amount - model.Storage.Single(s => s.Kind == "Battery").Amount;
             bool sampledStorage = profile.Storage.Single(s => s.Kind == "Battery").TickFrames > 0;
             // Stock is sampled on Update100, not the integral of the four-frame
