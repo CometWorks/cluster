@@ -50,6 +50,9 @@ internal static partial class BlockSafeZones
 
 	private static bool OnGameThread => MySandboxGame.Static != null && Thread.CurrentThread == MySandboxGame.Static.UpdateThread;
 
+	internal static bool AwaitingPower(MySafeZoneBlock block) => States.TryGetValue(block, out var state)
+		&& state.PendingPower && block.Enabled && block.m_safeZoneManager != null && block.m_safeZoneManager.SafeZoneEntityId != 0;
+
 	/// <summary>MySafeZoneBlock.Init postfix, any thread: take the entry off the arriving builder.</summary>
 	internal static void Initialized(MySafeZoneBlock block, MyObjectBuilder_CubeBlock builder)
 	{

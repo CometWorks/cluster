@@ -323,13 +323,16 @@ internal static partial class OfflineCompensation
 				{
 					bool exists = ((ObjectBuilders.SafeZone.MyObjectBuilder_SafeZoneBlock)builder).SafeZoneId != 0;
 					bool active = manager.IsSafeZoneEnabled();
+					// A carried enabled zone waiting for cold producers still owns its
+					// credit and operational demand if captured/offlined again.
+					bool pendingPower = BlockSafeZones.AwaitingPower(zone);
 					var saved = component.SafeZoneOb as MyObjectBuilder_SafeZone;
 					// Vanilla removes the bubble on power loss but keeps m_timeLeft. Its serialized
 					// UpkeepTime still follows the old wall deadline while paused. A powered manual
 					// removal is different: do not turn that zone back on during compensation.
 					bool paused = !exists && !zone.IsWorking && manager.m_timeLeft > TimeSpan.Zero
 						&& saved != null && saved.EntityId != 0 && saved.SafeZoneBlockId == block.EntityId;
-					if (active || component.Activating || paused)
+					if (active || pendingPower || component.Activating || paused)
 						p.Upkeep.Add(new() { Block = block.EntityId, Enabled = true, Exists = exists, PowerSink = powerSink,
 							RemainingFrames = Math.Max(0, (paused || component.Activating ? manager.m_timeLeft.TotalMilliseconds : component.UpkeepTime) * 60 / 1000), PeriodFrames = zone.Definition.SafeZoneUpkeepTimeM * 3600,
 							// The active sink is the engine's shape/radius calculation, in MW. During
