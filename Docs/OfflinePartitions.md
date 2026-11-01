@@ -577,6 +577,15 @@ Rollback must restore a compatible snapshot/package together. No migration/deplo
 
 ### Round-seven loaded-world lifetime and required JSON discriminators
 
+Round-eight review found a remaining early-stop ordering gap at core `d257347`:
+stopping before its first accounting update retained only the already loaded claim
+rows, leaving uncovered members live. The current core pin `8d3039a` reuses pending
+group recovery during Stop, before cancelling host callbacks. This path performs
+the existing complete-group validation/quarantine without cache restoration,
+observation or profiling. Targeted cold checks pass; focused native first-update
+failure/disposal proof and independent review remain pending. Evidence is under
+`/home/owendb/tm/offline-partitions/extraction-round8-repairs/`.
+
 The core pin retains standalone claim/legacy metadata serialization and whole-group
 update guards after a manager update failure or explicit plugin disposal while the
 same world remains loaded. Scheduling, commands, observation and measurement stop;
