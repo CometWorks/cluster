@@ -72,7 +72,19 @@ internal static class FeedbackChecks
         tankFeedback.Storage[1].IdlePower = .000001;
         tankFeedback.Storage[1].OperationalPower = .001;
         var tankResult = OfflineModel.Simulate(tankFeedback, 400, 400);
-        Check(tankResult.ConsumerEnergyMWh[3] > 0 && tankResult.ConsumerEnergyMWh[3] < .001 * 400 / 216000 / 2,
+        Check(Math.Abs(tankResult.ConsumerEnergyMWh[3] - 100 * (.001 + .000001) / 216000) < 1e-12,
             "tank standby and transfer draw follow endogenous gas flow");
+        var transition = Fixture(supply: 1);
+        transition.Storage[0].TickFrames = 100;
+        OfflineModel.Simulate(transition, 25, 25);
+        transition.Sources[0].Maximum = .1;
+        OfflineModel.Simulate(transition, 75, 50);
+        Check(transition.Storage[0].Sampling, "cycle retains its unpaid native timer interval");
+        transition.Sources[0].Maximum = 1;
+        OfflineModel.Simulate(transition, 100, 25);
+        float settled = 3f - (100f * (1f / 60f) * 1000f) * (.510001f / 3600000f);
+        Check(Math.Abs(transition.Storage[0].Amount - settled) < 1e-7, "steady prefix is not debited twice when a cycle enters and leaves one timer interval");
+        Check(!transition.Storage[0].Sampling && transition.Storage[0].AccountedEnergy == 0,
+            "native settlement releases the temporary sampling interval");
     }
 }

@@ -105,6 +105,11 @@ internal static class OfflineModel
 			// with vanilla's activation delay. Neither transition switches the functional block off.
 			if (UpdateZones(profile, required, input, result)) continue;
 			if (elapsed + Epsilon >= duration) break;
+			// Only a fast closed feedback cycle aliases the native storage sampler. Keep
+			// steady flow on the existing integral; finish any timer interval a cycle entered.
+			if (feedback?.Cycling == true)
+				foreach (var store in profile.Storage.Where(s => s.TickFrames > 0)) store.Sampling = true;
+
 			var changes = new Dictionary<(int Inventory, string Item), decimal>();
 			var storageRate = new double[profile.Storage.Count];
 			var productionRate = new double[profile.Production.Count];
@@ -120,10 +125,10 @@ internal static class OfflineModel
 				var store = profile.Storage[i];
 				storageRate[i] += charging[i] * store.InputConversion - store.LeakPerFrame;
 				if (store.Kind == "Battery" && storageRate[i] > 0) storageRate[i] *= store.RechargeEfficiency;
-				if (store.TickFrames > 0) storageRate[i] = 0;
+				if (store.Sampling) storageRate[i] = 0;
 			}
 			double step = duration - elapsed;
-			foreach (var store in profile.Storage.Where(s => s.TickFrames > 0 && s.Enabled))
+			foreach (var store in profile.Storage.Where(s => s.Sampling && s.Enabled))
 				step = Math.Min(step, Math.Max(1, store.TickFrames - store.ElapsedFrames));
 			for (int i = 0; i < profile.Sources.Count; i++)
 			{
@@ -260,7 +265,13 @@ internal static class OfflineModel
 				if (store.TickFrames > 0 && store.Enabled)
 				{
 					store.ElapsedFrames += step;
-					if (store.ElapsedFrames + Epsilon >= store.TickFrames)
+					if (!store.Sampling)
+					{
+						store.AccountedEnergy = store.ElapsedFrames + Epsilon >= store.TickFrames
+							? storageRate[i] * Mod(store.ElapsedFrames, store.TickFrames) : store.AccountedEnergy + storageRate[i] * step;
+						store.ElapsedFrames = Mod(store.ElapsedFrames, store.TickFrames);
+					}
+					else if (store.ElapsedFrames + Epsilon >= store.TickFrames)
 					{
 						double[] phaseOutput = feedback?.SettlementOutput ?? output, phaseCharging = feedback?.SettlementCharging ?? charging;
 						float delivered = (float)profile.Sources.Select((source, index) => source.Storage == i ? phaseOutput[index] : 0).Sum();
@@ -268,8 +279,11 @@ internal static class OfflineModel
 						float net = store.Mode == 2 ? -delivered : store.Mode == 1 ? received : received - delivered;
 						float delta = ((float)store.ElapsedFrames * (1f / 60f) * 1000f) * (net / 3600000f);
 						if (net > 0) delta *= (float)store.RechargeEfficiency;
-						store.Amount = Math.Clamp((float)store.Amount + delta, 0, store.Capacity);
-						store.ElapsedFrames = 0;
+						// Replace only the cost of this native interval; its steady prefix
+						// may already have been integrated before the fast cycle began.
+						store.Amount = Math.Clamp((float)(store.Amount - store.AccountedEnergy) + delta, 0, store.Capacity);
+						store.ElapsedFrames = store.AccountedEnergy = 0;
+						store.Sampling = false;
 					}
 				}
 				if (store.Kind == "Battery") { if (store.Amount >= store.Capacity - Epsilon) store.Full = true; else if (store.Amount < store.Capacity - Epsilon) store.Full = false; }
@@ -321,7 +335,7 @@ internal static class OfflineModel
 		return result;
 	}
 
-	private sealed record FeedbackCycle(int Period, bool Steady, bool[] NextPowered, bool[] NextProducing, bool[] NextTransferring, double[] SettlementOutput, double[] SettlementCharging, double[] PoweredFraction);
+	private sealed record FeedbackCycle(int Period, bool Steady, bool Cycling, bool[] NextPowered, bool[] NextProducing, bool[] NextTransferring, double[] SettlementOutput, double[] SettlementCharging, double[] PoweredFraction);
 
 	/// <summary>Native BeforeSimulation distributor / deferred working callback / AfterSimulation
 	/// demand feedback. Stocks are held only while finding the finite allocation cycle; the ordinary
@@ -346,7 +360,7 @@ internal static class OfflineModel
 				{
 					var phase = phases[0];
 					Array.Copy(phase.Input, input, input.Length); Array.Copy(phase.Output, output, output.Length); Array.Copy(phase.Charging, charging, charging.Length);
-					return new(1, false, phase.Powered, phase.Producing, phase.Transferring, phase.Output, phase.Charging, phase.Powered.Select(v => v ? 1d : 0).ToArray());
+					return new(1, false, phases.Count - first > 1, phase.Powered, phase.Producing, phase.Transferring, phase.Output, phase.Charging, phase.Powered.Select(v => v ? 1d : 0).ToArray());
 				}
 				Array.Clear(input); Array.Clear(output); Array.Clear(charging);
 				foreach (var phase in phases)
@@ -355,7 +369,7 @@ internal static class OfflineModel
 					for (int i = 0; i < output.Length; i++) output[i] += phase.Output[i] / phases.Count;
 					for (int i = 0; i < charging.Length; i++) charging[i] += phase.Charging[i] / phases.Count;
 				}
-				return new(phases.Count, phases.Count == 1, powered, producing, transferring, phases[^1].Output, phases[^1].Charging,
+				return new(phases.Count, phases.Count == 1, phases.Count > 1, powered, producing, transferring, phases[^1].Output, phases[^1].Charging,
 					Enumerable.Range(0, input.Length).Select(i => phases.Count(phase => phase.Powered[i]) / (double)phases.Count).ToArray());
 			}
 			if (phases.Count >= 256) throw new InvalidDataException("Native resource feedback cycle did not repeat");
@@ -649,6 +663,8 @@ internal static class OfflineModel
 				|| !double.IsFinite(s.IdlePower) || s.IdlePower < 0 && s.IdlePower != -1 || !double.IsFinite(s.OperationalPower) || s.OperationalPower < 0
 				|| !double.IsFinite(s.TickFrames) || s.TickFrames < 0 || s.TickFrames > 100
 				|| !double.IsFinite(s.ElapsedFrames) || s.ElapsedFrames < 0 || s.ElapsedFrames > 100
+				|| !double.IsFinite(s.AccountedEnergy) || Math.Abs(s.AccountedEnergy) > s.Capacity + Epsilon
+				|| s.Sampling && s.TickFrames <= 0
 				|| s.TickFrames > 0 && s.Kind != "Battery"
 				|| s.Capacity < 0 || !double.IsFinite(s.MaxInput) || s.MaxInput < 0 || !double.IsFinite(s.InputConversion) || s.InputConversion < 0)
 				throw new InvalidDataException("Invalid offline reservoir");

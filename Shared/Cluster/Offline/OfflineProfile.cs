@@ -99,7 +99,8 @@ internal sealed class OfflineStorage
 	public double IdlePower = -1, OperationalPower;
 	public bool Transferring; // retained operational demand, reset by native flow/working callbacks
 	// Native batteries sample current input/output on Update100, like reactor fuel.
-	public double TickFrames, ElapsedFrames;
+	public double TickFrames, ElapsedFrames, AccountedEnergy;
+	public bool Sampling;
 }
 internal sealed class OfflineRecipe
 {

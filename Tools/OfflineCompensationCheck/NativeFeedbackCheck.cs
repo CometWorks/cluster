@@ -35,7 +35,8 @@ internal static class NativeFeedbackCheck
             // output cycle. Keep delivered energy and settled native cost visible.
             float battery = (float)baseline.GetProperty("battery").GetDouble();
             double nativeFloatBound = (sampledStorage ? 2 : frames / 2d) * (MathF.BitIncrement(battery) - battery);
-            double nativeStorageTimerBound = .002001 * 100 / 216000;
+            double maximumDraw = baseline.TryGetProperty("batteryOutput", out _) ? trace.Max(t => t.GetProperty("batteryOutput").GetDouble()) : .002001;
+            double nativeStorageTimerBound = maximumDraw * 100 / 216000;
             double? nativeTotalElectrical = baseline.TryGetProperty("batteryOutput", out _) ? trace.Where(t => t.GetProperty("frame").GetInt64() > 0
                 && t.GetProperty("frame").GetInt64() <= frames).Sum(t => t.GetProperty("batteryOutput").GetDouble()) / 216000 : null;
             bool ok = Math.Abs(gas - modelGas) <= 500d / 60 * 8 + .1 && Math.Abs(settledAndPendingIce - modelIce) <= 25d / 60 * 8 + .01
@@ -43,7 +44,7 @@ internal static class NativeFeedbackCheck
                 && Math.Abs(result.ProducerEnergyMWh.Values.Sum() - result.ConsumerEnergyMWh.Values.Sum()) < 1e-10
                 && (sampledStorage || Math.Abs(modelBattery - result.ProducerEnergyMWh.Values.Sum()) < 1e-10)
                 && Math.Abs(nativeBattery - modelBattery) <= nativeFloatBound + nativeStorageTimerBound
-                && (!nativeTotalElectrical.HasValue || Math.Abs(nativeTotalElectrical.Value - result.ProducerEnergyMWh.Values.Sum()) <= .002001 * 8 / 216000 + 1e-10);
+                && (!nativeTotalElectrical.HasValue || Math.Abs(nativeTotalElectrical.Value - result.ProducerEnergyMWh.Values.Sum()) <= maximumDraw * 8 / 216000 + 1e-10);
             rows.Add(new { frames, nativeGas = gas, modeledGas = modelGas, nativeIce = ice, pendingGas = pending,
                 nativeSettledAndPendingIce = settledAndPendingIce, modeledIce = modelIce,
                 nativeElectricalMWh = nativeElectrical, modeledElectricalMWh = modelElectrical,
@@ -55,7 +56,7 @@ internal static class NativeFeedbackCheck
         }
         passed &= rows.Count == 4;
         var report = new { source = Path.GetFullPath(path), productSource = Environment.GetEnvironmentVariable("TESTED_PRODUCT_SHA"),
-            bound = "8 native frames (two feedback periods) plus native float stock quantum; ice debt is explicitly retained", rows, passed };
+            bound = "8 native frames for flows/energy; two float ULP plus one Update100 settlement for sampled battery stock; ice debt explicitly retained", rows, passed };
         File.WriteAllText(destination, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
         Console.WriteLine(JsonSerializer.Serialize(report));
         if (!passed) throw new Exception("Native Factory feedback differential failed");
