@@ -54,6 +54,21 @@ internal static class OfflineTestRoutes
     private static System.Threading.Tasks.Task[] rememberedSunTasks;
     private static CancellationToken rememberedSunToken;
     private static readonly List<object> CycleTrace = new();
+    private static ulong legacyClockScope;
+    private static JsonElement? legacyClockProfile;
+    private static void LegacyClockCaptured(PartitionManager.Partition partition, ref byte[] __result)
+    {
+        if (__result == null || partition.Id != legacyClockScope) return;
+        var profiles = System.Text.Json.Nodes.JsonNode.Parse(__result).AsArray();
+        foreach (var profile in profiles)
+        {
+            profile["Schema"] = 1;
+            profile["ClockFrameSeconds"] = .016;
+        }
+        __result = JsonSerializer.SerializeToUtf8Bytes(profiles);
+        legacyClockProfile = JsonSerializer.Deserialize<JsonElement>(__result);
+        legacyClockScope = 0;
+    }
     internal static void ObserveGasCycle()
     {
         if (cycleGrid == 0 || MySession.Static == null) return;
@@ -80,6 +95,7 @@ internal static class OfflineTestRoutes
         var tank = grid.GetFatBlocks<MyGasTank>().Single();
         var battery = grid.GetFatBlocks<MyBatteryBlock>().Single();
         return new { frame = MySession.Static.GameplayFrameCounter - cycleStart,
+            elapsedTicks = MySession.Static.ElapsedGameTime.Ticks,
             working = gas.IsWorking, enabled = gas.SourceComp.Enabled,
             required = gas.ResourceSink.RequiredInputByType(MyResourceDistributorComponent.ElectricityId),
             input = gas.ResourceSink.CurrentInputByType(MyResourceDistributorComponent.ElectricityId),
@@ -113,6 +129,25 @@ internal static class OfflineTestRoutes
 
     public static void Register()
     {
+        TestRoutes.Add("POST", "/offline-test-clock-refusal", context =>
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                byte[] profile = System.Text.Encoding.UTF8.GetBytes("[{\"Schema\":1,\"FrozenFrame\":100,\"SimulatedThrough\":101,\"ClockFrameSeconds\":0.016,\"Members\":[999]}]");
+                try
+                {
+                    OfflineCompensation.Call("Apply", new Dictionary<long, MyObjectBuilder_EntityBase>(), new[] { profile }, new[] { new long[] { 999 } });
+                    return new { refused = false, error = "Ambiguous clock was silently skipped" };
+                }
+                catch (System.IO.InvalidDataException e) { return new { refused = e.Message.Contains("clock/schema"), error = e.Message }; }
+            })));
+        TestRoutes.Add("POST", "/offline-test-legacy-clock", context =>
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                legacyClockScope = checked((ulong)TestRoutes.Long(context, "partition"));
+                legacyClockProfile = null;
+                return new { partition = legacyClockScope };
+            })));
+        TestRoutes.Add("GET", "/offline-test-legacy-clock", context => TestRoutes.Json(context, 200, legacyClockProfile));
         TestRoutes.Add("POST", "/offline-test-owned-fixture", context =>
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
             {
@@ -136,6 +171,7 @@ internal static class OfflineTestRoutes
         });
         TestRoutes.Add("GET", "/offline-test-zone-cancel", context => TestRoutes.Json(context, 200, new { cancelled = Volatile.Read(ref restoredZoneCancelled) != 0 }));
         var traceHarmony = new Harmony("ClusterTestPlugin.offline-transfer-observer");
+        traceHarmony.Patch(AccessTools.Method(typeof(OfflineCompensation), "CaptureFor"), postfix: new HarmonyMethod(typeof(OfflineTestRoutes), nameof(LegacyClockCaptured)));
         traceHarmony.Patch(AccessTools.Method(typeof(BlockSafeZones), "Restore"), prefix: new HarmonyMethod(typeof(OfflineTestRoutes), nameof(CancelRestoredZone)));
         traceHarmony.Patch(AccessTools.Method(typeof(ClusterRuntime), "MarkFrozen"), postfix: new HarmonyMethod(typeof(OfflineTestRoutes), nameof(TraceFrozen)));
         traceHarmony.Patch(AccessTools.Method(typeof(ClusterRuntime), "ClearFrozen", new[] { typeof(long), typeof(Guid) }), postfix: new HarmonyMethod(typeof(OfflineTestRoutes), nameof(TraceCleared)));

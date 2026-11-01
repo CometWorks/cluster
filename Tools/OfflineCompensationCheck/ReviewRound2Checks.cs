@@ -9,12 +9,12 @@ const string E = OfflineModel.Electricity;
 // breakpoint must neither livelock nor hold the preceding curve segment.
 foreach (bool varying in new[] { false, true })
 {
- var p = new OfflineProfile { ClockFrameSeconds=.016, SunFrame=38343, SunPeriodFrames=449999.9713897705 };
+ var p = new OfflineProfile { SunFrame=38343, SunPeriodFrames=449999.9713897705 };
  p.Sinks.Add(new() { Block=1, Resource=E, Required=.5 });
  p.Sources.Add(new() { Block=2, Resource=E, Maximum=1,
      Curve=Enumerable.Range(0,72).Select(i => varying && i%2==0 ? 0d : 1d).ToArray() });
  var result=OfflineModel.Simulate(p,225000,225000);
- if(result.Events>100 || Math.Abs(result.ProducerEnergyMWh[2]-(varying?.25:.5))>1e-7)
+ if(result.Events>100 || Math.Abs(result.ProducerEnergyMWh[2]-(varying?.25:.5)*25/24)>1e-7)
      throw new Exception("fractional native sun breakpoint lost progress or curve phase");
  Console.WriteLine($"PASS fractional native sun clock progress/energy, varying={varying}, events={result.Events}");
 }

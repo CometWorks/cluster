@@ -18,7 +18,12 @@ internal static class NativeReferenceCheck
             long caseFrames = row.TryGetProperty("nativeFrames", out var capturedFrames) ? capturedFrames.GetInt64() : frames;
             var predicted = row.GetProperty("initial").Deserialize<OfflineProfile>(OfflineProfile.Json)!;
             var actual = row.GetProperty("actual").Deserialize<OfflineProfile>(OfflineProfile.Json)!;
-            long units = checked((long)Math.Round(caseFrames / (predicted.ClockFrameSeconds * 60)));
+            // Raw saved world time, never an inverse of the model's multiplier.
+            long elapsedTicks = row.TryGetProperty("elapsedTicks", out var ticks) ? ticks.GetInt64()
+                : caseFrames == frames ? document.RootElement.GetProperty("elapsedTicks").GetInt64()
+                : checked((actual.FrozenFrame - predicted.FrozenFrame) * 160000);
+            long units = elapsedTicks / 160000;
+            if (elapsedTicks != checked(caseFrames * 160000)) throw new InvalidDataException("Native frame/world-clock reference disagrees");
             var result = OfflineModel.Simulate(predicted, predicted.SimulatedThrough + units, long.MaxValue);
             var stocks = actual.Storage.Select(a =>
             {
@@ -27,7 +32,9 @@ internal static class NativeReferenceCheck
                 return new { a.Block, a.Kind, actual = a.Amount, predicted = model.Amount, tolerance, passed = Math.Abs(a.Amount - model.Amount) <= tolerance };
             }).ToArray();
             decimal Fuel(OfflineProfile p) => p.Inventories.SelectMany(i => i.Stacks).Where(s => s.Item == "MyObjectBuilder_Ingot/Uranium").Sum(s => s.Amount);
-            decimal fuelActual = Fuel(actual), fuelPredicted = Fuel(predicted), fuelTolerance = Math.Max(.000001m, Math.Abs(fuelActual) * .01m);
+            decimal fuelActual = Fuel(actual), fuelPredicted = Fuel(predicted);
+            decimal nativeFuelDebit = Fuel(row.GetProperty("initial").Deserialize<OfflineProfile>(OfflineProfile.Json)!) - fuelActual;
+            decimal fuelTolerance = Math.Max(.000001m, Math.Abs(nativeFuelDebit) * .01m);
             bool fuelPassed = Math.Abs(fuelActual - fuelPredicted) <= fuelTolerance;
             var zones = actual.Upkeep.Select(a =>
             {
@@ -77,7 +84,7 @@ internal static class NativeReferenceCheck
             }
             bool casePassed = stocks.All(s => s.passed) && fuelPassed && zones.All(z => z.passed) && items.All(i => i.passed) && productionControl && zoneControl;
             passed &= casePassed;
-            rows.Add(new { name, stocks, fuelActual, fuelPredicted, fuelTolerance, fuelPassed, zones, items, productionControl, zoneControl,
+            rows.Add(new { name, caseFrames, elapsedTicks, units, stocks, nativeFuelDebit, fuelActual, fuelPredicted, fuelTolerance, fuelPassed, zones, items, productionControl, zoneControl,
                 native = row.GetProperty("native").Clone(), result, predicted, passed = casePassed });
         }
         File.WriteAllText(output, JsonSerializer.Serialize(new { reference = Path.GetFullPath(reference), referenceSha256 = Convert.ToHexString(SHA256.HashData(bytes)),

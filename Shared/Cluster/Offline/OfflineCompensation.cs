@@ -27,12 +27,12 @@ internal static class OfflineCompensation
         if (api == null)
         {
             var candidates = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("Concealment.Accounting.AccountingApi", false)).Where(t => t != null).ToArray();
-            if (candidates.Length != 1 || (int)candidates[0].GetField("Contract").GetRawConstantValue() != 1)
-                throw new InvalidOperationException("One compatible Concealment accounting plugin is required (contract 1).");
+            if (candidates.Length != 1 || (int)candidates[0].GetField("Contract").GetRawConstantValue() != 2)
+                throw new InvalidOperationException("One compatible Concealment accounting plugin is required (contract 2).");
             var selected = candidates[0];
             var callbacks = new Dictionary<string, object>
             {
-                ["clockFrameSeconds"] = 0.016,
+                ["clockFrameSeconds"] = 1.0 / 60,
                 ["clock"] = (Func<double>)(() => ClusterRuntime.AuthorityClockMilliseconds),
                 ["setting"] = (Func<string, string>)ClusterConfig.Get,
                 ["admit"] = (Func<ulong, uint, bool>)((scope, generation) => !ClusterRuntime.IsClustered || ClusterRuntime.CanProfile(scope, generation)),

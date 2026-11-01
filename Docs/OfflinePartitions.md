@@ -7,7 +7,7 @@ claimed.
 
 ## Concealment accounting extraction (2026-11-01)
 
-Cluster now invokes accounting contract 1 from the single Concealment server plugin;
+Cluster now invokes accounting contract 2 from the single Concealment server plugin;
 the copied model, profile, capture, solar and observation implementation is removed.
 `Dependencies/Concealment.lock.json` pins its source commit and content hash.
 `Build/prepare-concealment.py --source <concealment-checkout>` builds that immutable
@@ -33,6 +33,37 @@ native 60 Hz phases. Excess is forfeited through the actual wake, including retr
 Explicit overrides and the admin prediction request range of 0..168 hours survive.
 The historical proof sections below retain their original products and scope;
 they do not independently review or accept this extraction.
+
+### Round6 clock/recovery repairs
+
+Both real host getters address `floor(world milliseconds / 16)`. Native world time
+advances 160,000 TimeSpan ticks per engine update; subtracting the admin time-of-day
+offset is additive and does not change that rate. Contract 2/schema 2 therefore map
+one clock unit to one native resource/production/timer frame. A world hour is
+225,000 native frames (1.0416667 resource hours), while the cap remains 72 elapsed
+world hours by default. Sun geometry still follows elapsed world time; excess is
+forfeited through actual wake. Explicit cap overrides remain supported.
+
+Never-applied schema-1 Finals with `.016` or `1/60` clock discriminators migrate on
+the detached model copy and emit `ClockMigration`. Original Final bytes, stocks,
+native timer phases and frame addresses remain the retry basis. Schema-1 profiles
+already advanced beyond their freeze address and unknown schemas/clocks are refused
+as ambiguous before entity instantiation; their immutable Final remains the retry
+basis instead of being replaced by an ordinary Final. Ordinary already-paid Finals have no old profile and earn no second
+claim or retroactive adjustment. Keep the corrected host and immutable core pin
+together; contract-1 binaries cannot consume new schema-2 claims. Downgrade only
+with the matching pre-upgrade world/Finals and package, never by reinterpreting paid
+stocks. The v2 container and AdminContract 0.10/wire 1 remain unchanged.
+
+Standalone failed recovery separately preserves surviving rows and durable opaque
+evidence across the loaded physical/logical closure. Admission, capture and reveal
+refuse that group without inventing a missing root profile or stock baseline.
+
+Historical normalized model greens (including cap66) do not prove host duration.
+The corrected checkers use raw saved elapsed ticks and native phase, without
+inflating 450,000 native frames into 468,750 units or replacing a captured clock
+discriminator. Older Factory traces without raw elapsed ticks cannot establish
+the corrected host-boundary proof; fresh traces record them explicitly.
 
 ## Lifecycle and ownership
 

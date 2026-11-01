@@ -56,7 +56,7 @@ def run_one(bundle, out, label, frames, fast, port_slot=None, scenario="energy")
     server = None
     try:
         server = start_standalone(bench, bench.cluster.config.world_template, name="reference-" + label,
-            ready=("Session loaded", "Game ready"), local_plugins=[bundle], port_slot=port_slot, extra_env={
+            ready=("Session loaded", "Game ready"), local_plugins=[HOST.package / "plugins/Concealment", bundle], port_slot=port_slot, extra_env={
                 "OFFLINE_REFERENCE_ROOT": str(evidence), "OFFLINE_REFERENCE_FRAMES": str(frames),
                 "OFFLINE_REFERENCE_FAST": "1" if fast else "0", "OFFLINE_REFERENCE_SCENARIO": scenario})
         limit = time.monotonic() + max(600, frames / (60 if not fast else 100) + 300)

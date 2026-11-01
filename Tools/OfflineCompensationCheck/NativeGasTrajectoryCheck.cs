@@ -9,6 +9,8 @@ internal static class NativeGasTrajectoryCheck
         using var final = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(directory, "result.json")));
         using var initial = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(directory, "initial.json")));
         using var trajectory = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(directory, "trajectory.json")));
+        if (final.RootElement.GetProperty("elapsedTicks").GetInt64() != checked(final.RootElement.GetProperty("nativeFrames").GetInt64() * 160000))
+            throw new InvalidDataException("Native frame/world-clock reference disagrees");
         var rows = new List<object>();
         bool passed = true;
         int index = 0;
@@ -23,7 +25,7 @@ internal static class NativeGasTrajectoryCheck
             OfflineProfile At(long frames)
             {
                 var p = JsonSerializer.Deserialize<OfflineProfile>(JsonSerializer.Serialize(profile, OfflineProfile.Json), OfflineProfile.Json)!;
-                long units = (long)Math.Round(frames / (p.ClockFrameSeconds * 60));
+                long units = frames; // independently checked native world-frame cadence above
                 OfflineModel.Simulate(p, p.SimulatedThrough + units, long.MaxValue);
                 return p;
             }

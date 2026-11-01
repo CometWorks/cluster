@@ -9,4 +9,8 @@
     <Compile Include="$(MSBuildThisFileDirectory)SolarCases.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../ClusterTestPlugin/Source/OfflineObservedLogic.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <Reference Include="Concealment"><HintPath>$(ClusterPlugins)/Concealment/Concealment.dll</HintPath><Private>False</Private></Reference>
+    <Publicize Include="Concealment" />
+  </ItemGroup>
 </Project>

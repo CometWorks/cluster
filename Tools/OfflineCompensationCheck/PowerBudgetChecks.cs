@@ -124,12 +124,12 @@ internal static class PowerBudgetChecks
             Near(r.ConsumerEnergyMWh[60], .001 * 600 / 216000, "insufficient working power falls back to standby");
             Near(Stock(p, "ore"), 10, "gas cannot bootstrap itself from insufficient electrical supply");
         }
-        // A captured authority hour is 225000 16-ms units, or 216000 native engine frames.
+        // One elapsed world hour contains 225000 actual native frames.
         {
-            var p = Base(credit: 1000000); p.ClockFrameSeconds = .016; Reactor(p);
+            var p = Base(credit: 1000000); Reactor(p);
             var r = Simulate(p, 225000);
-            Near(r.ConsumerEnergyMWh[10], 5, "authority hour is one delivered MW-hour per MW");
-            Near(10 - Stock(p, "fuel"), 5, "authority/engine clock conversion preserves fuel cost");
+            Near(r.ConsumerEnergyMWh[10], 5 * 25d / 24, "world hour advances native per-frame delivered energy");
+            Near(10 - Stock(p, "fuel"), 5 * 25d / 24, "world/native clock preserves actual fuel cost");
             Check(r.Frames == 225000, "diagnostic interval retains original authority frame units");
         }
         Console.WriteLine($"Shared zone/production power budget: {checks} assertions passed; detached model, not native proof.");

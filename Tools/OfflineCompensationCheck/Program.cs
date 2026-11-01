@@ -9,6 +9,8 @@ if (args.Length == 5 && args[0] == "--model-profile")
     return;
 }
 
+if (args.Length == 3 && args[0] == "--native-clock") { NativeClockChecks.Run(args[1], args[2]); return; }
+
 if (args.Length == 1 && args[0] == "--cap") { CapChecks.Run(); return; }
 if (args.Length == 1 && args[0] == "--reservoir") { ReservoirChecks.Run(); return; }
 

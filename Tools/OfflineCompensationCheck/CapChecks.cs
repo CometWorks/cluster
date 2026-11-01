@@ -12,7 +12,7 @@ internal static class CapChecks
         foreach (double seconds in new[] { 0.016, 1.0 / 60 })
         {
             const string E = OfflineModel.Electricity, G = "MyObjectBuilder_GasProperties/Hydrogen:1";
-            var basis = new OfflineProfile { Group = 1, Members = [1], FrozenFrame = 10000, SimulatedThrough = 10000, ClockFrameSeconds = seconds };
+            var basis = new OfflineProfile { Schema = seconds == .016 ? 1 : OfflineProfile.CurrentSchema, Group = 1, Members = [1], FrozenFrame = 10000, SimulatedThrough = 10000, ClockFrameSeconds = seconds };
             basis.Items["fuel"] = new() { Volume = .0001m, Mass = 1 };
             basis.Items["ore"] = new() { Volume = .0001m, Mass = 1 };
             basis.Items["product"] = new() { Volume = .0001m, Mass = 1 };
@@ -35,9 +35,10 @@ internal static class CapChecks
             long wake = basis.SimulatedThrough + cap;
             var exact = Clone(basis); var result = OfflineModel.Simulate(exact, wake, cap);
             Check(!result.Capped && result.Frames == cap && exact.SimulatedThrough == wake, "exact 72h boundary/clock");
-            Check(Math.Abs(result.ProductionUnits[10] - .001 * cap * seconds * 60) < 1e-5, "production uses native resource phases for exactly 72 elapsed world hours");
+            Check(Math.Abs(result.ProductionUnits[10] - .001 * cap) < 1e-5, "raw world-clock units each advance one native production frame");
+            Check(exact.Schema == 2 && exact.ClockFrameSeconds == 1.0 / 60 && (result.ClockMigration != null) == (seconds == .016), "legacy migration explicit; both hosts capture native frames");
             Check(exact.Storage[0].Amount > 100 && exact.Storage[1].Amount > 1e7 && exact.Storage[2].Amount > 70, "electricity/gas/storage share capped time");
-            Check(result.ProducerFuelConsumed[1]["fuel"] > 500 && result.ProducerFuelConsumed[12]["ice"] > 700000 && result.UpkeepConsumed[11] == (long)Math.Round(cap * seconds / 3600), "fuel/ice/zone costs stop at capped time");
+            Check(result.ProducerFuelConsumed[1]["fuel"] > 500 && result.ProducerFuelConsumed[12]["ice"] > 700000 && result.UpkeepConsumed[11] == (long)Math.Round(cap / 216000d), "fuel/ice/zone costs stop at raw native-frame cap");
             foreach (long requested in new[] { cap - 1, cap, cap + 1, 168L * (3600000 / 16), long.MaxValue - basis.SimulatedThrough })
             {
                 var model = Clone(basis); long end = checked(basis.SimulatedThrough + requested);
@@ -65,6 +66,6 @@ internal static class CapChecks
                 Check(r.Frames == overrideCap && changed.SimulatedThrough == wake + cap, "explicit host cap overrides preserved without banking");
             }
         }
-        Console.WriteLine($"PASS {checks} cap/accounting/clock/forfeiture assertions (both host clock units)");
+        Console.WriteLine($"PASS {checks} corrected raw-native-frame cap/accounting/forfeiture assertions (schema1 migration and schema2)");
     }
 }

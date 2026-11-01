@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using ClusterPlugin;
+using Concealment.Accounting;
 using ObjectBuilders.SafeZone;
 using SpaceEngineers.Game.EntityComponents.Blocks;
 using SpaceEngineers.Game.Entities.Blocks.SafeZone;
@@ -41,7 +42,7 @@ public sealed partial class Plugin : IPlugin
         public MyCubeGrid Grid;
         public object Census;
         public OfflineProfile Initial;
-        public long CapturedAt;
+        public long CapturedAt, CapturedTicks;
         public MyCubeBlock Observed;
         public Action Start;
     }
@@ -56,9 +57,9 @@ public sealed partial class Plugin : IPlugin
     private bool zonePowerCut;
     private readonly List<object> timeline = new();
     private readonly Stopwatch wall = new();
-    private static readonly Type CensusType = typeof(OfflineCompensation).GetNestedType("Census", BindingFlags.NonPublic);
-    private static readonly MethodInfo Capture = typeof(OfflineCompensation).GetMethod("Capture", BindingFlags.NonPublic | BindingFlags.Static);
-    private static readonly MethodInfo SampleSun = typeof(OfflineCompensation).GetMethod("SampleSun", BindingFlags.NonPublic | BindingFlags.Static);
+    private static readonly Type CensusType = typeof(AccountingEngine).GetNestedType("Census", BindingFlags.NonPublic);
+    private static readonly MethodInfo Capture = typeof(AccountingEngine).GetMethod("Capture", BindingFlags.NonPublic | BindingFlags.Static);
+    private static readonly MethodInfo SampleSun = typeof(AccountingEngine).GetMethod("SampleSun", BindingFlags.NonPublic | BindingFlags.Static);
 
     public void Init(object gameInstance)
     {
@@ -86,6 +87,8 @@ public sealed partial class Plugin : IPlugin
                 throw new InvalidOperationException("Reference cannot run with an initialized cluster plugin");
             if (MySession.Static.CreativeMode || MySession.Static.SimplifiedSimulation)
                 throw new InvalidOperationException("Reference requires actual Survival with ordinary resource simulation");
+            if (ServerPlugin.Plugin.Instance?.Manager == null) return;
+            ServerPlugin.Plugin.Instance.ConfigData.Enabled = false;
             long frame = MySession.Static.GameplayFrameCounter;
             if (spawned < 0)
             {
@@ -102,10 +105,9 @@ public sealed partial class Plugin : IPlugin
                     cases.Add(SpawnObserved(false)); cases.Add(SpawnObserved(true)); cases.Add(SpawnObserved(true, inventory: true));
                     ClusterConfig.Apply(new Dictionary<string, string> { ["offline.longObservation"] = observedShort ? "Skip" : "InPlace",
                         ["offline.observeSeconds"] = observedShort ? "120" : "180", ["offline.settleFrames"] = "0", ["offline.rotateProduction"] = "false" });
-                    // Only the product's native fuel observer is installed; no cluster
-                    // plugin/service initializes in this standalone reference.
-                    var patch = typeof(OfflineCompensation).Assembly.GetType("Shared.Patches.OfflineReactorObservationPatch");
-                    if (patch != null) new HarmonyLib.Harmony("OfflineReference.native-fuel-observer").CreateClassProcessor(patch).Patch();
+                    Host.Setting = ClusterConfig.Get;
+                    // Reference policy only: keep the actual standalone clock,
+                    // admission and already-installed native fuel hooks.
                 }
                 else if (zones) cases.Add(SpawnZone());
                 else
@@ -123,7 +125,7 @@ public sealed partial class Plugin : IPlugin
                 foreach (var reactor in cases[0].Grid.GetFatBlocks<MyReactor>()) reactor.Enabled = false;
                 zonePowerCut = true;
             }
-            if (start == 0 && frame - spawned >= (solarPlanet || zoneEnvironment ? 3600 : 600) && OfflineCompensation.ContentReady)
+            if (start == 0 && frame - spawned >= (solarPlanet || zoneEnvironment ? 3600 : 600) && AccountingEngine.ContentReady)
             {
                 if (observed)
                 {
@@ -132,10 +134,10 @@ public sealed partial class Plugin : IPlugin
                     {
                         nextObservation = frame + 100;
                         bool ready = true;
-                        var censuses = (System.Collections.IDictionary)typeof(OfflineCompensation).GetField("CensusByGroup", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
+                        var censuses = (System.Collections.IDictionary)typeof(AccountingEngine).GetField("CensusByGroup", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
                         foreach (var c in cases)
                         {
-                            ready &= OfflineCompensation.Prepare(new PartitionManager.Partition { Id = (ulong)c.Grid.EntityId, Members = new() { c.Grid.EntityId } });
+                            ready &= AccountingEngine.Prepare((ulong)c.Grid.EntityId, new[] { new[] { c.Grid } }, new[] { c.Grid }, false);
                             c.Census = censuses[c.Grid.EntityId];
                         }
                         observationFrames = frame - observationStart;
@@ -159,11 +161,11 @@ public sealed partial class Plugin : IPlugin
                     foreach (var c in cases.Where(c => c.Initial == null))
                     {
                         if (c.Grid.GetFatBlocks<MyGasGenerator>().Any(g => g.m_gasOutputAggregate.Values.Any(v => v != 0))) continue;
-                        c.Start?.Invoke(); c.Initial = Read(c); c.CapturedAt = frame;
+                        c.Start?.Invoke(); c.Initial = Read(c); c.CapturedAt = frame; c.CapturedTicks = MySession.Static.ElapsedGameTime.Ticks;
                     }
                     if (cases.Any(c => c.Initial == null)) return;
                 }
-                else foreach (var c in cases) { if (!solarPlanet && !zoneEnvironment) c.Start?.Invoke(); c.Initial = Read(c); c.CapturedAt = frame; }
+                else foreach (var c in cases) { if (!solarPlanet && !zoneEnvironment) c.Start?.Invoke(); c.Initial = Read(c); c.CapturedAt = frame; c.CapturedTicks = MySession.Static.ElapsedGameTime.Ticks; }
                 start = frame; elapsedStart = MySession.Static.ElapsedGameTime.Ticks;
                 if (zoneEnvironment && (cases[0].Initial.Upkeep.Count != 1
                     || cases[0].Initial.Upkeep[0].Exists && cases[0].Initial.Upkeep[0].ActivationRemainingFrames <= 0))
@@ -198,12 +200,12 @@ public sealed partial class Plugin : IPlugin
                 {
                     var actual = Read(c);
                     var modeled = JsonSerializer.Deserialize<OfflineProfile>(JsonSerializer.Serialize(c.Initial, OfflineProfile.Json), OfflineProfile.Json);
-                    // Native resource integrators use frames/60; clustered authority stamps use
-                    // milliseconds/16. Compare the same honest number of engine updates.
                     long nativeFrames = frame - c.CapturedAt;
-                    long clockUnits = checked((long)Math.Round(nativeFrames / (modeled.ClockFrameSeconds * 60)));
+                    long elapsedTicks = MySession.Static.ElapsedGameTime.Ticks - c.CapturedTicks;
+                    long clockUnits = elapsedTicks / 160000;
+                    if (elapsedTicks != nativeFrames * 160000) throw new InvalidOperationException("Native world clock/frame cadence disagrees");
                     var result = OfflineModel.Simulate(modeled, modeled.SimulatedThrough + clockUnits, long.MaxValue);
-                    return new { nativeFrames, initial = c.Initial, actual, modeled, result, native = State(c.Grid) };
+                    return new { nativeFrames, elapsedTicks, clockUnits, initial = c.Initial, actual, modeled, result, native = State(c.Grid) };
                 }).ToArray();
                 Write("result.json", new { nativeFrames = count, target, fast, wallSeconds = wall.Elapsed.TotalSeconds,
                     elapsedTicks = MySession.Static.ElapsedGameTime.Ticks - elapsedStart,

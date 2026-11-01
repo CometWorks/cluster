@@ -17,8 +17,10 @@ internal static class NativeFeedbackCheck
             if (actual.ValueKind == JsonValueKind.Undefined) continue;
             long frames = actual.GetProperty("frame").GetInt64();
             var model = JsonSerializer.Deserialize<OfflineProfile>(JsonSerializer.Serialize(profile, OfflineProfile.Json), OfflineProfile.Json);
-            model.ClockFrameSeconds = 1d / 60; // native frame horizons; authority clock is unchanged
-            var result = OfflineModel.Simulate(model, model.SimulatedThrough + frames, frames);
+            long elapsedTicks = actual.GetProperty("elapsedTicks").GetInt64() - baseline.GetProperty("elapsedTicks").GetInt64();
+            long units = elapsedTicks / 160000;
+            if (elapsedTicks != checked(frames * 160000)) throw new InvalidDataException("Native phase/world-clock reference disagrees");
+            var result = OfflineModel.Simulate(model, model.SimulatedThrough + units, units);
             double gas = actual.GetProperty("tank").GetDouble() - baseline.GetProperty("tank").GetDouble();
             double modelGas = model.Storage.Single(s => s.Kind == "Tank").Amount - profile.Storage.Single(s => s.Kind == "Tank").Amount;
             decimal ice = baseline.GetProperty("ice").GetDecimal() - actual.GetProperty("ice").GetDecimal();
@@ -45,7 +47,7 @@ internal static class NativeFeedbackCheck
                 && (sampledStorage || Math.Abs(modelBattery - result.ProducerEnergyMWh.Values.Sum()) < 1e-10)
                 && Math.Abs(nativeBattery - modelBattery) <= nativeFloatBound + nativeStorageTimerBound
                 && (!nativeTotalElectrical.HasValue || Math.Abs(nativeTotalElectrical.Value - result.ProducerEnergyMWh.Values.Sum()) <= maximumDraw * 8 / 216000 + 1e-10);
-            rows.Add(new { frames, nativeGas = gas, modeledGas = modelGas, nativeIce = ice, pendingGas = pending,
+            rows.Add(new { frames, elapsedTicks, units, nativeGas = gas, modeledGas = modelGas, nativeIce = ice, pendingGas = pending,
                 nativeSettledAndPendingIce = settledAndPendingIce, modeledIce = modelIce,
                 nativeElectricalMWh = nativeElectrical, modeledElectricalMWh = modelElectrical,
                 nativeTotalElectricalMWh = nativeTotalElectrical, modeledTotalElectricalMWh = result.ProducerEnergyMWh.Values.Sum(), sampledStorage,
