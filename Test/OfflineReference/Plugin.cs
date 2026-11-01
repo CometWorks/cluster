@@ -41,6 +41,8 @@ public sealed partial class Plugin : IPlugin
         public MyCubeGrid Grid;
         public object Census;
         public OfflineProfile Initial;
+        public long CapturedAt;
+        public MyCubeBlock Observed;
         public Action Start;
     }
     private readonly List<Case> cases = new();
@@ -48,8 +50,10 @@ public sealed partial class Plugin : IPlugin
     private long spawned = -1, start, elapsedStart, gameplayStart, nextSample;
     private int target;
     private bool fast, finished;
-    private bool zones, gas, gyros, production, solarPlanet;
+    private bool zones, gas, gyros, production, solarPlanet, zoneEnvironment, observed;
+    private long observationStart, nextObservation, observationFrames;
     private bool solarCurvesStarted;
+    private bool zonePowerCut;
     private readonly List<object> timeline = new();
     private readonly Stopwatch wall = new();
     private static readonly Type CensusType = typeof(OfflineCompensation).GetNestedType("Census", BindingFlags.NonPublic);
@@ -63,10 +67,12 @@ public sealed partial class Plugin : IPlugin
         target = int.Parse(Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_FRAMES") ?? "1296000");
         fast = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_FAST") == "1";
         zones = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "zones";
-        gas = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "gas";
+        gas = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") is "gas" or "gas-no-oxygen";
         gyros = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "gyros";
         production = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "production";
         solarPlanet = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "solar-planet";
+        zoneEnvironment = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "zone-environment";
+        observed = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "observed";
         if (target < 3600 || target > 2000000) throw new ArgumentOutOfRangeException(nameof(target));
     }
 
@@ -82,12 +88,23 @@ public sealed partial class Plugin : IPlugin
             long frame = MySession.Static.GameplayFrameCounter;
             if (spawned < 0)
             {
-                MySession.Static.Settings.EnableSunRotation = solarPlanet;
+                if (Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "gas-no-oxygen") MySession.Static.Settings.EnableOxygen = false;
+                MySession.Static.Settings.EnableSunRotation = solarPlanet || zoneEnvironment || observed;
                 MySession.Static.Settings.AutoSaveInMinutes = 0;
                 if (solarPlanet) SpawnPlanetSolar();
                 else if (production) { cases.Add(SpawnProduction(false)); cases.Add(SpawnProduction(true)); }
                 else if (gyros) { cases.Add(SpawnGyro(true)); cases.Add(SpawnGyro(false)); }
-                else if (gas) foreach (int variant in new[] { 0, 1, 2 }) cases.Add(SpawnGas(variant));
+                else if (gas) foreach (int variant in new[] { 0, 1, 2, 3, 4 }) cases.Add(SpawnGas(variant));
+                else if (zoneEnvironment) cases.Add(SpawnEnvironmentalZone());
+                else if (observed)
+                {
+                    cases.Add(SpawnObserved(false)); cases.Add(SpawnObserved(true)); cases.Add(SpawnObserved(true, inventory: true));
+                    ClusterConfig.Apply(new Dictionary<string, string> { ["offline.longObservation"] = "InPlace", ["offline.settleFrames"] = "0", ["offline.rotateProduction"] = "false" });
+                    // Only the product's native fuel observer is installed; no cluster
+                    // plugin/service initializes in this standalone reference.
+                    var patch = typeof(OfflineCompensation).Assembly.GetType("Shared.Patches.OfflineReactorObservationPatch");
+                    if (patch != null) new HarmonyLib.Harmony("OfflineReference.native-fuel-observer").CreateClassProcessor(patch).Patch();
+                }
                 else if (zones) cases.Add(SpawnZone());
                 else
                 {
@@ -95,19 +112,68 @@ public sealed partial class Plugin : IPlugin
                     cases.Add(Spawn(2, true));
                 }
                 spawned = frame;
+                if (gas) Write("spawned.json", new { frame, cases = cases.Select(c => State(c.Grid)).ToArray() });
             }
-            if (start == 0 && frame - spawned >= (solarPlanet ? 3600 : 600) && OfflineCompensation.ContentReady)
+            if (zoneEnvironment && !zonePowerCut && frame - spawned >= 600)
             {
-                if (solarPlanet)
+                // Let the native block finish its event registration while powered,
+                // then remove its real supply through the ordinary enabled switch.
+                foreach (var reactor in cases[0].Grid.GetFatBlocks<MyReactor>()) reactor.Enabled = false;
+                zonePowerCut = true;
+            }
+            if (start == 0 && frame - spawned >= (solarPlanet || zoneEnvironment ? 3600 : 600) && OfflineCompensation.ContentReady)
+            {
+                if (observed)
+                {
+                    if (observationStart == 0) { observationStart = frame; MySandboxGame.Static.EnableMaxSpeed = fast; }
+                    if (frame >= nextObservation)
+                    {
+                        nextObservation = frame + 100;
+                        bool ready = true;
+                        var censuses = (System.Collections.IDictionary)typeof(OfflineCompensation).GetField("CensusByGroup", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
+                        foreach (var c in cases)
+                        {
+                            ready &= OfflineCompensation.Prepare(new PartitionManager.Partition { Id = (ulong)c.Grid.EntityId, Members = new() { c.Grid.EntityId } });
+                            c.Census = censuses[c.Grid.EntityId];
+                        }
+                        observationFrames = frame - observationStart;
+                        if (ready && observationFrames < 450000) throw new InvalidOperationException("InPlace completed before a full native sun rotation");
+                        if ((frame - observationStart) % 3600 == 0)
+                            Write("progress.json", new { observationFrames = frame - observationStart, observationTarget = 450000, target });
+                        if (!ready) { if (fast) Thread.Sleep(1); return; }
+                    }
+                    else { if (fast) Thread.Sleep(1); return; }
+                }
+                if (solarPlanet || zoneEnvironment)
                 {
                     if (!solarCurvesStarted) { foreach (var c in cases) c.Start?.Invoke(); solarCurvesStarted = true; }
                     if (cases.Any(c => ((Dictionary<long, Task<double[]>>)CensusType.GetField("Curves").GetValue(c.Census)).Values.Any(t => !t.IsCompleted))) return;
                 }
-                foreach (var c in cases) { if (!solarPlanet) c.Start?.Invoke(); c.Initial = Read(c); }
+                if (gas)
+                {
+                    // Gas is delivered every frame but ice is debited on Update100.
+                    // Start each independent reference after its real settlement, so
+                    // pre-reference gas debt is not mistaken for future consumption.
+                    foreach (var c in cases.Where(c => c.Initial == null))
+                    {
+                        if (c.Grid.GetFatBlocks<MyGasGenerator>().Any(g => g.m_gasOutputAggregate.Values.Any(v => v != 0))) continue;
+                        c.Start?.Invoke(); c.Initial = Read(c); c.CapturedAt = frame;
+                    }
+                    if (cases.Any(c => c.Initial == null)) return;
+                }
+                else foreach (var c in cases) { if (!solarPlanet && !zoneEnvironment) c.Start?.Invoke(); c.Initial = Read(c); c.CapturedAt = frame; }
                 start = frame; elapsedStart = MySession.Static.ElapsedGameTime.Ticks;
+                if (zoneEnvironment && (cases[0].Initial.Upkeep.Count != 1
+                    || cases[0].Initial.Upkeep[0].Exists && cases[0].Initial.Upkeep[0].ActivationRemainingFrames <= 0))
+                {
+                    Write("environment-precondition.json", new { profile = cases[0].Initial, state = State(cases[0].Grid) });
+                    throw new InvalidOperationException("Environmental zone must start inactive after native power loss (paused or activating on standby)");
+                }
                 gameplayStart = MySandboxGame.TotalGamePlayTimeInMilliseconds;
                 Write("initial.json", new { frame, dormantClusterLibrary = ClusterNodePlugin.Plugin.Instance == null,
-                    fast, target, profiles = cases.Select(c => c.Initial).ToArray() });
+                    fast, target, oxygenEnabled = MySession.Static.Settings.EnableOxygen,
+                    capturedAt = cases.Select(c => c.CapturedAt).ToArray(), observationFrames, scheduledInPlace = observed,
+                    profiles = cases.Select(c => c.Initial).ToArray() });
                 MySandboxGame.Static.EnableMaxSpeed = fast;
                 wall.Start(); nextSample = frame;
             }
@@ -118,6 +184,7 @@ public sealed partial class Plugin : IPlugin
             {
                 nextSample = frame + (gas ? 60 : 3600);
                 if (gas) { timeline.Add(new { nativeFrames = count, cases = cases.Select(c => State(c.Grid)).ToArray() }); Write("trajectory.json", timeline); }
+                if (zoneEnvironment) { timeline.Add(new { nativeFrames = count, cases = cases.Select(c => State(c.Grid)).ToArray() }); Write("trajectory.json", timeline); }
                 Write("progress.json", new { nativeFrames = count, target, wallSeconds = wall.Elapsed.TotalSeconds,
                     elapsedTicks = MySession.Static.ElapsedGameTime.Ticks - elapsedStart,
                     gameplayMilliseconds = MySandboxGame.TotalGamePlayTimeInMilliseconds - gameplayStart,
@@ -131,14 +198,15 @@ public sealed partial class Plugin : IPlugin
                     var modeled = JsonSerializer.Deserialize<OfflineProfile>(JsonSerializer.Serialize(c.Initial, OfflineProfile.Json), OfflineProfile.Json);
                     // Native resource integrators use frames/60; clustered authority stamps use
                     // milliseconds/16. Compare the same honest number of engine updates.
-                    long clockUnits = checked((long)Math.Round(count / (modeled.ClockFrameSeconds * 60)));
+                    long nativeFrames = frame - c.CapturedAt;
+                    long clockUnits = checked((long)Math.Round(nativeFrames / (modeled.ClockFrameSeconds * 60)));
                     var result = OfflineModel.Simulate(modeled, modeled.SimulatedThrough + clockUnits, long.MaxValue);
-                    return new { initial = c.Initial, actual, modeled, result, native = State(c.Grid) };
+                    return new { nativeFrames, initial = c.Initial, actual, modeled, result, native = State(c.Grid) };
                 }).ToArray();
                 Write("result.json", new { nativeFrames = count, target, fast, wallSeconds = wall.Elapsed.TotalSeconds,
                     elapsedTicks = MySession.Static.ElapsedGameTime.Ticks - elapsedStart,
                     gameplayMilliseconds = MySandboxGame.TotalGamePlayTimeInMilliseconds - gameplayStart,
-                    dormantClusterLibrary = ClusterNodePlugin.Plugin.Instance == null, results });
+                    dormantClusterLibrary = ClusterNodePlugin.Plugin.Instance == null, observationFrames, scheduledInPlace = observed, results });
                 MySandboxGame.Static.EnableMaxSpeed = false;
                 finished = true;
             }
@@ -163,6 +231,10 @@ public sealed partial class Plugin : IPlugin
             var saved = (MyObjectBuilder_SafeZoneComponent)manager.Serialize();
             MyEntities.TryGetEntityById(manager.SafeZoneEntityId, out MySafeZone zone);
             return new { exists = zone != null, active = zone?.Enabled, enabled = block.Enabled,
+                working = block.IsWorking, powered = block.ResourceSink.IsPoweredByType(MyResourceDistributorComponent.ElectricityId),
+                eventReady = block.m_readyToRecieveEvents,
+                requiredMW = block.ResourceSink.RequiredInputByType(MyResourceDistributorComponent.ElectricityId),
+                inputMW = block.ResourceSink.CurrentInputByType(MyResourceDistributorComponent.ElectricityId),
                 chips = (decimal)block.GetInventory().GetItemAmount(MyDefinitionId.Parse("MyObjectBuilder_Component/ZoneChip")),
                 remainingMs = saved.UpkeepTime, activating = saved.Activating,
                 radius = zone?.Radius, actions = zone?.AllowedActions.ToString() };
@@ -172,7 +244,8 @@ public sealed partial class Plugin : IPlugin
         engines = grid.GetFatBlocks<MyHydrogenEngine>().Select(e => new { gas = e.Capacity, output = e.SourceComp.CurrentOutput }).ToArray(),
         tanks = grid.GetFatBlocks<MyGasTank>().Select(t => new { gas = t.FilledRatio * t.Capacity, powered = t.IsWorking }).ToArray(),
         generators = grid.GetFatBlocks<MyGasGenerator>().Select(g => new { ice = (decimal)g.GetInventory().GetItemAmount(MyDefinitionId.Parse("MyObjectBuilder_Ore/Ice")),
-            working = g.IsWorking, outputs = g.SourceComp.ResourceTypes.Select(t => g.SourceComp.CurrentOutputByType(t)).ToArray() }).ToArray(),
+            working = g.IsWorking, pendingGas = g.m_gasOutputAggregate.ToDictionary(p => p.Key.ToString(), p => p.Value),
+            outputs = g.SourceComp.ResourceTypes.Select(t => g.SourceComp.CurrentOutputByType(t)).ToArray() }).ToArray(),
         solar = grid.GetFatBlocks<MySolarPanel>().Select(p => new { output = p.SourceComp.CurrentOutput, maximum = p.SourceComp.MaxOutput, enabled = p.Enabled }).ToArray(),
         reactors = grid.GetFatBlocks<MyReactor>().Select(r => new { fuel = (decimal)r.GetInventory().GetItems().Sum(i => (decimal)i.Amount),
             output = r.SourceComp.CurrentOutput, timer = r.m_timer.TimerTickInFrames, sinceTrigger = r.m_timer.FramesFromLastTrigger }).ToArray(),
@@ -231,6 +304,45 @@ public sealed partial class Plugin : IPlugin
         CensusType.GetField("Group").SetValue(census, grid.EntityId);
         CensusType.GetField("Members").SetValue(census, new[] { grid.EntityId });
         return new Case { Grid = grid, Census = census };
+    }
+
+    private Case SpawnEnvironmentalZone()
+    {
+        var c = SpawnZone();
+        c.Grid.DisplayName = "zone-environmental-restoration";
+        for (int i = 0; i < 40; i++)
+        {
+            var panel = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_SolarPanel>("LargeBlockSolarPanel");
+            panel.Min = new SerializableVector3I(30 + i % 10 * 6, i / 10 * 6, 0);
+            c.Grid.AddBlock(panel, false);
+        }
+        var first = c.Grid.GetFatBlocks<MySolarPanel>().First();
+        Vector3D normal = first.SolarPanelDefinition.PanelOrientation;
+        var local = MatrixD.CreateWorld(Vector3D.Zero, normal, Vector3D.CalculatePerpendicularVector(normal));
+        // Vanilla panels are two-sided: anti-sun still supplies full power.
+        // Start edge-on so the block really loses power before the reference.
+        Vector3D dark = Vector3D.Normalize(Vector3D.Cross(MySector.DirectionToSunNormalized, MySector.SunProperties.SunRotationAxis));
+        var facing = MatrixD.CreateWorld(Vector3D.Zero, dark, Vector3D.CalculatePerpendicularVector(dark));
+        var matrix = MatrixD.Invert(local) * facing;
+        matrix.Translation = c.Grid.PositionComp.GetPosition(); c.Grid.WorldMatrix = matrix;
+        c.Start = () =>
+        {
+            var curves = (Dictionary<long, Task<double[]>>)CensusType.GetField("Curves").GetValue(c.Census);
+            foreach (var panel in c.Grid.GetFatBlocks<MySolarPanel>())
+                curves[panel.EntityId] = (Task<double[]>)SampleSun.Invoke(null, new object[] { panel });
+        };
+        return c;
+    }
+
+    private Case SpawnObserved(bool fuel, bool inventory = false)
+    {
+        var c = Spawn(1, !fuel);
+        c.Grid.DisplayName = inventory ? "observed-inventory-policy" : fuel ? "observed-fuel-policy" : "observed-sun-varying";
+        if (!fuel) c.Grid.GetFatBlocks<MyReactor>().Single().Enabled = false;
+        c.Observed = fuel ? c.Grid.GetFatBlocks<MyReactor>().Single() : c.Grid.GetFatBlocks<MySolarPanel>().Single();
+        ClusterTestPlugin.OfflineObservedLogic.Attach(c.Observed, sun: true);
+        if (inventory) ClusterTestPlugin.OfflineObservedLogic.Attach(c.Observed, inventory: true);
+        return c;
     }
 
     private Case Spawn(int mode, bool solar)

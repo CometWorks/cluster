@@ -750,6 +750,61 @@ def offline_spatial_pin(bench):
     bench.exercised(actualTerminalPin=True, ordinaryDenial=True, actualSpatialChooser=True, noSyntheticPin=True)
 
 
+def offline_large_online_pull(bench):
+    """Raw controlled large-station measurements on a shared host, no exclusive frame claim."""
+    from scenarios_core import _handover_url
+    api, _, _, _, _ = _call_fixture(bench, take_offline=False)
+    for node in _nodes(bench):
+        _put_config(bench, node, {"offline.enabled": "false"})
+    bench.cluster.post("/automatic/pause")
+    fixture = bench.cluster.node("node-2", f"/offline-test-large-station?owner={_client_identity(bench)}", "POST", timeout=90)
+    grid = fixture["grid"]
+    _require(bench, "controlled station has10203 actual native blocks", fixture["blocks"] == 10203, json.dumps(fixture))
+    partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 60)
+    _require(bench, "large online station is owned by the remote source", bool(partition) and _owner_of(bench, grid)[0] == "node-2")
+    samples = []
+    for iteration in range(3):
+        for node in ("node-1", "node-2"):
+            bench.cluster.node(node, f"/offline-test-transfer-trace?grid={grid}", "POST")
+        before = bench.cluster.get("/transport/status")
+        started = time.monotonic()
+        opened = _open_terminal(api, grid)
+        latency = time.monotonic() - started
+        _require(bench, "actual remote terminal opens the controlled large station", opened.get("screenOpen") is True, json.dumps(opened))
+        _require(bench, "large station arrived on the requesting node", _owner_of(bench, grid) == ("node-1", partition))
+        source = bench.cluster.node("node-2", "/offline-test-transfer-trace")
+        target = bench.cluster.node("node-1", "/offline-test-transfer-trace")
+        freezes = [e for e in source["entries"] if e["phase"] == "frozen"]
+        thaws = [e for e in target["entries"] if e["phase"] == "cleared" and e["live"] and e["physicsEnabled"]]
+        _require(bench, "source freeze and target physics thaw have the same real transfer", bool(freezes and thaws)
+            and freezes[0]["transfer"] == thaws[-1]["transfer"] and source["frequency"] == target["frequency"])
+        transfer = next(t for t in bench.cluster.get("/registry/handovers/history") if t["TransferId"] == freezes[0]["transfer"])
+        freeze_ms = (thaws[-1]["ticks"] - freezes[0]["ticks"]) * 1000 / source["frequency"]
+        _require(bench, "native frozen interval and snapshot payload were measured", freeze_ms > 0 and transfer["SectorBytes"] > 0)
+        samples.append({"iteration": iteration, "latencySeconds": latency, "sourceFreezeToTargetThawMs": freeze_ms,
+            "transfer": transfer, "sourceTrace": source, "targetTrace": target, "transportBefore": before,
+            "transportAfter": bench.cluster.get("/transport/status")})
+        bench.record("large-online-pull-samples", {"fixture": fixture, "samples": samples,
+            "limitation": "shared host; synthetic10k armor/200lights;3 raw observations, no population percentile or live frequency claim"})
+        api.close_remote_terminal()
+        _require(bench, "closing the terminal releases the real pin", bool(_poll(lambda: not _remote_presence(bench, partition), 20)))
+        if iteration < 2:
+            def return_home():
+                try:
+                    bench.cluster.post(_handover_url(bench, partition, clientless=True), timeout=90)
+                    return True
+                except ClusterHttpError as error:
+                    # The sampled node pin is gone; the Gateway's generation-fenced
+                    # heartbeat report clears on its next ordinary publication.
+                    if "remote-use" in str(error): return False
+                    raise
+            _require(bench, "ordinary heartbeat clears cached presence before the return", bool(_poll(return_home, 30)))
+            _require(bench, "large station returned to the remote source", _owner_of(bench, grid) == ("node-2", partition))
+            time.sleep(11)  # actual per-entity online-pull cooldown
+    bench.exercised(actualLargeStation=True, actualTerminalPulls=3, sourceFreezeToTargetThaw=True,
+        sharedHost=True, exclusivePerformance=False, productionFrequency=False)
+
+
 def offline_frozen_new_pin(bench):
     """A real new terminal request cannot pin a source after native capture froze it."""
     from scenarios_saves import _PausedHandover
@@ -784,6 +839,33 @@ def offline_frozen_new_pin(bench):
 def offline_admin_profile_race(bench):
     """U1: actual preflight -> committed handover -> held source release."""
     from scenarios_core import _handover_url
+    from scenarios_admin import host_ip, MANAGE_TOKEN, QUERY_TOKEN
+    import hashlib
+    ip = host_ip()
+    port = bench.cluster.config.gateway_control.rsplit(":", 1)[1]
+    tokens = bench.dir / "native-admin-tokens.json"
+    tokens.write_text(json.dumps({"tokens": [
+        {"name": "native-manage", "scope": "manage", "sha256": hashlib.sha256(MANAGE_TOKEN.encode()).hexdigest()},
+        {"name": "native-query", "scope": "query", "sha256": hashlib.sha256(QUERY_TOKEN.encode()).hexdigest()}]}))
+    # Keep the CLI/node loopback prefix; exercise the actual bearer gate through
+    # the separate private-LAN prefix, never its loopback development exemption.
+    bench.cluster.config.gateway_args += ["--control", f"{ip}:{port}"]
+    import base64
+    bench.cluster.config.gateway_env.update({"CLUSTER_ADMIN_TOKENS": str(tokens), "CLUSTER_ADMIN_TOKEN": MANAGE_TOKEN,
+        "CLUSTER_JOIN_TOKEN_CURRENT": base64.b64encode(bytes(32)).decode(), "CLUSTER_ALLOW_TEST_ACCEPT_ALL": "true",
+        "CLUSTER_INTERNAL_NETWORKS": f"127.0.0.0/8,{ip}/32"})
+    bench.cluster.config.node_env["CLUSTER_JOIN_TOKEN"] = base64.b64encode(bytes(32)).decode()
+    def admin(path, method="GET", token=MANAGE_TOKEN, key=None, body=None):
+        request = urllib.request.Request(f"http://{ip}:{port}/admin/v1" + path,
+            data=json.dumps(body).encode() if body is not None else None, method=method)
+        if token: request.add_header("Authorization", "Bearer " + token)
+        if key: request.add_header("Idempotency-Key", key)
+        if body is not None: request.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=35) as response:
+                return response.status, json.load(response)
+        except urllib.error.HTTPError as error:
+            return error.code, json.load(error)
     _survival_template(bench)
     bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
     bench.cluster.post("/automatic/pause")
@@ -796,9 +878,26 @@ def offline_admin_profile_race(bench):
     grid = bench.cluster.node("node-1", f"/offline-test-station?owner={owner}", "POST")["grid"]
     partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 60)
     _require(bench, "profile race fixture has current ownership", bool(partition))
+    _require(bench, "native non-loopback admin rejects missing bearer", admin("/offline/partitions", token=None)[0] == 401)
+    _require(bench, "native query bearer reads offline catalog", admin("/offline/partitions", token=QUERY_TOKEN)[0] == 200)
+    before = _owner_of(bench, grid)
+    details = admin(f"/offline/details?node=node-1&partition={partition}", token=QUERY_TOKEN)
+    _require(bench, "native query bearer reads exact owner details", details[0] == 200, json.dumps(details)[:300])
+    denied = admin(f"/triggers/profile?node=node-1&partition={partition}", "POST", QUERY_TOKEN, "query-profile-denied")
+    bench.check("native query bearer cannot mutate profile", denied[0] == 403 and denied[1]["error"]["code"] == "authorization_denied")
+    bench.check("query and denied maintenance preserve native ownership without a wake", before == _owner_of(bench, grid)
+        and not _offline_row(bench, partition))
+    cache_key = "native-bearer-clear"
+    bench.cluster.node("wa-1", f"/offline-test-cache?key={cache_key}", "POST")
+    clear_body = {"key": cache_key, "expectedEpoch": 0}
+    denied = admin("/offline/cache/clear", "POST", QUERY_TOKEN, "query-clear-denied", clear_body)
+    bench.check("native query bearer cannot clear WA cache", denied[0] == 403 and denied[1]["error"]["code"] == "authorization_denied")
+    cleared = admin("/offline/cache/clear", "POST", MANAGE_TOKEN, "native-bearer-clear", clear_body)[1]["data"]
+    bench.check("native manage bearer clears one actual WA epoch", cleared["state"] == "Succeeded" and cleared["result"]["epoch"] == "1")
+    replay = admin("/offline/cache/clear", "POST", MANAGE_TOKEN, "native-bearer-clear", clear_body)[1]["data"]
+    bench.check("native bearer replay retains operation identity", replay["operationId"] == cleared["operationId"])
     def profile(node, key):
-        return bench.cluster._request("POST", f"/admin/v1/triggers/profile?node={node}&partition={partition}",
-            headers={"Idempotency-Key": key})["data"]
+        return admin(f"/triggers/profile?node={node}&partition={partition}", "POST", MANAGE_TOKEN, key)[1]["data"]
     _require(bench, "source claim is locally confirmed", bool(_poll(lambda: bench.cluster.node("node-1",
         f"/offline-test-admin-hold?grid={grid}&partition={partition}")["generation"] > 0, 20)))
     control = profile("node-1", "profile-race-before")
@@ -830,7 +929,10 @@ def offline_admin_profile_race(bench):
         transfer.result(timeout=60)
     current = profile("node-2", "profile-race-after")
     bench.check("current target profile succeeds after source release", current["state"] == "Succeeded")
-    bench.exercised(actualPreflightHandoverRace=True, frozenSourceGeneration=True, noRedirect=True)
+    events = admin("/events?after=0", token=QUERY_TOKEN)[1]
+    bench.record("native-bearer-events", events)
+    bench.check("native maintenance audits the named bearer actor", "native-manage" in json.dumps(events) and "loopback" not in json.dumps(cleared))
+    bench.exercised(actualPreflightHandoverRace=True, frozenSourceGeneration=True, noRedirect=True, actualNonLoopbackBearer=True)
 
 
 def offline_cache_durability(bench):
@@ -1028,12 +1130,33 @@ def p2_off_call_laser(bench):
     bench.record("laser-source-after-id", bench.cluster.node("node-1", f"/igc-test-laser-status?grid={source_grid}"))
     _require(bench, "id wake loads onto source node and establishes both real lasers", bool(paired) and _owner_of(bench, target_grid) == ("node-1", partition))
     bench.record("laser-id-connected", paired)
+    bench.cluster.node("node-1", f"/offline-test-options?grid={target_grid}&mode=short-radio", "POST")
+    chain = []
+    # Each 3.6km hop exceeds the native 3km partition co-location/merge bound;
+    # 4km radios bridge adjacent hops but cannot bypass the middle relay.
+    for name, x in (("middle", 23600), ("destination", 27200)):
+        station = bench.cluster.node("node-2", f"/offline-test-radio-at?owner={owner}&name=laser-chain-{name}&x={x}&y=20000&z=0", "POST")["grid"]
+        bench.cluster.node("node-2", f"/offline-test-options?grid={station}&mode=stay-online", "POST")
+        chain.append(station)
+    reach_path = f"/offline-test-radio-chain?source={source_grid}&destination={chain[1]}&owner={owner}"
+    _require(bench, "live laser and two short radio hops reach the distant endpoint", bool(_poll(lambda:
+        bench.cluster.node("node-1", reach_path).get("reachable"), 45)))
     enable("node-1")
     _require(bench, "established far end can offline", bool(_poll(lambda: _offline_row(bench, partition), 90)))
     time.sleep(12)
     s = bench.cluster.node("node-1", f"/igc-test-laser-status?grid={source_grid}")
     row = _offline_row(bench, partition)
     bench.check("established proxy link stays connected without waking", s.get("state") == "connected" and bool(row) and not row.get("LoadRequestedNode"), json.dumps({"source": s, "offline": row}))
+    reach = bench.cluster.node("node-1", reach_path)
+    _require(bench, "radio chain relays behind the established offline laser", reach.get("reachable") is True, json.dumps(reach))
+    bench.cluster.node("node-2", f"/igc-test-antenna?grid={chain[0]}&enabled=false", "POST")
+    try:
+        bench.check("removing the middle radio breaks the chain without waking the offline laser", bool(_poll(lambda:
+            not bench.cluster.node("node-1", reach_path).get("reachable"), 30)) and bool(_offline_row(bench, partition)))
+    finally:
+        bench.cluster.node("node-2", f"/igc-test-antenna?grid={chain[0]}&enabled=true", "POST")
+    bench.check("restoring the radio restores the path while the laser remains offline", bool(_poll(lambda:
+        bench.cluster.node("node-1", reach_path).get("reachable"), 30)) and bool(_offline_row(bench, partition)))
     bench.cluster.node("node-1", f"/igc-test-laser-idle?grid={source_grid}", "POST")
     # The per-source minute limit is real wall time; do not bypass it for the GPS arm.
     time.sleep(60)
@@ -1042,8 +1165,7 @@ def p2_off_call_laser(bench):
     paired = _poll(connected, 150, 2)
     _require(bench, "GPS wake establishes both real lasers", bool(paired))
     bench.record("laser-gps-connected", paired)
-    bench.exercised(idWake=True, gpsWake=True, establishedNoWake=True,
-                    limitation="explicit radio-chain relay-behind-offline-laser assertion remains separate")
+    bench.exercised(idWake=True, gpsWake=True, establishedNoWake=True, offlineLaserRadioChain=True, brokenRadioNegativeControl=True)
 
 
 def t_oc_10(bench):
@@ -1280,6 +1402,10 @@ def _inventory_totals(profile):
 
 
 def _zone_reference(bench, grid, partition, label, seconds=30, blocked=False, depleted=False, renewable=False):
+    # Registry publication precedes the source's ordinary claim acknowledgement.
+    # Wait for that real local admission rather than racing the maintenance guard.
+    _require(bench, label + ": source claim is locally confirmed", bool(_poll(lambda:
+        bench.cluster.node("node-1", f"/offline-test-admin-hold?grid={grid}&partition={partition}")["generation"] > 0, 20)))
     _require(bench, label + ": native profile completes", bool(_poll(lambda: bench.cluster.node("node-1",
         f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))
     if depleted:
@@ -1693,6 +1819,7 @@ SCENARIOS_OFFLINE.update({
     "T-OC-09": (t_oc_09, "actual shared-apply crash, immutable-Final retry and post-Final no-repeat recovery", "3"),
     "OFF-SPATIAL-PIN": (offline_spatial_pin, "Actual spatial co-location exempts a live terminal pin", "3"),
     "OFF-FROZEN-NEW-PIN": (offline_frozen_new_pin, "Frozen source denies actual new terminal pin and replay", "3"),
+    "OFF-LARGE-ONLINE-PULL": (offline_large_online_pull, "Controlled large station actual online pulls/frozen window/bytes", "3"),
     "OFF-ADMIN-PROFILE-RACE": (offline_admin_profile_race, "Profile preflight/committed-handover/frozen-source refusal (U1)", "3"),
     "OFF-CACHE-DURABILITY": (offline_cache_durability, "WA-local cache clear journal and pre-Final replacement (R8)", "3"),
     "P2-OFF-CALL-DENY": (p2_off_call_deny, "authenticated hostile-owner and missing-relay requests do not wake", "3"),

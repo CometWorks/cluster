@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
+using System.Diagnostics;
+using System.Collections.Concurrent;
 using ClusterPlugin;
 using HarmonyLib;
 using Sandbox;
@@ -13,6 +15,7 @@ using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Blocks;
 using Sandbox.Game.Entities.Cube;
 using Sandbox.Game.EntityComponents;
+using Sandbox.Game.GameSystems;
 using Sandbox.Game.World;
 using SpaceEngineers.Game.Entities.Blocks.SafeZone;
 using SpaceEngineers.Game.Entities.Blocks;
@@ -43,9 +46,49 @@ internal static class OfflineTestRoutes
     private static int adminPreflightEntered, adminReleaseEntered;
     private static object adminReleaseProof;
     private static readonly ManualResetEventSlim AdminPreflightRelease = new(true), AdminSourceRelease = new(true);
+    private static long tracedGrid;
+    private static readonly ConcurrentQueue<object> TransferTrace = new();
 
     public static void Register()
     {
+        var traceHarmony = new Harmony("ClusterTestPlugin.offline-transfer-observer");
+        traceHarmony.Patch(AccessTools.Method(typeof(ClusterRuntime), "MarkFrozen"), postfix: new HarmonyMethod(typeof(OfflineTestRoutes), nameof(TraceFrozen)));
+        traceHarmony.Patch(AccessTools.Method(typeof(ClusterRuntime), "ClearFrozen", new[] { typeof(long), typeof(Guid) }), postfix: new HarmonyMethod(typeof(OfflineTestRoutes), nameof(TraceCleared)));
+        TestRoutes.Add("POST", "/offline-test-transfer-trace", context =>
+        {
+            Interlocked.Exchange(ref tracedGrid, TestRoutes.Long(context, "grid")); TransferTrace.Clear();
+            TestRoutes.Json(context, 200, new { frequency = Stopwatch.Frequency });
+        });
+        TestRoutes.Add("GET", "/offline-test-transfer-trace", context => TestRoutes.Json(context, 200,
+            new { frequency = Stopwatch.Frequency, entries = TransferTrace.ToArray() }));
+        TestRoutes.Add("POST", "/offline-test-large-station", context =>
+        {
+            long owner = TestRoutes.Long(context, "owner");
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => LargeStation(owner)));
+        });
+        TestRoutes.Add("POST", "/offline-test-radio-at", context =>
+        {
+            long owner = TestRoutes.Long(context, "owner");
+            var position = new Vector3D(TestRoutes.Double(context, "x"), TestRoutes.Double(context, "y"), TestRoutes.Double(context, "z"));
+            string name = TestRoutes.Query(context, "name", "offline-laser-radio");
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                var grid = RcTestHarness.SpawnStation(name, position, owner, false);
+                foreach (var antenna in grid.GetFatBlocks<MyRadioAntenna>()) antenna.RadioBroadcaster.BroadcastRadius = 4000;
+                return new { grid = grid.EntityId };
+            }));
+        });
+        TestRoutes.Add("GET", "/offline-test-radio-chain", context =>
+        {
+            long source = TestRoutes.Long(context, "source"), destination = TestRoutes.Long(context, "destination"), owner = TestRoutes.Long(context, "owner");
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                if (!MyEntities.TryGetEntityById(source, out MyEntity entity) || entity is not MyCubeGrid grid) throw new InvalidOperationException("Missing source grid");
+                var relays = MyAntennaSystem.Static.GetAllRelayedBroadcasters(grid, owner, mutual: true);
+                return new { reachable = AntennaGraphService.CanReachGrid(grid.GetFatBlocks<MyLaserAntenna>().Single(), destination),
+                    broadcasters = relays.Select(b => b.Entity.EntityId).ToArray() };
+            }));
+        });
         // Hold the HTTP request after the Gateway's source report/presync, before
         // game-thread Capture. A real client can acquire a pin during this gap.
         // The production dispatcher and capture then run unchanged.
@@ -345,6 +388,44 @@ internal static class OfflineTestRoutes
             TestRoutes.Json(context, 200, new { target = Interlocked.Read(ref target), applied = Volatile.Read(ref applied) }));
     }
 
+    private static void TraceFrozen(long __0, Guid __1) => TraceTransfer(__0, __1, "frozen");
+    private static void TraceCleared(long __0, Guid __1) => TraceTransfer(__0, __1, "cleared");
+    private static void TraceTransfer(long grid, Guid transfer, string phase)
+    {
+        if (grid != Interlocked.Read(ref tracedGrid)) return;
+        bool live = MyEntities.TryGetEntityById(grid, out MyEntity entity) && !entity.MarkedForClose;
+        TransferTrace.Enqueue(new { phase, transfer, ticks = Stopwatch.GetTimestamp(), live, physicsEnabled = live && entity.Physics?.Enabled == true });
+        while (TransferTrace.Count > 128) TransferTrace.TryDequeue(out _);
+    }
+
+    private static object LargeStation(long owner)
+    {
+        var builder = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_CubeGrid>();
+        builder.GridSizeEnum = MyCubeSize.Large; builder.IsStatic = true; builder.CreatePhysics = true;
+        builder.PersistentFlags = MyPersistentEntityFlags2.InScene | MyPersistentEntityFlags2.CastShadows;
+        builder.DisplayName = "controlled-large-online-pull";
+        builder.PositionAndOrientation = new MyPositionAndOrientation(new Vector3D(20000, 20000, 0), Vector3D.Forward, Vector3D.Up);
+        for (int x = 0; x < 100; x++) for (int y = 0; y < 100; y++)
+        {
+            var armor = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_CubeBlock>("LargeBlockArmorBlock");
+            armor.Min = new SerializableVector3I(x, y, -1); armor.Owner = owner; builder.CubeBlocks.Add(armor);
+        }
+        for (int i = 0; i < 200; i++)
+        {
+            var light = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_InteriorLight>("LargeBlockLight_1corner");
+            light.Min = new SerializableVector3I(20 + i % 100, i / 100, 0); light.Owner = owner; builder.CubeBlocks.Add(light);
+        }
+        var antenna = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_RadioAntenna>("LargeBlockRadioAntenna");
+        antenna.Owner = owner; antenna.BroadcastRadius = 50000; antenna.EnableBroadcasting = true; builder.CubeBlocks.Add(antenna);
+        var battery = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_BatteryBlock>("LargeBlockBatteryBlock");
+        battery.Min = new SerializableVector3I(5, 0, 0); battery.Owner = owner; battery.CurrentStoredPower = 3; builder.CubeBlocks.Add(battery);
+        var remote = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_RemoteControl>("LargeBlockRemoteControl");
+        remote.Min = new SerializableVector3I(10, 0, 0); remote.Owner = owner; builder.CubeBlocks.Add(remote);
+        var grid = (MyCubeGrid)MyEntities.CreateFromObjectBuilderAndAdd(builder, false);
+        return new { grid = grid.EntityId, blocks = grid.BlocksCount, functional = grid.GetFatBlocks<MyFunctionalBlock>().Count(),
+            fixture = "10000 armor,200 lights,antenna,battery,remote; controlled synthetic payload, shared host" };
+    }
+
     private static object Options(long id, string mode)
     {
         var grid = (MyCubeGrid)MyEntities.GetEntityById(id);
@@ -469,7 +550,7 @@ internal static class OfflineTestRoutes
         {
             var antenna = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_RadioAntenna>("LargeBlockRadioAntenna");
             antenna.Min = new SerializableVector3I(3, 0, 0); antenna.Owner = grid.BigOwners.FirstOrDefault();
-            antenna.Enabled = true; antenna.EnableBroadcasting = true; antenna.BroadcastRadius = 1000;
+            antenna.Enabled = true; antenna.EnableBroadcasting = true; antenna.BroadcastRadius = 4000;
             grid.AddBlock(antenna, false);
         }
         else if (mode == "observed")

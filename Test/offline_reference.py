@@ -4,6 +4,7 @@ Max-speed pacing is allowed only after a real60Hz comparison; never skips update
 """
 from __future__ import annotations
 import argparse
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
@@ -44,7 +45,7 @@ def run_one(bundle, out, label, frames, fast, port_slot=None, scenario="energy")
         for name in ("Sandbox.sbc", "Sandbox_config.sbc"):
             path = template / name
             tree = ET.parse(path); settings = tree.getroot().find("Settings")
-            for key, value in {"GameMode": "Survival", "EnableSunRotation": "true", "SunRotationIntervalMinutes": "120", "AutoSaveInMinutes": "0"}.items():
+            for key, value in {"GameMode": "Survival", "EnableSunRotation": "true", "SunRotationIntervalMinutes": "120", "AutoSaveInMinutes": "0", "WeatherSystem": "false"}.items():
                 field = settings.find(key)
                 if field is None: field = ET.SubElement(settings, key)
                 field.text = value
@@ -91,20 +92,42 @@ def main():
     parser.add_argument("--proof-only", action="store_true")
     parser.add_argument("--continue-long", type=Path)
     parser.add_argument("--solar-planet", action="store_true")
+    parser.add_argument("--zone-environment", action="store_true")
+    parser.add_argument("--observed", action="store_true")
     parser.add_argument("--production", action="store_true")
     parser.add_argument("--gyros", action="store_true")
     parser.add_argument("--gas", action="store_true")
+    parser.add_argument("--gas-no-oxygen", action="store_true")
     parser.add_argument("--zone-long", type=Path, help="prior valid pacing proof")
     args = parser.parse_args()
     out = HOST.results / (datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ") + "-standalone")
     out.mkdir(parents=True)
-    bundle = build("solar-planet" if args.solar_planet else "production" if args.production else "gyros" if args.gyros else "gas" if args.gas else "zones" if args.zone_long else "energy")
+    scenario = "solar-planet" if args.solar_planet else "zone-environment" if args.zone_environment else "observed" if args.observed else "production" if args.production else "gyros" if args.gyros else "gas-no-oxygen" if args.gas_no_oxygen else "gas" if args.gas else "zones" if args.zone_long else "energy"
+    bundle = build(scenario)
+    source_files = [Path(__file__), *sorted((Path(__file__).parent / "OfflineReference").glob("*.*")),
+                    Path(__file__).parent / "ClusterTestPlugin/Source/OfflineObservedLogic.cs"]
+    source_files = [p for p in source_files if p.is_file()]
+    for path in source_files:
+        destination = out / "observer-source" / path.relative_to(Path(__file__).parent)
+        destination.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(path, destination)
     (out / "provenance.json").write_text(json.dumps({"package": str(HOST.package), "source": subprocess.check_output(
         ["git", "rev-parse", "HEAD"], text=True).strip(), "engine": "stock DS, cluster plugin not registered",
+        "sourceDirty": subprocess.check_output(["git", "status", "--porcelain"], text=True).splitlines(),
+        "observerSha256": {str(p.relative_to(Path(__file__).parent)): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_files},
+        "observerBinarySha256": hashlib.sha256((bundle / "OfflineReference.dll").read_bytes()).hexdigest(),
+        "product": json.loads((HOST.package / "manifest.json").read_text()),
         "pacing": "native EnableMaxSpeed plus1ms sleep; no skipped frames/time jumps", "resources": resources()}, indent=2))
     if args.solar_planet:
         run = run_one(bundle, out, "solar-planet", 675000, True, port_slot=12, scenario="solar-planet")
         (out / "solar-planet-reference.json").write_text(json.dumps(run, indent=2))
+        return
+    if args.zone_environment:
+        run = run_one(bundle, out, "zone-environment", 108000, True, port_slot=13, scenario="zone-environment")
+        (out / "zone-environment-reference.json").write_text(json.dumps(run, indent=2))
+        return
+    if args.observed:
+        run = run_one(bundle, out, "observed-rotation", 450000, True, port_slot=14, scenario="observed")
+        (out / "observed-reference.json").write_text(json.dumps(run, indent=2))
         return
     if args.production:
         run = run_one(bundle, out, "production", 36000, True, port_slot=11, scenario="production")
@@ -114,8 +137,8 @@ def main():
         run = run_one(bundle, out, "gyro-fuel", 21600, True, port_slot=10, scenario="gyros")
         (out / "gyro-reference.json").write_text(json.dumps(run, indent=2))
         return
-    if args.gas:
-        run = run_one(bundle, out, "gas-coupled", 7200, True, port_slot=9, scenario="gas")
+    if args.gas or args.gas_no_oxygen:
+        run = run_one(bundle, out, "gas-coupled", 36000, True, port_slot=9, scenario=scenario)
         (out / "gas-reference.json").write_text(json.dumps(run, indent=2))
         return
     if args.zone_long:

@@ -9,6 +9,8 @@ using Sandbox.Game.Entities.Planet;
 using Sandbox.Game.World;
 using Sandbox.Game.SessionComponents;
 using SpaceEngineers.Game.Entities.Blocks;
+using SpaceEngineers.Game.EntityComponents.GameLogic;
+using Sandbox.Game.Entities.Cube;
 using VRage;
 using VRage.Game;
 using VRage.Game.Entity;
@@ -22,8 +24,22 @@ public sealed partial class Plugin
 {
     private readonly List<object> solarSamples = new();
     private int lastSunBin = -1;
+    private sealed class SolarPoint
+    {
+        public MyCubeBlock Block;
+        public MyNewSolarGameLogicComponent Modern;
+        public MySolarGameLogicComponent Legacy;
+        public int Next;
+        public int Count => Modern?.PivotAmount ?? 8;
+        public bool Busy => Modern?.m_isBackgroundProcessing ?? Legacy.m_isBackgroundProcessing;
+        public float Output => Modern?.MaxOutput ?? Legacy.MaxOutput;
+    }
+    private List<SolarPoint> pendingPoints;
+    private readonly List<object> solarPointSamples = new();
     private void SpawnPlanetSolar()
     {
+        MySession.Static.Settings.WeatherSystem = false;
+        foreach (var weather in MySession.Static.GetComponent<MySectorWeatherComponent>().m_weatherPlanetData) weather.Weathers.Clear();
         var planet = MyPlanets.GetPlanets().FirstOrDefault() ?? throw new InvalidOperationException("Planet reference has no planet");
         Vector3D center = planet.PositionComp.GetPosition();
         Vector3D axis = MySector.SunProperties.SunRotationAxis;
@@ -38,21 +54,22 @@ public sealed partial class Plugin
             var tangent = Vector3D.Normalize(Vector3D.Cross(axis, normal));
             foreach (int side in new[] { -1, 1 })
             {
-                var neighbour = planet.GetClosestSurfacePointGlobal(ground + tangent * side * 750);
+                var neighbour = planet.GetClosestSurfacePointGlobal(ground + tangent * side * 75);
                 double height = Vector3D.Dot(neighbour - ground, normal);
+                if (height > 50) continue; // keep the obstruction inside the native100m ray, not just75m horizontally
                 if (height <= ridge) continue;
                 ridge = height; chosen = normal; surface = ground;
             }
         }
-        Write("solar-geometry.json", new { center, surface, normal = chosen, ridge750m = ridge, periodMinutes = MySession.Static.Settings.SunRotationIntervalMinutes });
-        if (ridge < 30) throw new InvalidOperationException("No real terrain ridge above the reference precondition");
+        Write("solar-geometry.json", new { center, surface, normal = chosen, ridge75m = ridge, periodMinutes = MySession.Static.Settings.SunRotationIntervalMinutes });
+        if (ridge < 10) throw new InvalidOperationException("No real terrain ridge within the native100m ray");
         var lateral = Vector3D.Normalize(Vector3D.Cross(chosen, axis));
         for (int variant = 0; variant < 4; variant++)
         {
             var b = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_CubeGrid>();
             b.GridSizeEnum = MyCubeSize.Large; b.IsStatic = true; b.CreatePhysics = true;
             b.PersistentFlags = MyPersistentEntityFlags2.InScene | MyPersistentEntityFlags2.CastShadows;
-            b.PositionAndOrientation = new MyPositionAndOrientation(surface + chosen * (variant == 1 ? 8 : 300) + lateral * (variant * 250), Vector3D.Forward, Vector3D.Up);
+            b.PositionAndOrientation = new MyPositionAndOrientation(surface + chosen * (variant == 1 ? 8 : 300) + lateral * (variant == 1 ? 0 : variant * 250), Vector3D.Forward, Vector3D.Up);
             b.DisplayName = new[] { "planet-open", "planet-ridge", "planet-own-obstruction", "planet-nearby-obstruction" }[variant];
             var panel = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_SolarPanel>("LargeBlockSolarPanel");
             b.CubeBlocks.Add(panel);
@@ -93,17 +110,79 @@ public sealed partial class Plugin
                 foreach (var block in grid.GetFatBlocks().Where(b => b is MySolarPanel or MyOxygenFarm))
                     curves[block.EntityId] = (Task<double[]>)SampleSun.Invoke(null, new object[] { block });
             } });
+            // Planet collision shapes are lazy. The fixture must provide the
+            // loaded voxel/Havok geometry promised by the reference, as native
+            // targeting/projectiles do, without editing the planet or its sun.
+            // PrefetchShapeOnRay alone returns immediately while the planet's
+            // physics dictionary is null in an otherwise static standalone world.
+            var shapeBox = new BoundingBoxD(matrix.Translation - new Vector3D(150), matrix.Translation + new Vector3D(150));
+            var increment = planet.Storage.Size / (planet.m_numCells + 1);
+            planet.GeneratePhysicalShapeForBox(ref increment, ref shapeBox);
+            var weather = MySession.Static.GetComponent<MySectorWeatherComponent>();
+            foreach (var block in grid.GetFatBlocks().Where(b => b is MySolarPanel or MyOxygenFarm))
+            for (int step = 0; step < 72; step++)
+            {
+                var sun = Vector3.Transform(weather.m_baseSunDirection, Matrix.CreateFromAxisAngle(weather.m_sunRotationAxis, (float)(step * Math.PI / 36)));
+                var ray = new LineD(block.WorldMatrix.Translation, block.WorldMatrix.Translation + sun * 100);
+                planet.PrefetchShapeOnRay(ref ray);
+            }
         }
     }
 
     private void SamplePlanetSolar(long count)
     {
+        if (pendingPoints != null)
+        {
+            foreach (var point in pendingPoints.Where(p => !p.Busy && p.Next < p.Count))
+            {
+                if (point.Modern is {} modern)
+                {
+                    modern.m_currentPivot = (byte)point.Next++; modern.m_isBackgroundProcessing = true;
+                    ParallelTasks.Parallel.Start(modern.m_computeSunAngleFunc);
+                }
+                else
+                {
+                    point.Legacy.m_currentPivot = (byte)point.Next++; point.Legacy.m_isBackgroundProcessing = true;
+                    ParallelTasks.Parallel.Start(point.Legacy.ComputeSunAngleFunc);
+                }
+            }
+            if (pendingPoints.All(p => p.Next == p.Count && !p.Busy))
+            {
+                solarPointSamples.Add(new { nativeFrames = count,
+                    phase = MySession.Static.ElapsedGameTime.TotalMinutes / MySession.Static.Settings.SunRotationIntervalMinutes * 360,
+                    points = pendingPoints.Select(p => new { block = p.Block.EntityId, ratio = p.Output }).ToArray() });
+                Write("solar-native-points.json", solarPointSamples); pendingPoints = null;
+            }
+        }
         double phase = MySession.Static.ElapsedGameTime.TotalMinutes / MySession.Static.Settings.SunRotationIntervalMinutes * 360;
         int bin = (int)Math.Floor(phase / 5);
         if (bin == lastSunBin) return;
         lastSunBin = bin;
+        // Independent native point reference: unregistered component copies use
+        // the engine's own background/raycast/completion methods for every pivot.
+        // Live components, clocks, sun and inventories are untouched. Ordinary
+        // rolling-pivot output is recorded separately, including sunrise lag.
+        if (pendingPoints != null) throw new InvalidOperationException("Native solar point did not settle before the next5degree sample");
+        pendingPoints = cases.SelectMany(c => c.Grid.GetFatBlocks().Where(b => b is MySolarPanel or MyOxygenFarm)).Select(block =>
+        {
+            var point = new SolarPoint { Block = block };
+            if (block is MySolarPanel panel && panel.SolarComponent is MyNewSolarGameLogicComponent source)
+            {
+                point.Modern = new MyNewSolarGameLogicComponent();
+                point.Modern.Initialize(source.PanelOrientation, source.m_isTwoSided,
+                    source.m_pivots.Select(p => p / block.CubeGrid.GridSize).ToArray(), panel);
+            }
+            else
+            {
+                var farm = (MyOxygenFarm)block;
+                point.Legacy = new MySolarGameLogicComponent();
+                point.Legacy.Initialize(farm.SolarComponent.PanelOrientation, farm.SolarComponent.m_isTwoSided, farm.SolarComponent.PanelOffset, farm);
+            }
+            return point;
+        }).ToList();
         solarSamples.Add(new { nativeFrames = count, phase, sun = MySector.DirectionToSunNormalized,
             grids = cases.Select(c => new { name = c.Grid.DisplayName,
+                weatherMultiplier = MySession.Static.GetComponent<MySectorWeatherComponent>().GetSolarMultiplier(c.Grid.PositionComp.GetPosition()),
                 dark = MySectorWeatherComponent.IsOnDarkSide(c.Grid.PositionComp.GetPosition()),
                 panels = c.Grid.GetFatBlocks<MySolarPanel>().Select(p => new { block = p.EntityId, ratio = p.SolarComponent.MaxOutput }).ToArray(),
                 farms = c.Grid.GetFatBlocks<MyOxygenFarm>().Select(f => new { block = f.EntityId, ratio = f.SolarComponent.MaxOutput, powered = f.IsWorking }).ToArray() }).ToArray() });

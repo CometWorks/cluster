@@ -18,7 +18,8 @@ namespace ClusterTestPlugin;
 internal sealed class OfflineObservedLogic : MyGameLogicComponent
 {
     private readonly bool inventory;
-    internal OfflineObservedLogic(bool inventory = false) { this.inventory = inventory; }
+    private readonly bool sun;
+    internal OfflineObservedLogic(bool inventory = false, bool sun = false) { this.inventory = inventory; this.sun = sun; }
     public override void UpdateAfterSimulation100()
     {
         if (inventory)
@@ -28,15 +29,15 @@ internal sealed class OfflineObservedLogic : MyGameLogicComponent
         }
         else if (Entity.Components.TryGet<MyResourceSourceComponent>(out var source))
         {
-            float rate = (float)(.1 + .05 * Math.Sin(MySession.Static.GameplayFrameCounter * Math.PI / 300));
+            float rate = (float)(.1 + .05 * (sun ? MySector.DirectionToSunNormalized.X : Math.Sin(MySession.Static.GameplayFrameCounter * Math.PI / 300)));
             foreach (var resource in source.ResourceTypes)
                 source.SetMaxOutputByType(resource, resource == MyResourceDistributorComponent.ElectricityId ? rate : 200 + rate * 1000);
         }
     }
 
-    internal static void Attach(MyCubeBlock block, bool inventory = false)
+    internal static void Attach(MyCubeBlock block, bool inventory = false, bool sun = false)
     {
-        var logic = new OfflineObservedLogic(inventory) { EntityUpdate = true };
+        var logic = new OfflineObservedLogic(inventory, sun) { EntityUpdate = true };
         var previous = block.GameLogic;
         // Remove before composing: assigning the new component otherwise detaches the old
         // component after Create set its container, leaving vanilla solar logic Entity=null.

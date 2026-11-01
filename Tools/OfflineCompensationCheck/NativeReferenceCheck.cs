@@ -15,9 +15,10 @@ internal static class NativeReferenceCheck
         bool passed = true;
         foreach (var row in document.RootElement.GetProperty("results").EnumerateArray())
         {
+            long caseFrames = row.TryGetProperty("nativeFrames", out var capturedFrames) ? capturedFrames.GetInt64() : frames;
             var predicted = row.GetProperty("initial").Deserialize<OfflineProfile>(OfflineProfile.Json)!;
             var actual = row.GetProperty("actual").Deserialize<OfflineProfile>(OfflineProfile.Json)!;
-            long units = checked((long)Math.Round(frames / (predicted.ClockFrameSeconds * 60)));
+            long units = checked((long)Math.Round(caseFrames / (predicted.ClockFrameSeconds * 60)));
             var result = OfflineModel.Simulate(predicted, predicted.SimulatedThrough + units, long.MaxValue);
             var stocks = actual.Storage.Select(a =>
             {
@@ -49,6 +50,17 @@ internal static class NativeReferenceCheck
                 return new { item, actual = a, predicted = m, tolerance, passed = Math.Abs(a - m) <= tolerance };
             }).ToArray();
             string name = row.GetProperty("native").GetProperty("name").GetString()!;
+            bool zoneControl = true;
+            if (name == "standalone-zone-four-hour")
+            {
+                var nativeZone = row.GetProperty("native").GetProperty("zones").EnumerateArray().Single();
+                const string chip = "MyObjectBuilder_Component/ZoneChip";
+                zoneControl = frames == 864000 && Items(initial).GetValueOrDefault(chip) == 3
+                    && actualItems.GetValueOrDefault(chip) == 0 && modelItems.GetValueOrDefault(chip) == 0
+                    && predicted.Upkeep.Count == 1 && !predicted.Upkeep[0].Exists && !predicted.Upkeep[0].Enabled
+                    && predicted.Upkeep[0].RemainingFrames == 0 && !nativeZone.GetProperty("exists").GetBoolean()
+                    && nativeZone.GetProperty("enabled").GetBoolean();
+            }
             bool productionControl = true;
             if (name.StartsWith("production-"))
             {
@@ -63,9 +75,9 @@ internal static class NativeReferenceCheck
                 else productionControl &= actualItems.GetValueOrDefault("MyObjectBuilder_Component/SteelPlate") > initialItems.GetValueOrDefault("MyObjectBuilder_Component/SteelPlate")
                     && actualItems.GetValueOrDefault("MyObjectBuilder_Component/SteelPlate") == modelItems.GetValueOrDefault("MyObjectBuilder_Component/SteelPlate");
             }
-            bool casePassed = stocks.All(s => s.passed) && fuelPassed && zones.All(z => z.passed) && items.All(i => i.passed) && productionControl;
+            bool casePassed = stocks.All(s => s.passed) && fuelPassed && zones.All(z => z.passed) && items.All(i => i.passed) && productionControl && zoneControl;
             passed &= casePassed;
-            rows.Add(new { name, stocks, fuelActual, fuelPredicted, fuelTolerance, fuelPassed, zones, items, productionControl,
+            rows.Add(new { name, stocks, fuelActual, fuelPredicted, fuelTolerance, fuelPassed, zones, items, productionControl, zoneControl,
                 native = row.GetProperty("native").Clone(), result, predicted, passed = casePassed });
         }
         File.WriteAllText(output, JsonSerializer.Serialize(new { reference = Path.GetFullPath(reference), referenceSha256 = Convert.ToHexString(SHA256.HashData(bytes)),

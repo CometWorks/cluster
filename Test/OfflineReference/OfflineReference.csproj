@@ -7,5 +7,6 @@
     <Compile Include="$(MSBuildThisFileDirectory)GasCases.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ProductionCases.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)SolarCases.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../ClusterTestPlugin/Source/OfflineObservedLogic.cs" />
   </ItemGroup>
 </Project>
