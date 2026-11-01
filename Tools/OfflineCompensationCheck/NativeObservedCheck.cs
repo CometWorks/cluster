@@ -48,6 +48,7 @@ internal static class NativeObservedCheck
         decimal nativeDebit = Fuel(fi) - Fuel(fa), modelDebit = Fuel(fi) - Fuel(fm);
         bool knownNativeFuel = fi.Confidence == "Approximate" && fi.Observations.Single().Samples >= 4500
             && fi.Unknowns.Count == 0 && nativeDebit > .1m && modelDebit > .1m;
+        bool fuelRateVaries = fi.Observations.Count == 1 && fi.Observations[0].Variance.Any(v => v > .0001);
         decimal fuelTolerance = Math.Max(.000001m, nativeDebit * .01m);
         bool fuelScriptDifferentialPassed = knownNativeFuel && Math.Abs(nativeDebit - modelDebit) <= fuelTolerance;
         var fuelResult = fuel.GetProperty("result").Deserialize<OfflineResult>(OfflineProfile.Json)!;
@@ -64,10 +65,10 @@ internal static class NativeObservedCheck
             // ordinary fuel still burns there while Frozen preserves model stock.
             && Iron(oi) > 0 && Iron(Profile(opaque, "actual")) >= Iron(oi)
             && Fuel(Profile(opaque, "actual")) < Fuel(oi);
-        bool passed = fullRotation && scheduledInPlace && varyingCaptured && observedWithinVariance && fuelScriptDifferentialPassed && commonBudget && conservativePolicy;
+        bool passed = fullRotation && scheduledInPlace && varyingCaptured && observedWithinVariance && fuelScriptDifferentialPassed && fuelRateVaries && commonBudget && conservativePolicy;
         File.WriteAllText(output, JsonSerializer.Serialize(new { directory, fullRotation, scheduledInPlace, varyingCaptured, observedWithinVariance,
             energyErrorMWh = energyError, varianceBoundMWh, observation.Samples, observation.Mean, observation.Variance,
-            conservativePolicy, knownNativeFuel, nativeFuelDebit = nativeDebit, modeledFuelDebit = modelDebit, fuelTolerance, fuelScriptDifferentialPassed, commonBudget, passed,
+            conservativePolicy, knownNativeFuel, fuelRateVaries, nativeFuelDebit = nativeDebit, modeledFuelDebit = modelDebit, fuelTolerance, fuelScriptDifferentialPassed, commonBudget, passed,
             applicableObservedPassed = fullRotation && varyingCaptured && observedWithinVariance,
             acceptanceComplete = false,
             limitation = "ordinary Prepare InPlace admission across a full learning rotation then an independent full native reference; no initialized cluster scheduler or real-world observed census" }, new JsonSerializerOptions { WriteIndented = true }));

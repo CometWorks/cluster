@@ -1681,6 +1681,11 @@ def offline_zone_environment_wake(bench):
     _require(bench, "native cold solar startup eventually supplies the carried zone", bool(after))
     trace = bench.cluster.node("node-1", "/offline-test-zone-watch")
     bench.record("environment-native-restoration-frames", trace)
+    pending_save = bench.cluster.node("node-1", "/offline-test-zone-pending-save")
+    bench.record("environment-native-pending-save", pending_save)
+    bench.check("saving during cold startup retains desired protection and paused paid credit", bool(pending_save) and pending_save["entryEnabled"]
+        and pending_save["blockEnabled"] and not pending_save["activating"] and pending_save["creditMs"] > 0)
+    bench.check("a capture during pending restoration keeps zone power and upkeep in the common budget", bool(pending_save) and pending_save["upkeepCaptured"])
     bench.check("no observed native frame has active protection without real supply", bool(trace) and any(s["active"] for s in trace)
         and all(not s["active"] or s["working"] and s["input"] >= s["required"] - .00001 for s in trace))
     bench.record("environment-shared-wake", {"before": before, "paused": paused, "result": result, "after": after})
@@ -1693,6 +1698,16 @@ def offline_zone_environment_wake(bench):
     bench.check("solar common budget pays for the zone without disabled-reactor fuel or invented chips", sum(result["ProducerEnergyMWh"].values()) > 0
         and abs(sum(result["ProducerEnergyMWh"].values()) - sum(result["ConsumerEnergyMWh"].values()) - sum(result["StorageInputEnergyMWh"].values())) < 1e-8
         and not result["UpkeepConsumed"] and all(v == 0 for p in result["ProducerFuelConsumed"].values() for v in p.values()))
+    from scenarios_core import _handover_url
+    bench.cluster.node("node-2", f"/offline-test-zone-cancel?grid={grid}", "POST")
+    bench.cluster.post(_handover_url(bench, partition, clientless=True), timeout=90)
+    _require(bench, "native manual-off interrupts the target's pending cold restoration", bool(_poll(lambda:
+        bench.cluster.node("node-2", "/offline-test-zone-cancel")["cancelled"], 30)))
+    time.sleep(10)
+    cancelled = bench.cluster.node("node-2", f"/offline-test-zone-state?grid={grid}")
+    bench.record("environment-manual-off-control", cancelled)
+    bench.check("pending restore never resurrects a manually removed zone", cancelled["zone"] == 0 and not cancelled["active"]
+        and cancelled["blockEnabled"] and cancelled["allowedActions"] == before["allowedActions"])
     bench.exercised(actualEnvironmentalOfflineRecovery=True, actualSharedRecoveryClaim=True, naturalSun=True, nativeActivation=True, sharedBudget=True,
         limitation="explicit ordinary load claim; unpowered antenna had no offline proxy, so no radio wake is claimed")
 

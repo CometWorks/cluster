@@ -50,16 +50,29 @@ internal static class OfflineTestRoutes
     private static readonly ConcurrentQueue<object> TransferTrace = new();
     private static long watchedZoneGrid;
     private static readonly ConcurrentQueue<object> ZoneRestoreTrace = new();
+    private static long cancelRestoredZoneGrid;
+    private static int restoredZoneCancelled;
+    private static object pendingZoneSaveProof;
 
     public static void Register()
     {
         TestRoutes.Add("POST", "/offline-test-zone-watch", context =>
         {
             Interlocked.Exchange(ref watchedZoneGrid, TestRoutes.Long(context, "grid")); ZoneRestoreTrace.Clear();
+            Volatile.Write(ref pendingZoneSaveProof, null);
             TestRoutes.Json(context, 200, new { watching = Interlocked.Read(ref watchedZoneGrid) });
         });
         TestRoutes.Add("GET", "/offline-test-zone-watch", context => TestRoutes.Json(context, 200, ZoneRestoreTrace.ToArray()));
+        TestRoutes.Add("GET", "/offline-test-zone-pending-save", context => TestRoutes.Json(context, 200, Volatile.Read(ref pendingZoneSaveProof)));
+        TestRoutes.Add("POST", "/offline-test-zone-cancel", context =>
+        {
+            Interlocked.Exchange(ref cancelRestoredZoneGrid, TestRoutes.Long(context, "grid"));
+            Volatile.Write(ref restoredZoneCancelled, 0);
+            TestRoutes.Json(context, 200, new { armed = true });
+        });
+        TestRoutes.Add("GET", "/offline-test-zone-cancel", context => TestRoutes.Json(context, 200, new { cancelled = Volatile.Read(ref restoredZoneCancelled) != 0 }));
         var traceHarmony = new Harmony("ClusterTestPlugin.offline-transfer-observer");
+        traceHarmony.Patch(AccessTools.Method(typeof(BlockSafeZones), "Restore"), postfix: new HarmonyMethod(typeof(OfflineTestRoutes), nameof(CancelRestoredZone)));
         traceHarmony.Patch(AccessTools.Method(typeof(ClusterRuntime), "MarkFrozen"), postfix: new HarmonyMethod(typeof(OfflineTestRoutes), nameof(TraceFrozen)));
         traceHarmony.Patch(AccessTools.Method(typeof(ClusterRuntime), "ClearFrozen", new[] { typeof(long), typeof(Guid) }), postfix: new HarmonyMethod(typeof(OfflineTestRoutes), nameof(TraceCleared)));
         TestRoutes.Add("POST", "/offline-test-transfer-trace", context =>
@@ -396,6 +409,16 @@ internal static class OfflineTestRoutes
             TestRoutes.Json(context, 200, new { target = Interlocked.Read(ref target), applied = Volatile.Read(ref applied) }));
     }
 
+    private static void CancelRestoredZone(MySafeZoneBlock __0)
+    {
+        if (__0.CubeGrid.EntityId != Interlocked.Read(ref cancelRestoredZoneGrid) || Volatile.Read(ref restoredZoneCancelled) != 0) return;
+        if (MyEntities.TryGetEntityById(__0.m_safeZoneManager.SafeZoneEntityId, out MySafeZone zone) && !zone.Enabled)
+        {
+            __0.m_safeZoneManager.SafeZoneRemove_Server(); // the actual native manual-off operation
+            Volatile.Write(ref restoredZoneCancelled, 1);
+        }
+    }
+
     internal static void ObserveZoneRestore()
     {
         long grid = Interlocked.Read(ref watchedZoneGrid);
@@ -404,6 +427,20 @@ internal static class OfflineTestRoutes
         if (block == null) return;
         var manager = block.Components.Get<MySafeZoneComponent>();
         MyEntities.TryGetEntityById(manager.SafeZoneEntityId, out MySafeZone zone);
+        if (zone != null && !zone.Enabled && Volatile.Read(ref pendingZoneSaveProof) == null)
+        {
+            var builder = block.GetObjectBuilderCubeBlock(); // real native Saving postfix
+            var carried = BlockBuilderEntry.Read(builder, BlockSafeZones.Key);
+            var saved = builder.ComponentContainer.Components.Select(c => c.Component).OfType<MyObjectBuilder_SafeZoneComponent>().Single();
+            var censusType = typeof(OfflineCompensation).GetNestedType("Census", System.Reflection.BindingFlags.NonPublic);
+            var census = Activator.CreateInstance(censusType, true);
+            censusType.GetField("Group").SetValue(census, grid);
+            censusType.GetField("Members").SetValue(census, new[] { grid });
+            var profile = (OfflineProfile)AccessTools.Method(typeof(OfflineCompensation), "Capture").Invoke(null, new object[] { new[] { native }, census, true });
+            Volatile.Write(ref pendingZoneSaveProof, new { entryEnabled = carried != null && BlockSafeZones.Parse(carried).Enabled,
+                creditMs = saved.UpkeepTime, activating = saved.Activating, blockEnabled = ((MyObjectBuilder_FunctionalBlock)builder).Enabled,
+                upkeepCaptured = profile.Upkeep.Count == 1 && profile.Upkeep[0].Exists && profile.Upkeep[0].OperationalPower > 1 });
+        }
         ZoneRestoreTrace.Enqueue(new { frame = MySession.Static.GameplayFrameCounter, active = zone?.Enabled == true,
             required = block.ResourceSink.RequiredInputByType(MyResourceDistributorComponent.ElectricityId),
             input = block.ResourceSink.CurrentInputByType(MyResourceDistributorComponent.ElectricityId), working = block.IsWorking });
