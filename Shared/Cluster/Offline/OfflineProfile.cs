@@ -71,6 +71,8 @@ internal sealed class OfflineSource
 	public int Priority;
 	public double Maximum;
 	public double[] Curve;
+	// Optional normalized addition to the raw geometric Curve; old profiles grant zero.
+	public double[] ShadowAllowance;
 	// The reservoir expended by one resource-unit of output for one engine frame.
 	public int Storage = -1;
 	public double StorageCost;
@@ -144,6 +146,8 @@ internal sealed class OfflineResult
 	public double EnergyDelta;
 	public Dictionary<string, decimal> ItemDelta = [];
 	public Dictionary<long, double> ProducerEnergyMWh = [], ConsumerEnergyMWh = [], StorageInputEnergyMWh = [];
+	// Proportional attribution within delivered solar, not counterfactual fuel savings.
+	public Dictionary<long, double> SolarShadowAllowanceMWh = [];
 	public Dictionary<long, Dictionary<string, decimal>> ProducerFuelConsumed = [];
 	public Dictionary<long, double> ProductionUnits = [];
 	public Dictionary<long, decimal> UpkeepConsumed = [];
@@ -163,4 +167,13 @@ internal sealed class OfflineObservation
 	public long Block;
 	public int Samples;
 	public double[] Mean, Minimum, Maximum, Variance;
+}
+
+internal sealed class OfflineSunCurve
+{
+	public double[] Raw, Extra;
+	// Only mixed pivot visibility is uncertain. Cosine, night and uniform blockage
+	// alone never qualify. Keep the unshadowed geometric envelope as well as nameplate.
+	internal static double ShadowExtra(double raw, int lit, int pivots) => lit > 0 && lit < pivots
+		? System.Math.Min(raw * 0.05, raw * (pivots - lit) / lit) : 0;
 }

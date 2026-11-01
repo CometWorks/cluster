@@ -221,6 +221,13 @@ internal static class OfflineModel
 			{
 				var source = profile.Sources[i];
 				if (source.Resource == Electricity) result.ProducerEnergyMWh[source.Block] = result.ProducerEnergyMWh.GetValueOrDefault(source.Block) + output[i] * step / 216000;
+				if (source.ShadowAllowance != null)
+				{
+					int bin = SunBin(profile, source, angleFrame);
+					double raw = source.Curve[bin], extra = source.ShadowAllowance[bin];
+					if (extra > 0) result.SolarShadowAllowanceMWh[source.Block] = result.SolarShadowAllowanceMWh.GetValueOrDefault(source.Block)
+						+ output[i] * extra / (raw + extra) * step / 216000;
+				}
 				foreach (var fuel in source.Fuel.Where(_ => source.FuelTickFrames == 0))
 				{
 					if (!result.ProducerFuelConsumed.TryGetValue(source.Block, out var consumed)) result.ProducerFuelConsumed[source.Block] = consumed = [];
@@ -401,10 +408,13 @@ internal static class OfflineModel
 	{
 		if (source.Storage >= 0 && p.Storage[source.Storage].Amount <= Epsilon) return 0;
 		if (source.Fuel.Any(f => Available(p, f) < 0.000001m)) return 0;
-		double curve = source.Curve is { Length: > 0 } ? source.Curve[p.SunPeriodFrames <= 0 ? 0
-			: (int)SunPosition(sunFrame, p.SunPeriodFrames, source.Curve.Length) % source.Curve.Length] : 1;
+		int bin = source.Curve is { Length: > 0 } ? SunBin(p, source, sunFrame) : 0;
+		double curve = source.Curve is { Length: > 0 } ? source.Curve[bin] + (source.ShadowAllowance?[bin] ?? 0) : 1;
 		return source.Maximum * curve;
 	}
+
+	private static int SunBin(OfflineProfile p, OfflineSource source, double frame) => p.SunPeriodFrames <= 0 ? 0
+		: (int)SunPosition(frame, p.SunPeriodFrames, source.Curve.Length) % source.Curve.Length;
 
 	private static double SunPosition(double frame, double period, int count)
 	{
@@ -679,6 +689,12 @@ internal static class OfflineModel
 				|| source.PowerSink < -1 || source.PowerSink >= p.Sinks.Count || !double.IsFinite(source.StorageCost) || source.StorageCost < 0
 				|| !double.IsFinite(source.IdlePower) || source.IdlePower < 0 && source.IdlePower != -1 || !double.IsFinite(source.OperationalPower) || source.OperationalPower < 0
 				|| source.Curve?.Any(v => !double.IsFinite(v) || v < 0 || v > 1) == true) throw new InvalidDataException("Invalid offline source");
+		foreach (var source in p.Sources.Where(s => s.ShadowAllowance != null))
+			if (source.Kind != "Environmental" || source.Resource != Electricity || source.Storage >= 0 || source.Fuel.Count != 0
+				|| source.Curve == null || source.ShadowAllowance.Length != source.Curve.Length
+				|| source.ShadowAllowance.Where((extra, i) => !double.IsFinite(extra) || extra < 0
+					|| extra > source.Curve[i] * 0.05 || source.Curve[i] + extra > 1).Any())
+				throw new InvalidDataException("Invalid solar shadow allowance");
 		foreach (var sink in p.Sinks) if (!double.IsFinite(sink.Required) || sink.Required < 0) throw new InvalidDataException("Invalid offline sink");
 		foreach (var material in p.Sources.SelectMany(s => s.Fuel).Concat(p.Production.SelectMany(b => b.Recipes).SelectMany(r => r.Inputs.Concat(r.Outputs)))
 			.Concat(p.Upkeep.Select(z => z.Chips)))

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Sandbox;
 using Sandbox.Common.ObjectBuilders;
@@ -41,7 +42,9 @@ internal static partial class OfflineCompensation
 		public MyCubeGrid[] Entities;
 		public long[] Members;
 		public string Signature, EnvironmentSignature;
-		public readonly Dictionary<long, Task<double[]>> Curves = new();
+		public readonly Dictionary<long, Task<OfflineSunCurve>> Curves = new();
+		public CancellationTokenSource SunCancellation = new();
+		public void ClearCurves() { SunCancellation.Cancel(); SunCancellation.Dispose(); SunCancellation = new(); Curves.Clear(); }
 		public readonly Dictionary<long, List<double[]>> Observations = new();
 		public readonly Dictionary<long, Dictionary<string, decimal>> ReactorDebits = new();
 		public string State = "settling";
@@ -54,6 +57,7 @@ internal static partial class OfflineCompensation
 	{
 		if (ReferenceEquals(m_profileSession, MySession.Static)) return;
 		m_profileSession = MySession.Static;
+		foreach (var census in CensusByGroup.Values) census.SunCancellation.Cancel();
 		CensusByGroup.Clear(); Measurements.Clear(); Attempted.Clear(); PerBlockRates.Clear(); Results.Clear();
 		m_lastObservationAdmissionFrame = Frame - 100;
 	}
@@ -162,19 +166,21 @@ internal static partial class OfflineCompensation
 				|| census.Entities == null || !census.Entities.SequenceEqual(grids)
 				|| census.Partition != partition.Id || ClusterRuntime.IsClustered && !ClusterRuntime.CanProfile(partition.Id, census.Generation))
 			{
+				census?.SunCancellation.Cancel();
 				census = new() { Group = group, Members = grids.Select(g => g.EntityId).ToArray(), Since = Frame, Signature = signature,
 					Entities = grids, Partition = partition.Id, Generation = ClusterRuntime.PluginOwnershipSnapshot().TryGetValue(partition.Id, out long generation) ? (uint)generation : 0 };
 				CensusByGroup[group] = census;
 			}
-			if (census.EnvironmentSignature != environment) { census.EnvironmentSignature = environment; census.Curves.Clear(); }
+			if (census.EnvironmentSignature != environment) { census.EnvironmentSignature = environment; census.ClearCurves(); }
 			if (MySession.Static.CreativeMode)
 			{
 				census.Last = Capture(grids, census, quick: true); census.Last.Confidence = "Creative"; census.State = "complete"; continue;
 			}
 			if (!quick && Frame - census.Since < ClusterConfig.GetInt("offline.settleFrames")) { complete = false; continue; }
+			foreach (long failed in census.Curves.Where(p => p.Value.IsCompleted && !p.Value.IsCompletedSuccessfully).Select(p => p.Key).ToArray()) census.Curves.Remove(failed);
 			foreach (var block in grids.SelectMany(g => g.GetFatBlocks()))
 			{
-				if (IsEnvironmental(block) && !Scripted(block) && !census.Curves.ContainsKey(block.EntityId)) census.Curves[block.EntityId] = SampleSun(block);
+				if (IsEnvironmental(block) && !Scripted(block) && !census.Curves.ContainsKey(block.EntityId)) census.Curves[block.EntityId] = SampleSun(block, census.SunCancellation.Token);
 				if ((Scripted(block) || ClusterConfig.Get("offline.unknownBlocks") == "Mean" && block is MyProgrammableBlock or MyTimerBlock or MyShipConnector) && !census.Observations.ContainsKey(block.EntityId))
 				{ census.Observations[block.EntityId] = []; census.ObservationSince = Frame; }
 			}
@@ -193,7 +199,8 @@ internal static partial class OfflineCompensation
 			census.State = "complete";
 		}
 		// Closed groups must not pin entity references or retain profiles forever.
-		foreach (long closed in CensusByGroup.Keys.Where(id => MyEntities.GetEntityById(id) == null).ToArray()) CensusByGroup.Remove(closed);
+		foreach (long closed in CensusByGroup.Keys.Where(id => MyEntities.GetEntityById(id) == null).ToArray())
+		{ CensusByGroup[closed].SunCancellation.Cancel(); CensusByGroup.Remove(closed); }
 		return complete;
 	}
 
@@ -284,6 +291,7 @@ internal static partial class OfflineCompensation
 				|| !ClusterRuntime.CanProfile(census.Partition, census.Generation)
 				|| census.Entities.Any(g => g.MarkedForClose || !ReferenceEquals(MyEntities.GetEntityById(g.EntityId), g) || Readiness(g) != null))
 			{
+				census.SunCancellation.Cancel();
 				CensusByGroup.Remove(census.Group);
 				foreach (long block in census.Entities?.SelectMany(g => g.GetFatBlocks()).Select(b => b.EntityId) ?? Enumerable.Empty<long>())
 					Measurements.Remove(block);

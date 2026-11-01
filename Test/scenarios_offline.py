@@ -1578,6 +1578,25 @@ def offline_solar_native(bench):
     bench.record("native-solar-profile", {"profile": profile, "native": native})
     bench.check("real sun-facing panel and sampled curve both supply nonzero electricity", bool(native) and len(sources) == 1
                 and max(sources[0]["Curve"]) > .5 and all(0 <= v <= 1 for v in sources[0]["Curve"]))
+    cache_url = f"/offline-test-sun-cache?grid={grid}"
+    remembered = bench.cluster.node("node-1", cache_url + "&remember=true", "POST")
+    bench.cluster.node("node-1", f"/trigger/profile?partition={partition}", "POST")
+    reused = bench.cluster.node("node-1", cache_url, "POST")
+    bench.check("unchanged native profile reuses the same completed ray task", remembered["completed"] and reused["sameTasks"])
+    # Force a fresh long curve through the existing config signature, then edit
+    # the actual block before it finishes. No time/geometry result is fabricated.
+    _put_config(bench, "node-1", {"offline.solarSteps": "720"})
+    bench.cluster.node("node-1", f"/trigger/profile?partition={partition}", "POST")
+    pending = bench.cluster.node("node-1", cache_url + "&remember=true&disable=true", "POST")
+    _require(bench, "long native curve is pending before topology invalidation", pending["pending"] == 1)
+    _require(bench, "replacement native curve completes", bool(_poll(lambda:
+        bench.cluster.node("node-1", f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))
+    replaced = _poll(lambda: (lambda c: c if c["oldFinished"] else None)(bench.cluster.node("node-1", cache_url, "POST")), 15)
+    bench.record("native-solar-cache-lifecycle", {"remembered": remembered, "reused": reused, "pending": pending, "replaced": replaced})
+    bench.check("invalidated in-flight work cancels without publishing into the replacement census", bool(replaced)
+        and replaced["oldCancelled"] and not replaced["sameCensus"] and not replaced["reusedOldTask"] and replaced["completed"])
+    disabled = bench.cluster.node("node-1", f"/profiles?partition={partition}")[0]
+    bench.check("disabled solar has zero nameplate and no supplied allowance", all(s["Maximum"] == 0 for s in disabled["Sources"] if s["Kind"] == "Environmental"))
     bench.exercised(nativeHavokRays=True, panels=1, limitation="focused crash regression; planet/ridge/obstruction differential and exclusive 200-panel timing remain")
 
 
@@ -1856,7 +1875,7 @@ def offline_gas_idle(bench):
 
 
 def offline_observed_scheduler(bench):
-    """Normal serving-node sweep/sampler, one natural minute-long rotation; no Prepare hook."""
+    """Initialized sweep, natural InPlace rotation, full 600s minimum-online then 600s grace."""
     _survival_template(bench, sun_rotation_minutes=1)
     bench.start_cluster()
     _require(bench, "new initialized regular node is actually serving", bool(_poll(lambda:
@@ -1872,7 +1891,9 @@ def offline_observed_scheduler(bench):
     _require(bench, "three native observed fixtures have ordinary owners", all(partitions))
     def state(): return bench.cluster.node("node-1", "/offline-test-observed")
     def census(grid): return next((c for c in state()["status"]["profiling"] if grid in c["members"]), None)
-    effective = _poll(lambda: (lambda s: s if s["policy"] == "InPlace" and s["observeSeconds"] == 5 else None)(state()), 20)
+    effective = _poll(lambda: (lambda s: s if s["policy"] == "InPlace" and s["observeSeconds"] == 5
+        and s["minOnlineSeconds"] == 600 and s["graceSeconds"] == 600
+        and all(any(o["partition"] == p for o in s["online"]) for p in partitions) else None)(state()), 20)
     bench.record("scheduler-effective-config", effective)
     _require(bench, "serving node has the intended effective InPlace policy", bool(effective))
     _require(bench, "normal quiet grace starts observing without a profile request", bool(_poll(lambda: census(fixtures[0]["grid"]), 30)))
@@ -1922,8 +1943,51 @@ def offline_observed_scheduler(bench):
                 - sum(result["ConsumerEnergyMWh"].values()) - sum(result["StorageInputEnergyMWh"].values())) < 1e-9)
     generation = bench.cluster.node("node-1", f"/offline-test-admin-hold?grid={fixtures[0]['grid']}&partition={partition}")["generation"]
     bench.record("scheduler-original-generation", {"partition": partition, "generation": generation})
-    bench.cluster.handover_config({"offline.minOnlineSeconds": "0", "offline.graceSeconds": "0"})
-    _require(bench, "completed observed group offlines through the ordinary scheduler", bool(_poll(lambda: _offline_row(bench, partition), 90)))
+    # Minimum-online is a blocker before quiet accumulation, so these are
+    # sequential real UTC deadlines. Read the actual owning scheduler's clocks;
+    # never lower either setting, assign a clock, or force Prepare/offlining.
+    from datetime import datetime, timedelta
+    def utc(value): return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    online_since = next(x["sinceUtc"] for x in effective["online"] if x["partition"] == partition)
+    minimum_deadline = utc(online_since) + timedelta(seconds=600)
+    expiry_history = []
+    quiet_since = None
+    premature = []
+    def naturally_offline():
+        nonlocal quiet_since
+        snapshot = state()
+        if snapshot["minOnlineSeconds"] != 600 or snapshot["graceSeconds"] != 600 or not snapshot["offlineEnabled"]:
+            raise ClusterError("scheduler expiry configuration changed")
+        quiet = next((q for q in snapshot["quiet"] if q["partition"] == partition), None)
+        if quiet:
+            if quiet_since is not None and quiet_since != quiet["sinceUtc"]:
+                raise ClusterError("quiet grace reset during untouched expiry")
+            quiet_since = quiet["sinceUtc"]
+            if utc(quiet_since) < minimum_deadline:
+                premature.append({"reason": "grace started before minimum-online", "snapshot": snapshot})
+        row = _offline_row(bench, partition)
+        deadline = utc(quiet_since) + timedelta(seconds=600) if quiet_since else minimum_deadline
+        flight = snapshot["owner"]["inFlight"]
+        if flight and flight["partition"] == partition and utc(snapshot["utc"]) - timedelta(milliseconds=flight["ageMs"]) < deadline:
+            premature.append({"reason": "offlining started before deadline", "snapshot": snapshot})
+        if row and (quiet_since is None or utc(snapshot["utc"]) < deadline):
+            premature.append({"reason": "offline row before deadline", "snapshot": snapshot, "row": row})
+        expiry_history.append({"snapshot": snapshot, "offline": row})
+        bench.record("scheduler-full-grace-history", expiry_history)
+        if premature: raise ClusterError("premature automatic offlining: " + json.dumps(premature))
+        return row
+    _require(bench, "untouched 600s minimum-online plus full 600s grace expires automatically",
+             bool(_poll(naturally_offline, 1260, 5)))
+    final_expiry = expiry_history[-1]["snapshot"]
+    bench.record("scheduler-full-grace-deadlines", {"onlineSinceUtc": online_since, "minimumDeadlineUtc": minimum_deadline.isoformat(),
+        "quietSinceUtc": quiet_since, "graceDeadlineUtc": (utc(quiet_since) + timedelta(seconds=600)).isoformat(),
+        "observedOfflineUtc": final_expiry["utc"], "premature": premature})
+    bench.check("minimum-online and quiet grace are sequential native scheduler deadlines", utc(quiet_since) >= minimum_deadline
+        and utc(final_expiry["utc"]) >= utc(quiet_since) + timedelta(seconds=600))
+    bench.check("native and authority clocks advance naturally throughout full expiry", final_expiry["nativeFrame"] > effective["nativeFrame"] + 3750
+        and final_expiry["authorityFrame"] > effective["authorityFrame"] and final_expiry["nativeElapsedTicks"] > effective["nativeElapsedTicks"])
+    bench.check("no observed premature offlining and both effective settings remain 600", not premature
+        and all(h["snapshot"]["minOnlineSeconds"] == h["snapshot"]["graceSeconds"] == 600 for h in expiry_history))
     bench.cluster.handover_config({"offline.enabled": "false"})
     offline_profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
     bench.record("scheduler-offline-profiles", offline_profiles)
@@ -1948,7 +2012,7 @@ def offline_observed_scheduler(bench):
     _require(bench, "same-worker observed recovery completes ownership and native thaw", bool(_poll(thawed, 45)))
     bench.record("scheduler-native-wake", bench.cluster.node("node-1", f"/offline-test-state?grid={fixtures[0]['grid']}"))
     bench.exercised(initializedCluster=True, normalSweep=True, naturalPeriodMinutes=1, nativeFuel=True, opaqueInventory=True,
-                    propulsionInvalidation=True, ordinaryOffline=True, sharedWake=True,
+                    propulsionInvalidation=True, fullMinOnlineSeconds=600, fullGraceSeconds=600, ordinaryOffline=True, sharedWake=True,
                     limitation="controlled bounded scheduler proof; 120-minute 450000+450000-frame rate fidelity is a separate pinned reference, not a representative-world census")
 
 

@@ -149,7 +149,7 @@ public sealed partial class Plugin : IPlugin
                 if (solarPlanet || zoneEnvironment)
                 {
                     if (!solarCurvesStarted) { foreach (var c in cases) c.Start?.Invoke(); solarCurvesStarted = true; }
-                    if (cases.Any(c => ((Dictionary<long, Task<double[]>>)CensusType.GetField("Curves").GetValue(c.Census)).Values.Any(t => !t.IsCompleted))) return;
+                    if (cases.Any(c => ((Dictionary<long, Task<OfflineSunCurve>>)CensusType.GetField("Curves").GetValue(c.Census)).Values.Any(t => !t.IsCompleted))) return;
                 }
                 if (gas)
                 {
@@ -329,9 +329,9 @@ public sealed partial class Plugin : IPlugin
         matrix.Translation = c.Grid.PositionComp.GetPosition(); c.Grid.WorldMatrix = matrix;
         c.Start = () =>
         {
-            var curves = (Dictionary<long, Task<double[]>>)CensusType.GetField("Curves").GetValue(c.Census);
+            var curves = (Dictionary<long, Task<OfflineSunCurve>>)CensusType.GetField("Curves").GetValue(c.Census);
             foreach (var panel in c.Grid.GetFatBlocks<MySolarPanel>())
-                curves[panel.EntityId] = (Task<double[]>)SampleSun.Invoke(null, new object[] { panel });
+                curves[panel.EntityId] = (Task<OfflineSunCurve>)SampleSun.Invoke(null, new object[] { panel, CancellationToken.None });
         };
         return c;
     }
@@ -388,8 +388,8 @@ public sealed partial class Plugin : IPlugin
             var local = MatrixD.CreateWorld(Vector3D.Zero, normal, Vector3D.CalculatePerpendicularVector(normal));
             var world = MatrixD.CreateWorld(Vector3D.Zero, sun, Vector3D.CalculatePerpendicularVector(sun));
             var matrix = MatrixD.Invert(local) * world; matrix.Translation = grid.PositionComp.GetPosition(); grid.WorldMatrix = matrix;
-            var curves = (Dictionary<long, Task<double[]>>)CensusType.GetField("Curves").GetValue(census);
-            curves[panel.EntityId] = (Task<double[]>)SampleSun.Invoke(null, new object[] { panel });
+            var curves = (Dictionary<long, Task<OfflineSunCurve>>)CensusType.GetField("Curves").GetValue(census);
+            curves[panel.EntityId] = (Task<OfflineSunCurve>)SampleSun.Invoke(null, new object[] { panel, CancellationToken.None });
         }
         return new Case { Grid = grid, Census = census };
     }

@@ -274,7 +274,7 @@ internal static partial class OfflineCompensation
 				{ foreach (var port in sources) port.Maximum = 0; p.Unknowns.Add(block.EntityId + ":environmental curve unavailable at stop"); }
 				else foreach (var port in sources)
 				{
-					port.Curve = curve.Result; port.Kind = "Environmental";
+					port.Curve = curve.Result.Raw; port.ShadowAllowance = curve.Result.Extra; port.Kind = "Environmental";
 					if (block is MySolarPanel solar) port.Maximum = enabled ? solar.SolarPanelDefinition.MaxPowerOutput : 0;
 					if (block is MyOxygenFarm farm) { port.Maximum = enabled ? farm.BlockDefinition.MaxGasOutput : 0; port.PowerSink = powerSink; }
 				}

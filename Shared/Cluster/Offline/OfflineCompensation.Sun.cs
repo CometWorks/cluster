@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Sandbox.Definitions;
 using Sandbox.Engine.Physics;
@@ -24,7 +25,7 @@ internal static partial class OfflineCompensation
 
 	/// <summary>Snapshot geometry on the game thread, ray-test through the engine physics queue.
 	/// Its workers hold the Havok read state and initialized native thread context. Neither the world's sun nor a live block's measured output is changed.</summary>
-	private static Task<double[]> SampleSun(MyCubeBlock block)
+	private static Task<OfflineSunCurve> SampleSun(MyCubeBlock block, CancellationToken cancellation)
 	{
 		MatrixD matrix = block.WorldMatrix;
 		MyCubeGrid grid = block.CubeGrid;
@@ -44,7 +45,7 @@ internal static partial class OfflineCompensation
 		else
 		{
 			MySolarGameLogicComponent component = block is MyOxygenFarm farm ? farm.SolarComponent : ((MySolarPanel)block).SolarComponent as MySolarGameLogicComponent;
-			if (component == null) return Task.FromException<double[]>(new InvalidOperationException("Unknown solar component"));
+			if (component == null) return Task.FromException<OfflineSunCurve>(new InvalidOperationException("Unknown solar component"));
 			normal = Vector3.Transform(component.PanelOrientation, matrix.GetOrientation());
 			twoSided = component.m_isTwoSided;
 			legacy = true;
@@ -63,9 +64,11 @@ internal static partial class OfflineCompensation
 		bool rotating = MySession.Static.Settings.EnableSunRotation;
 		int steps = rotating ? Math.Clamp(ClusterConfig.GetInt("offline.solarSteps"), 4, 720) : 1;
 		Vector3D gridPosition = grid.PositionComp.GetPosition();
-		var curve = new double[steps];
+		float gridSize = grid.GridSize;
+		var panel = block.SlimBlock;
+		var curve = new OfflineSunCurve { Raw = new double[steps], Extra = block is MySolarPanel ? new double[steps] : null };
 		if (!functional) return Task.FromResult(curve);
-		var completion = new TaskCompletionSource<double[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+		var completion = new TaskCompletionSource<OfflineSunCurve>(TaskCreationOptions.RunContinuationsAsynchronously);
 		var hits = new List<MyPhysics.HitInfo>();
 		// One sun direction per panel per physics pass bounds this work without issuing
 		// synchronous Havok calls from an arbitrary .NET thread-pool thread.
@@ -73,6 +76,7 @@ internal static partial class OfflineCompensation
 		{
 			try
 			{
+				cancellation.ThrowIfCancellationRequested();
 				if (grid.MarkedForClose || block.MarkedForClose) throw new InvalidOperationException("Solar geometry closed while sampling");
 				Vector3 sun = rotating ? Vector3.Normalize(Vector3.Transform(baseSun, Matrix.CreateFromAxisAngle(axis, (float)(step * 2 * Math.PI / steps)))) : currentSun;
 				double angle = Vector3.Dot(normal, sun);
@@ -93,7 +97,7 @@ internal static partial class OfflineCompensation
 				{
 					Vector3D pivot = pivots[i];
 					if (alternate != null && Vector3D.DistanceSquared(alternate[i], matrix.Translation + sun * 100) < Vector3D.DistanceSquared(pivot, matrix.Translation + sun * 100)) pivot = alternate[i];
-					Vector3D from = pivot + sun * 100, to = legacy ? pivot + sun * grid.GridSize / 4 : pivot;
+					Vector3D from = pivot + sun * 100, to = legacy ? pivot + sun * gridSize / 4 : pivot;
 					hits.Clear(); MyPhysics.CastRay(to, from, hits, 15);
 					bool visible = true;
 					foreach (var hit in hits)
@@ -101,19 +105,21 @@ internal static partial class OfflineCompensation
 						IMyEntity entity = hit.HkHitInfo.GetHitEntity();
 						if (entity != grid) { visible = false; break; }
 						Vector3I? cell = grid.RayCastBlocks(from, to);
-						if (cell.HasValue && grid.GetCubeBlock(cell.Value) != block.SlimBlock) { visible = false; break; }
+						if (cell.HasValue && grid.GetCubeBlock(cell.Value) != panel) { visible = false; break; }
 					}
 					if (visible) lit++;
 				}
-				curve[step] = Math.Clamp(Math.Abs(angle) * lit / pivots.Length, 0, 1); // weather expectation = 1
+				curve.Raw[step] = Math.Clamp(Math.Abs(angle) * lit / pivots.Length, 0, 1);
+				if (curve.Extra != null) curve.Extra[step] = OfflineSunCurve.ShadowExtra(curve.Raw[step], lit, pivots.Length); // weather expectation = 1
 				return false;
 			}
 			catch (Exception error) { completion.TrySetException(error); return true; }
 		}, _ =>
 		{
-			if (grid.MarkedForClose || block.MarkedForClose) completion.TrySetException(new InvalidOperationException("Solar geometry closed while sampling"));
+			if (cancellation.IsCancellationRequested) completion.TrySetCanceled(cancellation);
+			else if (grid.MarkedForClose || block.MarkedForClose) completion.TrySetException(new InvalidOperationException("Solar geometry closed while sampling"));
 			else completion.TrySetResult(curve);
-		}, 1, () => !completion.Task.IsCompleted && !grid.MarkedForClose && !block.MarkedForClose);
+		}, 1, () => !cancellation.IsCancellationRequested && !completion.Task.IsCompleted && !grid.MarkedForClose && !block.MarkedForClose);
 		return completion.Task;
 	}
 }

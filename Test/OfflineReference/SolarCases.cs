@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System.Threading;
 using ClusterPlugin;
 using Sandbox.Common.ObjectBuilders;
 using Sandbox.Game.Entities;
@@ -106,9 +107,9 @@ public sealed partial class Plugin
             CensusType.GetField("Members").SetValue(census, new[] { grid.EntityId });
             cases.Add(new Case { Grid = grid, Census = census, Start = () =>
             {
-                var curves = (Dictionary<long, Task<double[]>>)CensusType.GetField("Curves").GetValue(census);
+                var curves = (Dictionary<long, Task<OfflineSunCurve>>)CensusType.GetField("Curves").GetValue(census);
                 foreach (var block in grid.GetFatBlocks().Where(b => b is MySolarPanel or MyOxygenFarm))
-                    curves[block.EntityId] = (Task<double[]>)SampleSun.Invoke(null, new object[] { block });
+                    curves[block.EntityId] = (Task<OfflineSunCurve>)SampleSun.Invoke(null, new object[] { block, CancellationToken.None });
             } });
             // Planet collision shapes are lazy. The fixture must provide the
             // loaded voxel/Havok geometry promised by the reference, as native

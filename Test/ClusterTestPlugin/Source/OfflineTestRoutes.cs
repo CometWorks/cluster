@@ -39,6 +39,9 @@ internal static class OfflineTestRoutes
     private static int cyclePhase = -1;
     private static bool cycleWaiting;
     private static OfflineProfile cycleProfile;
+    private static object rememberedSunCensus;
+    private static System.Threading.Tasks.Task[] rememberedSunTasks;
+    private static CancellationToken rememberedSunToken;
     private static readonly List<object> CycleTrace = new();
     internal static void ObserveGasCycle()
     {
@@ -293,15 +296,29 @@ internal static class OfflineTestRoutes
             }));
         });
         TestRoutes.Add("GET", "/offline-test-observed", context =>
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => new
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
             {
-                nativeFrame = MySession.Static.GameplayFrameCounter,
-                periodMinutes = MySession.Static.Settings.SunRotationIntervalMinutes,
-                observeSeconds = ClusterConfig.GetInt("offline.observeSeconds"),
-                policy = ClusterConfig.Get("offline.longObservation"),
-                offlineEnabled = ClusterConfig.GetBool("offline.enabled"),
-                phase = MySector.DirectionToSunNormalized,
-                status = OfflineCompensation.Status(),
+                var persistence = (PartitionPersistence)AccessTools.Field(typeof(ClusterRuntime), "m_persistence").GetValue(null);
+                var online = (Dictionary<ulong, DateTime>)AccessTools.Field(typeof(PartitionPersistence), "m_onlineSince").GetValue(persistence);
+                var quiet = (Dictionary<ulong, DateTime>)AccessTools.Field(typeof(PartitionPersistence), "m_offlineQuietSince").GetValue(persistence);
+                return new
+                {
+                    utc = DateTime.UtcNow,
+                    authorityFrame = OfflineCompensation.Frame,
+                    nativeFrame = MySession.Static.GameplayFrameCounter,
+                    nativeElapsedTicks = MySession.Static.ElapsedGameTime.Ticks,
+                    periodMinutes = MySession.Static.Settings.SunRotationIntervalMinutes,
+                    observeSeconds = ClusterConfig.GetInt("offline.observeSeconds"),
+                    policy = ClusterConfig.Get("offline.longObservation"),
+                    offlineEnabled = ClusterConfig.GetBool("offline.enabled"),
+                    minOnlineSeconds = ClusterConfig.GetInt("offline.minOnlineSeconds"),
+                    graceSeconds = ClusterConfig.GetInt("offline.graceSeconds"),
+                    online = online.Select(p => new { partition = p.Key, sinceUtc = p.Value }).ToArray(),
+                    quiet = quiet.Select(p => new { partition = p.Key, sinceUtc = p.Value }).ToArray(),
+                    owner = persistence.OfflineStatus(),
+                    phase = MySector.DirectionToSunNormalized,
+                    status = OfflineCompensation.Status(),
+                };
             })));
         TestRoutes.Add("POST", "/offline-test-observed-control", context =>
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
@@ -453,6 +470,28 @@ internal static class OfflineTestRoutes
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => Snapshot(
                 new[] { (MyObjectBuilder_CubeGrid)((MyCubeGrid)MyEntities.GetEntityById(grid)).GetObjectBuilder() })));
         });
+        TestRoutes.Add("POST", "/offline-test-sun-cache", context =>
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                var type = typeof(OfflineCompensation).GetNestedType("Census", System.Reflection.BindingFlags.NonPublic);
+                var censuses = (System.Collections.IDictionary)AccessTools.Field(typeof(OfflineCompensation), "CensusByGroup").GetValue(null);
+                object census = censuses[TestRoutes.Long(context, "grid")];
+                var curves = census == null ? null : (Dictionary<long, System.Threading.Tasks.Task<OfflineSunCurve>>)type.GetField("Curves").GetValue(census);
+                var tasks = curves?.Values.Cast<System.Threading.Tasks.Task>().ToArray() ?? [];
+                if (TestRoutes.Query(context, "remember", "false") == "true")
+                {
+                    rememberedSunCensus = census; rememberedSunTasks = tasks;
+                    rememberedSunToken = ((CancellationTokenSource)type.GetField("SunCancellation").GetValue(census)).Token;
+                }
+                if (TestRoutes.Query(context, "disable", "false") == "true")
+                    ((MyCubeGrid)MyEntities.GetEntityById(TestRoutes.Long(context, "grid"))).GetFatBlocks<MySolarPanel>().Single().Enabled = false;
+                return new { sameCensus = ReferenceEquals(census, rememberedSunCensus), tasks = tasks.Length,
+                    sameTasks = rememberedSunTasks != null && tasks.SequenceEqual(rememberedSunTasks),
+                    pending = tasks.Count(t => !t.IsCompleted), completed = tasks.All(t => t.IsCompletedSuccessfully),
+                    oldCancelled = rememberedSunToken.IsCancellationRequested,
+                    oldFinished = rememberedSunTasks?.All(t => t.IsCompleted),
+                    reusedOldTask = rememberedSunTasks != null && tasks.Intersect(rememberedSunTasks).Any() };
+            })));
         TestRoutes.Add("GET", "/offline-test-solar-state", context =>
         {
             long grid = TestRoutes.Long(context, "grid");
