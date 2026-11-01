@@ -286,7 +286,7 @@ SCENARIOS_OFFLINE = {
 
 # SE-346: these use the existing real-client RC/terminal fixture and the production sweep/load.
 # They deliberately do not label the unavailable multi-client/planet differential fixtures as passing.
-def _survival_template(bench):
+def _survival_template(bench, *, sun_rotation_minutes=None):
     source = Path(bench.cluster.config.world_template or HOST.package / "examples/Cluster-Simple")
     target = bench.run_root.parent / (bench.run_root.name + "-templates") / "survival"
     if target.exists():
@@ -298,6 +298,15 @@ def _survival_template(bench):
         if not count and "<GameMode>Survival</GameMode>" not in text:
             raise ClusterError(f"{path}: no explicit game mode")
         path.write_text(text)
+        if sun_rotation_minutes is not None:
+            import xml.etree.ElementTree as ET
+            tree = ET.parse(path)
+            settings = tree.getroot().find("Settings")
+            for key, value in {"EnableSunRotation": "true", "SunRotationIntervalMinutes": str(sun_rotation_minutes), "WeatherSystem": "false"}.items():
+                field = settings.find(key)
+                if field is None: field = ET.SubElement(settings, key)
+                field.text = value
+            tree.write(path, encoding="utf-8", xml_declaration=True)
     bench.cluster.config.world_template = target
 
 
@@ -1627,6 +1636,57 @@ def t_oc_11(bench):
                     limitation="short clustered-engine references; full 4-hour/3-chip standalone differential and larger baseline envelope remain")
 
 
+def offline_zone_environment_wake(bench):
+    """Natural solar recovery is compensated before a real radio wake, with no sun jumps."""
+    _survival_template(bench, sun_rotation_minutes=10)
+    api = _join(bench)
+    api, grid, _, partition, _ = _call_fixture(bench, api=api, zone=True, zone_seconds=600, take_offline=False)
+    before = bench.cluster.node("node-1", f"/offline-test-zone-state?grid={grid}")
+    _require(bench, "environment zone begins powered with real settings", before["active"])
+    time.sleep(5)  # let the native manager register its ordinary power events
+    bench.cluster.node("node-1", f"/offline-test-options?grid={grid}&mode=zone-environment", "POST")
+    paused = _poll(lambda: (lambda s: s if not s["active"] else None)(
+        bench.cluster.node("node-1", f"/offline-test-zone-state?grid={grid}")), 20)
+    _require(bench, "edge-on solar removes active protection before offlining", bool(paused))
+    bench.record("environment-inactive-start", paused)
+    for node in ("node-1", "node-2"):
+        _put_config(bench, node, {"offline.wakeMeters": "0", "offline.leadSeconds": "0", "offline.quietMeters": "0"})
+    _put_config(bench, "node-1", {"offline.enabled": "true", "offline.minOnlineSeconds": "0", "offline.graceSeconds": "0", "offline.settleFrames": "0"})
+    _require(bench, "inactive environmental zone durably offlines", bool(_poll(lambda: _offline_row(bench, partition), 90)))
+    profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
+    zone_profile = next(p for p in profiles if p["Upkeep"])
+    initial = zone_profile["Upkeep"][0]
+    _require(bench, "Final captures inactive zone and100 actual solar curves", (not initial["Exists"] or initial["ActivationRemainingFrames"] > 0)
+        and len([s for s in zone_profile["Sources"] if s.get("Curve")]) == 100)
+    bench.record("environment-offline-profiles", profiles)
+    # Real elapsed authority time on all ordinary cluster nodes. The period was
+    # set in the world before launch; no native clock, sun or stock is assigned.
+    started = time.monotonic()
+    while time.monotonic() - started < 180:
+        row = _offline_row(bench, partition)
+        if not row or row.get("LoadRequestedNode"): raise ClusterError("environment fixture woke before explicit radio action")
+        time.sleep(5)
+    _put_config(bench, "node-1", {"offline.enabled": "false"})
+    bench.cluster.node("node-1", f"/offline-test-recovery?grid={grid}&ms=0", "POST")
+    opened = _open_terminal(api, grid)
+    _require(bench, "actual radio terminal wakes the solar-restored zone", opened.get("screenOpen") is True, json.dumps(opened))
+    applied = _applied(bench, "node-1")
+    result = _assert_applied_inventory(bench, profiles, applied, grid, "environment shared wake applies exact immutable-Final stocks")
+    after = bench.cluster.node("node-1", f"/offline-test-zone-state?grid={grid}")
+    bench.record("environment-shared-wake", {"before": before, "paused": paused, "result": result, "after": after})
+    zone = next(z for z in result["Zones"] if z["Block"] == before["block"])
+    bench.check("compensation restores the zone DURING offline time before native instantiation", zone["Exists"] and not zone["Activating"]
+        and zone["RemainingFrames"] < initial["RemainingFrames"] and result["ConsumerEnergyMWh"].get(str(before["block"]), 0) > 0)
+    bench.check("wake retains supported active protection, switch, settings and rights", after["active"] and after["blockEnabled"]
+        and after["supplied"] >= after["powerRequired"] - .00001 and after["radius"] == before["radius"]
+        and after["shape"] == before["shape"] and after["allowedActions"] == before["allowedActions"])
+    bench.check("solar common budget pays for the zone without disabled-reactor fuel or invented chips", sum(result["ProducerEnergyMWh"].values()) > 0
+        and abs(sum(result["ProducerEnergyMWh"].values()) - sum(result["ConsumerEnergyMWh"].values()) - sum(result["StorageInputEnergyMWh"].values())) < 1e-8
+        and not result["UpkeepConsumed"] and all(v == 0 for p in result["ProducerFuelConsumed"].values() for v in p.values()))
+    api.close_remote_terminal()
+    bench.exercised(actualEnvironmentalOfflineRecovery=True, actualRadioWake=True, naturalSun=True, nativeActivation=True, sharedBudget=True)
+
+
 def offline_zone_paused(bench):
     """A real power-removed zone carries paid credit/settings through shared recovery.
 
@@ -1836,6 +1896,7 @@ SCENARIOS_OFFLINE.update({
     "T-OC-11": (t_oc_11, "running player zones, common production power/fuel budget, outage/backup and real shared wake", "3"),
     "OFF-SOLAR-NATIVE": (offline_solar_native, "native physics-queue solar profiling crash regression", "2"),
     "OFF-ZONE-PAUSED": (offline_zone_paused, "native power-paused zone credit, shared recovery, vanilla reactivation and manual-off control", "3"),
+    "OFF-ZONE-ENVIRONMENT": (offline_zone_environment_wake, "Natural solar restoration during offline interval and actual shared radio wake", "3"),
     "OFF-REMOTE-CAPTURE-RACE": (offline_remote_capture_race, "native terminal pin acquired after gateway read refuses source capture", "3"),
     "OFF-GAS-IDLE": (offline_gas_idle, "native gas generator standby shares the actual grid power budget", "2"),
 })

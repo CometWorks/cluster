@@ -521,6 +521,24 @@ internal static class OfflineTestRoutes
             if (mode == "box-zone") settings.Size = new Vector3(40, 50, 60);
             MySessionComponentSafeZones.UpdateSafeZone(settings, sync: true);
         }
+        else if (mode == "zone-environment")
+        {
+            for (int i = 0; i < 100; i++)
+            {
+                var builder = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_SolarPanel>("LargeBlockSolarPanel");
+                builder.Min = new SerializableVector3I(30 + i % 10 * 6, i / 10 * 6, 0);
+                if (grid.AddBlock(builder, false) == null) throw new InvalidOperationException("environment solar did not fit");
+            }
+            var panel = grid.GetFatBlocks<MySolarPanel>().First();
+            Vector3D normal = panel.SolarPanelDefinition.PanelOrientation;
+            var local = MatrixD.CreateWorld(Vector3D.Zero, normal, Vector3D.CalculatePerpendicularVector(normal));
+            var dark = Vector3D.Normalize(Vector3D.Cross(MySector.DirectionToSunNormalized, MySector.SunProperties.SunRotationAxis));
+            var facing = MatrixD.CreateWorld(Vector3D.Zero, dark, Vector3D.CalculatePerpendicularVector(dark));
+            var aligned = MatrixD.Invert(local) * facing; aligned.Translation = grid.PositionComp.GetPosition(); grid.WorldMatrix = aligned;
+            foreach (var production in grid.GetFatBlocks<MyProductionBlock>()) production.Enabled = false;
+            foreach (var battery in grid.GetFatBlocks<MyBatteryBlock>()) battery.Enabled = false;
+            foreach (var reactor in grid.GetFatBlocks<MyReactor>()) reactor.Enabled = false;
+        }
         else if (mode == "solar-backup")
         {
             for (int y = 0; y < 5; y++)

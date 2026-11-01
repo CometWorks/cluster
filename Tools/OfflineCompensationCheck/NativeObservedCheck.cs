@@ -29,11 +29,15 @@ internal static class NativeObservedCheck
         decimal fuelTolerance = Math.Max(.000001m, nativeDebit * .01m);
         bool fuelScriptDifferentialPassed = knownNativeFuel && Math.Abs(nativeDebit - modelDebit) <= fuelTolerance;
         var opaque = rows.SingleOrDefault(r => r.GetProperty("native").GetProperty("name").GetString() == "observed-inventory-policy");
+        decimal Iron(OfflineProfile p) => p.Inventories.SelectMany(i => i.Stacks).Where(s => s.Item.EndsWith("/Iron")).Sum(s => s.Amount);
         bool conservativePolicy = opaque.ValueKind != JsonValueKind.Undefined && Profile(opaque, "initial") is {} oi
             && oi.Confidence == "Frozen" && oi.Unknowns.Any(u => u.Contains("inventory changes"))
             && Fuel(oi) == Fuel(Profile(opaque, "modeled"))
-            && Profile(opaque, "actual").Inventories.SelectMany(i => i.Stacks).Where(s => s.Item.EndsWith("/Iron")).Sum(s => s.Amount)
-                > oi.Inventories.SelectMany(i => i.Stacks).Where(s => s.Item.EndsWith("/Iron")).Sum(s => s.Amount);
+            // Script iron creation during learning proves the unexpected edit.
+            // Its bounded native inventory may be full before the reference;
+            // ordinary fuel still burns there while Frozen preserves model stock.
+            && Iron(oi) > 0 && Iron(Profile(opaque, "actual")) >= Iron(oi)
+            && Fuel(Profile(opaque, "actual")) < Fuel(oi);
         bool passed = fullRotation && scheduledInPlace && varyingCaptured && observedWithinVariance && fuelScriptDifferentialPassed && conservativePolicy;
         File.WriteAllText(output, JsonSerializer.Serialize(new { directory, fullRotation, scheduledInPlace, varyingCaptured, observedWithinVariance,
             energyErrorMWh = energyError, varianceBoundMWh, observation.Samples, observation.Mean, observation.Variance,

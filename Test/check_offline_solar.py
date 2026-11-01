@@ -42,11 +42,14 @@ def compare(directory, output):
         "dayAndNight": all({g["dark"] for s in ordinary for g in s["grids"] if g["name"] == name} == {False, True} for name in by_name),
     }
     outliers = [e for e in errors if e["absoluteError"] > .02]
-    passed = all(controls.values()) and not outliers and len(points) >= 108
+    point_comparison_passed = all(controls.values()) and not outliers and len(points) >= 108
+    ordinary_output_within_two_percent = max(ordinary_errors) <= .02
+    passed = point_comparison_passed and ordinary_output_within_two_percent
     files = ("initial.json", "result.json", "solar-samples.json", "solar-native-points.json", "solar-geometry.json")
     result = {"directory": str(directory), "hashes": {n: hashlib.sha256((directory / n).read_bytes()).hexdigest() for n in files},
               "controls": controls, "nativePointCount": len(errors), "pointMaxError": max(e["absoluteError"] for e in errors),
-              "ordinaryRollingPivotMaxError": max(ordinary_errors), "outliers": outliers, "passed": passed,
+              "ordinaryRollingPivotMaxError": max(ordinary_errors), "outliers": outliers,
+              "pointComparisonPassed": point_comparison_passed, "ordinaryOutputWithinTwoPercent": ordinary_output_within_two_percent, "passed": passed,
               "method": "native component copies compute every pivot through native workers/raycast/completion; live components and clocks unchanged; ordinary rolling-pivot trace retained separately"}
     output.write_text(json.dumps(result, indent=2))
     print(json.dumps({k: result[k] for k in ("controls", "nativePointCount", "pointMaxError", "ordinaryRollingPivotMaxError", "passed")}, indent=2))

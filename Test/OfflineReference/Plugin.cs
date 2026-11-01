@@ -50,7 +50,7 @@ public sealed partial class Plugin : IPlugin
     private long spawned = -1, start, elapsedStart, gameplayStart, nextSample;
     private int target;
     private bool fast, finished;
-    private bool zones, gas, gyros, production, solarPlanet, zoneEnvironment, observed;
+    private bool zones, gas, gyros, production, solarPlanet, zoneEnvironment, observed, observedShort;
     private long observationStart, nextObservation, observationFrames;
     private bool solarCurvesStarted;
     private bool zonePowerCut;
@@ -72,7 +72,8 @@ public sealed partial class Plugin : IPlugin
         production = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "production";
         solarPlanet = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "solar-planet";
         zoneEnvironment = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "zone-environment";
-        observed = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "observed";
+        observedShort = Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "observed-short";
+        observed = observedShort || Environment.GetEnvironmentVariable("OFFLINE_REFERENCE_SCENARIO") == "observed";
         if (target < 3600 || target > 2000000) throw new ArgumentOutOfRangeException(nameof(target));
     }
 
@@ -99,7 +100,8 @@ public sealed partial class Plugin : IPlugin
                 else if (observed)
                 {
                     cases.Add(SpawnObserved(false)); cases.Add(SpawnObserved(true)); cases.Add(SpawnObserved(true, inventory: true));
-                    ClusterConfig.Apply(new Dictionary<string, string> { ["offline.longObservation"] = "InPlace", ["offline.settleFrames"] = "0", ["offline.rotateProduction"] = "false" });
+                    ClusterConfig.Apply(new Dictionary<string, string> { ["offline.longObservation"] = observedShort ? "Skip" : "InPlace",
+                        ["offline.observeSeconds"] = observedShort ? "120" : "180", ["offline.settleFrames"] = "0", ["offline.rotateProduction"] = "false" });
                     // Only the product's native fuel observer is installed; no cluster
                     // plugin/service initializes in this standalone reference.
                     var patch = typeof(OfflineCompensation).Assembly.GetType("Shared.Patches.OfflineReactorObservationPatch");
@@ -137,7 +139,7 @@ public sealed partial class Plugin : IPlugin
                             c.Census = censuses[c.Grid.EntityId];
                         }
                         observationFrames = frame - observationStart;
-                        if (ready && observationFrames < 450000) throw new InvalidOperationException("InPlace completed before a full native sun rotation");
+                        if (ready && observationFrames < (observedShort ? 7200 : 450000)) throw new InvalidOperationException("Observation completed before its required native interval");
                         if ((frame - observationStart) % 3600 == 0)
                             Write("progress.json", new { observationFrames = frame - observationStart, observationTarget = 450000, target });
                         if (!ready) { if (fast) Thread.Sleep(1); return; }
@@ -172,7 +174,7 @@ public sealed partial class Plugin : IPlugin
                 gameplayStart = MySandboxGame.TotalGamePlayTimeInMilliseconds;
                 Write("initial.json", new { frame, dormantClusterLibrary = ClusterNodePlugin.Plugin.Instance == null,
                     fast, target, oxygenEnabled = MySession.Static.Settings.EnableOxygen,
-                    capturedAt = cases.Select(c => c.CapturedAt).ToArray(), observationFrames, scheduledInPlace = observed,
+                    capturedAt = cases.Select(c => c.CapturedAt).ToArray(), observationFrames, scheduledInPlace = observed && !observedShort,
                     profiles = cases.Select(c => c.Initial).ToArray() });
                 MySandboxGame.Static.EnableMaxSpeed = fast;
                 wall.Start(); nextSample = frame;
@@ -206,7 +208,7 @@ public sealed partial class Plugin : IPlugin
                 Write("result.json", new { nativeFrames = count, target, fast, wallSeconds = wall.Elapsed.TotalSeconds,
                     elapsedTicks = MySession.Static.ElapsedGameTime.Ticks - elapsedStart,
                     gameplayMilliseconds = MySandboxGame.TotalGamePlayTimeInMilliseconds - gameplayStart,
-                    dormantClusterLibrary = ClusterNodePlugin.Plugin.Instance == null, observationFrames, scheduledInPlace = observed, results });
+                    dormantClusterLibrary = ClusterNodePlugin.Plugin.Instance == null, observationFrames, scheduledInPlace = observed && !observedShort, results });
                 MySandboxGame.Static.EnableMaxSpeed = false;
                 finished = true;
             }

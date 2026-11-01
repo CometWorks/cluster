@@ -94,6 +94,7 @@ def main():
     parser.add_argument("--solar-planet", action="store_true")
     parser.add_argument("--zone-environment", action="store_true")
     parser.add_argument("--observed", action="store_true")
+    parser.add_argument("--observed-short", action="store_true", help="short native fuel-observer regression, never full-rotation acceptance")
     parser.add_argument("--production", action="store_true")
     parser.add_argument("--gyros", action="store_true")
     parser.add_argument("--gas", action="store_true")
@@ -102,7 +103,7 @@ def main():
     args = parser.parse_args()
     out = HOST.results / (datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ") + "-standalone")
     out.mkdir(parents=True)
-    scenario = "solar-planet" if args.solar_planet else "zone-environment" if args.zone_environment else "observed" if args.observed else "production" if args.production else "gyros" if args.gyros else "gas-no-oxygen" if args.gas_no_oxygen else "gas" if args.gas else "zones" if args.zone_long else "energy"
+    scenario = "solar-planet" if args.solar_planet else "zone-environment" if args.zone_environment else "observed-short" if args.observed_short else "observed" if args.observed else "production" if args.production else "gyros" if args.gyros else "gas-no-oxygen" if args.gas_no_oxygen else "gas" if args.gas else "zones" if args.zone_long else "energy"
     bundle = build(scenario)
     source_files = [Path(__file__), *sorted((Path(__file__).parent / "OfflineReference").glob("*.*")),
                     Path(__file__).parent / "ClusterTestPlugin/Source/OfflineObservedLogic.cs"]
@@ -125,8 +126,8 @@ def main():
         run = run_one(bundle, out, "zone-environment", 108000, True, port_slot=13, scenario="zone-environment")
         (out / "zone-environment-reference.json").write_text(json.dumps(run, indent=2))
         return
-    if args.observed:
-        run = run_one(bundle, out, "observed-rotation", 450000, True, port_slot=14, scenario="observed")
+    if args.observed or args.observed_short:
+        run = run_one(bundle, out, "observed-short" if args.observed_short else "observed-rotation", 3600 if args.observed_short else 450000, True, port_slot=15 if args.observed_short else 14, scenario=scenario)
         (out / "observed-reference.json").write_text(json.dumps(run, indent=2))
         return
     if args.production:
