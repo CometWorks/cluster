@@ -36,12 +36,28 @@ namespace ClusterTestPlugin;
 internal static class OfflineTestRoutes
 {
     private static long cycleGrid, cycleStart;
+    private static int cyclePhase = -1;
+    private static bool cycleWaiting;
     private static OfflineProfile cycleProfile;
     private static readonly List<object> CycleTrace = new();
     internal static void ObserveGasCycle()
     {
-        if (cycleGrid == 0 || MySession.Static == null || MySession.Static.GameplayFrameCounter - cycleStart > 2400) return;
+        if (cycleGrid == 0 || MySession.Static == null) return;
         if (MyEntities.GetEntityById(cycleGrid) is not MyCubeGrid grid) return;
+        if (cycleWaiting)
+        {
+            var gas = grid.GetFatBlocks<MyGasGenerator>().Single();
+            if ((gas.IsWorking ? 1 : 0) + (gas.SourceComp.Enabled ? 2 : 0) != cyclePhase) return;
+            BeginGasCycle(grid); return;
+        }
+        if (MySession.Static.GameplayFrameCounter - cycleStart > 2400) return;
+        CycleTrace.Add(GasCycleState(grid));
+    }
+    private static void BeginGasCycle(MyCubeGrid grid)
+    {
+        cycleWaiting = false; cycleStart = MySession.Static.GameplayFrameCounter;
+        CycleTrace.Clear();
+        cycleProfile = OfflineCompensation.CaptureFor(ClusterRuntime.m_partitions.Get(ClusterRuntime.PluginEntityPartition(cycleGrid).Partition), quick: true).Single(p => p.Members.Contains(cycleGrid));
         CycleTrace.Add(GasCycleState(grid));
     }
     private static object GasCycleState(MyCubeGrid grid)
@@ -298,11 +314,12 @@ internal static class OfflineTestRoutes
         TestRoutes.Add("POST", "/offline-test-gas-cycle", context =>
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
             {
-                cycleGrid = TestRoutes.Long(context, "grid"); cycleStart = MySession.Static.GameplayFrameCounter;
-                CycleTrace.Clear();
+                cycleGrid = TestRoutes.Long(context, "grid");
+                cyclePhase = int.Parse(TestRoutes.Query(context, "phase", "-1"));
+                if (cyclePhase < -1 || cyclePhase > 3) throw new ArgumentOutOfRangeException("phase");
                 var grid = (MyCubeGrid)MyEntities.GetEntityById(cycleGrid);
-                cycleProfile = OfflineCompensation.CaptureFor(ClusterRuntime.m_partitions.Get(ClusterRuntime.PluginEntityPartition(cycleGrid).Partition), quick: true).Single(p => p.Members.Contains(cycleGrid));
-                CycleTrace.Add(GasCycleState(grid));
+                cycleWaiting = cyclePhase >= 0; CycleTrace.Clear(); cycleProfile = null;
+                if (!cycleWaiting) BeginGasCycle(grid);
                 return new { cycleGrid, cycleStart };
             })));
         TestRoutes.Add("GET", "/offline-test-gas-cycle", context =>
@@ -330,7 +347,7 @@ internal static class OfflineTestRoutes
                 builder.CubeBlocks.Add(generator);
                 var grid = (MyCubeGrid)MyEntities.CreateFromObjectBuilderAndAdd(builder, false);
                 var gas = grid.GetFatBlocks<MyGasGenerator>().Single();
-                gas.GetInventory().AddItems(1000, MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Ore>("Ice"));
+                gas.GetInventory().AddItems(cycling ? 10000 : 1000, MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Ore>("Ice"));
                 return new { grid = grid.EntityId, generator = gas.EntityId };
             }));
         });

@@ -1324,18 +1324,25 @@ def offline_partial_gas(bench):
     time.sleep(3)
     _require(bench, "cycling Factory profile completes", bool(_poll(lambda:
         bench.cluster.node("node-1", f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))
-    bench.cluster.node("node-1", f"/offline-test-gas-cycle?grid={grid}", "POST")
-    latest = {}
-    def full_trace():
-        captured = bench.cluster.node("node-1", "/offline-test-gas-cycle")
-        latest.update(captured)
-        return captured if captured["trace"][-1]["frame"] >= 1200 else None
-    capture = _poll(full_trace, 90, 2)
-    bench.record("cycling-Factory", latest)
-    _require(bench, "cycling Factory captures 1200 actual native frames", bool(capture))
+    def capture_cycle(label, phase=-1):
+        bench.cluster.node("node-1", f"/offline-test-gas-cycle?grid={grid}&phase={phase}", "POST")
+        latest = {}
+        def full_trace():
+            captured = bench.cluster.node("node-1", "/offline-test-gas-cycle")
+            latest.update(captured)
+            return captured if captured["trace"] and captured["trace"][-1]["frame"] >= 1200 else None
+        capture = _poll(full_trace, 90, 2)
+        bench.record(label, latest)
+        _require(bench, label + ": captures 1200 actual native frames", bool(capture))
+        if phase >= 0:
+            start = capture["trace"][0]
+            bench.check(label + ": starts at the requested native working/source phase", int(start["working"]) + 2 * int(start["enabled"]) == phase)
+        return capture
+    capture = capture_cycle("cycling-Factory")
     trace = capture["trace"]
-    bench.record("cycling-Factory", {"initial": capture["initial"], "trace": trace})
     bench.check("cycling Factory native produces partial-time gas", any(t["output"] > 0 for t in trace) and any(t["output"] == 0 for t in trace))
+    # No time or state is assigned: the optional fixture waits for each real phase.
+    for phase in range(4): capture_cycle(f"cycling-Factory-phase-{phase}", phase)
     bench.exercised(definitionOnlyMod=True, partialAdaptible=True, zeroInput=True, factoryNegative=True,
                     limitation="bounded gas-generator differential; complete coupled chain/long baselines remain")
 
