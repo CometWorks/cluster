@@ -90,7 +90,8 @@ additions/removals, extra inventories and bottle-state edits keep the conservati
 observer never adds a second fuel debit; the model uses the captured native timer and stock
 semantics. The full InPlace learning and independent native reference now pass for a varying source
 and genuinely varying ModAPI reactor fuel, with an opaque-inventory negative control; the
-initialized cluster scheduler and representative-world census remain unproved. No Measure node was
+initialized serving-cluster scheduler now has a separate bounded natural-rotation fixture; a
+representative-world census remains unavailable. No Measure node was
 added: real Octahedron observed-world fractions are unavailable, so phase 6 remains an
 evidence-gated decision.
 
@@ -113,9 +114,23 @@ Results include per-producer energy/fuel, per-consumer energy, storage input, pr
 renewal and zone state. There is no separate accounting service, second debit layer or background
 offline simulation. Gas generators now select standby versus operational draw from delivered gas in
 the same allocator; oxygen/hydrogen ports share one electrical sink. Power/production multipliers
-and the oxygen setting remain respected. A nonadaptible blocked working draw cannot bootstrap gas
-production. Positive partial input powers adaptible groups according to the native predicate; output
-is not assumed to scale linearly. Engine gas intake and electrical dispatch settle together
+and the oxygen setting remain respected. Zero standby power cannot bootstrap gas production. With enough standby power but insufficient
+nonadaptible working power, the native generator can alternate its delayed working state and
+gas-dependent electrical demand. Capture retains both states; the existing resource allocator
+evaluates the resulting finite feedback cycle. The event model integrates whole closed periods and
+replays individual phases at fuel, storage, timer and interval boundaries. Shared production follows
+those powered phases. Tank standby/transfer demand retains the native latch refreshed by nonzero flow or deferred working callbacks; zero flow alone does not clear it.
+Reactor fuel and fast-feedback battery stock settlements use the actual last delivered phase,
+preserving their native sampled-cost rules. Battery sampling is confined to actual fast feedback
+intervals; steady flow retains its existing integral. A timer interval entered by a cycle retains
+its sampled settlement even after the cycle ends, reconciling its already-integrated steady prefix
+once. Delivered producer/consumer energy is conserved; sampled
+native stock cost is reported separately from the energy integral. The captured battery Update100
+phase and float stock arithmetic prevent a cycle average from inventing a different native debit.
+Capture observes existing distributor state and does not force an extra allocation between engine
+frames. Battery age uses the last completed frame (`GameplayFrameCounter - 1`), matching both
+pre-simulation Invoke capture and post-simulation plugin capture. No linear supply-ratio scaling or nameplate surcharge is introduced. Positive
+partial input still powers adaptible groups according to the native predicate. Engine gas intake and electrical dispatch settle together
 independently of resource enumeration order. Older profiles without these optional rates retain
 their captured constant demand. The expanded 39-check shared-budget proof is detached; the fresh
 native gas-standby comparison is separate.
@@ -205,7 +220,7 @@ grace/minOnline defaults stay 180/60 seconds.
 
 The authenticated Gateway AdminContract0.9.0 / wire1 seam advertises
 `features.offlinePartitions="v1"`. Older nodes explicitly refuse unsupported operations. Quasar
-PR317 at84f6bfd vendors the exact bb65a32 DTOs; later boundary repairs keep them unchanged. Gateway
+PR317 ataa6f578 vendors the exact bb65a32 DTOs; later boundary repairs keep them unchanged. Gateway
 routes are:
 
 - GET `/admin/v1/offline/partitions`, `/offline/details?node=N&partition=P`, `/offline/cache`.
@@ -227,8 +242,15 @@ this includes the earlier peer-rejection reader. Timeout/size/schema/transport f
 errors. Uploaded Finals retain their separate512MiB limit. Existing journal policy can fail open
 when disabled/unsupported or after1500ms; this work does not establish unconditional durability.
 Actual non-loopback Gateway bearer proof passes21/21 with missing/query/manage token and named audit
-controls, including the real source-release race. Interactive Quasar/Blazor service proof remains
-absent. Static renders and cold HTTP tests retain their narrower credit.
+controls, including the real source-release race. Authorized isolated Quasar/Blazor smoke at
+aa6f578 with nativec307bba passes actual trusted-network Administrator/Viewer circuits, Profile,
+cache epoch clear/replay, exact-Final0/1/168h predictions, no-wake invariants, private-LAN bearer
+scopes, mobile/keyboard, older backend and outage. Steam-account cookie login was not proved after
+the task-secret request timed out; no retry is scheduled. Uncertain-clear browser fault injection
+and extended in-flight races retain only focused-test coverage. Parent independently reviewed the
+separate explicit-role binding repair and reran3/3 regressions; the UI worker reports230 tests.
+All task-owned smoke processes/listeners were torn down. This scoped partial smoke does not certify
+backend fidelity or replace static/cold test provenance.
 
 ## Verification and current acceptance status
 
@@ -245,11 +267,19 @@ immutable. They are not promoted to latest-head proof. Historical detailed logs 
 here remain in Git and `offline-partitions-doc-before-consolidation-3a033aa.md`; current results are
 consolidated below.
 
-Every row names its **actual tested product**. Current source c307bba is based on main10fd567;
-`rebase-10fd567-range-diff.txt` preserves61/61 ticket commits unchanged. The earlier main-deb6b69
-rebase likewise preserves53/53 patches. The latest main changes offline-grid mass reporting, not
-compensation/admin semantics. The fresh c307bba private package passes all release gates; its actual environmental shared-wake17/17 result is separate from the historical rows below. Earlier rows never
-imply that an old package contains subsequent repairs.
+Every row names its **actual tested product**. Latest semantic productf769415 is based on freshly
+fetched mainbce4399. `rebase-bce4399-range-diff.txt` preserves68 ticket patches:67 equal and one
+required adaptation retaining upstream DrainSave frozen-state retry data alongside compensation
+profiles. Upstream plugin blockers, graceful-stop/retry and global-save protections remain. Main
+itself supplies version0.1.26 and the Magnetar2.4.3.9 requirement; this task does not bump it or
+publish a release. Required Magnetar was fetched into a separate private task directory; original
+host/shared installs remain intact. The private `package-fidelity-10` archive is
+`15afadc84192a3c364bb09dcf1b5e104a21d76abb9f7faf42d9357c39e34ec42`; all release gates pass.
+Earlier rows retain their original products. Independent round3 reviewed onlyafc0080d/c307bba,
+accepted Q1–Q3/U1–U3 for their reported defects and retained R1–R8; later fidelity changes have no
+new independent review. Canonical evidence and `fidelity-repair-response.md` retain exact commands,
+new results and failed intermediate runs, including the introduced client-admission error that
+was caught by rotor/cold-zone regressions and corrected inca0f104 (rebased50bf053).
 
 | Actual product / native result under native-host | Earned scope |
 |---|---|
@@ -274,6 +304,25 @@ imply that an old package contains subsequent repairs.
 |c636a46 / gas-results/20261101-014432Z/OFF-ZONE-PAUSED | Native paused id0/paid-credit/shared recovery/settings/120s activation/manual-off15/15 |
 |c307bba / results/20261101-020139Z/OFF-ZONE-ENVIRONMENT | Actual environmental shared-wake17/17: cold native supply/no unsupported active frame, pending save/capture paid credit/costs, settings/rights and real functional-off cancellation |
 
+The current f769415 read-only capture proof adds native `gas-results/20261101-123018Z` Factory31/31
+and `factory-fidelity-10-comparison.json`: normal Invoke plus all four real working/source capture
+phases,20 finite4/100/600/1200-frame comparisons. All pass; native/model battery debit is identical
+at every recorded float checkpoint. Maximum gas/settled+pending-ice/all-electrical errors are
+0.00038147 units/0.000018 units/4.646705e-9MWh. Original bounds remain8 native frames for flows and
+electrical delivery, two float ULP plus one Update100 settlement for sampled battery cost. The model
+conserves delivered producer/consumer electricity; native sampled stock cost remains explicit.
+Current `results/20261101-123018Z/OFF-GRID-POWER`12/12 preserves the actual distributor/gyro census
+without forcing capture-side allocation. Current `bridge-results/20261101-123018Z` initialized
+scheduler25/25 covers normal600s grace, natural1-minute InPlace rotation, supported varying fuel
+versus opaque edits, propulsion invalidation, ordinary offline, exact original-Final stock apply and
+same-worker new-generation native thaw. Rebased f8ceba6 `results/20261101-115102Z` additionally
+preserves moving-rotor/quiet-sibling admission6/6, upstream plugin-blocker stop/restart10/10 and
+refused drain-Final retry6/6. Final f769415 `results/20261101-123328Z-standalone` adds36000 actual
+native coupled frames: stock5/5 within original1% and trajectory5/5 within unchanged160-frame
+bounds. Final `bridge-results/20261101-123426Z/OFF-ZONE-ENVIRONMENT`17/17 preserves pending-save/
+capture common costs, native supply before active protection and functional-off cancellation.
+Canonical manifest and fidelity response retain exact hashes and commands.
+
 The standalone engine advances stocks independently while ClusterNode is a dormant capture/model
 library. Bounded native max-speed pacing was compared with3600 ordinary60Hz updates: gameplay and
 elapsed-sun counters and battery/fuel endpoints agree. No update is skipped and no sun/time counter
@@ -284,8 +333,8 @@ cases disable sun rotation; planetary and full-rotation observed cases are separ
 Native traces exposed and repaired paired-source priority, queued assembler working draw, sampled
 reactor fuel phase/tier and fractional sun-bin livelock. Each root has a
 failing-before/passing-after regression. R1–R8 were independently resolved at immutableb1e393f for
-their specific defects; Q1–Q3 and U1–U3 repairs have exact responses and proof artifacts. No
-subsequent independent review of the final combined source is claimed. A failed first
+their specific defects; Q1–Q3 and U1–U3 were also accepted by round3 atafc0080d/c307bba.
+The later finite-feedback and profiling lifecycle repairs remain unreviewed independently. A failed first
 reactor-observer run also exposed representation-sensitive decimal stock hashes; canonical G29
 formatting repairs that fingerprint. The full 450000-frame learning plus 450000-frame native
 reference subsequently passes: actual/model fuel debit0.833338/0.833375 within1%, battery
@@ -297,9 +346,9 @@ constant-clamped and first fingerprint failures remain failed.
 |T-OC-01|Three six-hour standalone baselines and12/12 strict stock cases above; broad arbitrary rapidly varying load waveforms remain outside that envelope|
 |T-OC-02|Full upgraded3-ore/two-refinery/conveyor/output-full/queued downstream assembler reference above; native ore-switch tolerance is one captured tick per switch|
 |T-OC-03|Loaded-voxel ridge/own-grid/nearby obstruction/panel/farm675000-frame geometry point reference passes872 comparisons at max0.001161; ordinary live rolling-pivot max0.165844 exceeds the original0.02 bound, so full T-OC-03 remains incomplete|
-|T-OC-04|Five-case native coupled stock/trajectory/oxygen-toggle/exhaustion/cold/circuit proofs above; variable Factory standby/working cycling still differs from the steady model|
+|T-OC-04|Five-case native coupled stock/trajectory/oxygen-toggle/exhaustion/cold/circuit proofs above; finite native Factory cycling repair and fresh coupled regression described above|
 |T-OC-05|Only controlled test worlds available; no safe representative observed-group census or Octahedron access; no speculative Measure role|
-|T-OC-06|Actual Prepare/InPlace450000-frame learning plus independent450000-frame native varying source/fuel/opaque-inventory reference passes at79a67df; initialized cluster scheduler and representative-world census remain unproved|
+|T-OC-06|Actual Prepare/InPlace450000+450000-frame varying source/fuel/opaque-inventory reference passes at79a67df. Initialized serving-cluster natural-rotation proof is separate above; no representative-world census|
 |T-OC-07|Native Block/Freeze/PB/timer/ejector/storage policy/shared wake10/10 at ef2e016; arbitrary script stock semantics remain conservatively Frozen|
 |T-OC-08|Native6/6 at9f128a7: moving rotor top, quiet sibling and stopped-rate reuse|
 |T-OC-09|Fresh shared crash/retry/ordinary-Final no-repeat18/18 above; long-cap reference distinct|
@@ -326,16 +375,30 @@ three synthetic station observations were made: no population percentile, produc
 or week-long usage frequency is inferred. Full transport snapshots/monotonic traces remain in
 `large-online-pull-samples.json` for review.
 
-Known unresolved implementation/proof limits are Factory power cycling, native rolling-pivot
-live-output fidelity, initialized cluster observation scheduler,
-representative-world Measure evidence, exclusive200-panel frame cost, production-frequency/week
-statistics and live Quasar/Blazor operation. The host works; these are not generic host blockers.
-Parent owns plan PR12 and Quasar PR317. No acceptance obligation is removed by a confidence label.
+Solar's strict ordinary-live2% gate remains failed. `solar-oracle-audit-final.json` preserves the
+675000-frame reference's retained angle samples,872 fresh points,8 ports, exact waveforms, phase offsets
+(max0.0136°), per-port max/RMS and angle-sampled quadrature energy. Original §4.3 re-runs every pivot
+at each sampled angle; the native modern component instead refreshes one of12 cached pivots per100
+frames (full refresh1200 frames/.96° at120 minutes). At the sharp305° obstruction edge, fresh2/12
+lit differs from cached3/12 or4/12. Interpolated sampled geometry error is0.001161; the actual model's
+left-bin values have0.009102 maximum fresh-geometry error; both are below0.02. Ordinary live error
+remains0.165844, including the left-bin comparison. Neither geometry result replaces the failed
+live oracle. Parent must decide the original all-pivot geometry criterion versus rolling-cache
+fidelity; no tolerance or formal pass is changed. Quadrature is not a per-frame native energy/stock
+proof. Native sun uses16ms/frame while resources use1/60s; both phase/period and duration must be
+mapped for standalone time comparisons. Physics-queue ray context and dynamic occlusion remain.
+
+Remaining external limits are representative-world/Measure evidence, exclusive200-panel frame
+cost, production-frequency/week statistics and the scoped Quasar login/browser gaps above. Only
+controlled test archives exist locally (`world-census-availability.json`); controlled fixtures are
+not a representative population. Parent owns plan PR13/e35f65d and Quasar PR317. No acceptance
+obligation is removed by a confidence label.
 
 Useful focused commands:
 
 ```sh
 dotnet run --project Tools/OfflineCompensationCheck -c Release -p:RunPostBuildEvent=Never
+dotnet run --project Tools/OfflineCompensationCheck -c Release -p:RunPostBuildEvent=Never -- --feedback
 dotnet ClusterRegistry/bin/Release/net10.0/ClusterRegistry.dll --self-test offline-admin
 # From Test/, using the exact isolated host/package contract:
 uv run python run_suite.py OFF-ADMIN-PROFILE-RACE OFF-CACHE-DURABILITY
