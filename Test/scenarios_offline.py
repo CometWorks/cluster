@@ -1913,6 +1913,8 @@ def offline_observed_scheduler(bench):
     result = compared["result"]
     bench.check("observed source serves the same complete consumer and storage budget", abs(sum(result["ProducerEnergyMWh"].values())
                 - sum(result["ConsumerEnergyMWh"].values()) - sum(result["StorageInputEnergyMWh"].values())) < 1e-9)
+    generation = bench.cluster.node("node-1", f"/offline-test-admin-hold?grid={fixtures[0]['grid']}&partition={partition}")["generation"]
+    bench.record("scheduler-original-generation", {"partition": partition, "generation": generation})
     bench.cluster.handover_config({"offline.minOnlineSeconds": "0", "offline.graceSeconds": "0"})
     _require(bench, "completed observed group offlines through the ordinary scheduler", bool(_poll(lambda: _offline_row(bench, partition), 90)))
     bench.cluster.handover_config({"offline.enabled": "false"})
@@ -1925,7 +1927,6 @@ def offline_observed_scheduler(bench):
         if not _offline_row(bench, partition): raise ClusterError("observed group woke before its explicit claim")
         time.sleep(5)
     bench.check("offline group releases its initialized observation census", census(fixtures[0]["grid"]) is None)
-    generation = next(r["Generation"] for r in bench.cluster.get("/registry/partitions") if r["Partition"] == partition)
     bench.cluster.node("node-1", f"/offline-test-recovery?grid={fixtures[0]['grid']}&ms=0", "POST")
     bench.cluster.post(f"/registry/partitions/offline/load?partition={partition}&node=node-1&reason=remote")
     _require(bench, "observed profile uses real shared recovery", bool(_poll(lambda: _applied(bench, "node-1"), 90)))
@@ -1935,6 +1936,7 @@ def offline_observed_scheduler(bench):
     _assert_applied_inventory(bench, offline_profiles, applied, fixtures[0]["grid"], "shared observed wake applies the original Final stock transaction exactly")
     def thawed():
         status = bench.cluster.node("node-1", f"/offline-test-admin-hold?grid={fixtures[0]['grid']}&partition={partition}")
+        bench.record("scheduler-native-identity", status)
         return status if status["generation"] > generation and not status["frozen"] else None
     _require(bench, "same-worker observed recovery completes ownership and native thaw", bool(_poll(thawed, 45)))
     bench.record("scheduler-native-wake", bench.cluster.node("node-1", f"/offline-test-state?grid={fixtures[0]['grid']}"))
