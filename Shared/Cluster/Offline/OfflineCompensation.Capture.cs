@@ -203,7 +203,7 @@ internal static partial class OfflineCompensation
 					Capacity = d.Capacity, MaxInput = d.Capacity * 0.05, InputConversion = 1.0 / 60, Mode = ((Sandbox.ModAPI.Ingame.IMyGasTank)tank).Stockpile ? 1 : 0,
 					Pair = true, Enabled = gasEnabled, PowerSink = powerSink, LeakPerFrame = block.IsFunctional ? 0 : d.Capacity * d.LeakPercent / 100.0,
 					IdlePower = gasEnabled ? d.StandbyPowerConsumption : 0, OperationalPower = gasEnabled ? d.OperationalPowerConsumption : 0,
-					Transferring = tank.SourceComp.CurrentOutputByType(d.StoredGasId) > 0 || tank.ResourceSink.CurrentInputByType(d.StoredGasId) > 0 });
+					Transferring = tank.ResourceSink.RequiredInputByType(MyResourceDistributorComponent.ElectricityId) > d.StandbyPowerConsumption });
 				foreach (var port in sources) { port.Storage = index; port.StorageCost = 1.0 / 60; port.Kind = "Tank"; port.PowerSink = powerSink; port.Maximum = gasEnabled && !((Sandbox.ModAPI.Ingame.IMyGasTank)tank).Stockpile ? d.Capacity * 0.05 : 0; }
 			}
 			else if (block is MyGasFueledPowerProducer engine)

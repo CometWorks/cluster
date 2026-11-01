@@ -374,7 +374,10 @@ internal static class OfflineModel
 			bool[] nextPowered = Enumerable.Range(0, p.Sinks.Count).Select(i => Powered(p, i, demand, input)).ToArray();
 			bool[] nextProducing = output.Select(v => v > Epsilon).ToArray();
 			bool[] nextTransferring = Enumerable.Range(0, p.Storage.Count).Select(i => charging[i] > Epsilon
-				|| Enumerable.Range(0, p.Sources.Count).Any(j => p.Sources[j].Storage == i && nextProducing[j])).ToArray();
+				|| Enumerable.Range(0, p.Sources.Count).Any(j => p.Sources[j].Storage == i && nextProducing[j])
+				// ExecuteGasTransfer updates demand only for nonzero transfer. A working
+				// callback refreshes it on power change; a quiet frame alone does not.
+				|| p.Storage[i].PowerSink >= 0 && transferring[i] && nextPowered[p.Storage[i].PowerSink] == powered[p.Storage[i].PowerSink]).ToArray();
 			phases.Add(((double[])input.Clone(), (double[])output.Clone(), (double[])charging.Clone(), nextPowered, nextProducing, nextTransferring));
 			powered = nextPowered; producing = nextProducing; transferring = nextTransferring;
 		}
