@@ -69,6 +69,19 @@ def _sweep(bench, *args: str) -> dict:
     return json.loads(run.stdout.strip().splitlines()[-1])
 
 
+def _capture(bench, partition: int) -> None:
+    """Ask for a catalogued save. /save-capture answers 409 while a periodic save is in flight."""
+
+    def queued():
+        try:
+            bench.cluster.node(NODE, f"/save-capture?partition={partition}", "POST")
+            return True
+        except ClusterError:
+            return None
+
+    wait_until(queued, 60, f"a save of partition {partition} queued")
+
+
 def p2_grid_delete(bench) -> None:
     bench.start_cluster(nodes=STARTED)
     spawned = {}
@@ -88,7 +101,7 @@ def p2_grid_delete(bench) -> None:
              homes["A"] == homes["D"] and len({homes[k] for k in "ABCE"}) == 4, json.dumps(homes))
     # A catalogued save that holds each probe: the newest save an emptied partition is left with.
     for key in "ABCE":
-        bench.cluster.node(NODE, f"/save-capture?partition={homes[key]}", "POST")
+        _capture(bench, homes[key])
     try:
         wait_until(lambda: all((_newest_entities(bench, homes[k]) or 0) >= 1 for k in "ABCE"), 90, "a save of each probe")
         saved = True
@@ -161,7 +174,7 @@ def p2_grid_delete_slow_frame(bench) -> None:
     except ClusterError:
         partition = None
     _require(bench, "setup: the probe is in a partition node-1 owns", partition, json.dumps(_members(bench))[:300])
-    bench.cluster.node(NODE, f"/save-capture?partition={partition}", "POST")
+    _capture(bench, partition)
     try:
         wait_until(lambda: (_newest_entities(bench, partition) or 0) >= 1, 90, "a save of the probe")
         saved = True
