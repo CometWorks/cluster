@@ -167,7 +167,7 @@ internal sealed partial class PartitionPersistence
 			|| OwnedGeneration(partition.Id) == 0 || partition.HasPending
 			|| partition.Members.Any(ClusterRuntime.IsFrozen)) return false;
 		if (RemoteUse.Capture(new[] { partition }).ContainsKey(partition.Id)
-			|| m_partitions.ClientPartitions(new[] { partition }).Any()
+			|| m_partitions.ClientPartitions(new[] { partition }).Any(p => p.Partition == partition.Id)
 			|| partition.Members.Any(OnlinePlayerAnchors(out _).Contains)) return false;
 		double radius = partition.Sphere.Radius + ClusterConfig.GetInt("offline.quietMeters");
 		return !PositionRegistryService.Players.Any(p => p.IsWithinDistance(partition.Sphere.Center.X,

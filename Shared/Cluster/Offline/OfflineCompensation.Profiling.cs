@@ -231,7 +231,7 @@ internal static partial class OfflineCompensation
 	}
 
 	private static long RequiredObservationFrames => Math.Max(ClusterConfig.GetInt("offline.observeSeconds") * 60L,
-		ClusterConfig.Get("offline.longObservation") == "InPlace" ? (long)(MySession.Static.Settings.SunRotationIntervalMinutes * 60000.0 / 16) : 0);
+		ClusterConfig.Get("offline.longObservation") == "InPlace" ? (long)((MySession.Static?.Settings.SunRotationIntervalMinutes ?? 0) * 60000.0 / 16) : 0);
 
 	private static object ProfilingStatus() => CensusByGroup.Values.Select(c => new { group = c.Group, members = c.Members, state = c.State,
 		frames = Frame - c.Since, observationFrames = Frame - c.ObservationSince, requiredObservationFrames = RequiredObservationFrames, samples = c.Observations.Values.Select(s => s.Count).ToArray(), observed = c.Observations.Count, confidence = c.Last?.Confidence, unknowns = c.Last?.Unknowns }).ToArray();

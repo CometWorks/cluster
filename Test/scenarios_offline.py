@@ -1245,6 +1245,10 @@ def t_oc_08(bench):
     bench.exercised(nativeRotorSubgrid=True, quietSibling=True, sharedPartition=partition)
 
 
+# Keep ownership stable while testing group readiness; balancing has its own native lanes.
+t_oc_08.regular_nodes = 1
+
+
 def offline_partial_gas(bench):
     """Q3: actual definition-only adaptible generator with native partial and zero electricity."""
     import copy
@@ -1322,8 +1326,11 @@ def offline_partial_gas(bench):
     _require(bench, "cycling Factory profile completes", bool(_poll(lambda:
         bench.cluster.node("node-1", f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))
     bench.cluster.node("node-1", f"/offline-test-gas-cycle?grid={grid}", "POST")
-    time.sleep(20)
-    capture = bench.cluster.node("node-1", "/offline-test-gas-cycle")
+    def full_trace():
+        captured = bench.cluster.node("node-1", "/offline-test-gas-cycle")
+        return captured if captured["trace"][-1]["frame"] >= 1200 else None
+    capture = _poll(full_trace, 90, 2)
+    _require(bench, "cycling Factory captures 1200 actual native frames", bool(capture))
     trace = capture["trace"]
     bench.record("cycling-Factory", {"initial": capture["initial"], "trace": trace})
     bench.check("cycling Factory native produces partial-time gas", any(t["output"] > 0 for t in trace) and any(t["output"] == 0 for t in trace))
@@ -1839,7 +1846,7 @@ def offline_observed_scheduler(bench):
     """Normal serving-node sweep/sampler, one natural minute-long rotation; no Prepare hook."""
     _survival_template(bench, sun_rotation_minutes=1)
     bench.start_cluster()
-    for node in ("node-1", "node-2"):
+    for node in ("node-1",):
         _put_config(bench, node, {"offline.enabled": "true", "offline.quietMeters": "0", "offline.wakeMeters": "0",
             "offline.leadSeconds": "0", "offline.minOnlineSeconds": "600", "offline.graceSeconds": "600",
             "offline.settleFrames": "300", "offline.observeSeconds": "5", "offline.longObservation": "InPlace",
@@ -1885,26 +1892,46 @@ def offline_observed_scheduler(bench):
     fuel = "MyObjectBuilder_Ingot/Uranium"
     before, actual, model = map(_inventory_totals, (initial, compared["actual"], compared["predicted"]))
     native_debit, model_debit = before[fuel] - actual[fuel], before[fuel] - model[fuel]
+    source = next(s for s in initial["Sources"] if s["Kind"] == "Reactor")
+    observation = next(o for o in initial["Observations"] if o["Block"] == source["Block"])
+    fuel_bound = max(observation["Maximum"]) * source["FuelTickFrames"] * sum(f["Amount"] for f in source["Fuel"] if f["Item"] == fuel) + .000001
     bench.check("initialized observed reactor pays native fuel within one captured settlement", native_debit > 0 and model_debit > 0
-                and abs(native_debit - model_debit) <= .004,
-                json.dumps({"native": native_debit, "modeled": model_debit, "bound": .004}))
+                and abs(native_debit - model_debit) <= fuel_bound,
+                json.dumps({"native": native_debit, "modeled": model_debit, "bound": fuel_bound}))
     result = compared["result"]
     bench.check("observed source serves the same complete consumer and storage budget", abs(sum(result["ProducerEnergyMWh"].values())
                 - sum(result["ConsumerEnergyMWh"].values()) - sum(result["StorageInputEnergyMWh"].values())) < 1e-9)
     _put_config(bench, "node-1", {"offline.minOnlineSeconds": "0", "offline.graceSeconds": "0"})
     _require(bench, "completed observed group offlines through the ordinary scheduler", bool(_poll(lambda: _offline_row(bench, partition), 90)))
     _put_config(bench, "node-1", {"offline.enabled": "false"})
-    _put_config(bench, "node-2", {"offline.enabled": "false"})
-    bench.cluster.node("node-2", f"/offline-test-recovery?grid={fixtures[0]['grid']}&ms=0", "POST")
-    bench.cluster.post(f"/registry/partitions/offline/load?partition={partition}&node=node-2&reason=remote")
-    _require(bench, "observed profile uses real shared recovery", bool(_poll(lambda: _applied(bench, "node-2"), 90)))
-    applied = _applied(bench, "node-2")
+    offline_profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
+    bench.record("scheduler-offline-profiles", offline_profiles)
+    # Native reactors settle at captured timer boundaries. An immediate wake can
+    # legitimately have positive energy but no fuel debit yet; cross one boundary.
+    wait_until = time.monotonic() + source["FuelTickFrames"] / 60 + 5
+    while time.monotonic() < wait_until:
+        if not _offline_row(bench, partition): raise ClusterError("observed group woke before its explicit claim")
+        time.sleep(5)
+    bench.check("offline group releases its initialized observation census", census(fixtures[0]["grid"]) is None)
+    generation = next(r["Generation"] for r in bench.cluster.get("/registry/partitions") if r["Partition"] == partition)
+    bench.cluster.node("node-1", f"/offline-test-recovery?grid={fixtures[0]['grid']}&ms=0", "POST")
+    bench.cluster.post(f"/registry/partitions/offline/load?partition={partition}&node=node-1&reason=remote")
+    _require(bench, "observed profile uses real shared recovery", bool(_poll(lambda: _applied(bench, "node-1"), 90)))
+    applied = _applied(bench, "node-1")
     bench.record("scheduler-shared-wake", applied)
     bench.check("shared wake computes observed fuel and energy on detached original stocks", any(r.get("ProducerFuelConsumed") for r in applied["compensation"]["results"]))
+    _assert_applied_inventory(bench, offline_profiles, applied, fixtures[0]["grid"], "shared observed wake applies the original Final stock transaction exactly")
+    def thawed():
+        status = bench.cluster.node("node-1", f"/offline-test-admin-hold?grid={fixtures[0]['grid']}&partition={partition}")
+        return status if status["generation"] > generation and not status["frozen"] else None
+    _require(bench, "same-worker observed recovery completes ownership and native thaw", bool(_poll(thawed, 45)))
+    bench.record("scheduler-native-wake", bench.cluster.node("node-1", f"/offline-test-state?grid={fixtures[0]['grid']}"))
     bench.exercised(initializedCluster=True, normalSweep=True, naturalPeriodMinutes=1, nativeFuel=True, opaqueInventory=True,
                     propulsionInvalidation=True, ordinaryOffline=True, sharedWake=True,
                     limitation="controlled bounded scheduler proof; 120-minute 450000+450000-frame rate fidelity is a separate pinned reference, not a representative-world census")
 
+
+offline_observed_scheduler.regular_nodes = 1
 
 def offline_observed_policy(bench):
     """Native external game-logic rate sampling and conservative storage/inventory fallback.
