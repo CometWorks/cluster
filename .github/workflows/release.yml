@@ -90,7 +90,9 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - name: Verify offline resource model
-        run: dotnet run --project Tools/OfflineCompensationCheck -c Release -p:RunPostBuildEvent=Never
+        run: |
+          python3 Build/prepare-concealment.py --source-only
+          dotnet run --project Tools/OfflineCompensationCheck -c Release -p:RunPostBuildEvent=Never -p:AccountingSourceChecks=true
       - name: Verify cross-repository protocol and CLI
         run: |
           python3 Build/verify-plugin-protocol.py .magnetar-sdk-source

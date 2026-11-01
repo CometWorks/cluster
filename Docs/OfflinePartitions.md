@@ -15,6 +15,10 @@ commit, independently of checkout edits; omitting `--source` downloads the same 
 Both packaging paths stage the DLL, manifest, provenance and dependency notices.
 No public NuGet package or machine-specific source path is required. Source-compiled
 and precompiled plugin identities use the same versioned process-local boundary.
+The SDK-only CI lane uses `--source-only` and `AccountingSourceChecks=true` to
+compile the verified pin's pure model directly into the test executable; it needs
+no game installation. Default local/native checks reference the built production
+DLL. No model source is copied into this repository or its production assemblies.
 
 A nonblank `CLUSTER_GATEWAY_REGISTRY` disables autonomous Concealment before manager
 or hook construction, including when transport is absent, disconnected or offline

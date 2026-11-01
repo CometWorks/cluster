@@ -7,7 +7,13 @@
     <NoWarn>CS0649</NoWarn>
     <RunPostBuildEvent>Never</RunPostBuildEvent>
   </PropertyGroup>
-  <ItemGroup>
+  <!-- CI without game libraries checks the exact pinned pure model source.
+       Native/reference checks default to the actual production plugin DLL. -->
+  <ItemGroup Condition="'$(AccountingSourceChecks)' == 'true'">
+    <Compile Include="../../Dependencies/Concealment/Source/ServerPlugin/Accounting/OfflineModel.cs" Link="Accounting/OfflineModel.cs" />
+    <Compile Include="../../Dependencies/Concealment/Source/ServerPlugin/Accounting/OfflineProfile.cs" Link="Accounting/OfflineProfile.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(AccountingSourceChecks)' != 'true'">
     <Reference Include="Concealment">
       <HintPath>$(MSBuildThisFileDirectory)../../Dependencies/Concealment/Concealment.dll</HintPath>
       <Private>True</Private>

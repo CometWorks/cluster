@@ -25,6 +25,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path)
     parser.add_argument("--output", type=Path, default=REPO / "Dependencies/Concealment")
+    parser.add_argument("--source-only", action="store_true",
+                        help="Verify/extract the pin for SDK-only model checks; do not build the native plugin")
     args = parser.parse_args()
     pin = json.loads((REPO / "Dependencies/Concealment.lock.json").read_text())
     commit = pin["commit"]
@@ -61,6 +63,9 @@ def main():
     digest = hashlib.sha256(json.dumps(files, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     if digest != pin["sourceSha256"]:
         raise ValueError("Concealment source does not match the pinned content")
+    if args.source_only:
+        print(f"Verified Concealment source {commit}: {digest}")
+        return
     command = ["dotnet", "build", str(source / "ServerPlugin/ServerPlugin.csproj"), "-c", "Release",
                "--nologo", "-v:q", "-p:RunPostBuildEvent=Never",
                "-p:EnableSourceControlManagerQueries=false", f"-p:SourceRevisionId={commit}"]
