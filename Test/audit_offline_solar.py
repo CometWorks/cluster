@@ -29,7 +29,8 @@ def audit(directory: Path, output: Path):
                 "freshPhaseDegrees": point_sample["phase"], "live": port["ratio"], "fresh": fresh["ratio"],
                 "curveAtLivePhase": predicted(block, sample["phase"]),
                 "curveAtFreshPhase": predicted(block, point_sample["phase"]),
-                "modelLeftBinAtLivePhase": predicted(block, sample["phase"], False)})
+                "modelLeftBinAtLivePhase": predicted(block, sample["phase"], False),
+                "modelLeftBinAtFreshPhase": predicted(block, point_sample["phase"], False)})
         # These are angle-sampled quadrature estimates, not an unsampled native energy integral.
         integrals = {key: sum((b["nativeFrames"]-a["nativeFrames"]) * (a[key]+b[key])/2 for a,b in zip(waveform,waveform[1:])) / 216000
                      for key in ("live", "fresh", "curveAtLivePhase", "modelLeftBinAtLivePhase")}
@@ -38,6 +39,9 @@ def audit(directory: Path, output: Path):
             "freshGeometryMaxAbsoluteError": max(abs(r["fresh"]-r["curveAtFreshPhase"]) for r in waveform),
             "ordinaryLiveMaxAbsoluteError": abs(worst["live"]-worst["curveAtLivePhase"]),
             "ordinaryLiveRmsError": math.sqrt(sum((r["live"]-r["curveAtLivePhase"])**2 for r in waveform)/len(waveform)),
+            "modelLeftBinVsLiveMaxAbsoluteError": max(abs(r["live"]-r["modelLeftBinAtLivePhase"]) for r in waveform),
+            "modelLeftBinVsFreshMaxAbsoluteError": max(abs(r["fresh"]-r["modelLeftBinAtFreshPhase"]) for r in waveform),
+            "maxReferencePhaseOffsetDegrees": max(abs(r["freshPhaseDegrees"]-r["livePhaseDegrees"]) for r in waveform),
             "worst": worst, "sampledIntegralHoursAtNameplate": integrals,
             "sampledElectricalMWh" if kind == "panels" else "sampledGasUnits": {key: value * sources[block]["Maximum"] * (1 if kind == "panels" else 3600) for key,value in integrals.items()}})
         waveforms.append({"grid": name, "kind": kind, "block": block, "samples": waveform})
@@ -57,6 +61,9 @@ def audit(directory: Path, output: Path):
             "comparison": "Ratios use each recorded actual angle. Native elapsed sun advances16ms/frame; resource integration uses1/60s/frame. A standalone time-domain model comparison must map BOTH native solar period/phase and resource duration into authority units; blindly comparing675000 native frames to703125 authority angle units introduces a 4.1667% phase drift.",
             "quadrature": "Trapezoids of the retained5degree samples only, ending at the last sample; not a per-frame energy measurement or new native stock acceptance. Left-bin curve values are also exposed; model interpolation is not silently changed."},
         "geometryControl": geometry, "freshGeometryMaxAbsoluteError": fresh_max, "ordinaryLiveMaxAbsoluteError": live_max,
+        "modelLeftBinVsLiveMaxAbsoluteError": max(s["modelLeftBinVsLiveMaxAbsoluteError"] for s in summaries),
+        "modelLeftBinVsFreshMaxAbsoluteError": max(s["modelLeftBinVsFreshMaxAbsoluteError"] for s in summaries),
+        "maxReferencePhaseOffsetDegrees": max(s["maxReferencePhaseOffsetDegrees"] for s in summaries),
         "freshGeometryWithinTwoPercent": fresh_max <= .02, "ordinaryLiveWithinTwoPercent": live_max <= .02,
         "formalFullAcceptancePassed": fresh_max <= .02 and live_max <= .02,
         "parentDecisionRequired": live_max > .02,

@@ -28,12 +28,24 @@ internal static class NativeFeedbackCheck
             double nativeElectrical = trace.Where(t => t.GetProperty("frame").GetInt64() > 0 && t.GetProperty("frame").GetInt64() <= frames).Sum(t => t.GetProperty("input").GetDouble()) / 216000;
             long producer = model.Sources.First(s => s.Kind == "Generator").Block;
             double modelElectrical = result.ConsumerEnergyMWh.GetValueOrDefault(producer);
+            double nativeBattery = baseline.GetProperty("battery").GetDouble() - actual.GetProperty("battery").GetDouble();
+            double modelBattery = profile.Storage.Single(s => s.Kind == "Battery").Amount - model.Storage.Single(s => s.Kind == "Battery").Amount;
+            // CurrentStoredPower is float. At 3 MWh the per-frame standby debit can
+            // round away; expose that stock limit instead of claiming 1% stock fidelity.
+            float battery = (float)baseline.GetProperty("battery").GetDouble();
+            double nativeFloatBound = frames * (MathF.BitIncrement(battery) - battery) / 2d;
+            double nativeStorageTimerBound = .0011 * 100 / 216000;
             bool ok = Math.Abs(gas - modelGas) <= 500d / 60 * 8 + .1 && Math.Abs(settledAndPendingIce - modelIce) <= 25d / 60 * 8 + .01
                 && Math.Abs(nativeElectrical - modelElectrical) < .001 * 8 / 216000 + 1e-10
-                && Math.Abs(result.ProducerEnergyMWh.Values.Sum() - result.ConsumerEnergyMWh.Values.Sum()) < 1e-10;
+                && Math.Abs(result.ProducerEnergyMWh.Values.Sum() - result.ConsumerEnergyMWh.Values.Sum()) < 1e-10
+                && Math.Abs(modelBattery - result.ProducerEnergyMWh.Values.Sum()) < 1e-10
+                && Math.Abs(nativeBattery - modelBattery) <= nativeFloatBound + nativeStorageTimerBound;
             rows.Add(new { frames, nativeGas = gas, modeledGas = modelGas, nativeIce = ice, pendingGas = pending,
                 nativeSettledAndPendingIce = settledAndPendingIce, modeledIce = modelIce,
-                nativeElectricalMWh = nativeElectrical, modeledElectricalMWh = modelElectrical, events = result.Events, passed = ok });
+                nativeElectricalMWh = nativeElectrical, modeledElectricalMWh = modelElectrical,
+                nativeBatteryDebitMWh = nativeBattery, modeledBatteryDebitMWh = modelBattery,
+                nativeFloatStorageBoundMWh = nativeFloatBound, nativeStorageTimerBoundMWh = nativeStorageTimerBound,
+                events = result.Events, passed = ok });
             passed &= ok;
         }
         passed &= rows.Count == 4;

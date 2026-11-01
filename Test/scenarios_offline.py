@@ -1285,8 +1285,7 @@ def offline_partial_gas(bench):
     bench.record("definition-only-mod.sbc", raw.decode())
     bench.cluster.start()
     bench.cluster.wait_ready()
-    for node in ("node-1", "node-2"):
-        _put_config(bench, node, {"offline.enabled": "false", "offline.quietMeters": "0", "offline.settleFrames": "0"})
+    bench.cluster.handover_config({"offline.enabled": "false", "offline.quietMeters": "0", "offline.settleFrames": "0"})
     owner = bench.cluster.node("node-1", "/identity-test-create?name=partial-gas-owner", "POST")["identityId"]
     # No client is needed: scripted Workshop IDs cannot be downloaded by a retail client.
     for factory in (False, True):
@@ -1326,16 +1325,23 @@ def offline_partial_gas(bench):
     _require(bench, "cycling Factory profile completes", bool(_poll(lambda:
         bench.cluster.node("node-1", f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))
     bench.cluster.node("node-1", f"/offline-test-gas-cycle?grid={grid}", "POST")
+    latest = {}
     def full_trace():
         captured = bench.cluster.node("node-1", "/offline-test-gas-cycle")
+        latest.update(captured)
         return captured if captured["trace"][-1]["frame"] >= 1200 else None
     capture = _poll(full_trace, 90, 2)
+    bench.record("cycling-Factory", latest)
     _require(bench, "cycling Factory captures 1200 actual native frames", bool(capture))
     trace = capture["trace"]
     bench.record("cycling-Factory", {"initial": capture["initial"], "trace": trace})
     bench.check("cycling Factory native produces partial-time gas", any(t["output"] > 0 for t in trace) and any(t["output"] == 0 for t in trace))
     bench.exercised(definitionOnlyMod=True, partialAdaptible=True, zeroInput=True, factoryNegative=True,
                     limitation="bounded gas-generator differential; complete coupled chain/long baselines remain")
+
+
+# Keep the traced native instance on its owner for the complete frame horizon.
+offline_partial_gas.regular_nodes = 1
 
 
 def offline_grid_power(bench):
@@ -1846,8 +1852,11 @@ def offline_observed_scheduler(bench):
     """Normal serving-node sweep/sampler, one natural minute-long rotation; no Prepare hook."""
     _survival_template(bench, sun_rotation_minutes=1)
     bench.start_cluster()
-    for node in ("node-1",):
-        _put_config(bench, node, {"offline.enabled": "true", "offline.quietMeters": "0", "offline.wakeMeters": "0",
+    _require(bench, "new initialized regular node is actually serving", bool(_poll(lambda:
+        bench.cluster.node("node-1", "/node-state")["state"] == "Serving", 60)))
+    # The Gateway owns runtime configuration and the first heartbeat reapplies it.
+    # A node-local PUT immediately after Game ready can be overwritten by that pull.
+    bench.cluster.handover_config({"offline.enabled": "true", "offline.quietMeters": "0", "offline.wakeMeters": "0",
             "offline.leadSeconds": "0", "offline.minOnlineSeconds": "600", "offline.graceSeconds": "600",
             "offline.settleFrames": "300", "offline.observeSeconds": "5", "offline.longObservation": "InPlace",
             "offline.rotateProduction": "false"})
@@ -1856,6 +1865,9 @@ def offline_observed_scheduler(bench):
     _require(bench, "three native observed fixtures have ordinary owners", all(partitions))
     def state(): return bench.cluster.node("node-1", "/offline-test-observed")
     def census(grid): return next((c for c in state()["status"]["profiling"] if grid in c["members"]), None)
+    effective = _poll(lambda: (lambda s: s if s["policy"] == "InPlace" and s["observeSeconds"] == 5 else None)(state()), 20)
+    bench.record("scheduler-effective-config", effective)
+    _require(bench, "serving node has the intended effective InPlace policy", bool(effective))
     _require(bench, "normal quiet grace starts observing without a profile request", bool(_poll(lambda: census(fixtures[0]["grid"]), 30)))
     time.sleep(12)
     early = state()
@@ -1901,9 +1913,9 @@ def offline_observed_scheduler(bench):
     result = compared["result"]
     bench.check("observed source serves the same complete consumer and storage budget", abs(sum(result["ProducerEnergyMWh"].values())
                 - sum(result["ConsumerEnergyMWh"].values()) - sum(result["StorageInputEnergyMWh"].values())) < 1e-9)
-    _put_config(bench, "node-1", {"offline.minOnlineSeconds": "0", "offline.graceSeconds": "0"})
+    bench.cluster.handover_config({"offline.minOnlineSeconds": "0", "offline.graceSeconds": "0"})
     _require(bench, "completed observed group offlines through the ordinary scheduler", bool(_poll(lambda: _offline_row(bench, partition), 90)))
-    _put_config(bench, "node-1", {"offline.enabled": "false"})
+    bench.cluster.handover_config({"offline.enabled": "false"})
     offline_profiles = bench.cluster.node("node-1", f"/profiles?partition={partition}")
     bench.record("scheduler-offline-profiles", offline_profiles)
     # Native reactors settle at captured timer boundaries. An immediate wake can
