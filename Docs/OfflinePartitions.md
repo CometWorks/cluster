@@ -574,3 +574,27 @@ Before any future deployment, retain a pre-change cluster snapshot and binary pa
 saves remain readable; old readers cannot read profile-bearing v2 Finals or the appended WA cache
 section. `offline.compensate=false` stops new profiling/credit and does not downgrade the format.
 Rollback must restore a compatible snapshot/package together. No migration/deployment was performed.
+
+### Round-seven loaded-world lifetime and required JSON discriminators
+
+The core pin retains standalone claim/legacy metadata serialization and whole-group
+update guards after a manager update failure or explicit plugin disposal while the
+same world remains loaded. Scheduling, commands, observation and measurement stop;
+complete groups settle before stopping, and rejected/opaque groups remain suspended.
+Native world unload releases the retained runtime, patches and callbacks. A runtime
+cannot replace that owner while the same loaded world still retains state.
+
+Shared persisted profiles require explicit `Schema` and `ClockFrameSeconds`, also
+inside standalone records. Sparse JSON cannot acquire current defaults via a model
+clone. Missing fields propagate refusal through the shared Apply reader before
+Cluster recovery can instantiate entities or replace its immutable Final; standalone
+retains malformed records as opaque evidence. Explicit known unpaid schema-1
+migration, current schema-2 profiles, cap/retry and coupled rollback policy remain.
+No AdminContract, v2 container, clock domain, resource model or tolerance changes.
+
+The focused regression commands are Concealment `tests/runtime`,
+`tests/accounting-recovery/run.py` and `tests/accounting-clock` (production DLL plus
+`DEDICATED64`). Actual native fault/disposal/save/restart proof and source/precompiled
+loader identities are recorded separately by the implementation handoff. New
+independent review and the initialized authority-clock differential remain required;
+the dormant-facade duration references keep their earlier bounded scope.
