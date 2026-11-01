@@ -103,7 +103,8 @@ internal static partial class OfflineCompensation
 			}
 			return new() { Item = id.ToString(), Amount = amount, Inventories = paths.ToArray() };
 		}
-		foreach (var grid in grids) grid.GridSystems.ResourceDistributor.ResourceStateByType(MyResourceDistributorComponent.ElectricityId, withRecompute: true, grid);
+		// Observe the native distribution. Forcing a recompute here advances delayed
+		// gas working callbacks without an engine frame and shifts sampled stock cost.
 		foreach (var block in blocks)
 		{
 			bool enabled = block.IsFunctional && (block is not MyFunctionalBlock functional || functional.Enabled);
@@ -192,7 +193,9 @@ internal static partial class OfflineCompensation
 				p.Storage.Add(new() { Block = block.EntityId, Kind = "Battery", Resource = Resource(MyResourceDistributorComponent.ElectricityId, block),
 					Amount = battery.CurrentStoredPower, Capacity = battery.MaxStoredPower, MaxInput = d.RequiredPowerInput, InputConversion = 1.0 / 216000,
 					Mode = (int)battery.ChargeMode, Pair = true, Enabled = enabled, Full = battery.m_isFull, RechargeEfficiency = d.RechargeMultiplier,
-					ElapsedFrames = Math.Clamp(MySession.Static.GameplayFrameCounter - battery.m_lastUpdateTime, 0, 100) });
+					// MySession increments its counter after simulation; it names the next
+					// frame both at an Invoke capture and at the subsequent plugin update.
+					ElapsedFrames = Math.Clamp(MySession.Static.GameplayFrameCounter - 1 - battery.m_lastUpdateTime, 0, 100) });
 				foreach (var port in sources) { port.Storage = index; port.StorageCost = 1.0 / 216000; port.Kind = "Battery"; port.Maximum = enabled && battery.ChargeMode != Sandbox.ModAPI.Ingame.ChargeMode.Recharge ? d.MaxPowerOutput : 0; }
 			}
 			else if (block is MyGasTank tank)
