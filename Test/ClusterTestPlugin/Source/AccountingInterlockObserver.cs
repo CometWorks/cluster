@@ -22,7 +22,9 @@ internal static class AccountingInterlockObserver
         harmony.Patch(AccessTools.Method(typeof(ClusterRuntime), "SetNodeState"),
             postfix: new HarmonyMethod(typeof(AccountingInterlockObserver), nameof(StateChanged)));
         harmony.Patch(AccessTools.Method(typeof(PartitionPersistence), "Update"),
-            postfix: new HarmonyMethod(typeof(AccountingInterlockObserver), nameof(Updated)));
+            // Update may terminate the process after the drain's last heartbeat;
+            // a postfix cannot observe that final closed state.
+            prefix: new HarmonyMethod(typeof(AccountingInterlockObserver), nameof(Updated)));
         TestRoutes.Add("GET", "/accounting-interlock", context => TestRoutes.Json(context, 200, Events.ToArray()));
     }
     private static void StateChanged(string __0) => Record(__0);
