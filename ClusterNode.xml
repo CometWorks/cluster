@@ -29,6 +29,7 @@
 
     <DependencyIds>
         <Id>direct-transport</Id>
+        <Id>C88741F0-0AA5-4263-BD78-5D21467A84D3</Id>
     </DependencyIds>
 
     <Runtimes>CoreCLR</Runtimes>

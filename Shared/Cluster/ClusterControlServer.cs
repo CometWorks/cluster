@@ -1151,10 +1151,10 @@ internal sealed partial class ClusterControlServer
 				else
 				{
 					ulong partition = ulong.Parse(raw, CultureInfo.InvariantCulture);
-					OfflineProfile[] profiles = null;
+					byte[] profiles = null;
 					if (context.Request.QueryString["offline"] == "true")
-						profiles = JsonSerializer.Deserialize<OfflineProfile[]>(m_persistence.ReadOfflineFinal(partition).Profiles ?? Encoding.UTF8.GetBytes("[]"), OfflineProfile.Json) ?? [];
-					result = Invoke(() => JsonSerializer.Serialize(OfflineCompensation.AdminRead(partition, m_partitions, profiles), OfflineProfile.Json));
+						profiles = m_persistence.ReadOfflineFinal(partition).Profiles ?? Encoding.UTF8.GetBytes("[]");
+					result = Invoke(() => JsonSerializer.Serialize(OfflineCompensation.AdminRead(partition, m_partitions, profiles), OfflineCompensation.Json));
 				}
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 				return;
@@ -1172,7 +1172,7 @@ internal sealed partial class ClusterControlServer
 			{
 				ulong partition = ulong.Parse(context.Request.QueryString["partition"] ?? throw new ArgumentException("Missing partition"), CultureInfo.InvariantCulture);
 				bool online = Invoke(() => m_partitions.Evaluate().Any(p => p.Id == partition));
-				string result = online ? Invoke(() => JsonSerializer.Serialize(OfflineCompensation.Profiles(partition, m_partitions), OfflineProfile.Json))
+				string result = online ? Invoke(() => JsonSerializer.Serialize(OfflineCompensation.Profiles(partition, m_partitions), OfflineCompensation.Json))
 					: Encoding.UTF8.GetString(m_persistence.ReadOfflineFinal(partition).Profiles ?? Encoding.UTF8.GetBytes("[]"));
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 				return;
@@ -1198,7 +1198,7 @@ internal sealed partial class ClusterControlServer
 					source = PartitionSaveFile.Read(stream.ToArray());
 				}
 				else source = m_persistence.ReadOfflineFinal(ulong.Parse(context.Request.QueryString["partition"] ?? throw new ArgumentException("Missing partition"), CultureInfo.InvariantCulture), context.Request.QueryString["save"]);
-				string result = Invoke(() => JsonSerializer.Serialize(OfflineCompensation.DryRun(source, hours), OfflineProfile.Json));
+				string result = Invoke(() => JsonSerializer.Serialize(OfflineCompensation.DryRun(source, hours), OfflineCompensation.Json));
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 				return;
 			}
@@ -1275,7 +1275,7 @@ internal sealed partial class ClusterControlServer
 			}
 			if (context.Request.HttpMethod == "GET" && path.EndsWith("/offline", StringComparison.OrdinalIgnoreCase))
 			{
-				string result = Invoke(() => JsonSerializer.Serialize(new { owner = m_persistence.OfflineStatus(), cluster = OfflinePartitionService.Status(), callUps = RemotePullService.Status() }, OfflineProfile.Json));
+				string result = Invoke(() => JsonSerializer.Serialize(new { owner = m_persistence.OfflineStatus(), cluster = OfflinePartitionService.Status(), callUps = RemotePullService.Status() }, OfflineCompensation.Json));
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 				return;
 			}

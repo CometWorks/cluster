@@ -459,8 +459,8 @@ internal sealed partial class PartitionPersistence
 			RespawnPoints = JsonSerializer.Serialize(respawns),
 			Npc = npc,
 			Grids = grids,
-			OfflineGameFrame = save.Profiles?.FirstOrDefault()?.FrozenFrame,
-			ProfileSummary = save.Profiles?.Select(p => new { p.Group, p.Confidence, p.Unknowns }).ToArray(),
+			OfflineGameFrame = OfflineCompensation.FrozenFrame(save.Profiles),
+			ProfileSummary = OfflineCompensation.Summary(save.Profiles),
 			Drain = true,
 		};
 	}
@@ -508,7 +508,7 @@ internal sealed partial class PartitionPersistence
 		var frozen = new Dictionary<long, DrainFrozenState>();
 		try
 		{
-			OfflineProfile[] profiles = OfflineCompensation.CaptureFor(partition);
+			byte[] profiles = OfflineCompensation.CaptureFor(partition);
 			foreach (MyEntity entity in entities)
 			{
 				ClusterRuntime.MarkFrozen(entity.EntityId, freezeId);
@@ -639,8 +639,8 @@ internal sealed partial class PartitionPersistence
 			RespawnPoints = JsonSerializer.Serialize(transition.RespawnPoints),
 			transition.Npc,
 			transition.Grids,
-			OfflineGameFrame = transition.Save.Profiles?.FirstOrDefault()?.FrozenFrame,
-			ProfileSummary = transition.Save.Profiles?.Select(p => new { p.Group, p.Confidence, p.Unknowns }).ToArray(),
+			OfflineGameFrame = OfflineCompensation.FrozenFrame(transition.Save.Profiles),
+			ProfileSummary = OfflineCompensation.Summary(transition.Save.Profiles),
 		};
 		ulong partition = transition.Partition;
 		transition.Post = Task.Run(() =>

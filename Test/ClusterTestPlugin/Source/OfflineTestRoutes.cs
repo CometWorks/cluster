@@ -35,10 +35,21 @@ namespace ClusterTestPlugin;
 /// All mutation/injection stays in the optional test plugin; production has no test branch.</summary>
 internal static class OfflineTestRoutes
 {
+    // Test inspection stays reflection/JSON based: source-compiled Concealment has
+    // a generated assembly identity, and no fixture carries another model copy.
+    private static Type Engine => AppDomain.CurrentDomain.GetAssemblies()
+        .Select(a => a.GetType("Concealment.Accounting.AccountingEngine", false)).Single(t => t != null);
+    private static int Count(string field) { var value = AccessTools.Field(Engine, field).GetValue(null); return (int)value.GetType().GetProperty("Count").GetValue(value); }
+    private static long ClockFrame => checked((long)Math.Floor(ClusterRuntime.AuthorityClockMilliseconds / 16));
+    private static JsonElement[] CaptureFor(PartitionManager.Partition partition, bool quick = false) =>
+        JsonSerializer.Deserialize<JsonElement[]>(OfflineCompensation.CaptureFor(partition, quick), OfflineCompensation.Json);
+    private static IEnumerable<MyObjectBuilder_Inventory> Inventories(MyObjectBuilder_CubeBlock block) =>
+        (IEnumerable<MyObjectBuilder_Inventory>)AccessTools.Method(Engine, "Inventories").Invoke(null, new object[] { block });
+
     private static long cycleGrid, cycleStart;
     private static int cyclePhase = -1;
     private static bool cycleWaiting;
-    private static OfflineProfile cycleProfile;
+    private static JsonElement? cycleProfile;
     private static object rememberedSunCensus;
     private static System.Threading.Tasks.Task[] rememberedSunTasks;
     private static CancellationToken rememberedSunToken;
@@ -60,7 +71,7 @@ internal static class OfflineTestRoutes
     {
         cycleWaiting = false; cycleStart = MySession.Static.GameplayFrameCounter;
         CycleTrace.Clear();
-        cycleProfile = OfflineCompensation.CaptureFor(ClusterRuntime.m_partitions.Get(ClusterRuntime.PluginEntityPartition(cycleGrid).Partition), quick: true).Single(p => p.Members.Contains(cycleGrid));
+        cycleProfile = CaptureFor(ClusterRuntime.m_partitions.Get(ClusterRuntime.PluginEntityPartition(cycleGrid).Partition), quick: true).Single(p => p.GetProperty("Members").EnumerateArray().Any(id => id.GetInt64() == cycleGrid));
         CycleTrace.Add(GasCycleState(grid));
     }
     private static object GasCycleState(MyCubeGrid grid)
@@ -84,7 +95,7 @@ internal static class OfflineTestRoutes
     private static long target, until;
     private static object applied;
     private static bool patched;
-    private static OfflineProfile reference;
+    private static JsonElement? reference;
     private static long capturePartition;
     private static int captureEntered;
     private static readonly ManualResetEventSlim CaptureRelease = new(true);
@@ -102,6 +113,13 @@ internal static class OfflineTestRoutes
 
     public static void Register()
     {
+        TestRoutes.Add("POST", "/offline-test-owned-fixture", context =>
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                var grid = RcTestHarness.SpawnStation("offline-clientless-accounting", new Vector3D(40000, 40000, 0),
+                    TestRoutes.Long(context, "owner"), true);
+                return AddProduction(grid.EntityId);
+            })));
         TestRoutes.Add("POST", "/offline-test-zone-watch", context =>
         {
             Interlocked.Exchange(ref watchedZoneGrid, TestRoutes.Long(context, "grid")); ZoneRestoreTrace.Clear();
@@ -304,7 +322,7 @@ internal static class OfflineTestRoutes
                 return new
                 {
                     utc = DateTime.UtcNow,
-                    authorityFrame = OfflineCompensation.Frame,
+                    authorityFrame = ClockFrame,
                     nativeFrame = MySession.Static.GameplayFrameCounter,
                     nativeElapsedTicks = MySession.Static.ElapsedGameTime.Ticks,
                     periodMinutes = MySession.Static.Settings.SunRotationIntervalMinutes,
@@ -340,7 +358,7 @@ internal static class OfflineTestRoutes
                 return new { cycleGrid, cycleStart };
             })));
         TestRoutes.Add("GET", "/offline-test-gas-cycle", context =>
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => new { initial = JsonSerializer.SerializeToElement(cycleProfile, OfflineProfile.Json), trace = CycleTrace.ToArray() })));
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => new { initial = JsonSerializer.SerializeToElement(cycleProfile, OfflineCompensation.Json), trace = CycleTrace.ToArray() })));
         TestRoutes.Add("POST", "/offline-test-mod-gas", context =>
         {
             bool factory = TestRoutes.Query(context, "factory", "false") == "true";
@@ -401,9 +419,9 @@ internal static class OfflineTestRoutes
             {
                 var candidate = ClusterRuntime.m_partitions.Get(partition);
                 if (prepare && !OfflineCompensation.Prepare(candidate)) return JsonSerializer.SerializeToElement(new { complete = false });
-                reference = OfflineCompensation.CaptureFor(candidate).Single();
-                if (prepare) return JsonSerializer.SerializeToElement(new { complete = true, profile = reference }, OfflineProfile.Json);
-                return JsonSerializer.SerializeToElement(reference, OfflineProfile.Json);
+                reference = CaptureFor(candidate).Single();
+                if (prepare) return JsonSerializer.SerializeToElement(new { complete = true, profile = reference }, OfflineCompensation.Json);
+                return JsonSerializer.SerializeToElement(reference, OfflineCompensation.Json);
             }));
         });
         TestRoutes.Add("GET", "/offline-test-reference", context =>
@@ -413,12 +431,15 @@ internal static class OfflineTestRoutes
             {
                 // The live endpoint may have emptied a queue since the starting census. Read
                 // stocks/working state without requiring the old profiling signature to survive.
-                var actual = OfflineCompensation.CaptureFor(ClusterRuntime.m_partitions.Get(partition), quick: true).Single();
-                var predicted = JsonSerializer.Deserialize<OfflineProfile>(JsonSerializer.Serialize(reference, OfflineProfile.Json), OfflineProfile.Json);
-                var result = OfflineModel.Simulate(predicted, actual.FrozenFrame, OfflineCompensation.MaxFrames);
-                return new { actual = JsonSerializer.SerializeToElement(actual, OfflineProfile.Json),
-                    predicted = JsonSerializer.SerializeToElement(predicted, OfflineProfile.Json),
-                    result = JsonSerializer.SerializeToElement(result, OfflineProfile.Json) };
+                var actual = CaptureFor(ClusterRuntime.m_partitions.Get(partition), quick: true).Single();
+                var modeled = JsonSerializer.Deserialize<JsonElement>((byte[])OfflineCompensation.Call("Model",
+                    System.Text.Encoding.UTF8.GetBytes(reference.Value.GetRawText()), actual.GetProperty("FrozenFrame").GetInt64(),
+                    ClusterConfig.GetInt("offline.compensateMaxHours") * (3600000L / 16)));
+                var predicted = modeled.GetProperty("profile");
+                var result = modeled.GetProperty("result");
+                return new { actual = JsonSerializer.SerializeToElement(actual, OfflineCompensation.Json),
+                    predicted = JsonSerializer.SerializeToElement(predicted, OfflineCompensation.Json),
+                    result = JsonSerializer.SerializeToElement(result, OfflineCompensation.Json) };
             }));
         });
         TestRoutes.Add("POST", "/offline-test-sibling", context =>
@@ -429,8 +450,8 @@ internal static class OfflineTestRoutes
         TestRoutes.Add("GET", "/offline-test-measurements", context =>
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => new
             {
-                attempts = OfflineCompensation.Attempted.Count,
-                perBlock = OfflineCompensation.PerBlockRates.Count,
+                attempts = Count("Attempted"),
+                perBlock = Count("PerBlockRates"),
                 cache = OfflineRateCache.Status(),
                 production = MyEntities.GetEntities().OfType<MyCubeGrid>().SelectMany(g => g.GetFatBlocks<MyProductionBlock>())
                     .Select(b => new { block = b.EntityId, grid = b.CubeGrid.EntityId, working = b.IsWorking, producing = b.IsProducing,
@@ -449,8 +470,9 @@ internal static class OfflineTestRoutes
             int? epoch = int.TryParse(TestRoutes.Query(context, "epoch", ""), out int supplied) ? supplied : null;
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
             {
-                OfflineRateCache.Measured(key, 1, 1, epoch);
-                return new { key, epoch = OfflineRateCache.Epoch(key) };
+                var cache = Engine.Assembly.GetType("Concealment.Accounting.OfflineRateCache");
+                AccessTools.Method(cache, "Measured").Invoke(null, new object[] { key, 1.0, 1.0, epoch });
+                return new { key, epoch = AccessTools.Method(cache, "Epoch").Invoke(null, new object[] { key }) };
             }));
         });
         TestRoutes.Add("POST", "/offline-test-options", context =>
@@ -473,10 +495,10 @@ internal static class OfflineTestRoutes
         TestRoutes.Add("POST", "/offline-test-sun-cache", context =>
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
             {
-                var type = typeof(OfflineCompensation).GetNestedType("Census", System.Reflection.BindingFlags.NonPublic);
-                var censuses = (System.Collections.IDictionary)AccessTools.Field(typeof(OfflineCompensation), "CensusByGroup").GetValue(null);
+                var type = Engine.GetNestedType("Census", System.Reflection.BindingFlags.NonPublic);
+                var censuses = (System.Collections.IDictionary)AccessTools.Field(Engine, "CensusByGroup").GetValue(null);
                 object census = censuses[TestRoutes.Long(context, "grid")];
-                var curves = census == null ? null : (Dictionary<long, System.Threading.Tasks.Task<OfflineSunCurve>>)type.GetField("Curves").GetValue(census);
+                var curves = census == null ? null : (System.Collections.IDictionary)type.GetField("Curves").GetValue(census);
                 var tasks = curves?.Values.Cast<System.Threading.Tasks.Task>().ToArray() ?? [];
                 if (TestRoutes.Query(context, "remember", "false") == "true")
                 {
@@ -579,14 +601,14 @@ internal static class OfflineTestRoutes
             var builder = block.GetObjectBuilderCubeBlock(); // real native Saving postfix
             var carried = BlockBuilderEntry.Read(builder, BlockSafeZones.Key);
             var saved = builder.ComponentContainer.Components.Select(c => c.Component).OfType<MyObjectBuilder_SafeZoneComponent>().Single();
-            var censusType = typeof(OfflineCompensation).GetNestedType("Census", System.Reflection.BindingFlags.NonPublic);
+            var censusType = Engine.GetNestedType("Census", System.Reflection.BindingFlags.NonPublic);
             var census = Activator.CreateInstance(censusType, true);
             censusType.GetField("Group").SetValue(census, grid);
             censusType.GetField("Members").SetValue(census, new[] { grid });
-            var profile = (OfflineProfile)AccessTools.Method(typeof(OfflineCompensation), "Capture").Invoke(null, new object[] { new[] { native }, census, true });
+            var profile = JsonSerializer.SerializeToElement(AccessTools.Method(Engine, "Capture").Invoke(null, new object[] { new[] { native }, census, true }), OfflineCompensation.Json);
             Volatile.Write(ref pendingZoneSaveProof, new { entryEnabled = carried != null && BlockSafeZones.Parse(carried).Enabled,
                 creditMs = saved.UpkeepTime, activating = saved.Activating, blockEnabled = ((MyObjectBuilder_FunctionalBlock)builder).Enabled,
-                upkeepCaptured = profile.Upkeep.Count == 1 && profile.Upkeep[0].Exists && profile.Upkeep[0].OperationalPower > 1 });
+                upkeepCaptured = profile.GetProperty("Upkeep").GetArrayLength() == 1 && profile.GetProperty("Upkeep")[0].GetProperty("Exists").GetBoolean() && profile.GetProperty("Upkeep")[0].GetProperty("OperationalPower").GetDouble() > 1 });
         }
         ZoneRestoreTrace.Enqueue(new { frame = MySession.Static.GameplayFrameCounter, active = zone?.Enabled == true,
             required = block.ResourceSink.RequiredInputByType(MyResourceDistributorComponent.ElectricityId),
@@ -829,9 +851,9 @@ internal static class OfflineTestRoutes
         if (grid == 0 || !__0.ContainsKey(grid)) return;
         Volatile.Write(ref applied, new
         {
-            grid, frame = OfflineCompensation.Frame,
+            grid, frame = ClockFrame,
             builders = Snapshot(__0.Values.OfType<MyObjectBuilder_CubeGrid>()),
-            compensation = JsonSerializer.SerializeToElement(OfflineCompensation.Status(), OfflineProfile.Json),
+            compensation = JsonSerializer.SerializeToElement(OfflineCompensation.Status(), OfflineCompensation.Json),
         });
         Plugin.Log("offline recovery applied before instantiation grid=" + grid);
         // The bench SIGKILLs only this root's node inside this window. An abandoned probe releases.
@@ -902,7 +924,7 @@ internal static class OfflineTestRoutes
         MyEntities.TryGetEntityById(manager.SafeZoneEntityId, out MySafeZone zone);
         var component = (MyObjectBuilder_SafeZoneComponent)manager.Serialize();
         var saved = component.SafeZoneOb as MyObjectBuilder_SafeZone;
-        return new { grid = id, frame = OfflineCompensation.Frame, gameplayFrame = MySession.Static.GameplayFrameCounter,
+        return new { grid = id, frame = ClockFrame, gameplayFrame = MySession.Static.GameplayFrameCounter,
             block = block.EntityId, blockEnabled = block.Enabled, working = block.IsWorking,
             powerRequired = block.ResourceSink.RequiredInputByType(MyResourceDistributorComponent.ElectricityId),
             supplied = block.ResourceSink.CurrentInputByType(MyResourceDistributorComponent.ElectricityId),
@@ -931,7 +953,7 @@ internal static class OfflineTestRoutes
                 .Select(c => new { remainingMs = c.UpkeepTime, activating = c.Activating, activationMs = c.ActivationTime }).FirstOrDefault(),
             storage = b is MyObjectBuilder_MyProgrammableBlock pb ? pb.Storage : null,
             countdown = b is MyObjectBuilder_TimerBlock timer ? (int?)timer.CurrentTime : null,
-            inventories = OfflineCompensation.Inventories(b).Select(i => new
+            inventories = Inventories(b).Select(i => new
             {
                 id = i.InventoryId,
                 items = i.Items.Select(item => new { type = item.PhysicalContent.GetId().ToString(), amount = (decimal)item.Amount, id = item.ItemId }).ToArray(),

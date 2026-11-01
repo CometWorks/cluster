@@ -1,5 +1,8 @@
-using ClusterPlugin;
+using Concealment.Accounting;
 using System.Text.Json;
+
+if (args.Length == 1 && args[0] == "--cap") { CapChecks.Run(); return; }
+if (args.Length == 1 && args[0] == "--reservoir") { ReservoirChecks.Run(); return; }
 
 if (args.Length == 3 && args[0] == "--native-feedback") { NativeFeedbackCheck.Run(args[1], args[2]); return; }
 

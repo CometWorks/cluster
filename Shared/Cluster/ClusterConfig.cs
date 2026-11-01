@@ -283,7 +283,7 @@ public static class ClusterConfig
 		["offline.cacheTolerance"] = "0.02",
 		["offline.unknownBlocks"] = "Freeze",
 		["offline.longObservation"] = "Skip",
-		["offline.compensateMaxHours"] = "168",
+		["offline.compensateMaxHours"] = "72",
 		["offline.callUp"] = "true",
 		["offline.callUpSeconds"] = "120",
 		["offline.callUpPerMinute"] = "6",

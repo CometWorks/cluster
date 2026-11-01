@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
-using ClusterPlugin;
+using Concealment.Accounting;
 
 internal static class NativeGasTrajectoryCheck
 {

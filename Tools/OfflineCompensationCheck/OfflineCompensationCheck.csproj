@@ -8,7 +8,9 @@
     <RunPostBuildEvent>Never</RunPostBuildEvent>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../Shared/Cluster/Offline/OfflineProfile.cs" Link="OfflineProfile.cs" />
-    <Compile Include="../../Shared/Cluster/Offline/OfflineModel.cs" Link="OfflineModel.cs" />
+    <Reference Include="Concealment">
+      <HintPath>$(MSBuildThisFileDirectory)../../Dependencies/Concealment/Concealment.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
   </ItemGroup>
 </Project>

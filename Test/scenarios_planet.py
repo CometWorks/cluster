@@ -328,6 +328,11 @@ def start_standalone(bench, world_dir: Path, name: str = "stock", hub_plugins: l
         if (snapshot / "Hubs").is_dir():
             shutil.copytree(snapshot / "Hubs", sources_dir / "Hubs", dirs_exist_ok=True)
     root = magnetar_config._load_sources(sources_dir / "sources.xml")
+    # This is a hub snapshot, never another bench's dev-plugin selection. A
+    # manifest Id overrides a local DLL even if it was enabled through <Local>.
+    local_sources = root.find("LocalPluginSources")
+    if local_sources is not None:
+        local_sources.clear()
     for plugin_id in (magnetar_config.TRANSPORT_ID, *magnetar_config.PROFILES.values()):
         magnetar_config._unregister(root, plugin_id)
     magnetar_config._write_xml(root, sources_dir / "sources.xml")

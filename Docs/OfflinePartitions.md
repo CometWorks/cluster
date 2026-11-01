@@ -5,6 +5,31 @@ call-ups in the production `Shared/Cluster` / `ClusterRegistry` architecture. Na
 establish their stated scope only. No deployment, release or complete GUI/performance acceptance is
 claimed.
 
+## Concealment accounting extraction (2026-11-01)
+
+Cluster now invokes accounting contract 1 from the single Concealment server plugin;
+the copied model, profile, capture, solar and observation implementation is removed.
+`Dependencies/Concealment.lock.json` pins its source commit and content hash.
+`Build/prepare-concealment.py --source <concealment-checkout>` builds that immutable
+commit, independently of checkout edits; omitting `--source` downloads the same pin.
+Both packaging paths stage the DLL, manifest, provenance and dependency notices.
+No public NuGet package or machine-specific source path is required. Source-compiled
+and precompiled plugin identities use the same versioned process-local boundary.
+
+A nonblank `CLUSTER_GATEWAY_REGISTRY` disables autonomous Concealment before manager
+or hook construction, including when transport is absent, disconnected or offline
+offlining is disabled. Cluster owns admission, generation, time, Finals and application.
+Required profiles remain in the checksummed v2 Final with native stocks; optional
+plugin handover hints remain dispensable. Dormant standalone claims or positive
+legacy credit are preserved and block conflicting compensation.
+
+The elapsed cap now defaults to **72 world hours** in both Magnetar hosts. Both
+use 225,000 saved-world clock units per hour; standalone resources still retain
+native 60 Hz phases. Excess is forfeited through the actual wake, including retry.
+Explicit overrides and the admin prediction request range of 0..168 hours survive.
+The historical proof sections below retain their original products and scope;
+they do not independently review or accept this extraction.
+
 ## Lifecycle and ownership
 
 Quiet logical groups settle and profile during the normal offline grace. A moving sibling blocks
@@ -44,7 +69,7 @@ become216,000 engine frames/hour. Storage/gas convert at60 frames/second, refine
 per native frame, and assembler formulas retain the engine's rounded unit duration. Native reference
 testing found and corrected the earlier4% duration error. Sun changes add no production time; the
 captured sun phase advances with real authority frames and admin sun steps take effect at interval
-end. The default 168 **authority-hour** cap forfeits excess time rather than banking it for another
+end. The default 72 **authority-hour** cap forfeits excess time rather than banking it for another
 wake. Shutdown wall time earns nothing.
 
 ## Modeled behavior and conservative policies
@@ -238,7 +263,7 @@ never prints it.
 
 New defaults: `offline.compensate=true`, `velocityReadiness=true`, `settleFrames=300`,
 `observeSeconds=180`, `rotateProduction=true`, `solarSteps=72`, `cacheTolerance=0.02`,
-`unknownBlocks=Freeze`, `longObservation=Skip`, `compensateMaxHours=168`, `callUp=true`,
+`unknownBlocks=Freeze`, `longObservation=Skip`, `compensateMaxHours=72`, `callUp=true`,
 `callUpSeconds=120`, `callUpPerMinute=6`, `callUpNoticeSeconds=2` (all under `offline.`). Existing
 grace/minOnline defaults stay 180/60 seconds.
 

@@ -3733,7 +3733,7 @@ internal sealed partial class PartitionPersistence
 	{
 		Dictionary<long, MyObjectBuilder_EntityBase> entities = new Dictionary<long, MyObjectBuilder_EntityBase>();
 		HashSet<long> created = new HashSet<long>();
-		var offlineProfiles = new List<(OfflineProfile Profile, HashSet<long> Members)>();
+		var offlineProfiles = new List<(byte[] Profiles, HashSet<long> Members)>();
 		// T-0207: every location this claim offered and what happened to it. The failure below used
 		// to name only the partition, and ReadRecoveryFile logs a line only for a location it
 		// actually OPENED - so a claim whose locations are all absent produced no explanation at
@@ -3763,8 +3763,7 @@ internal sealed partial class PartitionPersistence
 			var selected = Deserialize(save).Where(e => (file.EntityIds == null || file.EntityIds.Contains(e.EntityId)) && !entities.ContainsKey(e.EntityId)).ToArray();
 			PartitionSaveFile.MergeEntities(entities, selected, null);
 			if (save.Profiles != null)
-				foreach (var profile in JsonSerializer.Deserialize<OfflineProfile[]>(save.Profiles, OfflineProfile.Json) ?? [])
-					offlineProfiles.Add((profile, selected.Select(e => e.EntityId).ToHashSet()));
+				offlineProfiles.Add((save.Profiles, selected.Select(e => e.EntityId).ToHashSet()));
 		}
 		// Never permanently drop a profile by applying against a boot-local or not-yet-offset clock.
 		if (offlineProfiles.Count != 0 && !OfflineLoadReady)
@@ -4246,7 +4245,7 @@ internal sealed partial class PartitionPersistence
 		HashSet<long> members = next.Members.ToHashSet();
 		// T-0237: decided BEFORE the freeze below, which disables physics and would read every body as at rest.
 		Func<PendingSave, object> offlineOffer = DrainOfflineOffer(next, clients);
-		OfflineProfile[] profiles = offlineOffer == null ? null : OfflineCompensation.CaptureForDrain(next);
+		byte[] profiles = offlineOffer == null ? null : OfflineCompensation.CaptureForDrain(next);
 		Dictionary<long, DrainFrozenState> frozen = new Dictionary<long, DrainFrozenState>();
 		foreach (MyEntity entity in MyEntities.GetEntities().Where(x => members.Contains(x.EntityId)))
 		{
@@ -4362,7 +4361,7 @@ internal sealed partial class PartitionPersistence
 	}
 
 	private PendingSave QueueCapture(PartitionManager.Partition partition, string kind, bool waitForSlot = true,
-		Dictionary<long, DrainFrozenState> frozen = null, OfflineProfile[] profiles = null)
+		Dictionary<long, DrainFrozenState> frozen = null, byte[] profiles = null)
 	{
 		Stopwatch capture = Stopwatch.StartNew();
 		MyObjectBuilder_EntityBase[] entities = MyEntities.GetEntities().Where(entity => partition.Members.Contains(entity.EntityId))
@@ -4560,7 +4559,7 @@ internal sealed partial class PartitionPersistence
 	public bool RegistryClaimOnly(ulong partition) => m_apply.IsClaimOnly(partition);
 
 	private PendingSave QueueCaptured(PartitionManager.Partition partition, string kind, MyObjectBuilder_EntityBase[] entities, bool waitForSlot,
-		double captureMilliseconds = 0, byte[] presetFile = null, uint presetSequence = 0, OfflineProfile[] profiles = null)
+		double captureMilliseconds = 0, byte[] presetFile = null, uint presetSequence = 0, byte[] profiles = null)
 	{
 		State state = GetState(partition.Id);
 		PendingSave pending;
@@ -4659,7 +4658,7 @@ internal sealed partial class PartitionPersistence
 					{
 						byte[] body = PartitionSaveFile.SerializeEntities(save.Entities);
 						save.File = PartitionSaveFile.Write(save.PartitionId, save.Generation, save.Sequence, save.Kind == "Final" ? (byte)2 : save.Kind == "HandoverTee" ? (byte)1 : (byte)0,
-							save.Sphere, save.Anchored, save.Entities.Length, body, save.ClusterTime, save.Profiles == null ? null : JsonSerializer.SerializeToUtf8Bytes(save.Profiles, OfflineProfile.Json));
+							save.Sphere, save.Anchored, save.Entities.Length, body, save.ClusterTime, save.Profiles);
 					}
 					serialize.Stop();
 					save.SerializeMilliseconds = serialize.Elapsed.TotalMilliseconds;
@@ -5131,7 +5130,7 @@ internal sealed partial class PartitionPersistence
 		public ManualResetEventSlim Completed { get; } = new ManualResetEventSlim();
 		public bool Succeeded { get; set; }
 		public byte[] File { get; set; }
-		public OfflineProfile[] Profiles { get; init; }
+		public byte[] Profiles { get; init; }
 		public double SerializeMilliseconds { get; set; }
 		public double WriteMilliseconds { get; set; }
 		public int Attempts { get; set; }
