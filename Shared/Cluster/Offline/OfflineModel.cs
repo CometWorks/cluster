@@ -35,6 +35,7 @@ internal static class OfflineModel
 		var inventories = profile.Inventories;
 		var poweredSources = profile.Sources.Select((source, index) => (Source: source, Index: index))
 			.Where(s => s.Source.PowerSink >= 0 && s.Source.IdlePower >= 0).GroupBy(s => s.Source.PowerSink).ToArray();
+		bool singleFeedbackStep = false;
 		while (true)
 		{
 			if (++result.Events > 2_000_000) throw new InvalidDataException("Offline event budget exceeded; no partial result may be applied");
@@ -54,41 +55,51 @@ internal static class OfflineModel
 			double[] maximum = profile.Sources.Select(s => Maximum(profile, s, angleFrame)).ToArray();
 			double[] input = new double[required.Length], output = new double[maximum.Length], charging = new double[profile.Storage.Count];
 			bool[] workingStorage = profile.Storage.Select(s => s.Enabled).ToArray();
-			// Electricity and gas are coupled through generators/engines/farms. Iterate their power gate;
-			// monotone disabling prevents an unpowered generator from supplying its own bootstrap energy.
-			int powerPasses = 3 * profile.Sources.Count + profile.Storage.Count + 2;
-			for (int pass = 0; pass < powerPasses; pass++)
+			FeedbackCycle feedback = null;
+			if (profile.Sources.Any(s => s.PowerFeedback))
 			{
-				Allocate(profile, required, maximum, input, output, charging, workingStorage);
-				bool demandChanged = false;
-				foreach (var ports in poweredSources)
-				{
-					// Oxygen and hydrogen share one producer and one power sink. Charge
-					// operational draw only while at least one gas is actually delivered.
-					double demand = ports.Any(s => output[s.Index] > Epsilon)
-						? ports.Max(s => s.Source.OperationalPower) : ports.Max(s => s.Source.IdlePower);
-					if (Math.Abs(required[ports.Key] - demand) > Epsilon) { required[ports.Key] = demand; demandChanged = true; }
-				}
-				// Reallocate at the new draw before testing a source's electrical gate.
-				if (demandChanged)
-				{
-					if (pass == powerPasses - 1) throw new InvalidDataException("Coupled resource allocation did not settle");
-					continue;
-				}
-				bool changed = false;
-				for (int i = 0; i < maximum.Length; i++)
-				{
-					int sink = profile.Sources[i].PowerSink;
-					if (maximum[i] > 0 && !Powered(profile, sink, required, input)) { maximum[i] = 0; changed = true; }
-				}
-				for (int i = 0; i < workingStorage.Length; i++)
-				{
-					int sink = profile.Storage[i].PowerSink;
-					if (workingStorage[i] && !Powered(profile, sink, required, input)) { workingStorage[i] = false; changed = true; }
-				}
-				if (!changed) break;
-				if (pass == powerPasses - 1) throw new InvalidDataException("Coupled resource allocation did not settle");
+				feedback = AllocateFeedback(profile, required, maximum, input, output, charging,
+					singleFeedbackStep || profile.ResourceFrameRemaining < 1 - Epsilon);
 			}
+			else
+			{
+				// Electricity and gas are coupled through generators/engines/farms. Iterate their power gate;
+				// monotone disabling prevents an unpowered generator from supplying its own bootstrap energy.
+				int powerPasses = 3 * profile.Sources.Count + profile.Storage.Count + 2;
+				for (int pass = 0; pass < powerPasses; pass++)
+				{
+					Allocate(profile, required, maximum, input, output, charging, workingStorage);
+					bool demandChanged = false;
+					foreach (var ports in poweredSources)
+					{
+						// Oxygen and hydrogen share one producer and one power sink. Charge
+						// operational draw only while at least one gas is actually delivered.
+						double demand = ports.Any(s => output[s.Index] > Epsilon)
+							? ports.Max(s => s.Source.OperationalPower) : ports.Max(s => s.Source.IdlePower);
+						if (Math.Abs(required[ports.Key] - demand) > Epsilon) { required[ports.Key] = demand; demandChanged = true; }
+					}
+					// Reallocate at the new draw before testing a source's electrical gate.
+					if (demandChanged)
+					{
+						if (pass == powerPasses - 1) throw new InvalidDataException("Coupled resource allocation did not settle");
+						continue;
+					}
+					bool changed = false;
+					for (int i = 0; i < maximum.Length; i++)
+					{
+						int sink = profile.Sources[i].PowerSink;
+						if (maximum[i] > 0 && !Powered(profile, sink, required, input)) { maximum[i] = 0; changed = true; }
+					}
+					for (int i = 0; i < workingStorage.Length; i++)
+					{
+						int sink = profile.Storage[i].PowerSink;
+						if (workingStorage[i] && !Powered(profile, sink, required, input)) { workingStorage[i] = false; changed = true; }
+					}
+					if (!changed) break;
+					if (pass == powerPasses - 1) throw new InvalidDataException("Coupled resource allocation did not settle");
+				}
+			}
+
 			// Working state and chip renewal use the SAME allocated electricity as production.
 			// Losing power removes the bubble and pauses its paid credit; recovery recreates it
 			// with vanilla's activation delay. Neither transition switches the functional block off.
@@ -181,6 +192,18 @@ internal static class OfflineModel
 			}
 			foreach (var zone in profile.Upkeep.Where(z => z.Enabled && z.Exists))
 				step = Math.Min(step, Math.Max(Epsilon, zone.ActivationRemainingFrames > Epsilon ? zone.ActivationRemainingFrames : zone.RemainingFrames));
+			if (feedback != null)
+			{
+				if (feedback.Period > 1 && step + Epsilon < feedback.Period)
+				{
+					// A stock/timer/end boundary cuts the period. Replay its first native
+					// phase instead of spreading a fractional duty cycle across that boundary.
+					singleFeedbackStep = true;
+					continue;
+				}
+				step = feedback.Period > 1 ? Math.Floor((step + Epsilon) / feedback.Period) * feedback.Period
+					: feedback.Steady ? step : Math.Min(step, profile.ResourceFrameRemaining);
+			}
 			if (!double.IsFinite(step) || step <= 0) throw new InvalidDataException("Offline model made no progress; refusing partial compensation");
 			for (int i = 0; i < output.Length; i++)
 			{
@@ -212,10 +235,11 @@ internal static class OfflineModel
 				if (source.FuelElapsedFrames + Epsilon < source.FuelTickFrames) continue;
 				// MyReactor consumes the last distributed output times the whole timer,
 				// not the integral of all outputs since its previous settlement.
-				if (output[i] > 0) foreach (var fuel in source.Fuel)
+				double settlementOutput = feedback?.SettlementOutput[i] ?? output[i];
+				if (settlementOutput > 0) foreach (var fuel in source.Fuel)
 				{
 					decimal debit = Math.Min(Available(profile, fuel), Math.Max(.000001m,
-						decimal.Round((decimal)(output[i] * source.FuelElapsedFrames) * fuel.Amount, 6, MidpointRounding.AwayFromZero)));
+						decimal.Round((decimal)(settlementOutput * source.FuelElapsedFrames) * fuel.Amount, 6, MidpointRounding.AwayFromZero)));
 					Transfer(profile, fuel, -debit);
 					if (!result.ProducerFuelConsumed.TryGetValue(source.Block, out var consumed)) result.ProducerFuelConsumed[source.Block] = consumed = [];
 					consumed[fuel.Item] = consumed.GetValueOrDefault(fuel.Item) + debit;
@@ -250,6 +274,17 @@ internal static class OfflineModel
 			foreach (var zone in profile.Upkeep.Where(z => z.Enabled && z.Exists))
 				if (zone.ActivationRemainingFrames > Epsilon) zone.ActivationRemainingFrames = Math.Max(0, zone.ActivationRemainingFrames - step);
 				else zone.RemainingFrames = Math.Max(0, zone.RemainingFrames - step);
+			if (feedback != null && !feedback.Steady && feedback.Period == 1)
+			{
+				profile.ResourceFrameRemaining -= step;
+				if (profile.ResourceFrameRemaining <= Epsilon)
+				{
+					for (int i = 0; i < profile.Sinks.Count; i++) profile.Sinks[i].Powered = feedback.NextPowered[i];
+					for (int i = 0; i < profile.Sources.Count; i++) profile.Sources[i].Producing = feedback.NextProducing[i];
+					profile.ResourceFrameRemaining = 1;
+				}
+			}
+			singleFeedbackStep = false;
 			elapsed += step;
 		}
 		profile.SimulatedThrough = wakeFrame; // the cap is deliberately forfeited, never banked for a second wake
@@ -261,6 +296,58 @@ internal static class OfflineModel
 			Exhausted = !z.Enabled, RemainingFrames = z.RemainingFrames, ActivationRemainingFrames = z.ActivationRemainingFrames }).ToList();
 		Validate(profile);
 		return result;
+	}
+
+	private sealed record FeedbackCycle(int Period, bool Steady, bool[] NextPowered, bool[] NextProducing, double[] SettlementOutput);
+
+	/// <summary>Native BeforeSimulation distributor / deferred working callback / AfterSimulation
+	/// demand feedback. Stocks are held only while finding the finite allocation cycle; the ordinary
+	/// event loop integrates its actual delivered rates and stops at every stock/timer boundary.</summary>
+	private static FeedbackCycle AllocateFeedback(OfflineProfile p, double[] required, double[] maximum,
+		double[] input, double[] output, double[] charging, bool single)
+	{
+		bool[] powered = p.Sinks.Select(s => s.Powered).ToArray();
+		bool[] producing = p.Sources.Select(s => s.Producing).ToArray();
+		var states = new Dictionary<string, int>();
+		var phases = new List<(double[] Input, double[] Output, double[] Charging, bool[] Powered, bool[] Producing)>();
+		string Key() => string.Concat(powered.Select(v => v ? '1' : '0')) + ":" + string.Concat(producing.Select(v => v ? '1' : '0'));
+		while (true)
+		{
+			string key = Key();
+			if (states.TryGetValue(key, out int first))
+			{
+				// Keep transient phases as events. A closed cycle can be integrated in
+				// whole periods without inventing a proportional production law.
+				if (first != 0 || single)
+				{
+					var phase = phases[0];
+					Array.Copy(phase.Input, input, input.Length); Array.Copy(phase.Output, output, output.Length); Array.Copy(phase.Charging, charging, charging.Length);
+					return new(1, false, phase.Powered, phase.Producing, phase.Output);
+				}
+				Array.Clear(input); Array.Clear(output); Array.Clear(charging);
+				foreach (var phase in phases)
+				{
+					for (int i = 0; i < input.Length; i++) input[i] += phase.Input[i] / phases.Count;
+					for (int i = 0; i < output.Length; i++) output[i] += phase.Output[i] / phases.Count;
+					for (int i = 0; i < charging.Length; i++) charging[i] += phase.Charging[i] / phases.Count;
+				}
+				return new(phases.Count, phases.Count == 1, powered, producing, phases[^1].Output);
+			}
+			if (phases.Count >= 256) throw new InvalidDataException("Native resource feedback cycle did not repeat");
+			states.Add(key, phases.Count);
+			var demand = (double[])required.Clone();
+			foreach (var ports in p.Sources.Select((s, i) => (Source: s, Index: i)).Where(s => s.Source.PowerFeedback).GroupBy(s => s.Source.PowerSink))
+				demand[ports.Key] = ports.Any(s => producing[s.Index]) ? ports.Max(s => s.Source.OperationalPower) : ports.Max(s => s.Source.IdlePower);
+			var available = (double[])maximum.Clone();
+			for (int i = 0; i < available.Length; i++)
+				if (p.Sources[i].PowerSink >= 0 && !powered[p.Sources[i].PowerSink]) available[i] = 0;
+			var stores = p.Storage.Select(s => s.Enabled && (s.PowerSink < 0 || powered[s.PowerSink])).ToArray();
+			Allocate(p, demand, available, input, output, charging, stores);
+			bool[] nextPowered = Enumerable.Range(0, p.Sinks.Count).Select(i => Powered(p, i, demand, input)).ToArray();
+			bool[] nextProducing = output.Select(v => v > Epsilon).ToArray();
+			phases.Add(((double[])input.Clone(), (double[])output.Clone(), (double[])charging.Clone(), nextPowered, nextProducing));
+			powered = nextPowered; producing = nextProducing;
+		}
 	}
 
 	private static double Maximum(OfflineProfile p, OfflineSource source, double sunFrame)
@@ -513,6 +600,7 @@ internal static class OfflineModel
 	{
 		if (p.Schema != OfflineProfile.CurrentSchema || p.SimulatedThrough < p.FrozenFrame || p.FrozenFrame < 0
 			|| !double.IsFinite(p.ClockFrameSeconds) || p.ClockFrameSeconds <= 0 || p.ClockFrameSeconds > 1
+			|| !double.IsFinite(p.ResourceFrameRemaining) || p.ResourceFrameRemaining <= 0 || p.ResourceFrameRemaining > 1
 			|| !double.IsFinite(p.SunFrame) || !double.IsFinite(p.SunPeriodFrames) || p.SunPeriodFrames < 0) throw new InvalidDataException("Invalid offline profile clock/schema");
 		foreach (var item in p.Items.Values) if (item.Volume < 0 || item.Mass < 0) throw new InvalidDataException("Invalid item dimensions");
 		for (int i = 0; i < p.Inventories.Count; i++)
@@ -534,6 +622,7 @@ internal static class OfflineModel
 				|| !double.IsFinite(source.FuelTier2AfterFrames) || source.FuelTier2AfterFrames < -1
 				|| !double.IsFinite(source.FuelTier2TickFrames) || source.FuelTier2TickFrames < 0
 				|| source.FuelTier2AfterFrames >= 0 && source.FuelTier2TickFrames <= 0
+				|| source.PowerFeedback && (source.PowerSink < 0 || source.IdlePower < 0)
 				|| source.PowerSink < -1 || source.PowerSink >= p.Sinks.Count || !double.IsFinite(source.StorageCost) || source.StorageCost < 0
 				|| !double.IsFinite(source.IdlePower) || source.IdlePower < 0 && source.IdlePower != -1 || !double.IsFinite(source.OperationalPower) || source.OperationalPower < 0
 				|| source.Curve?.Any(v => !double.IsFinite(v) || v < 0 || v > 1) == true) throw new InvalidDataException("Invalid offline source");

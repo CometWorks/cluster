@@ -35,6 +35,28 @@ namespace ClusterTestPlugin;
 /// All mutation/injection stays in the optional test plugin; production has no test branch.</summary>
 internal static class OfflineTestRoutes
 {
+    private static long cycleGrid, cycleStart;
+    private static OfflineProfile cycleProfile;
+    private static readonly List<object> CycleTrace = new();
+    internal static void ObserveGasCycle()
+    {
+        if (cycleGrid == 0 || MySession.Static == null || MySession.Static.GameplayFrameCounter - cycleStart > 2400) return;
+        if (MyEntities.GetEntityById(cycleGrid) is not MyCubeGrid grid) return;
+        CycleTrace.Add(GasCycleState(grid));
+    }
+    private static object GasCycleState(MyCubeGrid grid)
+    {
+        var gas = grid.GetFatBlocks<MyGasGenerator>().Single();
+        return new { frame = MySession.Static.GameplayFrameCounter - cycleStart,
+            working = gas.IsWorking, enabled = gas.SourceComp.Enabled,
+            required = gas.ResourceSink.RequiredInputByType(MyResourceDistributorComponent.ElectricityId),
+            input = gas.ResourceSink.CurrentInputByType(MyResourceDistributorComponent.ElectricityId),
+            output = gas.SourceComp.CurrentOutputByType(MyResourceDistributorComponent.HydrogenId),
+            pending = gas.m_gasOutputAggregate.Values.Sum(),
+            ice = (decimal)gas.GetInventory().GetItemAmount(MyDefinitionId.Parse("MyObjectBuilder_Ore/Ice")),
+            battery = grid.GetFatBlocks<MyBatteryBlock>().Single().CurrentStoredPower,
+            tank = grid.GetFatBlocks<MyGasTank>().Single().FilledRatio * grid.GetFatBlocks<MyGasTank>().Single().Capacity };
+    }
     private static long target, until;
     private static object applied;
     private static bool patched;
@@ -223,15 +245,69 @@ internal static class OfflineTestRoutes
                 return new { grid = grid.EntityId };
             }));
         });
+        TestRoutes.Add("POST", "/offline-test-observed", context =>
+        {
+            int variant = int.Parse(TestRoutes.Query(context, "variant", "0"));
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                MySession.Static.Settings.EnableSunRotation = true;
+                MySession.Static.Settings.SunRotationIntervalMinutes = 1;
+                var b = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_CubeGrid>();
+                b.GridSizeEnum = MyCubeSize.Large; b.IsStatic = true; b.CreatePhysics = true;
+                b.PersistentFlags = MyPersistentEntityFlags2.InScene | MyPersistentEntityFlags2.CastShadows;
+                b.PositionAndOrientation = new MyPositionAndOrientation(new Vector3D(45000 + variant * 6000, 45000, 0), Vector3D.Forward, Vector3D.Up);
+                b.DisplayName = "scheduler-observed-" + variant;
+                var battery = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_BatteryBlock>("LargeBlockBatteryBlock");
+                battery.Min = new SerializableVector3I(0, 0, 0); battery.CurrentStoredPower = 1; battery.ChargeMode = 1; b.CubeBlocks.Add(battery);
+                var reactor = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Reactor>("LargeBlockSmallGenerator");
+                reactor.Min = new SerializableVector3I(5, 0, 0); reactor.UseConveyorSystem = false; b.CubeBlocks.Add(reactor);
+                var gyro = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Gyro>("LargeBlockGyro");
+                gyro.Min = new SerializableVector3I(7, 0, 0); b.CubeBlocks.Add(gyro);
+                var grid = (MyCubeGrid)MyEntities.CreateFromObjectBuilderAndAdd(b, false);
+                var native = grid.GetFatBlocks<MyReactor>().Single();
+                native.GetInventory().AddItems(10, MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Ingot>("Uranium"));
+                OfflineObservedLogic.Attach(native, sun: true);
+                if (variant == 2) OfflineObservedLogic.Attach(native, inventory: true);
+                return new { grid = grid.EntityId, block = native.EntityId };
+            }));
+        });
+        TestRoutes.Add("GET", "/offline-test-observed", context =>
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => new
+            {
+                nativeFrame = MySession.Static.GameplayFrameCounter,
+                phase = MySector.DirectionToSunNormalized,
+                status = OfflineCompensation.Status(),
+            })));
+        TestRoutes.Add("POST", "/offline-test-observed-control", context =>
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                var grid = (MyCubeGrid)MyEntities.GetEntityById(TestRoutes.Long(context, "grid"));
+                var gyro = grid.GetFatBlocks<MyGyro>().Single();
+                gyro.GyroOverride = TestRoutes.Query(context, "moving", "true") == "true";
+                return new { gyro.GyroOverride };
+            })));
+        TestRoutes.Add("POST", "/offline-test-gas-cycle", context =>
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                cycleGrid = TestRoutes.Long(context, "grid"); cycleStart = MySession.Static.GameplayFrameCounter;
+                CycleTrace.Clear();
+                var grid = (MyCubeGrid)MyEntities.GetEntityById(cycleGrid);
+                cycleProfile = OfflineCompensation.CaptureFor(ClusterRuntime.m_partitions.Get(ClusterRuntime.PluginEntityPartition(cycleGrid).Partition), quick: true).Single();
+                CycleTrace.Add(GasCycleState(grid));
+                return new { cycleGrid, cycleStart };
+            })));
+        TestRoutes.Add("GET", "/offline-test-gas-cycle", context =>
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => new { initial = JsonSerializer.SerializeToElement(cycleProfile, OfflineProfile.Json), trace = CycleTrace.ToArray() })));
         TestRoutes.Add("POST", "/offline-test-mod-gas", context =>
         {
             bool factory = TestRoutes.Query(context, "factory", "false") == "true";
+            bool cycling = TestRoutes.Query(context, "cycling", "false") == "true";
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
             {
                 var builder = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_CubeGrid>();
                 builder.GridSizeEnum = MyCubeSize.Large; builder.IsStatic = true; builder.CreatePhysics = true;
                 builder.PersistentFlags = MyPersistentEntityFlags2.InScene | MyPersistentEntityFlags2.CastShadows;
-                builder.PositionAndOrientation = new MyPositionAndOrientation(new Vector3D(25000, factory ? 25000 : 20000, 0), Vector3D.Forward, Vector3D.Up);
+                builder.PositionAndOrientation = new MyPositionAndOrientation(new Vector3D(25000, cycling ? 30000 : factory ? 25000 : 20000, 0), Vector3D.Forward, Vector3D.Up);
                 builder.DisplayName = factory ? "offline-factory-negative" : "offline-adaptible-generator";
                 var battery = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_BatteryBlock>("OfflinePartialBattery");
                 battery.Min = new SerializableVector3I(-3, 0, 0); battery.CurrentStoredPower = 3;
@@ -240,7 +316,7 @@ internal static class OfflineTestRoutes
                 var tank = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_GasTank>("LargeHydrogenTank");
                 tank.Min = new SerializableVector3I(0, 0, 0); tank.FilledRatio = 0; tank.IsStockpiling = true;
                 builder.CubeBlocks.Add(tank);
-                var generator = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_OxygenGenerator>(factory ? "OfflineFactoryGenerator" : "OfflinePartialGenerator");
+                var generator = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_OxygenGenerator>(cycling ? "OfflineCyclingGenerator" : factory ? "OfflineFactoryGenerator" : "OfflinePartialGenerator");
                 generator.Min = new SerializableVector3I(1, 1, -1); generator.UseConveyorSystem = false;
                 builder.CubeBlocks.Add(generator);
                 var grid = (MyCubeGrid)MyEntities.CreateFromObjectBuilderAndAdd(builder, false);

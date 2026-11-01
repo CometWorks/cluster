@@ -19,6 +19,7 @@ internal sealed class OfflineProfile
 	// use native 60 Hz engine frames; keep the conversion explicit at the model boundary.
 	public double ClockFrameSeconds = 0.016;
 	public double SunFrame, SunPeriodFrames;
+	public double ResourceFrameRemaining = 1;
 	public bool Creative, Simplified;
 	public string Confidence = "Exact";
 	public List<string> Unknowns = [];
@@ -60,7 +61,7 @@ internal sealed class OfflineSink
 	public long Block;
 	public string Resource, Group;
 	public int Priority;
-	public bool Adaptible;
+	public bool Adaptible, Powered;
 	public double Required;
 }
 internal sealed class OfflineSource
@@ -83,6 +84,8 @@ internal sealed class OfflineSource
 	// A gas producer's one electrical sink follows delivered gas, shared by all
 	// its output ports. -1 preserves the captured constant demand of older profiles.
 	public double IdlePower = -1, OperationalPower;
+	// Native gas source enablement follows the previous electrical update; demand follows gas output.
+	public bool PowerFeedback, Producing;
 }
 internal sealed class OfflineStorage
 {

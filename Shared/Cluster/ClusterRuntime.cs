@@ -405,6 +405,8 @@ public static class ClusterRuntime
 
     internal static bool PartitionClaimPending(ulong partition) => m_persistence?.ClaimPending(partition) ?? false;
 
+    internal static bool CanProfile(ulong partition, uint generation = 0) => m_persistence?.CanProfile(partition, generation) == true;
+
     internal static bool PartitionOfflining(ulong partition) => m_persistence?.Offlining(partition) ?? false;
 
     internal static Dictionary<ulong, long> PluginOwnershipSnapshot() =>

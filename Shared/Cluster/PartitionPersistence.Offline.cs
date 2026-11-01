@@ -150,6 +150,32 @@ internal sealed partial class PartitionPersistence
 		}
 	}
 
+	// Shared admission for the sweep, manual Prepare and the between-sweep rate sampler.
+	// Ownership and quiet presence are live facts, not permission retained by a census.
+	internal bool CanProfile(ulong id, uint generation = 0)
+	{
+		if (generation != 0 && OwnedGeneration(id) != generation) return false;
+		PartitionManager.Partition partition;
+		try { partition = m_partitions.Peek(id); }
+		catch (InvalidOperationException) { return false; }
+		return CanProfile(partition);
+	}
+
+	private bool CanProfile(PartitionManager.Partition partition)
+	{
+		if (!RegistryEnabled || !m_registryReady || !ClusterRuntime.IsServing || ClusterRuntime.IsAuthorityFenced || m_closed || m_fenced || m_concealment || m_warmRecovery
+			|| OwnedGeneration(partition.Id) == 0 || partition.HasPending
+			|| partition.Members.Any(ClusterRuntime.IsFrozen)) return false;
+		if (RemoteUse.Capture(new[] { partition }).ContainsKey(partition.Id)
+			|| m_partitions.ClientPartitions(new[] { partition }).Any()
+			|| partition.Members.Any(OnlinePlayerAnchors(out _).Contains)) return false;
+		double radius = partition.Sphere.Radius + ClusterConfig.GetInt("offline.quietMeters");
+		return !PositionRegistryService.Players.Any(p => p.IsWithinDistance(partition.Sphere.Center.X,
+			partition.Sphere.Center.Y, partition.Sphere.Center.Z, radius * radius))
+			&& !MySession.Static.Players.GetOnlinePlayers().Any(p => p.Character != null
+				&& Vector3D.DistanceSquared(p.Character.PositionComp.GetPosition(), partition.Sphere.Center) <= radius * radius);
+	}
+
 	private void SweepOffline(DateTime now)
 	{
 		PartitionManager.Partition[] partitions = m_partitions.Evaluate().ToArray();
@@ -176,12 +202,7 @@ internal sealed partial class PartitionPersistence
 			if (!m_onlineSince.ContainsKey(partition.Id)) m_onlineSince[partition.Id] = now;
 			bool profiled = true;
 			// Profile quiet groups during grace, even when a moving sibling blocks the partition.
-			if (!partition.HasPending && !partition.Members.Any(ClusterRuntime.IsFrozen) && owned.Contains(partition.Id)
-				&& !remote.ContainsKey(partition.Id) && !routed.Contains(partition.Id)
-				&& !partition.Members.Any(anchors.Contains)
-				&& !players.Any(p => p.IsWithinDistance(partition.Sphere.Center.X, partition.Sphere.Center.Y, partition.Sphere.Center.Z,
-					Math.Pow(partition.Sphere.Radius + quiet, 2)))
-				&& !localPlayers.Any(p => Vector3D.DistanceSquared(p, partition.Sphere.Center) <= Math.Pow(partition.Sphere.Radius + quiet, 2)))
+			if (CanProfile(partition))
 			{
 				try { profiled = OfflineCompensation.Prepare(partition); }
 				catch (Exception e) { profiled = false; m_offlineLastRefusal = "profiling: " + SecretRedactor.Redact(e.Message); }

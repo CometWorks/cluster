@@ -143,7 +143,7 @@ internal static partial class OfflineCompensation
 					var group = Group(sink.Group, false);
 					if (type == MyResourceDistributorComponent.ElectricityId) powerSink = p.Sinks.Count;
 					p.Sinks.Add(new() { Block = block.EntityId, Resource = Resource(type, block), Group = sink.Group.String, Priority = group.Priority,
-						Adaptible = group.Adaptible, Required = sink.RequiredInputByType(type) });
+						Adaptible = group.Adaptible, Powered = sink.IsPoweredByType(type), Required = sink.RequiredInputByType(type) });
 				}
 			if (unknown != null && !observe || scripted && !observe)
 			{
@@ -238,12 +238,13 @@ internal static partial class OfflineCompensation
 						? d.IceConsumptionPerSecond * gas.IceToGasRatio * generator.m_productionCapacityMultiplier : 0;
 					if (!observe)
 					{
+						port.PowerFeedback = true; port.Producing = generator.SourceComp.ResourceTypes.Any(t => generator.SourceComp.CurrentOutputByType(t) > 0);
 						port.IdlePower = gasEnabled ? d.StandbyPowerConsumption * generator.m_powerConsumptionMultiplier : 0;
 						port.OperationalPower = gasEnabled ? d.OperationalPowerConsumption * generator.m_powerConsumptionMultiplier : 0;
 					}
 					port.Fuel.Add(Material(block, ice, (decimal)(1.0 / gas.IceToGasRatio / 60), generator.GetInventory(), false));
 				}
-				if (powerSink >= 0 && !observe) p.Sinks[powerSink].Required = gasEnabled ? d.OperationalPowerConsumption * generator.m_powerConsumptionMultiplier : 0;
+				if (powerSink >= 0 && !observe) p.Sinks[powerSink].Required = generator.ResourceSink.RequiredInputByType(MyResourceDistributorComponent.ElectricityId);
 			}
 			else if (block is MyJumpDrive jump)
 			{

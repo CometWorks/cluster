@@ -36,6 +36,9 @@ internal static partial class OfflineCompensation
 	private sealed class Census
 	{
 		public long Group, Since, LastSample, ObservationSince;
+		public ulong Partition;
+		public uint Generation;
+		public MyCubeGrid[] Entities;
 		public long[] Members;
 		public string Signature, EnvironmentSignature;
 		public readonly Dictionary<long, Task<double[]>> Curves = new();
@@ -45,6 +48,7 @@ internal static partial class OfflineCompensation
 		public OfflineProfile Last;
 	}
 	private static readonly Dictionary<long, Census> CensusByGroup = new();
+	private static long m_lastObservationAdmissionFrame;
 
 	internal static string Readiness(MyCubeGrid grid)
 	{
@@ -136,7 +140,7 @@ internal static partial class OfflineCompensation
 	internal static bool Prepare(PartitionManager.Partition partition, bool quick = false)
 	{
 		if (!ClusterConfig.GetBool("offline.compensate")) return true;
-		if (!ContentReady) return false;
+		if (!ContentReady || ClusterRuntime.IsClustered && !ClusterRuntime.CanProfile(partition.Id)) return false;
 		bool complete = true;
 		string environment = OccluderSignature(partition);
 		foreach (var grids in Groups(partition))
@@ -144,9 +148,12 @@ internal static partial class OfflineCompensation
 			long group = grids.Min(g => g.EntityId);
 			if (grids.Any(g => Readiness(g) != null)) { complete = false; continue; }
 			string signature = Signature(grids);
-			if (!CensusByGroup.TryGetValue(group, out var census) || census.Signature != signature)
+			if (!CensusByGroup.TryGetValue(group, out var census) || census.Signature != signature
+				|| census.Entities == null || !census.Entities.SequenceEqual(grids)
+				|| census.Partition != partition.Id || ClusterRuntime.IsClustered && !ClusterRuntime.CanProfile(partition.Id, census.Generation))
 			{
-				census = new() { Group = group, Members = grids.Select(g => g.EntityId).ToArray(), Since = Frame, Signature = signature };
+				census = new() { Group = group, Members = grids.Select(g => g.EntityId).ToArray(), Since = Frame, Signature = signature,
+					Entities = grids, Partition = partition.Id, Generation = ClusterRuntime.PluginOwnershipSnapshot().TryGetValue(partition.Id, out long generation) ? (uint)generation : 0 };
 				CensusByGroup[group] = census;
 			}
 			if (census.EnvironmentSignature != environment) { census.EnvironmentSignature = environment; census.Curves.Clear(); }
@@ -251,16 +258,29 @@ internal static partial class OfflineCompensation
 	}
 	internal static void UpdateObservations()
 	{
-		if (!ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority || !ClusterConfig.GetBool("offline.compensate") || MySession.Static?.Ready != true) return;
+		if (!ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority || MySession.Static?.Ready != true) return;
 		long frame = Frame;
-		foreach (var census in CensusByGroup.Values)
+		if (frame - m_lastObservationAdmissionFrame < 100) return;
+		m_lastObservationAdmissionFrame = frame;
+		foreach (var census in CensusByGroup.Values.ToArray())
 		{
-			if (census.State == "complete" || census.Observations.Count == 0 || frame - census.LastSample < 100) continue;
+			if (frame - census.LastSample < 100) continue;
+			if (!ClusterConfig.GetBool("offline.compensate") || census.Entities == null
+				|| !ClusterRuntime.CanProfile(census.Partition, census.Generation)
+				|| census.Entities.Any(g => g.MarkedForClose || !ReferenceEquals(MyEntities.GetEntityById(g.EntityId), g) || Readiness(g) != null))
+			{
+				CensusByGroup.Remove(census.Group);
+				foreach (long block in census.Entities?.SelectMany(g => g.GetFatBlocks()).Select(b => b.EntityId) ?? Enumerable.Empty<long>())
+					Measurements.Remove(block);
+				continue;
+			}
+			if (census.State == "complete" || census.Observations.Count == 0) continue;
 			census.LastSample = frame;
 			foreach (long id in census.Observations.Keys)
 				if (MyEntities.GetEntityById(id) is MyCubeBlock block && !block.MarkedForClose) census.Observations[id].Add(ReadRates(block));
 		}
 	}
+
 	private static double[] ReadRates(MyCubeBlock block)
 	{
 		var values = new List<double>();

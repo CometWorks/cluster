@@ -1263,11 +1263,11 @@ def offline_partial_gas(bench):
     battery = next(d for d in energy.iter("Definition") if d.findtext("Id/SubtypeId") == "LargeBlockBatteryBlock")
     root = ET.Element("Definitions")
     blocks = ET.SubElement(root, "CubeBlocks")
-    for subtype, group in (("OfflinePartialGenerator", "Generators"), ("OfflineFactoryGenerator", "Factory")):
+    for subtype, group in (("OfflinePartialGenerator", "Generators"), ("OfflineFactoryGenerator", "Factory"), ("OfflineCyclingGenerator", "Factory")):
         definition = copy.deepcopy(gas)
         definition.find("Id/SubtypeId").text = subtype
         definition.find("ResourceSinkGroup").text = group
-        if group == "Factory": definition.find("StandbyPowerConsumption").text = "0.5"
+        if subtype == "OfflineFactoryGenerator": definition.find("StandbyPowerConsumption").text = "0.5"
         blocks.append(definition)
     definition = copy.deepcopy(battery)
     definition.find("Id/SubtypeId").text = "OfflinePartialBattery"
@@ -1314,6 +1314,21 @@ def offline_partial_gas(bench):
                         and ((model_ice > 0) == should_work), json.dumps({"nativeIce": native_ice, "modelIce": model_ice}))
             bench.check(label + ": definition-only fixture is not a scripted fallback", not initial["Observations"]
                         and all("mod logic" not in reason for reason in initial["Unknowns"]))
+    fixture = bench.cluster.node("node-1", "/offline-test-mod-gas?cycling=true", "POST")
+    grid = fixture["grid"]
+    partition = _poll(lambda: (_owner_of(bench, grid) or (None, None))[1], 60)
+    _require(bench, "cycling Factory fixture owned", bool(partition))
+    time.sleep(3)
+    _require(bench, "cycling Factory profile completes", bool(_poll(lambda:
+        bench.cluster.node("node-1", f"/trigger/profile?partition={partition}", "POST").get("complete"), 60)))
+    initial = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}", "POST")
+    bench.cluster.node("node-1", f"/offline-test-gas-cycle?grid={grid}", "POST")
+    time.sleep(20)
+    capture = bench.cluster.node("node-1", "/offline-test-gas-cycle")
+    trace = capture["trace"]
+    compared = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}")
+    bench.record("cycling-Factory", {"initial": capture["initial"], "trace": trace, "comparison": compared})
+    bench.check("cycling Factory native produces partial-time gas", any(t["output"] > 0 for t in trace) and any(t["output"] == 0 for t in trace))
     bench.exercised(definitionOnlyMod=True, partialAdaptible=True, zeroInput=True, factoryNegative=True,
                     limitation="bounded gas-generator differential; complete coupled chain/long baselines remain")
 
@@ -1822,6 +1837,80 @@ def offline_gas_idle(bench):
     bench.exercised(nativeGasStandby=True, sharedPowerBudget=True, limitation="full coupled gas exhaustion and cold bootstrap remain separate")
 
 
+def offline_observed_scheduler(bench):
+    """Normal serving-node sweep/sampler, one natural minute-long rotation; no Prepare hook."""
+    _survival_template(bench)
+    import xml.etree.ElementTree as ET
+    for name in ("Sandbox.sbc", "Sandbox_config.sbc"):
+        path = bench.cluster.config.world_template / name
+        tree = ET.parse(path)
+        settings = tree.getroot().find("Settings")
+        for key, value in {"EnableSunRotation": "true", "SunRotationIntervalMinutes": "1"}.items():
+            field = settings.find(key)
+            if field is None: field = ET.SubElement(settings, key)
+            field.text = value
+        tree.write(path, encoding="utf-8", xml_declaration=True)
+    bench.start_cluster()
+    for node in ("node-1", "node-2"):
+        _put_config(bench, node, {"offline.enabled": "true", "offline.quietMeters": "0", "offline.wakeMeters": "0",
+            "offline.leadSeconds": "0", "offline.minOnlineSeconds": "600", "offline.graceSeconds": "600",
+            "offline.settleFrames": "300", "offline.observeSeconds": "5", "offline.longObservation": "InPlace",
+            "offline.rotateProduction": "false"})
+    fixtures = [bench.cluster.node("node-1", f"/offline-test-observed?variant={i}", "POST") for i in range(3)]
+    partitions = [_poll(lambda f=f: (_owner_of(bench, f["grid"]) or (None, None))[1], 60) for f in fixtures]
+    _require(bench, "three native observed fixtures have ordinary owners", all(partitions))
+    def state(): return bench.cluster.node("node-1", "/offline-test-observed")
+    def census(grid): return next((c for c in state()["status"]["profiling"] if grid in c["members"]), None)
+    _require(bench, "normal quiet grace starts observing without a profile request", bool(_poll(lambda: census(fixtures[0]["grid"]), 30)))
+    time.sleep(12)
+    early = state()
+    bench.record("scheduler-early", early)
+    bench.check("InPlace remains observing beyond the five-second short window", all(census(f["grid"])["state"] == "observing" for f in fixtures))
+    grid = fixtures[1]["grid"]
+    bench.cluster.node("node-1", f"/offline-test-observed-control?grid={grid}&moving=true", "POST")
+    _require(bench, "propulsion invalidates a live observation census", bool(_poll(lambda: census(grid) is None, 12)))
+    bench.check("propelled content remains ordinarily owned", _owner_of(bench, grid) == ("node-1", partitions[1]) and not _offline_row(bench, partitions[1]))
+    bench.cluster.node("node-1", f"/offline-test-observed-control?grid={grid}&moving=false", "POST")
+    _require(bench, "quiet eligibility starts a fresh window", bool(_poll(lambda: census(grid), 15)))
+    profiles = []
+    for f, partition in zip(fixtures, partitions):
+        _require(bench, "automatic full-rotation profile completes", bool(_poll(lambda f=f: (census(f["grid"]) or {}).get("state") == "complete", 100)))
+        profiles.append(bench.cluster.node("node-1", f"/profiles?partition={partition}")[0])
+    bench.record("scheduler-profiles", profiles)
+    for i, profile in enumerate(profiles):
+        obs = profile["Observations"]
+        bench.check(f"fixture{i}: full natural rotation and varying resource samples", bool(obs) and obs[0]["Samples"] >= 30
+                    and max(obs[0]["Variance"]) > 0 and profile["SunPeriodFrames"] == 3750)
+        bench.check(f"fixture{i}: native fuel versus opaque additions stay distinct", (profile["Confidence"] == "Frozen") == (i == 2))
+    partition = partitions[0]
+    initial = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}", "POST")
+    time.sleep(65)
+    compared = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}")
+    bench.record("scheduler-native-reference", {"initial": initial, "comparison": compared})
+    fuel = "MyObjectBuilder_Ingot/Uranium"
+    before, actual, model = map(_inventory_totals, (initial, compared["actual"], compared["predicted"]))
+    native_debit, model_debit = before[fuel] - actual[fuel], before[fuel] - model[fuel]
+    bench.check("initialized observed reactor pays native fuel within one captured settlement", native_debit > 0 and model_debit > 0
+                and abs(native_debit - model_debit) <= .004,
+                json.dumps({"native": native_debit, "modeled": model_debit, "bound": .004}))
+    result = compared["result"]
+    bench.check("observed source serves the same complete consumer and storage budget", abs(sum(result["ProducerEnergyMWh"].values())
+                - sum(result["ConsumerEnergyMWh"].values()) - sum(result["StorageInputEnergyMWh"].values())) < 1e-9)
+    _put_config(bench, "node-1", {"offline.minOnlineSeconds": "0", "offline.graceSeconds": "0"})
+    _require(bench, "completed observed group offlines through the ordinary scheduler", bool(_poll(lambda: _offline_row(bench, partition), 90)))
+    _put_config(bench, "node-1", {"offline.enabled": "false"})
+    _put_config(bench, "node-2", {"offline.enabled": "false"})
+    bench.cluster.node("node-2", f"/offline-test-recovery?grid={fixtures[0]['grid']}&ms=0", "POST")
+    bench.cluster.post(f"/registry/partitions/offline/load?partition={partition}&node=node-2&reason=remote")
+    _require(bench, "observed profile uses real shared recovery", bool(_poll(lambda: _applied(bench, "node-2"), 90)))
+    applied = _applied(bench, "node-2")
+    bench.record("scheduler-shared-wake", applied)
+    bench.check("shared wake computes observed fuel and energy on detached original stocks", any(r.get("ProducerFuelConsumed") for r in applied["results"]))
+    bench.exercised(initializedCluster=True, normalSweep=True, naturalPeriodMinutes=1, nativeFuel=True, opaqueInventory=True,
+                    propulsionInvalidation=True, ordinaryOffline=True, sharedWake=True,
+                    limitation="controlled bounded scheduler proof; 120-minute 450000+450000-frame rate fidelity is a separate pinned reference, not a representative-world census")
+
+
 def offline_observed_policy(bench):
     """Native external game-logic rate sampling and conservative storage/inventory fallback.
 
@@ -1920,6 +2009,7 @@ SCENARIOS_OFFLINE.update({
     "T-OC-10": (t_oc_10, "real changed-mod bytes skip compensation and leave the woken partition healthy", "3"),
     "T-OC-13": (t_oc_13, "parked large dynamic grid offlines and preserves its pose", "2"),
     "T-OC-08": (t_oc_08, "moving rotor subgrid leaves a quiet sibling profiled and reuses its rate when stopped", "2"),
+    "OFF-OBSERVED-SCHEDULER": (offline_observed_scheduler, "Initialized quiet grace/full-rotation observation/offline/shared wake", "3"),
     "OFF-OBSERVED-POLICY": (offline_observed_policy, "native short-window external rates and conservative script storage/inventory policy", "3"),
     "OFF-PARTIAL-GAS": (offline_partial_gas, "Definition-only gas generator partial/zero/Factory controls (Q3)", "3"),
     "OFF-GRID-POWER": (offline_grid_power, "Whole native distributor demand and gyro battery debit (Q1)", "3"),

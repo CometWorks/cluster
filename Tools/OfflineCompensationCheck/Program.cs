@@ -1,11 +1,15 @@
 using ClusterPlugin;
 using System.Text.Json;
 
+if (args.Length == 3 && args[0] == "--native-feedback") { NativeFeedbackCheck.Run(args[1], args[2]); return; }
+
 if (args.Length == 3 && args[0] == "--native-reference") { NativeReferenceCheck.Run(args[1], args[2]); return; }
 if (args.Length == 3 && args[0] == "--gas-trajectory") { NativeGasTrajectoryCheck.Run(args[1], args[2]); return; }
 if (args.Length == 3 && args[0] == "--zone-environment") { NativeEnvironmentCheck.Run(args[1], args[2]); return; }
 if (args.Length == 3 && args[0] == "--observed-reference") { NativeObservedCheck.Run(args[1], args[2]); return; }
 if (args.Length == 3 && args[0] == "--observed-short-reference") { NativeObservedCheck.RunShort(args[1], args[2]); return; }
+
+if (args.Length == 1 && args[0] == "--feedback") { FeedbackChecks.Run(); return; }
 
 if (args.Length == 2 && args[0] == "--review") { ReviewChecks.Run(args[1]); return; }
 if (args.Length == 1 && args[0] == "--power-budget") { PowerBudgetChecks.Run(); return; }
