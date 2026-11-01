@@ -65,6 +65,29 @@ inflating 450,000 native frames into 468,750 units or replacing a captured clock
 discriminator. Older Factory traces without raw elapsed ticks cannot establish
 the corrected host-boundary proof; fresh traces record them explicitly.
 
+Repair evidence is separately scoped to runtime product `0ad6458` and pinned core
+`ce8df32` (content `90d217e33b8ba5dca7ebd026cdae50b69a68b938f9d2b038ad29a993caceb64b`).
+The private package and an independent preparation reproduce DLL
+`43f20fd6e6641c41408bc6966fc3d7d04e81a1b7f9d6f1dae6856a39ae201a42`.
+New native incomplete-root rotor-group runs pass scans/refusal/unaffected-group
+settlement/save/SIGKILL/reload in both loader paths. Actual Cluster integration
+passes both loader orders, identical ModelForHost input/output, ambiguous-clock
+Apply refusal and a cross-node wake from an explicitly migrated schema-1 Final.
+Standalone and isolated dormant-Cluster-facade native references each pass 56
+raw-time stock prefixes. A normal Factory capture and all four requested native
+phases in each adapter pass the 4/100/600/1200-frame checks using captured clock
+fields and raw ticks (40 differential checkpoints in total).
+
+The isolated reference uses the production Cluster facade with only the existing
+local-mod loader installed; Cluster lifecycle and clock synchronization stay dormant.
+It is a real native resource reference, separate from the initialized cross-node
+integration. Heavy per-frame probes in an initialized cluster perturb its independently
+corrected clock domain; those timed-out/failed attempts remain failed and are not
+used as native duration or performance proof. Original Cluster10/lifecycle12 failures
+and lifecycle13's separate scope remain unchanged. New independent review and the
+external acceptance gates below remain open; no fresh client-hosted/Windows proof,
+remote CI result, merge, release, publication or deployment is claimed.
+
 ## Lifecycle and ownership
 
 Quiet logical groups settle and profile during the normal offline grace. A moving sibling blocks
