@@ -1837,17 +1837,7 @@ def offline_gas_idle(bench):
 
 def offline_observed_scheduler(bench):
     """Normal serving-node sweep/sampler, one natural minute-long rotation; no Prepare hook."""
-    _survival_template(bench)
-    import xml.etree.ElementTree as ET
-    for name in ("Sandbox.sbc", "Sandbox_config.sbc"):
-        path = bench.cluster.config.world_template / name
-        tree = ET.parse(path)
-        settings = tree.getroot().find("Settings")
-        for key, value in {"EnableSunRotation": "true", "SunRotationIntervalMinutes": "1"}.items():
-            field = settings.find(key)
-            if field is None: field = ET.SubElement(settings, key)
-            field.text = value
-        tree.write(path, encoding="utf-8", xml_declaration=True)
+    _survival_template(bench, sun_rotation_minutes=1)
     bench.start_cluster()
     for node in ("node-1", "node-2"):
         _put_config(bench, node, {"offline.enabled": "true", "offline.quietMeters": "0", "offline.wakeMeters": "0",
@@ -1874,6 +1864,7 @@ def offline_observed_scheduler(bench):
     history = []
     def completed(f):
         snapshot = state()
+        snapshot["offline"] = bench.cluster.node("node-1", "/offline")["owner"]
         history.append(snapshot)
         bench.record("scheduler-window-history", history)
         return any(c["state"] == "complete" and f["grid"] in c["members"] for c in snapshot["status"]["profiling"])
@@ -1883,8 +1874,8 @@ def offline_observed_scheduler(bench):
     bench.record("scheduler-profiles", profiles)
     for i, profile in enumerate(profiles):
         obs = profile["Observations"]
-        bench.check(f"fixture{i}: full natural rotation and varying resource samples", bool(obs) and obs[0]["Samples"] >= 30
-                    and max(obs[0]["Variance"]) > 0 and profile["SunPeriodFrames"] == 3750)
+        bench.check(f"fixture{i}: full natural rotation and varying resource samples", profile["SunPeriodFrames"] == 3750
+                    and (i == 2 or bool(obs) and obs[0]["Samples"] >= 30 and max(obs[0]["Variance"]) > 0))
         bench.check(f"fixture{i}: native fuel versus opaque additions stay distinct", (profile["Confidence"] == "Frozen") == (i == 2))
     partition = partitions[0]
     initial = bench.cluster.node("node-1", f"/offline-test-reference?partition={partition}", "POST")

@@ -275,6 +275,10 @@ internal static class OfflineTestRoutes
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => new
             {
                 nativeFrame = MySession.Static.GameplayFrameCounter,
+                periodMinutes = MySession.Static.Settings.SunRotationIntervalMinutes,
+                observeSeconds = ClusterConfig.GetInt("offline.observeSeconds"),
+                policy = ClusterConfig.Get("offline.longObservation"),
+                offlineEnabled = ClusterConfig.GetBool("offline.enabled"),
                 phase = MySector.DirectionToSunNormalized,
                 status = OfflineCompensation.Status(),
             })));

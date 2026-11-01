@@ -49,6 +49,15 @@ internal static partial class OfflineCompensation
 	}
 	private static readonly Dictionary<long, Census> CensusByGroup = new();
 	private static long m_lastObservationAdmissionFrame;
+	private static MySession m_profileSession;
+	private static void EnsureProfilingSession()
+	{
+		if (ReferenceEquals(m_profileSession, MySession.Static)) return;
+		m_profileSession = MySession.Static;
+		CensusByGroup.Clear(); Measurements.Clear(); Attempted.Clear(); PerBlockRates.Clear(); Results.Clear();
+		m_lastObservationAdmissionFrame = Frame - 100;
+	}
+
 
 	internal static string Readiness(MyCubeGrid grid)
 	{
@@ -139,6 +148,7 @@ internal static partial class OfflineCompensation
 	/// completed group's curve or throughput measurements. No grid is frozen during sampling.</summary>
 	internal static bool Prepare(PartitionManager.Partition partition, bool quick = false)
 	{
+		EnsureProfilingSession();
 		if (!ClusterConfig.GetBool("offline.compensate")) return true;
 		if (!ContentReady || ClusterRuntime.IsClustered && !ClusterRuntime.CanProfile(partition.Id)) return false;
 		bool complete = true;
@@ -175,7 +185,7 @@ internal static partial class OfflineCompensation
 					census.Observations[block.EntityId].Add(ReadRates(block));
 			}
 			if (census.Curves.Values.Any(t => !t.IsCompletedSuccessfully)) { census.State = "environmental"; complete = false; continue; }
-			if (!quick && census.Observations.Count > 0 && Frame - census.ObservationSince < Math.Max(ClusterConfig.GetInt("offline.observeSeconds") * 60L, ClusterConfig.Get("offline.longObservation") == "InPlace" ? (long)(MySession.Static.Settings.SunRotationIntervalMinutes * 60000.0 / 16) : 0))
+			if (!quick && census.Observations.Count > 0 && Frame - census.ObservationSince < RequiredObservationFrames)
 			{ census.State = "observing"; complete = false; continue; }
 			census.Last = Capture(grids, census, quick);
 			if (!quick && ScheduleMeasurements(grids, census.Last)) { census.State = "production"; complete = false; continue; }
@@ -220,8 +230,11 @@ internal static partial class OfflineCompensation
 		return profiles.ToArray();
 	}
 
+	private static long RequiredObservationFrames => Math.Max(ClusterConfig.GetInt("offline.observeSeconds") * 60L,
+		ClusterConfig.Get("offline.longObservation") == "InPlace" ? (long)(MySession.Static.Settings.SunRotationIntervalMinutes * 60000.0 / 16) : 0);
+
 	private static object ProfilingStatus() => CensusByGroup.Values.Select(c => new { group = c.Group, members = c.Members, state = c.State,
-		frames = Frame - c.Since, observationFrames = Frame - c.ObservationSince, samples = c.Observations.Values.Select(s => s.Count).ToArray(), observed = c.Observations.Count, confidence = c.Last?.Confidence, unknowns = c.Last?.Unknowns }).ToArray();
+		frames = Frame - c.Since, observationFrames = Frame - c.ObservationSince, requiredObservationFrames = RequiredObservationFrames, samples = c.Observations.Values.Select(s => s.Count).ToArray(), observed = c.Observations.Count, confidence = c.Last?.Confidence, unknowns = c.Last?.Unknowns }).ToArray();
 	internal static object Profiles(ulong partition, PartitionManager manager) => CensusByGroup.Values.Where(c => c.Members.Any(id => manager.Peek(partition).Members.Contains(id))).Select(c => c.Last).Where(p => p != null).ToArray();
 
 	// Operator reads consume existing census/Final state. They never Evaluate, Capture or profile.
@@ -258,7 +271,9 @@ internal static partial class OfflineCompensation
 	}
 	internal static void UpdateObservations()
 	{
-		if (!ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority || MySession.Static?.Ready != true) return;
+		if (!ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority) return;
+		EnsureProfilingSession();
+		if (MySession.Static?.Ready != true) return;
 		long frame = Frame;
 		if (frame - m_lastObservationAdmissionFrame < 100) return;
 		m_lastObservationAdmissionFrame = frame;
