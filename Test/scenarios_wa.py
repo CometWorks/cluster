@@ -2411,30 +2411,43 @@ def _broadcast_chat(bench, ctx, node_id: str, identity: int, author: str) -> str
 
 def p2_wa_bcast(bench) -> None:
     """SE-943: a broadcast controller message sent on a regular node goes through the WA's chat path. The
-    client the message targets shows the block's name as the sender, from either node, and no other
-    client receives it. Without the message's CustomData across the WA the client named the node's
-    server member, Good.bot."""
+    node the targeted client is on relays it with the block's name in CustomData.AuthorName, which the
+    client shows as the sender, from either node; no other client receives it. Without CustomData across
+    the WA the client named the Author, the node's server member, Good.bot.
+
+    The bench's headless clients show no multiplayer chat on their HUD (MyHudChat needs an active game
+    service), so the name is read from what node-1 relays (the test plugin's /chat-relay-probe), and the
+    client's received-message log proves the delivery."""
     ctx = _founder(bench)
     api = ctx.api
+    client = str(CLIENT_ID)
     author = f"SE-943 Beacon {random.randrange(1000)}"
+    _post(bench, "node-1", "/chat-relay-probe")
+
+    def relayed(text):
+        return [row for row in _node(bench, "node-1", "/chat-relay-probe")["relayed"] if row.get("text") == text]
+
+    def received(text):
+        return any(m.get("Text") == text for m in api.get_chat_messages(0).get("messages") or [])
+
     for node_id in ("node-1", "node-2"):
         text = _broadcast_chat(bench, ctx, node_id, ctx.binding_identity, author)
-
-        def shown():
-            listing = api.get_chat_messages(0)
-            row = next((row for row in listing.get("hud") or [] if row.get("text") == text), None)
-            return row if row and any(m.get("Text") == text for m in listing.get("messages") or []) else None
-        row = _poll(shown, CLIENT_TIMEOUT)
-        bench.check(f"a broadcast controller message sent on {node_id} reached the targeted client", row is not None, text)
-        bench.check(f"the client names the broadcast controller as the sender of the message from {node_id}, not Good.bot",
-                    (row or {}).get("sender") == author, json.dumps(row))
+        bench.check(f"a broadcast controller message sent on {node_id} reached the targeted client",
+                    _poll(lambda: received(text), CLIENT_TIMEOUT), text)
+        rows = relayed(text)
+        bench.record(f"broadcast-from-{node_id}", rows)
+        bench.check(f"node-1 relayed the message from {node_id} to the client with the broadcast controller's name, not Good.bot",
+                    any(row["recipient"] == client and row["authorName"] == author for row in rows), json.dumps(rows))
     other = _post(bench, "node-1", "/identity-test-create?" + _q(name=f"se943-other-{random.randrange(1000)}"))["identityId"]
     hidden = _broadcast_chat(bench, ctx, "node-1", other, author)
     published = _poll(lambda: all(any(hidden in (row.get("payload") or "") for row in _subsystem(bench, n, "chat"))
                                   for n in ("node-1", "node-2")), HANDOVER_TIMEOUT)
     bench.check("the WA published the message targeted at another identity to both nodes", published, hidden)
-    seen = _poll(lambda: any(m.get("Text") == hidden for m in api.get_chat_messages(0).get("messages") or []), 10)
-    bench.check("the message targeted at another identity did not reach the client", not seen, hidden)
+    seen = _poll(lambda: received(hidden), 10)
+    rows = relayed(hidden)
+    bench.record("broadcast-to-other", rows)
+    bench.check("the message targeted at another identity did not reach the client",
+                not seen and not any(row["recipient"] == client for row in rows), json.dumps(rows))
     bench.exercised(route="broadcast controller chat from node-1 and node-2 to the founder on node-1, and to another identity",
                     author=author, identity=ctx.binding_identity, other=other)
 
