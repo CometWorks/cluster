@@ -1,5 +1,13 @@
 # Offline wake implementation draft (SE-346 / SE-347)
 
+Round12 follow-up: the pinned standalone loader requires a schema-2 unpaid root's
+mechanical history before reconstruction. Missing/null root history keeps the
+whole loaded closure held, retains the malformed root verbatim and refuses a new
+claim. Child rows may omit the root-owned map; explicit schema-1 no-history roots
+retain observation compatibility. Targeted recovery checks cover both normal and
+early-stop recovery plus repeated save/reload. This small validation repair has
+no new native-host proof; earlier native scopes retain their exact source pins.
+
 This branch is **not acceptance complete**. It implements wake-time compensation and antenna
 call-ups in the production `Shared/Cluster` / `ClusterRegistry` architecture. Native proofs below
 establish their stated scope only. No deployment, release or complete GUI/performance acceptance is
