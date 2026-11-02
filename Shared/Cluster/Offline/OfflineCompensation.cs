@@ -7,6 +7,7 @@ using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Cube;
+using Sandbox.Game.World;
 using SpaceEngineers.Game.Entities.Blocks;
 using SpaceEngineers.Game.Entities.Blocks.SafeZone;
 using VRage.Game;
@@ -27,15 +28,20 @@ internal static class OfflineCompensation
         if (api == null)
         {
             var candidates = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("Concealment.Accounting.AccountingApi", false)).Where(t => t != null).ToArray();
-            if (candidates.Length != 1 || (int)candidates[0].GetField("Contract").GetRawConstantValue() != 2)
-                throw new InvalidOperationException("One compatible Concealment accounting plugin is required (contract 2).");
+            if (candidates.Length != 1 || (int)candidates[0].GetField("Contract").GetRawConstantValue() != 3)
+                throw new InvalidOperationException("One compatible Concealment accounting plugin is required (contract 3).");
             var selected = candidates[0];
             var callbacks = new Dictionary<string, object>
             {
                 ["clockFrameSeconds"] = 1.0 / 60,
-                ["clock"] = (Func<double>)(() => ClusterRuntime.AuthorityClockMilliseconds),
+                ["clock"] = (Func<double>)(() => AccountingClock.NativeMilliseconds),
+                ["nativeFrame"] = (Func<long>)(() => AccountingClock.NativeFrame),
+                ["nativeEpoch"] = (Func<string>)(() => AccountingClock.NativeEpoch),
+                ["authorityClock"] = (Func<(string Epoch, long Frame, long Generation, long SunTicks)>)AccountingClock.ReadFresh,
+                ["sunPath"] = (Func<string, string, long, long, byte[]>)AccountingClock.SunPath,
+                ["sunClock"] = (Func<long>)(() => AccountingClock.SunTicks(MySession.Static)),
                 ["setting"] = (Func<string, string>)ClusterConfig.Get,
-                ["admit"] = (Func<ulong, uint, bool>)((scope, generation) => !ClusterRuntime.IsClustered || ClusterRuntime.CanProfile(scope, generation)),
+                ["admit"] = (Func<ulong, uint, bool>)((scope, generation) => !ClusterRuntime.IsClustered || AccountingClock.Ready && ClusterRuntime.CanProfile(scope, generation)),
                 ["generation"] = (Func<ulong, uint>)(scope => ClusterRuntime.PluginOwnershipSnapshot().TryGetValue(scope, out long g) ? checked((uint)g) : 0),
                 ["observe"] = (Func<bool>)(() => ClusterRuntime.IsClustered && !ClusterRuntime.IsWorldAuthority && ClusterRuntime.IsServing),
                 ["frozen"] = (Func<long, bool>)ClusterRuntime.IsFrozen,

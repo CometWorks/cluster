@@ -17,6 +17,7 @@
   <ItemGroup Condition="'$(AccountingSourceChecks)' == 'true'">
     <Compile Include="../../Dependencies/Concealment/Source/ServerPlugin/Accounting/OfflineModel.cs" Link="Accounting/OfflineModel.cs" />
     <Compile Include="../../Dependencies/Concealment/Source/ServerPlugin/Accounting/OfflineProfile.cs" Link="Accounting/OfflineProfile.cs" />
+    <Compile Include="../../Dependencies/Concealment/Source/ServerPlugin/Accounting/SunWorkPath.cs" Link="Accounting/SunWorkPath.cs" />
   </ItemGroup>
   <ItemGroup Condition="'$(AccountingSourceChecks)' != 'true'">
     <Reference Include="Concealment">

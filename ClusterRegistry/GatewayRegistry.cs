@@ -5848,6 +5848,8 @@ internal sealed partial class GatewayRegistry : IDisposable
         public Guid? LastManagedRestore { get; set; }
         public Dictionary<string, ManagedProof> ManagedProofs { get; set; } = [];
         public long StateSequence { get; set; }
+        public AccountingClockSample? AccountingClock { get; set; }
+        public TrackedList<AccountingSunRun> AccountingSun { get; set; } = [];
         public Dictionary<string, NodeRegistration> Nodes { get; set; } = [];
         public WorldAuthority WorldAuthority { get; set; } = new(null, 0, 0);
         public TrackedDictionary<ulong, PartitionOwnership> Partitions { get; set; } = [];

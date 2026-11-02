@@ -1,5 +1,11 @@
 # Offline wake implementation draft (SE-346 / SE-347)
 
+The initialized-clock repair uses accounting contract 3 and explicit local-native versus
+durable-WA profile domains. [Accounting time and sun history](AccountingClock.md) describes
+the freeze boundary, native-update clock, ordered environmental path, recovery and legacy
+refusal rules. Qualification remains scoped to its recorded source/package identities;
+the original ICQ wall-clock failure is retained as a failed baseline.
+
 Round12 follow-up: the pinned standalone loader requires a schema-2 unpaid root's
 mechanical history before reconstruction. Missing/null root history keeps the
 whole loaded closure held, retains the malformed root verbatim and refuses a new
@@ -15,7 +21,7 @@ claimed.
 
 ## Concealment accounting extraction (2026-11-01)
 
-Cluster now invokes accounting contract 2 from the single Concealment server plugin;
+Cluster now invokes accounting contract 3 from the single Concealment server plugin;
 the copied model, profile, capture, solar and observation implementation is removed.
 `Dependencies/Concealment.lock.json` pins its source commit and content hash.
 `Build/prepare-concealment.py --source <concealment-checkout>` builds that immutable

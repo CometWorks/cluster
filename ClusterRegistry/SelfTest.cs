@@ -149,6 +149,7 @@ internal static partial class SelfTest
     /// output that also happened to pass.
     public static readonly (string Name, Action Body)[] Sections =
     [
+        ("accounting-clock", TestAccountingClock),
         ("diagnostic-reports", TestDiagnosticReports),
         ("linux-limits", TestLinuxLimits),
         ("endpoints", TestEndpoints),

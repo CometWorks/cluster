@@ -16,11 +16,17 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MySession))]
 public static class MySessionPatch
 {
+	[HarmonyPrefix]
+	[HarmonyPatch(nameof(MySession.Update), new[] { typeof(MyTimeSpan) })]
+	private static void BeforeUpdate(MySession __instance, out (int Frame, long Sun) __state)
+		=> __state = (__instance.GameplayFrameCounter, AccountingClock.SunTicks(__instance));
+
 	// SessionClockPatch.Postfix: slew the node's session clock to the WA clock plus the admin time-of-day offset.
 	[HarmonyPostfix]
 	[HarmonyPatch(nameof(MySession.Update), new[] { typeof(MyTimeSpan) })]
-	private static void UpdatePostfix(MySession __instance)
+	private static void UpdatePostfix(MySession __instance, (int Frame, long Sun) __state)
 	{
+		AccountingClock.CompletedNativeUpdate(__instance, __state.Frame, __state.Sun);
 		MySessionSeams.ClusterAdjustElapsedGameTime?.Invoke(__instance);
 	}
 

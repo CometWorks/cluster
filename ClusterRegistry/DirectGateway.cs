@@ -4612,6 +4612,22 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 WriteJson(context, 200, _registry.HandoverConfig());
                 return;
             }
+            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/offline-accounting-clock", StringComparison.OrdinalIgnoreCase))
+            {
+                WriteJson(context, 200, (object?)_registry.AccountingClock("", 0, null) ?? new { unavailable = true });
+                return;
+            }
+            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/offline-accounting-sun", StringComparison.OrdinalIgnoreCase))
+            {
+                WriteJson(context, 200, _registry.AccountingSun(Required(context, "epoch"), long.Parse(Required(context, "from")), long.Parse(Required(context, "through"))));
+                return;
+            }
+            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/offline-accounting-clock", StringComparison.OrdinalIgnoreCase))
+            {
+                var request = ReadJson<AccountingClockRequest>(context);
+                WriteJson(context, 200, _registry.AccountingClock(request.Node, request.Epoch, request.Sample));
+                return;
+            }
             if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/nodes/heartbeat", StringComparison.OrdinalIgnoreCase))
             {
                 HeartbeatRequest request = ReadJson<HeartbeatRequest>(context);
@@ -4649,7 +4665,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 WriteJson(context, 200, new HeartbeatResponse(node.Node, node.Epoch, node.Endpoint, node.Registered, node.State,
                     node.LeaseExpires, node.ForceDrainAt, node.Role, node.AuthorityGeneration, authority.Generation, accepted,
                     request.LocalSendMilliseconds, gatewayMilliseconds, currentAuthorityMilliseconds, _registry.HandoverConfigRevision,
-                    _registry.ShuttingDown));
+                    _registry.ShuttingDown, AccountingClock: _registry.AccountingClock(node.Node, node.Epoch, request.AccountingClock)));
                 return;
             }
             if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/nodes/close", StringComparison.OrdinalIgnoreCase))
@@ -8428,13 +8444,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         long? RecoveryCapacity = null, ulong[]? Quarantined = null, long? ProjectedLoad = null, long? LoadCapacity = null,
         long? RecoveryLoadsPending = null, HitchReport[]? Hitches = null, long? ConfigRevision = null, bool? Serving = null,
         string? DeploymentRevision = null, bool ConfigurationVerified = false, string? ConfigurationFailure = null,
-        bool Liveness = false, Dictionary<ulong, RemoteUseReport>? RemoteUsers = null);
+        bool Liveness = false, Dictionary<ulong, RemoteUseReport>? RemoteUsers = null, AccountingClockSample? AccountingClock = null);
     /// <summary>A game-thread frame over the node's hitch threshold, with the handover phase that held it (§3).</summary>
     private sealed record HitchReport(DateTime Utc, double Ms, string Phase, string? TransferId, ulong Partition, double PhaseMs);
+    private sealed record AccountingClockRequest(string Node, long Epoch, AccountingClockSample Sample);
     private sealed record HeartbeatResponse(string Node, long Epoch, string Endpoint, DateTimeOffset Registered, NodeState State,
         DateTimeOffset LeaseExpires, DateTimeOffset? ForceDrainAt, NodeRole Role, long AuthorityGeneration, long WorldAuthorityGeneration,
         PartitionVersion[] Ownerships, double LocalSendMilliseconds, double GatewayMilliseconds, double? AuthorityMilliseconds,
-        long HandoverConfigRevision = 0, bool ClusterDraining = false, bool TopologyTransfer = true);
+        long HandoverConfigRevision = 0, bool ClusterDraining = false, bool TopologyTransfer = true, AccountingClockSample? AccountingClock = null);
     // T-0339 (design C): TopologyTransfer tells the node this registry applies a transfer (GatewayRegistry.IsTransfer); a
     // registry without the field is one that refuses it, and the node then makes the split and the merge instead.
     private sealed record RecoveryRequest(string Node, long Epoch, ulong[] Partitions);

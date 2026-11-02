@@ -2472,7 +2472,7 @@ internal sealed partial class PartitionPersistence
 		int.TryParse(Environment.GetEnvironmentVariable("CLUSTER_TEST_DISCARD_DELAY_MS"), out int discardDelay) && discardDelay > 0 ? discardDelay : 0;
 	// A load requeued for offline readiness or handed to the replication thread for census checks.
 	private const int DeferredLoad = -1;
-	private static bool OfflineLoadReady => !ClusterConfig.GetBool("offline.compensate") || ClusterRuntime.HasAuthorityClock && OfflineCompensation.ContentReady
+	private static bool OfflineLoadReady => !ClusterConfig.GetBool("offline.compensate") || ClusterRuntime.HasAuthorityClock && AccountingClock.Ready && OfflineCompensation.ContentReady
 		&& SessionClockPatch.AppliedOffsetMilliseconds == TimeOfDayService.OffsetMilliseconds;
 
 	private bool BelowRecoveryCapacity()

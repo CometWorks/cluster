@@ -13,16 +13,23 @@ internal static class NativeClockChecks
         bool passed = document.RootElement.GetProperty("complete").GetBoolean();
         foreach (var row in document.RootElement.GetProperty("rows").EnumerateArray())
         {
-            long frames = row.GetProperty("nativeFrames").GetInt64(), ticks = row.GetProperty("elapsedTicks").GetInt64();
-            long units = row.TryGetProperty("elapsedStartTicks", out var startTicks)
-                ? row.GetProperty("elapsedEndTicks").GetInt64() / 160000 - startTicks.GetInt64() / 160000 : ticks / 160000;
             var initial = row.GetProperty("initial").Deserialize<OfflineProfile>(OfflineProfile.Json)!;
+            bool local = initial.Schema == OfflineProfile.ClusterSchema && initial.ClockDomain == "ClusterLocal";
+            long frames = row.GetProperty("nativeFrames").GetInt64(), sessionTicks = row.GetProperty("elapsedTicks").GetInt64();
+            // Cluster schema3 names a native-local callback, separate from the
+            // replicated display/sun session. Measure its ACTUAL raw readings;
+            // never replace the duration by the expected native update count.
+            long ticks = local ? row.GetProperty("hostElapsedTicks").GetInt64() : sessionTicks;
+            long units = local
+                ? checked((long)Math.Floor(row.GetProperty("hostEndMilliseconds").GetDouble() / 16)) - checked((long)Math.Floor(row.GetProperty("hostStartMilliseconds").GetDouble() / 16))
+                : row.TryGetProperty("elapsedStartTicks", out var startTicks)
+                    ? row.GetProperty("elapsedEndTicks").GetInt64() / 160000 - startTicks.GetInt64() / 160000 : ticks / 160000;
             var actual = row.GetProperty("actual").Deserialize<OfflineProfile>(OfflineProfile.Json)!;
             var model = row.GetProperty("initial").Deserialize<OfflineProfile>(OfflineProfile.Json)!;
             var result = OfflineModel.Simulate(model, initial.SimulatedThrough + units, 72L * 225000);
             long clockDrift = units - frames;
             bool clock = ticks == frames * 160000 && clockDrift == 0 && units == row.GetProperty("hostUnits").GetInt64()
-                && initial.Schema == 2 && initial.ClockFrameSeconds == 1d / 60 && result.Frames == units;
+                && (initial.Schema == 2 || local) && initial.ClockFrameSeconds == 1d / 60 && result.Frames == units;
             Dictionary<string, decimal> Items(OfflineProfile p) => p.Inventories.SelectMany(i => i.Stacks).GroupBy(s => s.Item).ToDictionary(g => g.Key, g => g.Sum(s => s.Amount));
             var before = Items(initial); var nativeItems = Items(actual); var modeledItems = Items(model);
             var items = before.Keys.Union(nativeItems.Keys).Union(modeledItems.Keys).Select(item =>
@@ -65,10 +72,10 @@ internal static class NativeClockChecks
             }).ToArray();
             bool ok = clock && items.All(i => i.passed) && storage.All(s => s.passed) && zones.All(z => z.passed);
             passed &= ok;
-            rows.Add(new { name = row.GetProperty("name").GetString(), frames, ticks, units, clockDrift, clock, items, storage, zones, passed = ok });
+            rows.Add(new { name = row.GetProperty("name").GetString(), frames, ticks, sessionTicks, initial.ClockDomain, units, clockDrift, clock, items, storage, zones, passed = ok });
         }
         File.WriteAllText(output, JsonSerializer.Serialize(new { source = Path.GetFullPath(path), rows, passed,
-            method = "actual captured host clock/raw elapsed ticks/native phases; one native production tick, 1% fuel DEBIT, explicit native pending ice, 160-frame gas and Update100 storage bounds" },
+            method = "actual raw host clock in its explicit schema domain; replicated session elapsed retained separately; unchanged native production/fuel/pending-ice/gas/Update100 bounds" },
             new JsonSerializerOptions(OfflineProfile.Json) { WriteIndented = true }));
         Console.WriteLine($"Raw-host native prefix differential: {rows.Count} cases, passed={passed}, {output}");
         if (!passed) throw new InvalidOperationException("Raw-host native differential failed; see retained comparisons");
