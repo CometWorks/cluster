@@ -681,7 +681,9 @@ all previously open acceptance gates remain required.
 
 The pin now scopes Havok admission permission to the current OnAddedToWorld call,
 revokes it before removal callbacks (including nested removal), and retains removed
-objects with disabled managed intent. Cleanup never re-admits a constraint merely
+objects with disabled managed intent. Unpaid SafeConstraint reads suppress native
+refresh/disposal/recreation during inspection and builder serialization; target checks
+read connection state directly. Cleanup never re-admits a constraint merely
 to use native setters. Requested m_enabled is captured independently of effective
 native Enabled for main and piston-internal constraints, including paid snapshots.
 Private standalone record schema 2 requires IntentVersion=1 on mechanical history.
