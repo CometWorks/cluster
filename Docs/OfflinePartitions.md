@@ -729,3 +729,14 @@ zone callbacks remain explicit boundaries unless separately proved by those cont
 Initialized authority-clock duration differential, external census/Measure,
 exclusive200/performance, production-week, Steam/player/client-hosted Windows and
 full external antenna acceptance remain open.
+# NPC battery accounting repair (RWN-1)
+
+Populated-world native tests found that NPC creative batteries in a Survival world
+were incorrectly debited. The pinned Concealment core now captures the native
+per-block mode and models its no-debit supply and Auto/Recharge Update100 refill.
+Other batteries, production power and fuel remain in the same resource budget.
+Conflicting older unpaid NPC profiles are refused before mutation, preserving
+their original claims and stocks; ordinary older finite profiles remain compatible.
+The model regression and existing clock/domain/prediction checks pass. Native
+repair verification and independent review remain pending. Full acceptance is false.
+
