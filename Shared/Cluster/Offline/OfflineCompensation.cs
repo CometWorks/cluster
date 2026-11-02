@@ -91,7 +91,7 @@ internal static class OfflineCompensation
     internal static object Summary(byte[] profiles) => profiles == null ? null : Call("Summary", profiles);
     internal static object Status() => Call("Status");
     internal static object Profiles(ulong partition, PartitionManager manager) => Call("Profiles", (object)manager.Peek(partition).Members.ToArray());
-    internal static object AdminRead(ulong partition, PartitionManager manager, byte[] offline = null) => Call("AdminRead", manager.Peek(partition).Members.ToArray(), offline);
+    internal static object AdminRead(ulong partition, PartitionManager manager, byte[] offline = null) => Call("AdminRead", offline == null ? manager.Peek(partition).Members.ToArray() : Array.Empty<long>(), offline);
     internal static void UpdateObservations() => Call("UpdateObservations");
     internal static void CancelScope(ulong partition) { if (api != null) Call("CancelScope", partition); }
     internal static object BeginMeasurement(MyProductionBlock block, uint frames) => Call("BeginMeasurement", block, frames);

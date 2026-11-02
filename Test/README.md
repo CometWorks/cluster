@@ -156,9 +156,14 @@ The detached check runs without a package or game:
 
 ```sh
 dotnet run --project Tools/OfflineCompensationCheck -c Release -p:RunPostBuildEvent=Never
+python3 Test/OfflineAdminRead/run.py /absolute/path/to/new/admin-read-output
 ```
 
-Run it from the repository root. Registry policy sections are `remote-use` and
+Run these checks from the repository root.
+The admin-read check compiles the exact facade with inert collaborators: an offline replica
+needs no live partition, while live reads still require one. It does not launch the game.
+
+Registry policy sections are `remote-use` and
 `offline-partitions`. Native `P2-OFF-CALL-TERMINAL`, `P2-OFF-CALL-RC` and
 `P2-OFF-CALL-IGC` require the normal doctor/isolated-package contract; their actual per-package results are recorded in `Docs/OfflinePartitions.md`. RC includes
 a dynamic drone and raw client thrust. Additional native runners cover shared recovery crashes,
