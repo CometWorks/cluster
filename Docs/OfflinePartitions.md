@@ -1,5 +1,11 @@
 # Offline wake implementation draft (SE-346 / SE-347)
 
+The pinned fuel model preserves a native zero Tier1 countdown as inactive. Only a
+positive scheduled countdown may transition a reactor to Tier2. This fixes the six
+post-live-handover uranium mismatches without changing rates, timer phases or
+tolerances. The unchanged 35-prefix input passes source/DLL replay; fresh native
+freeze/wake and timer/tier continuation remain to be qualified on this pin.
+
 The initialized-clock repair uses accounting contract 3 and explicit local-native versus
 durable-WA profile domains. [Accounting time and sun history](AccountingClock.md) describes
 the freeze boundary, native-update clock, ordered environmental path, recovery and legacy
