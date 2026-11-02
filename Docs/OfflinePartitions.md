@@ -676,3 +676,34 @@ New focused proof, exact inputs/products/fixtures, failures and cleanup belong u
 `mechanical-failure-repairs-response.md`. The earlier mechanical recovery and round10
 reports remain immutable and retain their original scopes. New independent review and
 all previously open acceptance gates remain required.
+
+### Requested intent and prepared settlement stages (R11)
+
+The pin now scopes Havok admission permission to the current OnAddedToWorld call,
+revokes it before removal callbacks (including nested removal), and retains removed
+objects with disabled managed intent. Cleanup never re-admits a constraint merely
+to use native setters. Requested m_enabled is captured independently of effective
+native Enabled for main and piston-internal constraints, including paid snapshots.
+Private standalone record schema 2 requires IntentVersion=1 on mechanical history.
+Schema-1 unforced records can migrate the known request; forced history is ambiguous
+and refuses instead of inventing intent. Genuinely old no-history claims keep the
+observation-only reconstruction path. Rollback requires a matching earlier world and
+runtime; Admin0.10, shared profile schema2 and accounting contract2 are unchanged.
+
+Settlement keeps the original recipe-bearing profiling signature at admission,
+then validates immutable ownership/settings plus an exact prepared stock basis
+before and after each native write. Only fields belonging to that write advance
+the expected basis. Completed recipes may disappear legitimately; edits to later
+blocks are refused before overwrite. Every notification and the final publication
+still require exact desired stocks. The model and cost kernel are unchanged.
+
+Focused controls, failed attempts, exact source/binary products and final private
+package identity are recorded in
+`/home/owendb/tm/offline-partitions/intent-assembler-repairs/` and its response.
+Earlier positive native scopes retain their original product identities; they are
+not rerun or combined into an acceptance score. Independent review is required.
+Release-setter failure atomicity after paid publication and unqualified storage/gas/
+zone callbacks remain explicit boundaries unless separately proved by those controls.
+Initialized authority-clock duration differential, external census/Measure,
+exclusive200/performance, production-week, Steam/player/client-hosted Windows and
+full external antenna acceptance remain open.
