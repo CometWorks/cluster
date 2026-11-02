@@ -637,3 +637,35 @@ The implementation response records exact source, product and fixture identities
 New independent review remains required. Initialized Cluster authority-duration
 and the external acceptance gates above remain open. Contract2/schema2, known
 unpaid schema1 migration, Admin0.10/wire1, costs, clocks and solar policy are unchanged.
+
+
+### Mechanical ownership and settlement boundary (R10)
+
+The pinned core now owns complete per-base constraint identities before structural
+reconstruction, including disabled and absent entries. Assignments are retained even
+when native callbacks throw; native world admission disables each newly owned constraint
+before public attachment callbacks. Ownership remains with the loaded world through
+rejection, scheduling failure, disposal and saves. Complete block/link/claim/closure and
+exact stock/pose checks surround every structural call, including piston subparts.
+Later callbacks invalidating earlier links stop subsequent calls.
+
+The private standalone root record adds required per-entry Mechanical state so native
+save/reload does not lose originally disabled constraints. Existing claims without
+that history keep the supported reconstruction path and record the actual native
+requested reconstruction state, rather than assuming an enabled default; unrecorded
+historical disabled flags cannot be reconstructed. Subsequent checkpoints retain the
+observed state explicitly. Older runtimes do not implement this ownership; rollback
+requires the matching pre-upgrade world and runtime/package together.
+
+Settlement retains its unpaid receipt through native writes and notifications, checks
+mechanical ownership throughout, and restores complete original inventories, native
+caches, queues and phases on refusal. Native reentrant inventory writes are fenced
+before mutation during commit/rollback. Reactor capacity is prepared from the exact
+native fuel-inventory rule so normal native notification cache refresh remains valid.
+This does not change the shared model, schema2/contract2, clocks, costs or Cluster wire.
+
+New focused proof, exact inputs/products/fixtures, failures and cleanup belong under
+`/home/owendb/tm/offline-partitions/mechanical-failure-repairs/`, with
+`mechanical-failure-repairs-response.md`. The earlier mechanical recovery and round10
+reports remain immutable and retain their original scopes. New independent review and
+all previously open acceptance gates remain required.
