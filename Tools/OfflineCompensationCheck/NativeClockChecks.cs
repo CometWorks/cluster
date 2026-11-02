@@ -24,14 +24,23 @@ internal static class NativeClockChecks
                 ? checked((long)Math.Floor(row.GetProperty("hostEndMilliseconds").GetDouble() / 16)) - checked((long)Math.Floor(row.GetProperty("hostStartMilliseconds").GetDouble() / 16))
                 : row.TryGetProperty("elapsedStartTicks", out var startTicks)
                     ? row.GetProperty("elapsedEndTicks").GetInt64() / 160000 - startTicks.GetInt64() / 160000 : ticks / 160000;
-            var actual = row.GetProperty("actual").Deserialize<OfflineProfile>(OfflineProfile.Json)!;
+            var actualJson = row.GetProperty("actual");
+            var actual = actualJson.ValueKind == JsonValueKind.Null ? null : actualJson.Deserialize<OfflineProfile>(OfflineProfile.Json)!;
+            var nativeState = row.GetProperty("native");
             var model = row.GetProperty("initial").Deserialize<OfflineProfile>(OfflineProfile.Json)!;
             var result = OfflineModel.Simulate(model, initial.SimulatedThrough + units, 72L * 225000);
             long clockDrift = units - frames;
             bool clock = ticks == frames * 160000 && clockDrift == 0 && units == row.GetProperty("hostUnits").GetInt64()
                 && (initial.Schema == 2 || local) && initial.ClockFrameSeconds == 1d / 60 && result.Frames == units;
             Dictionary<string, decimal> Items(OfflineProfile p) => p.Inventories.SelectMany(i => i.Stacks).GroupBy(s => s.Item).ToDictionary(g => g.Key, g => g.Sum(s => s.Amount));
-            var before = Items(initial); var nativeItems = Items(actual); var modeledItems = Items(model);
+            var before = Items(initial);
+            // Lean prefixes record actual native stocks without running a full
+            // profile capture/model in the observation interval. Final prefixes
+            // additionally retain a complete independent native profile.
+            var nativeItems = actual != null ? Items(actual) : nativeState.GetProperty("inventoryState").EnumerateArray()
+                .SelectMany(i => i.GetProperty("items").EnumerateArray()).GroupBy(i => i.GetProperty("content").GetString()!)
+                .ToDictionary(g => g.Key, g => g.Sum(i => i.GetProperty("amount").GetDecimal()));
+            var modeledItems = Items(model);
             var items = before.Keys.Union(nativeItems.Keys).Union(modeledItems.Keys).Select(item =>
             {
                 decimal nativeDebit = before.GetValueOrDefault(item) - nativeItems.GetValueOrDefault(item);
@@ -53,15 +62,25 @@ internal static class NativeClockChecks
             }).ToArray();
             var storage = model.Storage.Select(s =>
             {
-                var a = actual.Storage.Single(a => a.Block == s.Block && a.Kind == s.Kind);
+                double nativeAmount;
+                if (actual != null) nativeAmount = actual.Storage.Single(a => a.Block == s.Block && a.Kind == s.Kind).Amount;
+                else if (s.Kind == "Battery") nativeAmount = nativeState.GetProperty("battery").EnumerateArray()
+                    .Single(a => a.GetProperty("block").GetInt64() == s.Block).GetProperty("stored").GetDouble();
+                else
+                {
+                    var state = nativeState.GetProperty("environment").GetProperty(s.Kind == "Tank" ? "tanks" : "engines")
+                        .EnumerateArray().Single(a => a.GetProperty("block").GetInt64() == s.Block);
+                    nativeAmount = state.GetProperty("capacity").GetDouble();
+                    if (s.Kind == "Tank") nativeAmount *= state.GetProperty("ratio").GetDouble();
+                }
                 double bound = s.Kind is "Tank" or "Engine" ? s.MaxInput * s.InputConversion * 160 + 1
                     : Math.Max(s.MaxInput, initial.Sources.Where(p => p.Storage >= 0 && initial.Storage[p.Storage].Block == s.Block).Sum(p => p.Maximum)) * 100 / 216000d
-                        + (frames / 100d + 2) * Math.Abs(MathF.BitIncrement((float)a.Amount) - (float)a.Amount);
-                return new { s.Block, s.Kind, native = a.Amount, modeled = s.Amount, bound, passed = Math.Abs(s.Amount - a.Amount) <= bound };
+                        + (frames / 100d + 2) * Math.Abs(MathF.BitIncrement((float)nativeAmount) - (float)nativeAmount);
+                return new { s.Block, s.Kind, native = nativeAmount, modeled = s.Amount, bound, passed = Math.Abs(s.Amount - nativeAmount) <= bound };
             }).ToArray();
             var zones = model.Upkeep.Select(z =>
             {
-                var native = actual.Upkeep.SingleOrDefault(a => a.Block == z.Block);
+                var native = actual?.Upkeep.SingleOrDefault(a => a.Block == z.Block);
                 // Native capture omits exhausted/deleted bubbles. Read the live
                 // component's serialized credit/entity id as the negative control.
                 var state = row.GetProperty("native").GetProperty("environment").GetProperty("zones").EnumerateArray().Single(s => s.GetProperty("block").GetInt64() == z.Block);
