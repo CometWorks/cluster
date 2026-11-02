@@ -649,8 +649,15 @@ rejection, scheduling failure, disposal and saves. Complete block/link/claim/clo
 exact stock/pose checks surround every structural call, including piston subparts.
 Later callbacks invalidating earlier links stop subsequent calls.
 
+Piston internal subpart constraints use the same owner, including their saved flags
+and explicit world-membership history. LoadSubparts reconstruction remains inactive
+until ordinary paid native updates; no motion callback runs during unpaid recovery.
+Deferred restoration yields to any newer unpaid owner.
+
 The private standalone root record adds required per-entry Mechanical state so native
-save/reload does not lose originally disabled constraints. Existing claims without
+save/reload does not lose originally disabled constraints. Paid snapshots retain the
+current state per grid, bound to native saved targets and checkpoint. Ordinary native
+initialization restores those flags before later capture or another snapshot. Existing claims without
 that history keep the supported reconstruction path and record the actual native
 requested reconstruction state, rather than assuming an enabled default; unrecorded
 historical disabled flags cannot be reconstructed. Subsequent checkpoints retain the
