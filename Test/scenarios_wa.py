@@ -2403,6 +2403,42 @@ def p2_wa_01(bench) -> None:
                     medbayPartition=ctx.respawn_partition, founder=ctx.faction_identity, member=ctx.client2_identity)
 
 
+def _broadcast_chat(bench, ctx, node_id: str, identity: int, author: str) -> str:
+    text = f"se943-broadcast-{node_id}-{random.randrange(32768)}"
+    _post(bench, node_id, "/broadcast-chat-test?" + _q(identityId=identity, author=author, text=text))
+    return text
+
+
+def p2_wa_bcast(bench) -> None:
+    """SE-943: a broadcast controller message sent on a regular node goes through the WA's chat path. The
+    client the message targets shows the block's name as the sender, from either node, and no other
+    client receives it. Without the message's CustomData across the WA the client named the node's
+    server member, Good.bot."""
+    ctx = _founder(bench)
+    api = ctx.api
+    author = f"SE-943 Beacon {random.randrange(1000)}"
+    for node_id in ("node-1", "node-2"):
+        text = _broadcast_chat(bench, ctx, node_id, ctx.binding_identity, author)
+
+        def shown():
+            listing = api.get_chat_messages(0)
+            row = next((row for row in listing.get("hud") or [] if row.get("text") == text), None)
+            return row if row and any(m.get("Text") == text for m in listing.get("messages") or []) else None
+        row = _poll(shown, CLIENT_TIMEOUT)
+        bench.check(f"a broadcast controller message sent on {node_id} reached the targeted client", row is not None, text)
+        bench.check(f"the client names the broadcast controller as the sender of the message from {node_id}, not Good.bot",
+                    (row or {}).get("sender") == author, json.dumps(row))
+    other = _post(bench, "node-1", "/identity-test-create?" + _q(name=f"se943-other-{random.randrange(1000)}"))["identityId"]
+    hidden = _broadcast_chat(bench, ctx, "node-1", other, author)
+    published = _poll(lambda: all(any(hidden in (row.get("payload") or "") for row in _subsystem(bench, n, "chat"))
+                                  for n in ("node-1", "node-2")), HANDOVER_TIMEOUT)
+    bench.check("the WA published the message targeted at another identity to both nodes", published, hidden)
+    seen = _poll(lambda: any(m.get("Text") == hidden for m in api.get_chat_messages(0).get("messages") or []), 10)
+    bench.check("the message targeted at another identity did not reach the client", not seen, hidden)
+    bench.exercised(route="broadcast controller chat from node-1 and node-2 to the founder on node-1, and to another identity",
+                    author=author, identity=ctx.binding_identity, other=other)
+
+
 def _gps_state(bench, node_id: str) -> dict:
     state = _node(bench, node_id, "/global-state")
     gps = next(x for x in state["subsystems"] if x["subsystem"] == "gps")
@@ -2950,6 +2986,7 @@ SCENARIOS_WA = {
                            "(write-ahead journal)", "3"),
     "P2-WA-01": (p2_wa_01, "cross-node chat, faction and GPS", "3"),
     "P2-WA-03": (p2_wa_03, "global encounter dispatched once cluster-wide; counts converge", "3"),
+    "P2-WA-BCAST": (p2_wa_bcast, "SE-943: a broadcast controller message names its block, not Good.bot, after the WA's chat path", "3"),
     "P2-WA-ECON": (p2_wa_econ, "WA-2 economy: store, trade, contracts, PCU ledger, grid transfer", "3"),
     "P2-MOD-LASER-GPS": (p2_mod_laser_gps, "SE1-0226, SE1-0235: a laser links by GPS to a laser on another node, which points back", "3"),
     "P2-MOD-01": (p2_mod_01, "cross-node IGC unicast and broadcast, no leak to other nodes", "3"),

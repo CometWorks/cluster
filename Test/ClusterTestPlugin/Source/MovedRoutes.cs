@@ -272,6 +272,22 @@ internal static class MovedRoutes
 					Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 					return;
 		});
+        TestRoutes.Add("POST", "/broadcast-chat-test", (context, path) =>
+		{
+					// SE-943: the call MyChatBroadcastEntityComponent.TransmitMessageToCharacter makes on the
+					// server, with the block's shown name in CustomData.AuthorName.
+					long identityId = long.Parse(context.Request.QueryString["identityId"] ?? throw new ArgumentException("Missing identityId query parameter"), CultureInfo.InvariantCulture);
+					string author = context.Request.QueryString["author"] ?? throw new ArgumentException("Missing author query parameter");
+					string text = context.Request.QueryString["text"] ?? throw new ArgumentException("Missing text query parameter");
+					string result = Invoke(() =>
+					{
+						var customData = new VRage.GameServices.ChatMessageCustomData { AuthorName = author, SenderId = 0, TextColor = Color.Yellow };
+						MyMultiplayer.Static.SendChatMessage(text, ChatChannel.BroadcastController, identityId, customData);
+						return JsonSerializer.Serialize(new { identityId, author, text });
+					});
+					Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
+					return;
+		});
         TestRoutes.Add("POST", "/identity-test-create", (context, path) =>
 		{
 					string name = context.Request.QueryString["name"] ?? throw new ArgumentException("Missing name query parameter");
