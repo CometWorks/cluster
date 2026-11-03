@@ -740,3 +740,25 @@ Conflicting older unpaid NPC profiles are refused before mutation, preserving
 their original claims and stocks; ordinary older finite profiles remain compatible.
 The model regression and existing clock/domain/prediction checks pass. Native
 repair verification and independent review remain pending. Full acceptance is false.
+
+## Native phase and sampler-thread repairs
+
+The exact 1,350,000-update native endpoint at the prior package passes the original
+remaining-stock bound, but fails the stricter Auto fuel-debit comparison. New captures
+now retain Update100 for every battery; near-full Auto settles with native float
+rounding. The retained native oracle then matches uranium exactly (8.685524 kg),
+with unchanged inputs, captured phases and debit tolerance. Historical TickFrames=0
+profiles retain their continuous math. Idle full reservoirs do not create sampling
+work. Cold native-oracle/legacy/cap checks pass28 assertions; existing battery29,
+clock90/required-JSON126, domain33 and prediction42 checks pass.
+
+The native physics queue can execute sampler callbacks on the simulation thread.
+A local worker handoff now runs that computation on initialized engine workers and
+joins it before the protected physics phase returns. It keeps public locked raycasts
+and existing cancellation/identity checks; it introduces no independent native reader
+or global scheduler patch. Nine exact-source cold checks cover dispatch/join/fault
+invariants with an inert scheduler. Native geometry/thread/lifetime requalification
+and the exclusive 200-panel/72-step under5s/no-sampler-stall-over2ms proof are pending.
+Main-thread waiting remains part of that budget. No exclusive result is inferred
+from the shared-host dry run. Original failures and the incomplete three-reference
+endpoint sequence remain recorded in remaining-engineering-proof/.
