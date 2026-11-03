@@ -84,6 +84,15 @@ internal sealed class AdmissionBook
 
     public void Kick(ulong userId) => _kicked[userId] = DateTimeOffset.UtcNow;
 
+    public void ClearKickCooldown(ulong userId) => _kicked.TryRemove(userId, out _);
+
+    public CometWorks.ClusterGateway.AdminContract.V1.PlayerKickCooldown[] KickCooldowns()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        return _kicked.Where(entry => entry.Value + KickTimeout > now).OrderBy(entry => entry.Key)
+            .Select(entry => new CometWorks.ClusterGateway.AdminContract.V1.PlayerKickCooldown(entry.Key, entry.Value + KickTimeout)).ToArray();
+    }
+
     public ulong[] BannedUsers() { lock (_banned) return _banned.Order().ToArray(); }
 
     public bool WasKickedRecently(ulong userId) =>

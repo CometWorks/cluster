@@ -54,6 +54,9 @@ envelopes, error codes), `ClusterRegistry/AdminApi.cs` (routing),
 | `POST /admin/v1/nodes/{slot}/kill` | provenance-bound force removal: the body must name the exact `node`+`epoch` the slot observes; the still-wanted slot respawns only after the executor reports the incumbent gone |
 | `POST /admin/v1/world-authority/move` | drains the current WA incarnation; the successor spawns via the NodePlan and takes a bumped authority generation |
 | `GET /admin/v1/clients` | stable player/session view: identity, admission state, admin flag, and the authoritative registry route (node/partition) when known |
+| `GET /admin/v1/players/moderation` | authoritative promotion entries `{userId, level, revision}` and active admission kick deadlines `{userId, expiresAt}`, including offline players |
+| `PUT /admin/v1/players/{userId}/promotion` | set `{level, expectedRevision}` through the current fenced World Authority; manage scope and `Idempotency-Key` required |
+| `DELETE /admin/v1/admission/kicks/{userId}` | clear this player's Gateway admission kick deadline; manage scope and `Idempotency-Key` required; bans are unchanged |
 | `POST /admin/v1/clients/{id}/kick` | punitive kick (arms the anti-flap cooldown) or, with `{"reconnect":true}`, a rescue reconnect that does not lock the player out |
 | `GET /admin/v1/admission/bans` | the effective admin ban set |
 | `POST /admin/v1/admission/bans` | ban `{userId}`; persisted to `admission-bans.json` under the registry dir (atomic rewrite, applied over the admission config at start), and the connected session is disconnected |
@@ -80,6 +83,50 @@ operation record: `202` while the effect is still running, `200` with the record
 outcome once terminal. Retrying with the same key — including after a lost response or a
 Gateway restart — replays the record instead of repeating the effect; reusing a key for a
 different request is refused with `409 idempotency_key_reuse`.
+
+## Player moderation
+
+Contract package `0.11.0` adds the three routes above and feature `playerModeration: v1`
+without changing HTTP wire v1. Check operation capabilities before enabling an action.
+Roles are exactly `None`, `Scripter`, `Moderator`, `SpaceMaster` and `Admin`; `Owner` is
+not assignable. User IDs must be nonzero. An absent user in a non-null promotion map
+has role `None`, revision 0. A null `promotions` means the WA is unavailable or too old;
+`promotionError` explains why, while Gateway cooldowns remain available.
+
+The role request includes the revision observed for that player. A stale request completes
+as a failed operation with `revision_mismatch`; refresh before a new decision. The Gateway
+sends the operation GUID through its existing WA command lane, fenced by WA generation
+and correlated by subsystem, sequence and operation GUID. Only Gateway-originated admin
+commands are accepted. No node selected from the player's current placement owns the role.
+Success acknowledges the WA's game-thread update and queued cluster replication; a
+disconnected replica catches up through the existing snapshot resync.
+
+The WA promotion map, revisions and explicit `None` demotions are captured with the command
+ledger in an appended optional global-save section. Earlier saves still load and seed from
+their checkpoint. Startup seeds cannot overwrite known roles. Nodes reapply the current
+map when player loading restores stale checkpoint data during reconnect or movement.
+Global saves and role changes wait for initial promotion seeding; an early role command
+fails with `promotion_not_ready` without bypassing the checkpoint-loading grace period.
+Refresh before submitting a new action. Journaled changes after a recoverable
+save replay on its replacement WA, under the existing journal policy (including its
+bounded fail-open behavior) and [state durability](StateDurability.md) rollback limits.
+Use matching Gateway and node builds; older nodes do not implement the new WA commands.
+
+A lost or invalid WA acknowledgement completes the Gateway operation with
+`promotion_uncertain`, never success. Retry the **same key and identical request** to
+reconcile that WA ledger GUID. The revision check prevents an undelivered old request
+from overwriting a newer decision. Quasar retains this outcome as in progress and
+reconciles the original request after reconnect or restart.
+
+Punitive kicks still impose five minutes in `AdmissionBook`. Clearing a cooldown removes
+only that user's deadline; it does not unban, change reserved slots or affect other users.
+A replay of a completed clear does not remove a subsequent kick. These deadlines remain
+in memory and disappear on Gateway restart, matching existing behavior. An interrupted
+clear is failed as `clear_interrupted`; refresh before sending a new clear. Roles persist
+through clean cluster restart, WA replacement, player reconnect and node movement.
+
+CLI: `player-moderation`, `player-promotion USERID LEVEL EXPECTED_REVISION`, and
+`clear-kick-cooldown USERID`. Mutations accept `--key` as usual.
 
 ## Node control
 

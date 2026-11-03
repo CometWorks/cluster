@@ -6,6 +6,11 @@ referencing Registry implementation types.
 
 The URL prefix and current wire version are exposed by `AdminProtocol`.
 
+Package `0.11.0` adds `PlayerModerationContract.cs`: cluster promotion state with
+per-player revisions, compare-and-set role updates, and Gateway admission kick
+cooldown observation/clearing. Operations advertise `playerModeration: v1` and
+retain HTTP wire v1. See `Docs/Gateway/AdminAPI.md` for ownership and persistence.
+
 Package `0.10.0` adds leased, revisioned, incarnation-bound rotation publications and
 client diagnostic DTOs. HTTP wire v1 is retained; the game mod-network codec uses
 protocol 4. See `Docs/Gateway/ClientDiagnostics.md`.

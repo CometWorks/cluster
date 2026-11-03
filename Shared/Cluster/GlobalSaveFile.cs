@@ -13,7 +13,7 @@ internal static class GlobalSaveFile
 
 	public static byte[] Write(MyObjectBuilder_Checkpoint checkpoint, uint generation, uint sequence, byte kind, long clusterTime,
 		string commandLedger = null, string characterRecord = null, string timeOfDayRecord = null, string shipStorageRecord = null,
-		string adminSafeZonesRecord = null, string contractRecord = null)
+		string adminSafeZonesRecord = null, string contractRecord = null, string offlineRatesRecord = null, string promotionRecord = null)
 	{
 		if (checkpoint == null) throw new ArgumentNullException(nameof(checkpoint));
 		using MemoryStream checkpointBody = new MemoryStream();
@@ -35,8 +35,10 @@ internal static class GlobalSaveFile
 				// file written before either still reads: the reader takes whatever sections are
 				// present. WorldAuthority.md 5.5's settings store, §8.2's time-of-day state, the stored ships
 				// (SE1-0233), the admin safe zones (SE1-0252), then §6.3's accepted contracts (SE1-0247); a later
-				// section forces empty placeholders for the earlier ones it follows.
-				string[] sections = { characterRecord, timeOfDayRecord, shipStorageRecord, adminSafeZonesRecord, contractRecord };
+				// section forces empty placeholders for the earlier ones it follows. The optional
+				// offline-rates slot is preserved for compatibility with the shared offline branch;
+				// this build leaves it empty. Promotion records follow that slot.
+				string[] sections = { characterRecord, timeOfDayRecord, shipStorageRecord, adminSafeZonesRecord, contractRecord, offlineRatesRecord, promotionRecord };
 				int count = Array.FindLastIndex(sections, section => section != null) + 1;
 				for (int i = 0; i < count; i++)
 				{
@@ -61,7 +63,7 @@ internal static class GlobalSaveFile
 		if (generation.HasValue) PartitionSaveFile.ValidateEnvelope(parsed, 0, generation.Value, sequence);
 		byte[] checkpointBody = parsed.Body;
 		string ledger = null, characterRecord = null, timeOfDayRecord = null, shipStorageRecord = null, adminSafeZonesRecord = null,
-			contractRecord = null;
+			contractRecord = null, offlineRatesRecord = null, promotionRecord = null;
 		if (parsed.Body.Length >= 12 && BitConverter.ToUInt32(parsed.Body) == BodyMagic)
 		{
 			using MemoryStream combined = new(parsed.Body, writable: false);
@@ -106,18 +108,32 @@ internal static class GlobalSaveFile
 			if (combined.Position < combined.Length)
 			{
 				int recordLength = reader.ReadInt32();
-				if (recordLength < 0 || recordLength != combined.Length - combined.Position)
+				if (recordLength < 0 || recordLength > combined.Length - combined.Position)
 					throw new InvalidDataException("Invalid World Authority contract record length");
 				contractRecord = recordLength == 0 ? null : Encoding.UTF8.GetString(reader.ReadBytes(recordLength));
+			}
+			if (combined.Position < combined.Length)
+			{
+				int recordLength = reader.ReadInt32();
+				if (recordLength < 0 || recordLength > 16 * 1024 * 1024 || recordLength > combined.Length - combined.Position)
+					throw new InvalidDataException("Invalid World Authority offline rates record length");
+				offlineRatesRecord = recordLength == 0 ? null : Encoding.UTF8.GetString(reader.ReadBytes(recordLength));
+			}
+			if (combined.Position < combined.Length)
+			{
+				int recordLength = reader.ReadInt32();
+				if (recordLength < 0 || recordLength > 4 * 1024 * 1024 || recordLength != combined.Length - combined.Position)
+					throw new InvalidDataException("Invalid World Authority promotion record length");
+				promotionRecord = recordLength == 0 ? null : Encoding.UTF8.GetString(reader.ReadBytes(recordLength));
 			}
 		}
 		using MemoryStream body = new MemoryStream(checkpointBody, writable: false);
 		if (!MyObjectBuilderSerializerKeen.DeserializeXML(body, out MyObjectBuilder_Checkpoint checkpoint))
 			throw new InvalidDataException("Failed to deserialize the World Authority checkpoint");
-		return new Bundle(checkpoint, ledger, characterRecord, timeOfDayRecord, shipStorageRecord, adminSafeZonesRecord, contractRecord);
+		return new Bundle(checkpoint, ledger, characterRecord, timeOfDayRecord, shipStorageRecord, adminSafeZonesRecord, contractRecord, offlineRatesRecord, promotionRecord);
 	}
 
 	internal sealed record Bundle(MyObjectBuilder_Checkpoint Checkpoint, string CommandLedger, string CharacterRecord = null,
 		string TimeOfDayRecord = null, string ShipStorageRecord = null, string AdminSafeZonesRecord = null,
-		string ContractRecord = null);
+		string ContractRecord = null, string OfflineRatesRecord = null, string PromotionRecord = null);
 }

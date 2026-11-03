@@ -1,5 +1,13 @@
 # Cluster scenario suite
 
+Player moderation can be checked without game processes or Steam:
+`dotnet run --project Test/PlayerModeration/PlayerModeration.csproj` exercises the
+production promotion owner, command ledger and global-save section codec using
+inert game/scheduler/envelope adapters. The Registry's `--self-test player-moderation`
+uses real loopback HTTP auth and UDP WA command routing, plus admission state and
+durable operation recovery. Build plugins with `-p:RunPostBuildEvent=Never` for
+verification so the normal post-build target does not deploy to a local Magnetar.
+
 The suite deploys a cluster from an unpacked **release package** (the `ClusterForLinux-<version>`
 that `Build/release.sh` produces), joins headless clients to it, and asserts against structured
 state: the Gateway's `diag` snapshot, the Ownership Registry, node control routes, process logs and
