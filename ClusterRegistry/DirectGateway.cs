@@ -3790,7 +3790,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
 		return reason != null;
 	}
 
-    private async Task<string> SendGatewayCommand(WorldAuthority authority, string subsystem, string payload, CancellationToken cancellationToken)
+    private async Task<string> SendGatewayCommand(WorldAuthority authority, string subsystem, string payload, CancellationToken cancellationToken,
+        Guid? stableOperationId = null)
     {
         NodeRegistration wa = _registry!.Nodes().Single(node => node.Node == authority.Node && node.Epoch == authority.Epoch
             && node.Role == NodeRole.WA && node.State == NodeState.Active);
@@ -3798,7 +3799,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         ConnectBackend(link);
         if (!link.Connected.Wait(TimeSpan.FromSeconds(10), cancellationToken)) throw new TimeoutException("Timed out connecting to the World Authority");
         long sequence = Interlocked.Increment(ref _gatewayCommandSequence);
-		Guid operationId = Guid.NewGuid();
+		Guid operationId = stableOperationId ?? Guid.NewGuid();
 		var pending = new PendingGatewayCommand(authority.Generation, subsystem, operationId,
 			new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously));
         if (!_gatewayCommands.TryAdd(sequence, pending)) throw new InvalidOperationException("Duplicate Gateway command sequence");

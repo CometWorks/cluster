@@ -89,6 +89,14 @@ registry went 10.3 -> 14.2 MB. Flushing on an interval removes the growth term
 from the write path entirely - the cost of a flush still scales with state, but
 the *number* of flushes stops scaling with activity.
 
+## Player moderation
+
+Player promotion state, including revisions and explicit None demotions, is part
+of the WA global-save bundle and command journal. A clean stop saves it with the
+ledger; replacement WAs replay changes after that save under the journal's existing
+policy. Admission kick deadlines remain Gateway memory only and reset on Gateway
+restart. See [player moderation](AdminAPI.md#player-moderation).
+
 ## SIGTERM commits and exits
 
 A SIGTERM stops the Gateway process, not the cluster. The Registry commits what it holds and the process exits

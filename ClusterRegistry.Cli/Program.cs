@@ -12,7 +12,7 @@ internal static class Program
     private const string Usage = """
         Usage: ClusterRegistry.Cli [--url URL] [--timeout SECONDS] COMMAND
         Reads:     health | capabilities | status | plan | recovery-readiness | nodes
-                   | world-authority | partitions | snapshots | config | clients | bans
+                   | world-authority | partitions | snapshots | config | clients | bans | player-moderation
                    | chat-history [--cursor N] [--limit M] | ship-storage-takes | artifacts | artifact ID
                    | events [--cursor N] [--limit M] | operations [--limit M] | operation ID
                    | diag [--depth D] [--node N] [--partition P] [--player S] [--entity E]
@@ -28,6 +28,8 @@ internal static class Program
                    | wa-move [--force-after N]
                    | trigger TASK [--node N] [--partition P] [--unthrottled]
                    | kick CLIENTID [--reconnect] | ban USERID | unban USERID
+                   | player-promotion USERID None|Scripter|Moderator|SpaceMaster|Admin EXPECTED_REVISION
+                   | clear-kick-cooldown USERID
                    | chat MESSAGE --sender STEAMID
                    | ship-storage-settle SHIPID TAKEID release|consume (a stranded take, #1316)
                    | world-export [--ttl-hours H] | registry-backup [--ttl-hours H] | artifact-release ID
@@ -86,6 +88,9 @@ internal static class Program
         ("diag", "GET /admin/v1/diag", []),
         ("trigger {task}", "POST /admin/v1/triggers/{task}", []),
         ("clients", "GET /admin/v1/clients", []),
+        ("player-moderation", "GET /admin/v1/players/moderation", []),
+        ("player-promotion {userId} Admin 0", "PUT /admin/v1/players/{userId}/promotion", []),
+        ("clear-kick-cooldown {userId}", "DELETE /admin/v1/admission/kicks/{userId}", []),
         ("kick {id}", "POST /admin/v1/clients/{id}/kick", []),
         ("bans", "GET /admin/v1/admission/bans", []),
         ("ban {userId}", "POST /admin/v1/admission/bans", []),
@@ -418,7 +423,7 @@ internal static class Program
                     or "rotation" or "rotation-set" or "client-diagnostics" or "handover-config" or "handover-config-set" or "config" or "clients" or "bans" or "chat-history" or "ship-storage-takes" or "artifacts" or "events"
                     or "operations" or "diag" or "shutdown" or "gateway-restart" or "save-all"
                     or "config-set" or "node-close" or "node-kill" or "wa-move" or "trigger" or "kick"
-                    or "ban" or "unban" or "chat" or "ship-storage-settle" or "world-export" or "registry-backup" or "artifact-release"
+                    or "ban" or "unban" or "player-moderation" or "player-promotion" or "clear-kick-cooldown" or "chat" or "ship-storage-settle" or "world-export" or "registry-backup" or "artifact-release"
                     or "node-control" or "node-control-history" or "node-control-set" or "node-control-remove"
                     or "node-control-recycle" or "node-control-hosts-file")
                     command = args[i];
@@ -498,6 +503,22 @@ internal static class Program
                     break;
                 case "bans":
                     command = "admission/bans";
+                    break;
+                case "player-moderation":
+                    command = "players/moderation";
+                    break;
+                case "player-promotion":
+                    if (positional.Count != 3 || !long.TryParse(positional[2], out long expectedRevision) || expectedRevision < 0 || expectedRevision == long.MaxValue
+                        || !ulong.TryParse(positional[0], out ulong promoteId) || promoteId == 0
+                        || !Enum.TryParse<Admin.PlayerPromotionLevel>(positional[1], out var level) || !Enum.IsDefined(level)
+                        || !Enum.GetNames<Admin.PlayerPromotionLevel>().Contains(positional[1]))
+                        throw new ArgumentException(Usage);
+                    (method, command, body) = ("PUT", $"players/{promoteId}/promotion", JsonSerializer.Serialize(new Admin.SetPlayerPromotionRequest(level, expectedRevision), JsonOptions));
+                    break;
+                case "clear-kick-cooldown":
+                    if (positional.Count != 1 || !ulong.TryParse(positional[0], out ulong cooldownId) || cooldownId == 0)
+                        throw new ArgumentException(Usage);
+                    (method, command, body) = ("DELETE", $"admission/kicks/{cooldownId}", "{}");
                     break;
                 case "kick":
                     if (positional.Count != 1 || !ulong.TryParse(positional[0], out ulong kickId))

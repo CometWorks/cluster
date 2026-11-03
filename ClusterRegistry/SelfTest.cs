@@ -179,6 +179,7 @@ internal static partial class SelfTest
         ("plugin-services", TestPluginServices),
         ("plugin-persistence", TestPluginPersistence),
         ("admin-admission", TestAdminAdmission),
+        ("player-moderation", TestPlayerModeration),
         ("admin-artifacts", TestAdminArtifacts),
         ("registry-copy", TestRegistryCopy),
         ("registry-backup-retention", TestRegistryBackupRetention),

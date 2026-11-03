@@ -4407,6 +4407,22 @@ internal sealed partial class GatewayRegistry : IDisposable
     public AdminOperationRecord FailAdminOperation(string operationId, string errorCode, string errorMessage) =>
         FinishAdminOperation(operationId, AdminOperationPhase.Failed, null, errorCode, errorMessage);
 
+    /// <summary>Reconcile an unconfirmed promotion under its original WA ledger GUID.</summary>
+    internal bool ResumePlayerPromotion(string operationId)
+    {
+        lock (_lock)
+        {
+            if (!_state.AdminOperations.TryGetValue(operationId, out var record) || record.Kind != "player-promotion"
+                || record.State != AdminOperationPhase.Failed || record.ErrorCode != "promotion_uncertain") return false;
+            record.State = AdminOperationPhase.Running;
+            record.ErrorCode = record.ErrorMessage = null;
+            record.UpdatedAt = _clock();
+            Emit("operation.resumed", operationId, new Dictionary<string, string> { ["kind"] = record.Kind, ["actor"] = record.Actor });
+            Persist();
+            return true;
+        }
+    }
+
     private AdminOperationRecord FinishAdminOperation(string operationId, AdminOperationPhase state,
         IReadOnlyDictionary<string, string>? result, string? errorCode, string? errorMessage)
     {

@@ -20,6 +20,21 @@ internal sealed partial class DirectGateway
         }
 
         string prefix = Admin.AdminProtocol.RoutePrefix;
+        if (context.Request.HttpMethod == "PUT"
+            && path.StartsWith(prefix + "/players/", StringComparison.OrdinalIgnoreCase)
+            && path.EndsWith("/promotion", StringComparison.OrdinalIgnoreCase)
+            && ulong.TryParse(path[(prefix + "/players/").Length..^"/promotion".Length], out ulong promoteUser))
+        {
+            AdminSetPlayerPromotion(context, actor, promoteUser);
+            return;
+        }
+        if (context.Request.HttpMethod == "DELETE"
+            && path.StartsWith(prefix + "/admission/kicks/", StringComparison.OrdinalIgnoreCase)
+            && ulong.TryParse(path[(prefix + "/admission/kicks/").Length..], out ulong clearKickUser))
+        {
+            AdminClearKickCooldown(context, actor, clearKickUser);
+            return;
+        }
         if (context.Request.HttpMethod == "POST" && path.Equals(prefix + "/shutdown", StringComparison.OrdinalIgnoreCase))
         {
             AdminShutdown(context, actor);
@@ -561,9 +576,9 @@ internal sealed partial class DirectGateway
     private void AdminKickClient(HttpListenerContext context, AdminActor actor, ulong clientId)
     {
         var request = ReadAdminBody<Admin.KickClientRequest>(context) ?? new Admin.KickClientRequest();
-        if (!_clients.TryGetValue(clientId, out ClientSession? session))
+        if (clientId == 0)
         {
-            WriteAdminError(context, 404, "not_found", $"No connected client '{clientId}'.");
+            WriteAdminError(context, 400, "invalid_arguments", "A non-zero clientId is required.");
             return;
         }
         AdminOperationRecord? record = BeginMutation(context, actor, "client-kick",
@@ -572,6 +587,12 @@ internal sealed partial class DirectGateway
             return;
         if (!replayed)
         {
+            if (!_clients.TryGetValue(clientId, out ClientSession? session))
+            {
+                _registry!.FailAdminOperation(record.OperationId, "not_found", $"No connected client '{clientId}'.");
+                WriteOperation(context, record);
+                return;
+            }
             // Same split as the legacy route: a punitive kick arms the anti-flap cooldown, a
             // reconnect rescues a stuck player without locking them out.
             if (!request.Reconnect)

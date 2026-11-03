@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using Sandbox;
 using Sandbox.Game.World;
 using VRage.Game.ModAPI;
 
@@ -24,19 +27,31 @@ public static class PromotionService
 	private const double SeedGraceMilliseconds = 15_000;
 
 	private static readonly object SyncRoot = new object();
-	private static readonly Dictionary<ulong, int> Levels = new();
+	private static readonly Dictionary<ulong, PromotionEntry> Levels = new();
 	private static readonly string Node = Environment.GetEnvironmentVariable("CLUSTER_NODE_ID") ?? string.Empty;
 
 	private static string m_snapshot = JsonSerializer.Serialize(new PromotionSnapshot(Array.Empty<PromotionEntry>()));
 	private static string m_pending;
 	private static string m_applied;
+	private static Dictionary<ulong, int> m_appliedLevels;
 	private static bool m_applying;
-	private static bool m_seeded;
+	private static volatile bool m_seeded;
 	private static double m_readySince;
 
-	public sealed record PromotionEntry(ulong SteamId, int Level);
-	public sealed record PromotionReport(string Origin, PromotionEntry[] Entries);
+	public sealed record PromotionEntry(ulong SteamId, int Level, long Revision = 0);
+	public sealed record PromotionChange(ulong SteamId, int Level, long ExpectedRevision);
+	public sealed record PromotionReport(string Origin, PromotionEntry[] Entries, bool Seed = false);
 	public sealed record PromotionSnapshot(PromotionEntry[] Entries);
+
+	/// <summary>Cluster backend sessions may use OFFLINE mode, where vanilla reports every
+	/// nonzero id as Owner. Only the replicated promotion map grants a cluster bypass.</summary>
+	internal static bool IsModerator(ulong userId)
+	{
+		MySession session = MySession.Static;
+		if (session == null) return false;
+		return (ClusterRuntime.IsClustered ? session.PromotedUsers.GetValueOrDefault(userId)
+			: session.GetUserPromoteLevel(userId)) >= MyPromoteLevel.Moderator;
+	}
 
 	internal static void Install()
 	{
@@ -44,6 +59,67 @@ public static class PromotionService
 		GlobalStateChannel.RegisterAuthorityHandler(Subsystem, ReceiveReport);
 		GlobalStateChannel.RegisterReplicaHandler(Subsystem, ReceiveSnapshot);
 		GlobalStateChannel.RegisterSnapshot(Subsystem, Snapshot, ReceiveSnapshot);
+		GlobalStateChannel.RegisterCommandHandler("promotion-set", SetFromGateway, journaled: true);
+		GlobalStateChannel.RegisterQueryHandler("promotion-query", QueryFromGateway);
+	}
+
+	private static string QueryFromGateway(string origin, string payload)
+	{
+		if (origin != "$gateway") throw new InvalidOperationException("Promotion administration must originate at the Gateway");
+		lock (SyncRoot)
+		{
+			if (!m_seeded) throw new InvalidOperationException("World Authority promotions are not ready");
+			return m_snapshot;
+		}
+	}
+
+	private static string SetFromGateway(string origin, string payload)
+	{
+		if (origin != "$gateway") throw new InvalidOperationException("Promotion administration must originate at the Gateway");
+		PromotionChange entry = JsonSerializer.Deserialize<PromotionChange>(payload);
+		if (entry == null || entry.SteamId == 0 || entry.Level is < 0 or > 4 || entry.ExpectedRevision < 0 || entry.ExpectedRevision == long.MaxValue)
+			throw new ArgumentException("Invalid player promotion");
+		MySandboxGame game = MySandboxGame.Static ?? throw new InvalidOperationException("The World Authority game is unavailable");
+		var completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+		void Apply()
+		{
+			try
+			{
+				if (!ClusterRuntime.IsWorldAuthority || ClusterRuntime.IsAuthorityFenced || MySession.Static?.Ready != true)
+					throw new InvalidOperationException("The World Authority is unavailable");
+				SeedFromSession(MySession.Static);
+				if (!m_seeded) throw new InvalidOperationException("promotion_not_ready");
+				lock (SyncRoot)
+				{
+					if ((Levels.TryGetValue(entry.SteamId, out var current) ? current.Revision : 0) != entry.ExpectedRevision)
+						throw new InvalidOperationException("promotion_revision_mismatch");
+					ReceiveReport(origin, JsonSerializer.Serialize(new PromotionReport(origin, new[] { new PromotionEntry(entry.SteamId, entry.Level) })));
+					// The acknowledgement and the next checkpoint must see the game-thread effect.
+					Update();
+					completion.SetResult(JsonSerializer.Serialize(Levels[entry.SteamId]));
+				}
+			}
+			catch (Exception e) { completion.SetException(e); }
+		}
+		if (game.UpdateThread == Thread.CurrentThread) Apply();
+		else game.Invoke(Apply, "ClusterPlugin promotion administration");
+		return completion.Task.GetAwaiter().GetResult();
+	}
+
+	internal static bool Ready => m_seeded;
+	internal static string PersistedRecord() => Snapshot();
+
+	internal static void RestoreRecord(string payload)
+	{
+		if (string.IsNullOrEmpty(payload)) return; // Older saves seed from their checkpoint.
+		PromotionSnapshot snapshot = ReadSnapshot(payload);
+		lock (SyncRoot)
+		{
+			Levels.Clear();
+			foreach (PromotionEntry entry in snapshot.Entries) Levels.Add(entry.SteamId, entry);
+			m_snapshot = m_pending = payload;
+			m_seeded = true;
+		}
 	}
 
 	private static void OnPromotionChanged(ulong steamId, MyPromoteLevel level)
@@ -80,7 +156,7 @@ public static class PromotionService
 			m_seeded = true;
 			return;
 		}
-		string payload = JsonSerializer.Serialize(new PromotionReport(Node, entries));
+		string payload = JsonSerializer.Serialize(new PromotionReport(Node, entries, Seed: true));
 		Console.WriteLine($"[ClusterPlugin] promotion seed entries={entries.Length}");
 		if (ClusterRuntime.IsWorldAuthority)
 		{
@@ -96,12 +172,19 @@ public static class PromotionService
 	{
 		PromotionReport report = Read(payload);
 		lock (SyncRoot)
+		{
 			foreach (PromotionEntry entry in report.Entries)
 			{
-				if (entry.Level > 0) Levels[entry.SteamId] = entry.Level;
-				else Levels.Remove(entry.SteamId);
+				// Startup/transfer checkpoint data cannot undo a later explicit role, including None.
+				if (report.Seed && Levels.ContainsKey(entry.SteamId)) continue;
+				if (!Levels.ContainsKey(entry.SteamId) && Levels.Count >= MaxEntries)
+					throw new InvalidOperationException("Promotion map is full");
+				Levels.TryGetValue(entry.SteamId, out var current);
+				Levels[entry.SteamId] = current?.Level == entry.Level ? current
+					: entry with { Revision = checked((current?.Revision ?? 0) + 1) };
 			}
-		PublishMerged();
+			PublishMerged();
+		}
 	}
 
 	private static void PublishMerged()
@@ -110,7 +193,7 @@ public static class PromotionService
 		lock (SyncRoot)
 			payload = m_snapshot = JsonSerializer.Serialize(new PromotionSnapshot(Levels
 				.OrderBy(entry => entry.Key)
-				.Select(entry => new PromotionEntry(entry.Key, entry.Value))
+				.Select(entry => entry.Value)
 				.ToArray()));
 		GlobalStateChannel.Publish(Subsystem, payload);
 		// The WA never receives its own replica broadcasts - park the merged map so its Update()
@@ -120,8 +203,7 @@ public static class PromotionService
 
 	private static void ReceiveSnapshot(string payload)
 	{
-		if (payload == null || payload.Length > 4 * 1024 * 1024)
-			throw new InvalidOperationException("Invalid promotion snapshot");
+		ReadSnapshot(payload);
 		lock (SyncRoot) m_pending = payload;
 	}
 
@@ -138,42 +220,34 @@ public static class PromotionService
 		// demote them.
 		if (!m_seeded) return;
 		string payload;
+		Dictionary<ulong, int> replicated;
 		lock (SyncRoot)
 		{
-			payload = m_pending;
+			// Player loading can restore stale checkpoint roles without a promotion event.
+			// Reconcile even an unchanged snapshot after a reconnect or node move.
+			payload = m_pending ?? m_applied;
 			if (payload == null) return;
-			if (string.Equals(payload, m_applied, StringComparison.Ordinal))
-			{
-				m_pending = null;
-				return;
-			}
+			replicated = payload == m_applied ? m_appliedLevels
+				: ReadSnapshot(payload).Entries.ToDictionary(entry => entry.SteamId, entry => entry.Level);
 		}
-		PromotionSnapshot snapshot = null;
-		try { snapshot = JsonSerializer.Deserialize<PromotionSnapshot>(payload); }
-		catch (Exception e) { Console.WriteLine("[ClusterPlugin] promotion snapshot rejected: " + e.Message); }
-		if (snapshot?.Entries == null || snapshot.Entries.Length > MaxEntries) snapshot = null;
-		if (snapshot != null)
+		// Demotions first: local entries the authoritative map no longer contains.
+		ulong[] demoted = session.PromotedUsers.Keys.Where(steamId => !replicated.ContainsKey(steamId)).ToArray();
+		m_applying = true;
+		try
 		{
-			var replicated = snapshot.Entries.ToDictionary(entry => entry.SteamId, entry => entry.Level);
-			// Demotions first: local entries the authoritative map no longer contains.
-			ulong[] demoted = session.PromotedUsers.Keys.Where(steamId => !replicated.ContainsKey(steamId)).ToArray();
-			m_applying = true;
-			try
+			foreach (ulong steamId in demoted)
+				MySessionSeams.ClusterRaisePromoteLevel(steamId, MyPromoteLevel.None);
+			foreach ((ulong steamId, int level) in replicated)
 			{
-				foreach (ulong steamId in demoted)
-					MySessionSeams.ClusterRaisePromoteLevel(steamId, MyPromoteLevel.None);
-				foreach ((ulong steamId, int level) in replicated)
-				{
-					if (level < 0 || level > (int)MyPromoteLevel.Admin) continue;
-					session.PromotedUsers.TryGetValue(steamId, out MyPromoteLevel current);
-					if ((int)current != level) MySessionSeams.ClusterRaisePromoteLevel(steamId, (MyPromoteLevel)level);
-				}
+				session.PromotedUsers.TryGetValue(steamId, out MyPromoteLevel current);
+				if ((int)current != level) MySessionSeams.ClusterRaisePromoteLevel(steamId, (MyPromoteLevel)level);
 			}
-			finally { m_applying = false; }
 		}
+		finally { m_applying = false; }
 		lock (SyncRoot)
 		{
 			m_applied = payload;
+			m_appliedLevels = replicated;
 			if (string.Equals(m_pending, payload, StringComparison.Ordinal)) m_pending = null;
 		}
 	}
@@ -205,9 +279,21 @@ public static class PromotionService
 		PromotionReport report = JsonSerializer.Deserialize<PromotionReport>(payload)
 			?? throw new InvalidOperationException("Invalid promotion report");
 		if (report.Entries == null || report.Entries.Length > MaxEntries
-			|| report.Entries.Any(entry => entry == null || entry.Level < 0 || entry.Level > (int)MyPromoteLevel.Admin))
+			|| report.Entries.Any(entry => entry == null || entry.SteamId == 0 || entry.Level < 0 || entry.Level > (int)MyPromoteLevel.Admin))
 			throw new InvalidOperationException("Invalid promotion report");
 		return report;
+	}
+
+	private static PromotionSnapshot ReadSnapshot(string payload)
+	{
+		if (payload == null || payload.Length > 4 * 1024 * 1024)
+			throw new InvalidOperationException("Invalid promotion snapshot");
+		PromotionSnapshot snapshot = JsonSerializer.Deserialize<PromotionSnapshot>(payload);
+		if (snapshot?.Entries == null || snapshot.Entries.Length > MaxEntries
+			|| snapshot.Entries.Any(entry => entry == null || entry.SteamId == 0 || entry.Level is < 0 or > 4 || entry.Revision < 0)
+			|| snapshot.Entries.Select(entry => entry.SteamId).Distinct().Count() != snapshot.Entries.Length)
+			throw new InvalidOperationException("Invalid promotion snapshot");
+		return snapshot;
 	}
 
 	private static string Snapshot() { lock (SyncRoot) return m_snapshot; }

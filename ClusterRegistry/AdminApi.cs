@@ -28,6 +28,7 @@ internal sealed partial class DirectGateway
         ["nodeControl"] = "v1",
         ["clientDiagnostics"] = "v1",
         ["rotationPublication"] = "v1",
+        ["playerModeration"] = "v1",
     };
 
     /// <summary>
@@ -157,6 +158,11 @@ internal sealed partial class DirectGateway
         if (path.Equals(Admin.AdminProtocol.RoutePrefix + "/clients", StringComparison.OrdinalIgnoreCase))
         {
             WriteAdminEnvelope(context, AdminClients());
+            return;
+        }
+        if (path.Equals(Admin.AdminProtocol.RoutePrefix + "/players/moderation", StringComparison.OrdinalIgnoreCase))
+        {
+            AdminPlayerModeration(context);
             return;
         }
         if (path.Equals(Admin.AdminProtocol.RoutePrefix + "/admission/bans", StringComparison.OrdinalIgnoreCase))
