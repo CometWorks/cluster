@@ -2403,6 +2403,55 @@ def p2_wa_01(bench) -> None:
                     medbayPartition=ctx.respawn_partition, founder=ctx.faction_identity, member=ctx.client2_identity)
 
 
+def _broadcast_chat(bench, ctx, node_id: str, identity: int, author: str) -> str:
+    text = f"se943-broadcast-{node_id}-{random.randrange(32768)}"
+    _post(bench, node_id, "/broadcast-chat-test?" + _q(identityId=identity, author=author, text=text))
+    return text
+
+
+def p2_wa_bcast(bench) -> None:
+    """SE-943: a broadcast controller message sent on a regular node goes through the WA's chat path. The
+    node the targeted client is on relays it with the block's name in CustomData.AuthorName, which the
+    client shows as the sender, from either node; no other client receives it. Without CustomData across
+    the WA the client named the Author, the node's server member, Good.bot.
+
+    The bench's headless clients show no multiplayer chat on their HUD (MyHudChat needs an active game
+    service), so the name is read from what node-1 relays (the test plugin's /chat-relay-probe), and the
+    client's received-message log proves the delivery."""
+    ctx = _founder(bench)
+    api = ctx.api
+    client = str(CLIENT_ID)
+    author = f"SE-943 Beacon {random.randrange(1000)}"
+    _post(bench, "node-1", "/chat-relay-probe")
+
+    def relayed(text):
+        return [row for row in _node(bench, "node-1", "/chat-relay-probe")["relayed"] if row.get("text") == text]
+
+    def received(text):
+        return any(m.get("Text") == text for m in api.get_chat_messages(0).get("messages") or [])
+
+    for node_id in ("node-1", "node-2"):
+        text = _broadcast_chat(bench, ctx, node_id, ctx.binding_identity, author)
+        bench.check(f"a broadcast controller message sent on {node_id} reached the targeted client",
+                    _poll(lambda: received(text), CLIENT_TIMEOUT), text)
+        rows = relayed(text)
+        bench.record(f"broadcast-from-{node_id}", rows)
+        bench.check(f"node-1 relayed the message from {node_id} to the client with the broadcast controller's name, not Good.bot",
+                    any(row["recipient"] == client and row["authorName"] == author for row in rows), json.dumps(rows))
+    other = _post(bench, "node-1", "/identity-test-create?" + _q(name=f"se943-other-{random.randrange(1000)}"))["identityId"]
+    hidden = _broadcast_chat(bench, ctx, "node-1", other, author)
+    published = _poll(lambda: all(any(hidden in (row.get("payload") or "") for row in _subsystem(bench, n, "chat"))
+                                  for n in ("node-1", "node-2")), HANDOVER_TIMEOUT)
+    bench.check("the WA published the message targeted at another identity to both nodes", published, hidden)
+    seen = _poll(lambda: received(hidden), 10)
+    rows = relayed(hidden)
+    bench.record("broadcast-to-other", rows)
+    bench.check("the message targeted at another identity did not reach the client",
+                not seen and not any(row["recipient"] == client for row in rows), json.dumps(rows))
+    bench.exercised(route="broadcast controller chat from node-1 and node-2 to the founder on node-1, and to another identity",
+                    author=author, identity=ctx.binding_identity, other=other)
+
+
 def _gps_state(bench, node_id: str) -> dict:
     state = _node(bench, node_id, "/global-state")
     gps = next(x for x in state["subsystems"] if x["subsystem"] == "gps")
@@ -2950,6 +2999,7 @@ SCENARIOS_WA = {
                            "(write-ahead journal)", "3"),
     "P2-WA-01": (p2_wa_01, "cross-node chat, faction and GPS", "3"),
     "P2-WA-03": (p2_wa_03, "global encounter dispatched once cluster-wide; counts converge", "3"),
+    "P2-WA-BCAST": (p2_wa_bcast, "SE-943: a broadcast controller message names its block, not Good.bot, after the WA's chat path", "3"),
     "P2-WA-ECON": (p2_wa_econ, "WA-2 economy: store, trade, contracts, PCU ledger, grid transfer", "3"),
     "P2-MOD-LASER-GPS": (p2_mod_laser_gps, "SE1-0226, SE1-0235: a laser links by GPS to a laser on another node, which points back", "3"),
     "P2-MOD-01": (p2_mod_01, "cross-node IGC unicast and broadcast, no leak to other nodes", "3"),

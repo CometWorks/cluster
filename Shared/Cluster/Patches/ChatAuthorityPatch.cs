@@ -7,7 +7,9 @@ using Sandbox;
 using Sandbox.Engine.Multiplayer;
 using Sandbox.Game.Gui;
 using Sandbox.Game.World;
+using VRage.GameServices;
 using VRage.Network;
+using VRageMath;
 
 namespace ClusterPlugin;
 
@@ -116,18 +118,33 @@ public static class ChatAuthorityPatch
 	{
 		Message message = JsonSerializer.Deserialize<Message>(payload) ?? throw new InvalidOperationException("Invalid chat success");
 		ChatMsg msg = message.ToChatMsg();
-		foreach (ulong member in MyMultiplayer.Static.Members.Where(member => member != message.Sender && member != MyMultiplayer.Static.ServerId))
+		var channel = (ChatChannel)message.Channel;
+		// Vanilla sends a targeted broadcast controller or scripted message only to its target, also
+		// when the target is the player whose request triggered it.
+		bool targeted = (channel is ChatChannel.BroadcastController or ChatChannel.GlobalScripted) && message.TargetId > 0;
+		foreach (ulong member in MyMultiplayer.Static.Members.Where(member => (targeted || member != message.Sender) && member != MyMultiplayer.Static.ServerId))
 		{
 			long identity = MySession.Static.Players.TryGetIdentityId(member);
-			if ((ChatChannel)message.Channel == ChatChannel.Private && identity != message.TargetId) continue;
-			if ((ChatChannel)message.Channel == ChatChannel.Faction && MySession.Static.Factions.TryGetFactionById(message.TargetId)?.IsMember(identity) != true) continue;
+			if ((channel == ChatChannel.Private || targeted) && identity != message.TargetId) continue;
+			if (channel == ChatChannel.Faction && MySession.Static.Factions.TryGetFactionById(message.TargetId)?.IsMember(identity) != true) continue;
 			MyMultiplayerBaseSeams.ClusterRelayChat(msg, member);
 		}
 	}
 
-	private sealed record Message(string Text, ulong Author, byte Channel, long TargetId, bool CrossChatEnabled, ulong Sender)
+	// CustomData carries the shown author of broadcast controller and scripted messages: without it
+	// the client names the node's server member, "Good.bot" (SE-943).
+	private sealed record Message(string Text, ulong Author, byte Channel, long TargetId, bool CrossChatEnabled, ulong Sender,
+		bool HasCustomData = false, string AuthorName = null, ulong? SenderId = null, uint? TextColor = null)
 	{
-		public static Message From(ChatMsg msg, ulong sender) => new Message(msg.Text, msg.Author, msg.Channel, msg.TargetId, msg.CrossChatEnabled, sender);
-		public ChatMsg ToChatMsg() => new ChatMsg { Text = Text, Author = Author, Channel = Channel, TargetId = TargetId, CrossChatEnabled = CrossChatEnabled };
+		public static Message From(ChatMsg msg, ulong sender) => new Message(msg.Text, msg.Author, msg.Channel, msg.TargetId, msg.CrossChatEnabled, sender,
+			msg.CustomData.HasValue, msg.CustomData?.AuthorName, msg.CustomData?.SenderId, msg.CustomData?.TextColor?.PackedValue);
+
+		public ChatMsg ToChatMsg() => new ChatMsg
+		{
+			Text = Text, Author = Author, Channel = Channel, TargetId = TargetId, CrossChatEnabled = CrossChatEnabled,
+			CustomData = HasCustomData
+				? new ChatMessageCustomData { AuthorName = AuthorName, SenderId = SenderId, TextColor = TextColor.HasValue ? new Color(TextColor.Value) : null }
+				: null,
+		};
 	}
 }
