@@ -75,6 +75,14 @@ def main():
     subprocess.run(command, check=True)
     built = source / "ServerPlugin/bin/Release/net10.0"
     shutil.copy2(built / "Concealment.dll", output)
+    # Concealment is not a profile plugin, so Quasar exports no configuration for it and a managed
+    # node refuses to start without one (SE-1078). Ship its defaults, serialized by the PluginSdk
+    # it was built against.
+    sdk, game = (subprocess.check_output(["dotnet", "msbuild", command[2], *command[7:], f"-getProperty:{name}"],
+                                         text=True).strip() for name in ("MagnetarBinDir", "Dedicated64"))
+    subprocess.run(["dotnet", "run", "--project", str(REPO / "Tools/PluginConfigDefaults"), "-c", "Release", "--",
+                    str(Path(sdk) / "PluginSdk.dll"), str(output / "Concealment.dll"), "Shared.Config.PluginConfig",
+                    str(output / "canonical-configuration.json"), game], check=True)
     manifest = ET.parse(source / "Concealment.xml")
     manifest.getroot().find("Commit").text = commit
     manifest.write(output / "Concealment.xml", encoding="utf-8", xml_declaration=True)

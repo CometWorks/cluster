@@ -117,7 +117,8 @@ stage_plugin ClusterNode "$NODE_OUT" ClusterNode.xml
 stage_plugin WorldAuthority "$WA_OUT" WorldAuthority.xml
 mkdir -p "$STAGING/plugins/Concealment"
 cp -a "$REPO/Dependencies/Concealment/Concealment.dll" "$REPO/Dependencies/Concealment/Concealment.xml" \
-    "$REPO/Dependencies/Concealment/provenance.json" "$REPO/Dependencies/Concealment/licenses" "$STAGING/plugins/Concealment/"
+    "$REPO/Dependencies/Concealment/provenance.json" "$REPO/Dependencies/Concealment/canonical-configuration.json" \
+    "$REPO/Dependencies/Concealment/licenses" "$STAGING/plugins/Concealment/"
 mkdir -p "$STAGING/client/ClusterDiagnostics"
 cp "$REPO/ClientDiagnosticsPlugin/bin/$CONFIGURATION/net10.0/ClusterDiagnostics.dll" "$STAGING/client/ClusterDiagnostics/plugin.dll"
 sed "s|<Commit>[^<]*</Commit>|<Commit>$COMMIT</Commit>|" "$REPO/ClusterDiagnosticsClient.xml" > "$STAGING/client/ClusterDiagnostics/plugin.xml"
@@ -202,7 +203,7 @@ for required in gateway-rs/gateway-rs gateway-rs/libsteam_api.so gateway-rs/LICE
         tools/MagnetarWorld/MagnetarWorld.dll cli/ClusterRegistry.Cli/ClusterRegistry.Cli.dll \
         plugins/ClusterNode/ClusterNode.dll plugins/ClusterNode/ClusterNode.xml \
         plugins/WorldAuthority/WorldAuthority.dll plugins/WorldAuthority/WorldAuthority.xml \
-        plugins/Concealment/Concealment.dll plugins/Concealment/Concealment.xml plugins/Concealment/provenance.json \
+        plugins/Concealment/Concealment.dll plugins/Concealment/Concealment.xml plugins/Concealment/provenance.json plugins/Concealment/canonical-configuration.json \
         plugins/Concealment/licenses/concealment/LICENSE plugins/Concealment/licenses/accounting/NOTICE \
         cli/cluster cli/cluster-status cli/cluster.py cli/gateway_supervisor.py cli/magnetar_config.py cli/cluster_hostd.py cli/managed_deployment.py cli/gateway-admin \
         docs/ClusterCLI.md docs/AdminAPI.md docs/GatewayAPI.md docs/NodeAPI.md docs/EnvVars.md docs/NodeControl.md \

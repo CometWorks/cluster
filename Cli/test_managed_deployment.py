@@ -115,6 +115,10 @@ class ManagedPreparationTest(unittest.TestCase):
                 (payload / "CommonPlugins/Linux", "linux-compat"),
                 (payload / "CommonPlugins/Performance", managed.PERFORMANCE_ID)):
                 PackagedPluginsTest.bundle(folder, plugin)
+            # SE-1078: the bundled Concealment is not a profile plugin; its packaged default is canonical.
+            concealment_default = {"configType": "Shared.Config.PluginConfig",
+                "configuration": {"schema": {}, "defaults": {"Enabled": True}, "values": {"Enabled": True}}}
+            managed.write_json(package / "plugins/Concealment/canonical-configuration.json", concealment_default)
             (payload / "DirectTransport/LiteNetLib.dll").write_bytes(b"fixture")
             ds = payload / "DedicatedServer/DedicatedServer64"
             ds.mkdir(parents=True)
@@ -201,6 +205,8 @@ class ManagedPreparationTest(unittest.TestCase):
                         for node in bundle["nodes"]:
                             canonical = managed.read_json(Path(result["manifest"]).parent / node["configurationSeed"] / "canonical.json")
                             performance = next(p for p in canonical["plugins"] if p["id"] == managed.PERFORMANCE_ID)
+                            concealment = next(p for p in canonical["plugins"] if p["id"] == CONCEALMENT_ID)
+                            self.assertEqual(concealment_default, {k: concealment[k] for k in ("configType", "configuration")})
                             settings = performance["configuration"]["values"]
                             self.assertEqual(expected, (settings["havokThreadCountMode"], settings["havokThreadCount"]))
                 modded_world = base / "modded-world"
