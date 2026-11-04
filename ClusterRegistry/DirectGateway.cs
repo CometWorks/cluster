@@ -4636,6 +4636,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     request.ProjectedLoad, request.LoadCapacity, request.RecoveryLoadsPending, request.Serving,
                     request.DeploymentRevision, request.ConfigurationVerified, request.ConfigurationFailure, request.Liveness);
                 if (!request.Liveness) _registry.ReportRemoteUse(request.Node, request.Epoch, request.Ownerships, request.RemoteUsers);
+                if (request.ServerData != null)
+                    ReportServerData(request.Node, request.ServerData);
                 if (request.Hitches != null)
                     foreach (HitchReport hitch in request.Hitches)
                         _handoverTelemetry.Hitch(hitch.TransferId, request.Node, hitch.Phase, hitch.Ms, hitch.Utc, hitch.PhaseMs);
@@ -4665,7 +4667,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 WriteJson(context, 200, new HeartbeatResponse(node.Node, node.Epoch, node.Endpoint, node.Registered, node.State,
                     node.LeaseExpires, node.ForceDrainAt, node.Role, node.AuthorityGeneration, authority.Generation, accepted,
                     request.LocalSendMilliseconds, gatewayMilliseconds, currentAuthorityMilliseconds, _registry.HandoverConfigRevision,
-                    _registry.ShuttingDown, AccountingClock: _registry.AccountingClock(node.Node, node.Epoch, request.AccountingClock)));
+                    _registry.ShuttingDown, AccountingClock: _registry.AccountingClock(node.Node, node.Epoch, request.AccountingClock),
+                    ServerDataWanted: _admission.ServerData == null));
                 return;
             }
             if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/nodes/close", StringComparison.OrdinalIgnoreCase))
@@ -8444,14 +8447,19 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         long? RecoveryCapacity = null, ulong[]? Quarantined = null, long? ProjectedLoad = null, long? LoadCapacity = null,
         long? RecoveryLoadsPending = null, HitchReport[]? Hitches = null, long? ConfigRevision = null, bool? Serving = null,
         string? DeploymentRevision = null, bool ConfigurationVerified = false, string? ConfigurationFailure = null,
-        bool Liveness = false, Dictionary<ulong, RemoteUseReport>? RemoteUsers = null, AccountingClockSample? AccountingClock = null);
+        bool Liveness = false, Dictionary<ulong, RemoteUseReport>? RemoteUsers = null, AccountingClockSample? AccountingClock = null,
+        string? ServerData = null);
     /// <summary>A game-thread frame over the node's hitch threshold, with the handover phase that held it (§3).</summary>
     private sealed record HitchReport(DateTime Utc, double Ms, string Phase, string? TransferId, ulong Partition, double PhaseMs);
     private sealed record AccountingClockRequest(string Node, long Epoch, AccountingClockSample Sample);
     private sealed record HeartbeatResponse(string Node, long Epoch, string Endpoint, DateTimeOffset Registered, NodeState State,
         DateTimeOffset LeaseExpires, DateTimeOffset? ForceDrainAt, NodeRole Role, long AuthorityGeneration, long WorldAuthorityGeneration,
         PartitionVersion[] Ownerships, double LocalSendMilliseconds, double GatewayMilliseconds, double? AuthorityMilliseconds,
-        long HandoverConfigRevision = 0, bool ClusterDraining = false, bool TopologyTransfer = true, AccountingClockSample? AccountingClock = null);
+        long HandoverConfigRevision = 0, bool ClusterDraining = false, bool TopologyTransfer = true, AccountingClockSample? AccountingClock = null,
+        bool ServerDataWanted = false);
+    // SE-1076: ServerDataWanted asks the node for MyCachedServerItem.GetServerData() in its next heartbeat's ServerData
+    // (base64), which the Steam frontend publishes as the "sc" rules of the server details. A node without the field
+    // never sends it; a registry without it never asks.
     // T-0339 (design C): TopologyTransfer tells the node this registry applies a transfer (GatewayRegistry.IsTransfer); a
     // registry without the field is one that refuses it, and the node then makes the split and the merge instead.
     private sealed record RecoveryRequest(string Node, long Epoch, ulong[] Partitions);

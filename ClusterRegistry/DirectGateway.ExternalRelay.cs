@@ -403,6 +403,26 @@ internal sealed partial class DirectGateway
         catch (IOException) { }
     }
 
+    /// <summary>
+    /// SE-1076: a node's MyCachedServerItem.GetServerData(), published as the "sc" rules. Vanilla keeps it under
+    /// 1018 bytes by dropping mods and block limits, so anything far larger is not that blob.
+    /// </summary>
+    private void ReportServerData(string node, string base64)
+    {
+        byte[] data;
+        try { data = Convert.FromBase64String(base64); }
+        catch (FormatException) { Console.Error.WriteLine($"Server data from {node} is not base64; ignored"); return; }
+        if (data.Length == 0 || data.Length > 16 * 1024)
+        {
+            Console.Error.WriteLine($"Server data from {node} is {data.Length} bytes; ignored");
+            return;
+        }
+        if (!_admission.SetServerData(data))
+            return;
+        Console.WriteLine($"Server data from {node}: {data.Length} bytes, published as the server details' sc rules");
+        SteamPublishDirty();
+    }
+
     private void SteamPublishDirty()
     {
         if (_relay == null) _steam?.PublishDirty();
@@ -431,6 +451,7 @@ internal sealed partial class DirectGateway
                 passwordProtected = _admission.Settings.PasswordProtected,
                 tags = _admission.GameTags(DirectTransportConstants.VanillaVersion, _options.DirectFrontend),
                 modCount = _admission.Settings.ModCount, modsTotalSize = _admission.ModsTotalSize,
+                rules = _admission.ServerDataRules().Select(rule => new { key = rule.Key, value = rule.Value }).ToArray(),
                 players = ClusterPlayers().Select(player => new { userId = player.UserId, name = player.Name }).ToArray(),
             });
         }

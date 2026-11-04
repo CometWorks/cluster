@@ -242,6 +242,9 @@ impl SteamApi for RealSteam {
         self.server.set_game_tags(&publish.tags);
         self.server.set_key_value("mods", &publish.mod_count.to_string());
         self.server.set_key_value("modsTotalSize", &publish.mods_total_size.to_string());
+        for rule in &publish.rules {
+            self.server.set_key_value(&rule.key, &rule.value);
+        }
         self.server.set_bot_player_count(bots);
     }
 

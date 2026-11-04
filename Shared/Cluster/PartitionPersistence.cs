@@ -2819,7 +2819,8 @@ internal sealed partial class PartitionPersistence
 					RecoveryLoadsPending = m_recoveries.Count + m_censusChecks.Count + Volatile.Read(ref m_recoveryLoadInFlight),
 					// T-0059: registry Active is set at registration; placement must wait for Serving.
 					Serving = ClusterRuntime.IsServing, DeploymentRevision = NodeProcessIdentity.Revision,
-					ConfigurationVerified = NodeProcessIdentity.Verified, ConfigurationFailure = NodeProcessIdentity.Failure
+					ConfigurationVerified = NodeProcessIdentity.Verified, ConfigurationFailure = NodeProcessIdentity.Failure,
+					ServerData = ServerDetailsReport.ForHeartbeat
 				});
 				double clockReceive = ClusterRuntime.LocalMilliseconds;
 				// §2: the gateway's handover-config document wins; a node that missed the PUT fan-out
@@ -2836,6 +2837,9 @@ internal sealed partial class PartitionPersistence
 				// T-0339 (design C): transfers only where the registry says it applies them; absent on an older registry.
 				m_partitions.RegistryTransfer = !m_transferRefused && heartbeat.RootElement.TryGetProperty("TopologyTransfer", out JsonElement transfer)
 					&& transfer.ValueKind == JsonValueKind.True;
+				// SE-1076: the Gateway has no server details to publish yet; the next heartbeat carries them.
+				ServerDetailsReport.Wanted(heartbeat.RootElement.TryGetProperty("ServerDataWanted", out JsonElement serverDataWanted)
+					&& serverDataWanted.ValueKind == JsonValueKind.True);
 				double echoedSend = heartbeat.RootElement.GetProperty("LocalSendMilliseconds").GetDouble();
 				long authorityGeneration = heartbeat.RootElement.GetProperty("WorldAuthorityGeneration").GetInt64();
 				ClusterRuntime.SetAuthorityGeneration(authorityGeneration);

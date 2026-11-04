@@ -234,7 +234,16 @@ pub struct SteamPublish {
     /// The A2S rules vanilla sets beside the tags (MyDedicatedServerBase.ModCount / ModsTotalSize, #1529).
     pub mod_count: i64,
     pub mods_total_size: u64,
+    /// Further A2S rules, set as given: the server details' "sc" rules (MyCachedServerItem.SendSettingsToSteam, SE-1076).
+    pub rules: Vec<SteamRule>,
     pub players: Vec<SteamPlayer>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SteamRule {
+    pub key: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -861,9 +870,10 @@ mod tests {
         };
         assert_eq!((auth.op.as_str(), auth.client_id, auth.ticket.as_deref()), ("begin", 76561198000000001, Some("AQID")));
         let body = br#"{"serverName":"s","mapName":"m","maxPlayers":16,"passwordProtected":false,"tags":"a,b",
-            "players":[{"userId":5,"name":"five"}]}"#;
+            "rules":[{"key":"sc","value":"3"},{"key":"sc0","value":"AQID"}],"players":[{"userId":5,"name":"five"}]}"#;
         let Inbound::SteamPublish(publish) = parse(types::STEAM_PUBLISH, 0, body).unwrap() else { panic!() };
         assert_eq!(publish.players, vec![SteamPlayer { user_id: 5, name: "five".into() }]);
+        assert_eq!(publish.rules[1], SteamRule { key: "sc0".into(), value: "AQID".into() });
         assert_eq!(publish.max_players, 16);
     }
 
