@@ -423,7 +423,11 @@ def prepare(root: Path, spec_path: Path, expected_sha: str, host_id: str, world:
                     continue
                 xml = ET.parse(folder / (folder.name + ".xml"))
                 plugin_id = xml.getroot().findtext("Id")
-                values = plugin_configuration(spec.get("pluginConfigurations", {}).get(plugin_id, {}))
+                values = spec.get("pluginConfigurations", {}).get(plugin_id)
+                if values is None and (folder / "canonical-configuration.json").is_file():
+                    # A bundled plugin outside the profile, like Concealment, ships its defaults (SE-1078).
+                    values = read_json(folder / "canonical-configuration.json")
+                values = plugin_configuration(values or {})
                 if plugin_id == PERFORMANCE_ID:
                     values = shared_host_havok(values, sum(n["host"] == host_id for n in nodes), physical_cores())
                 entries.append({"id": plugin_id, "assemblySha256": digest(folder / (folder.name + ".dll")), **values})

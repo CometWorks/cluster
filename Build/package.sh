@@ -90,7 +90,8 @@ done
 git -C "$CLUSTER_REPO" archive HEAD | tar -x -C "$STAGING/plugins/cluster"
 mkdir -p "$STAGING/plugins/cluster/Dependencies/Concealment"
 cp -a "$CLUSTER_REPO/Dependencies/Concealment/Concealment.dll" "$CLUSTER_REPO/Dependencies/Concealment/Concealment.xml" \
-    "$CLUSTER_REPO/Dependencies/Concealment/provenance.json" "$CLUSTER_REPO/Dependencies/Concealment/licenses" \
+    "$CLUSTER_REPO/Dependencies/Concealment/provenance.json" "$CLUSTER_REPO/Dependencies/Concealment/canonical-configuration.json" \
+    "$CLUSTER_REPO/Dependencies/Concealment/licenses" \
     "$STAGING/plugins/cluster/Dependencies/Concealment/"
 rm -rf "$STAGING/plugins/cluster/Build/out"
 # Magnetar compiles only the manifests' SourceDirectories. The Gateway ships built under registry/,
