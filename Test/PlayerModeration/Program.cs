@@ -51,6 +51,15 @@ string saved = PromotionService.PersistedRecord();
 byte[] file = GlobalSaveFile.Write(new(), 1, 2, 0, 0, "{\"Entries\":[]}", promotionRecord: saved);
 var bundle = GlobalSaveFile.ReadBundle(file);
 Check(bundle.PromotionRecord == saved && bundle.OfflineRatesRecord == null, "New section round-trip including empty preceding section");
+const string offlineRates = "{\"entries\":[]}";
+var combined = GlobalSaveFile.ReadBundle(GlobalSaveFile.Write(new(), 1, 3, 0, 0, "{\"Entries\":[]}",
+    offlineRatesRecord: offlineRates, promotionRecord: saved));
+Check(combined.OfflineRatesRecord == offlineRates && combined.PromotionRecord == saved,
+    "Offline rates and promotions retain their separate ordered save sections");
+var ratesOnly = GlobalSaveFile.ReadBundle(GlobalSaveFile.Write(new(), 1, 4, 0, 0, "{\"Entries\":[]}",
+    offlineRatesRecord: offlineRates));
+Check(ratesOnly.OfflineRatesRecord == offlineRates && ratesOnly.PromotionRecord == null,
+    "Older offline-rate saves remain readable without promotion records");
 Check(GlobalSaveFile.ReadBundle(GlobalSaveFile.Write(new(), 1, 1, 0, 0, "{\"Entries\":[]}")).PromotionRecord == null, "Older saves remain readable");
 Set(7, 4, demotionRevision);
 PromotionService.RestoreRecord(bundle.PromotionRecord);
