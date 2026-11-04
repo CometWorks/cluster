@@ -2,234 +2,272 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
+using Sandbox.Engine.Multiplayer;
+using Sandbox.Game;
 using Sandbox.Game.Entities;
+using VRage.Game.Entity;
+using VRage.Game.ModAPI;
+using Sandbox.Game.GameSystems;
+using Sandbox.Game.Multiplayer;
 using Sandbox.Game.World;
 using VRage.Game;
 using VRage.Network;
 
 namespace ClusterPlugin;
 
-/// <summary>
-/// WA-4/WA-6 on-demand partition pull. A client's replication request for a grid this node does not hold
-/// is vanilla's silent no-op; when the grid is antenna-published by another node (its proxy exists here),
-/// the demand is reported to the Gateway, which runs a fenced clientless handover of the grid's partition
-/// to this node. Vanilla's on-demand replication then serves the client's next attempt - rights checks
-/// (ownership, mutual antenna reachability) stay exactly where vanilla runs them, after the grid is local.
-///
-/// SE1-0122: a demand from the respawn screen's spawn point preview (it names a medical room) moves the dead
-/// client instead of the grid. See <see cref="Preview"/>.
-/// </summary>
+/// <summary>Only an authenticated client's explicit replicable request can wake a radio grid.
+/// Relay enumeration, HUD publication and IGC never enter this path.</summary>
 public static class RemotePullService
 {
-	private const double DemandCooldownMilliseconds = 10000;
-	private const int PreviewAttempts = 60;
 	private static readonly object Sync = new();
-	private static readonly Dictionary<(long Entity, ulong Client), double> LastDemand = new();
+	private static readonly Dictionary<(Endpoint, long), Demand> Pending = new();
+	private static readonly Dictionary<(ulong, long), long> LastDemand = new();
+	private static readonly Dictionary<ulong, Queue<long>> WakeTimes = new();
+	private static readonly Dictionary<string, long> Counters = new();
 	private static readonly HttpClient Gateway = ClusterHttp.Client(TimeSpan.FromSeconds(120));
 	private static readonly string Node = Environment.GetEnvironmentVariable("CLUSTER_NODE_ID") ?? string.Empty;
+
+	private sealed class Demand
+	{
+		public Endpoint Sender;
+		public long Entity, Medical, Interacted;
+		public byte Flags;
+		public bool Cancelled, Offline;
+		public long Started = Environment.TickCount64, LocalSince;
+	}
 
 	internal static void Install()
 	{
 		ClusterRuntime.AuthorizeRegistryClient(Gateway);
-		ClusterReplicationDemand.AbsentReplicable = Demand;
+		ClusterReplicationDemand.Request = Request;
 	}
 
-	private static void Demand(Endpoint sender, long entityId, long medicalRoomId)
+	private static void Count(string outcome)
 	{
-		try
-		{
-			if (!ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority || entityId == 0) return;
-			ulong client = sender.Id.Value;
-			// A pull serves every client that wants the grid, a preview only the client that asked.
-			(long, ulong) key = (entityId, medicalRoomId != 0 ? client : 0);
-			lock (Sync)
-			{
-				if (LastDemand.TryGetValue(key, out double last)
-					&& ClusterRuntime.LocalMilliseconds - last < DemandCooldownMilliseconds) return;
-				LastDemand[key] = ClusterRuntime.LocalMilliseconds;
-				if (LastDemand.Count > 1024) LastDemand.Clear();
-			}
-			if (medicalRoomId != 0) Task.Run(() => Preview(entityId, medicalRoomId, client));
-			else Task.Run(() => Pull(entityId, client));
-		}
-		catch (Exception exception)
-		{
-			Console.WriteLine("[ClusterPlugin] remote pull demand failed: " + SecretRedactor.Redact(exception.Message));
-		}
+		lock (Sync) Counters[outcome] = Counters.GetValueOrDefault(outcome) + 1;
 	}
 
-	private static void Pull(long gridEntityId, ulong client)
+	internal static object Status()
 	{
-		try
+		lock (Sync) return new { pending = Pending.Count, outcomes = new Dictionary<string, long>(Counters) };
+	}
+
+	internal static (ulong User, long Entity)[] WaitingUsers()
+	{
+		lock (Sync) return Pending.Values.Where(p => !p.Cancelled && p.Medical == 0 && p.Offline)
+			.Select(p => (p.Sender.Id.Value, p.Entity)).ToArray();
+	}
+
+	private static void Request(Endpoint sender, long entity, bool add, long medical, long interacted, byte flags)
+	{
+		if (!ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority || entity == 0) return;
+		lock (Sync)
 		{
-			// The demanded id is a grid id: the remote-control take and the remote terminal request the grid
-			// replicable. A grid another node antenna-publishes has a proxy here, which authorizes the pull (the
-			// medical screen's spawn point preview goes to Preview instead). The demand is edge-triggered by a
-			// single client packet while the publication takes a few capture cycles to propagate after a
-			// handover, so the resolution polls instead of sampling once.
-			string origin = null;
-			for (int attempt = 0; origin == null && attempt < 30; attempt++)
+			var key = (sender, entity);
+			if (!add)
 			{
-				if (attempt > 0) System.Threading.Thread.Sleep(1000);
-				foreach (AntennaGraphEntry entry in AntennaGraphService.Entries())
-					if (entry.GridEntityId == gridEntityId && entry.Origin != Node) { origin = entry.Origin; break; }
-			}
-			if (origin == null)
-			{
-				Console.WriteLine($"[ClusterPlugin] remote pull grid={gridEntityId} origin=unknown skipped=true"
-					+ $" entries={AntennaGraphService.Entries().Length}");
+				if (Pending.Remove(key, out Demand cancelled)) cancelled.Cancelled = true;
 				return;
 			}
-			(_, string control) = SpawnDirectorService.ResolveNodeControl(origin);
-			string payload = Gateway.GetStringAsync(control.TrimEnd('/') + "/cluster/partition-of?entity=" + gridEntityId)
-				.GetAwaiter().GetResult();
-			ulong partition = System.Text.Json.JsonSerializer.Deserialize<PartitionOf>(payload)?.partition ?? 0;
-			if (partition == 0)
-			{
-				Console.WriteLine($"[ClusterPlugin] remote pull grid={gridEntityId} origin={origin} partition=0 skipped=true");
-				return;
-			}
-			string registry = Environment.GetEnvironmentVariable("CLUSTER_GATEWAY_REGISTRY")?.TrimEnd('/');
-			using StringContent empty = new StringContent(string.Empty);
-			using HttpResponseMessage response = Gateway.PostAsync(
-				registry + "/registry/pull-demands?partition=" + partition + "&source=" + Uri.EscapeDataString(origin)
-				+ "&target=" + Uri.EscapeDataString(Node) + "&grid=" + gridEntityId + "&client=" + client, empty)
-				.GetAwaiter().GetResult();
-			string body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-			// The gateway answers HTTP 200 for polite rejections (cooldown, ownership) - accepted must
-			// reflect the body, not the status, or every rejection logs as an accept.
-			bool accepted = response.IsSuccessStatusCode && body.Contains("\"accepted\":true");
-			Console.WriteLine($"[ClusterPlugin] remote pull grid={gridEntityId} origin={origin} via=antenna partition={partition}"
-				+ $" client={client} accepted={accepted} response={SecretRedactor.Redact(body).Trim()}");
-			if (accepted) PushWhenLocal(gridEntityId, client);
-		}
-		catch (Exception exception)
-		{
-			Console.WriteLine("[ClusterPlugin] remote pull failed: " + SecretRedactor.Redact(exception.Message));
+			if (Pending.ContainsKey(key)) return;
+			if (Pending.Values.Any(x => x.Sender.Id.Value == sender.Id.Value)) { Count("refused-rate"); return; }
+			long now = Environment.TickCount64;
+			var cooldownKey = (sender.Id.Value, entity);
+			if (LastDemand.TryGetValue(cooldownKey, out long last) && now - last < 10000) return;
+			foreach (var old in LastDemand.Where(x => now - x.Value >= 60000).Select(x => x.Key).ToArray()) LastDemand.Remove(old);
+			LastDemand[cooldownKey] = now;
+			Demand demand = new() { Sender = sender, Entity = entity, Medical = medical, Interacted = interacted, Flags = flags };
+			Pending[key] = demand;
+			_ = Run(demand);
 		}
 	}
 
-	/// <summary>
-	/// SE1-0122: the respawn screen previews a spawn point by streaming its grid, and enables the respawn button only
-	/// once the grid is there. When the grid lives on another node, the dead client moves to that node
-	/// (<see cref="RespawnRegistryService.SwitchForPreview"/>). That leaves everyone else alone, while pulling the
-	/// grid here would move a whole station, and the Gateway refuses that whenever someone is aboard. An offline
-	/// spawn point is loaded onto this node first. Resolution polls because the registry lags a handover or a load
-	/// by a few capture cycles.
-	/// </summary>
-	private static void Preview(long gridEntityId, long medicalRoomId, ulong client)
+	// Every read of the engine and the final cancellation check/replay run together on the game thread.
+	private static async Task<T> OnGame<T>(Demand demand, Func<T> action)
 	{
-		try
-		{
-			for (int attempt = 0; attempt < PreviewAttempts; attempt++)
-			{
-				if (attempt > 0) System.Threading.Thread.Sleep(1000);
-				ClusterRespawnPoint point = RespawnRegistryService.Points.FirstOrDefault(x => x.RespawnEntityId == medicalRoomId
-					&& x.GridEntityId == gridEntityId && x.Working && MaySpawnAt(x, client));
-				if (point == null) continue;
-				if (OfflinePartitionService.IsOfflineOrigin(point.Origin))
-				{
-					// Re-asserted now and then: the request is fire-and-forget.
-					if (attempt % 15 == 0)
-					{
-						Console.WriteLine($"[ClusterPlugin] spawn preview grid={gridEntityId} client={client} loads offline partition {point.PartitionId}");
-						OfflinePartitionService.RequestLoad(point.PartitionId, Node, "spawn");
-					}
-					continue;
-				}
-				if (point.Origin == Node)
-				{
-					// Loaded here: replay the request the client made while the grid was absent.
-					if (!GrantWhenLocal(gridEntityId, medicalRoomId, client)) continue;
-					Console.WriteLine($"[ClusterPlugin] spawn preview grid={gridEntityId} client={client} granted locally after={attempt}s");
-					return;
-				}
-				RespawnRegistryService.SwitchForPreview(client, medicalRoomId, point);
-				return;
-			}
-			Console.WriteLine($"[ClusterPlugin] spawn preview grid={gridEntityId} client={client} unresolved=true");
-		}
-		catch (Exception exception)
-		{
-			Console.WriteLine("[ClusterPlugin] spawn preview failed: " + SecretRedactor.Redact(exception.Message));
-		}
-	}
-
-	private static bool GrantWhenLocal(long gridEntityId, long medicalRoomId, ulong client)
-	{
-		bool granted = false;
-		using var done = new System.Threading.ManualResetEventSlim();
+		var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
 		Sandbox.MySandboxGame.Static.Invoke(() =>
 		{
 			try
 			{
-				granted = (Sandbox.Engine.Multiplayer.MyMultiplayer.Static?.ReplicationLayer as MyReplicationServer)
-					?.RequestSpawnPreviewForClient(gridEntityId, medicalRoomId, new Endpoint(new EndpointId(client), 0)) == true;
+				lock (Sync)
+				{
+					if (demand.Cancelled || !Pending.TryGetValue((demand.Sender, demand.Entity), out var current) || current != demand
+						|| MyMultiplayer.Static?.ReplicationLayer is not MyReplicationServer server
+						|| !server.m_clientStates.ContainsKey(demand.Sender)) throw new OperationCanceledException();
+					completion.TrySetResult(action());
+				}
 			}
-			finally
-			{
-				done.Set();
-			}
-		}, "RemotePullService.GrantWhenLocal");
-		return done.Wait(TimeSpan.FromSeconds(10)) && granted;
+			catch (Exception e) { completion.TrySetException(e); }
+		}, "RemotePullService");
+		return await completion.Task.WaitAsync(TimeSpan.FromSeconds(10));
 	}
 
-	/// <summary>
-	/// The demanding client's replicable request was consumed while the grid was absent: once the
-	/// pulled partition lands here, push the grid replicable to that client instead of waiting for
-	/// it to ask again.
-	/// </summary>
-	private static void PushWhenLocal(long gridEntityId, ulong client)
-	{
-		for (int attempt = 0; attempt < 60; attempt++)
-		{
-			System.Threading.Thread.Sleep(1000);
-			bool present = false;
-			using var done = new System.Threading.ManualResetEventSlim();
-			Sandbox.MySandboxGame.Static.Invoke(() =>
-			{
-				try
-				{
-					if (MyEntities.GetEntityById(gridEntityId) != null)
-					{
-						present = true;
-						(Sandbox.Engine.Multiplayer.MyMultiplayer.Static?.ReplicationLayer as MyReplicationServer)
-							?.ForceReplicableForClient(gridEntityId, new Endpoint(new EndpointId(client), 0));
-					}
-				}
-				finally
-				{
-					done.Set();
-				}
-			}, "RemotePullService.PushWhenLocal");
-			if (!done.Wait(TimeSpan.FromSeconds(10)) || !present) continue;
-			Console.WriteLine($"[ClusterPlugin] remote pull push grid={gridEntityId} client={client} after={attempt + 1}s");
-			return;
-		}
-		Console.WriteLine($"[ClusterPlugin] remote pull push timed out grid={gridEntityId} client={client}");
-	}
-
-	/// <summary>
-	/// The same gate AppendRemoteRespawnPoints applies before listing the point on this player's
-	/// medical screen: admins, spawnee-faction points, and friendly-or-shared ownership qualify. A
-	/// hostile player must not be able to preview someone else's medbay by requesting its grid id.
-	/// </summary>
-	private static bool MaySpawnAt(ClusterRespawnPoint point, ulong userId)
+	private static async Task Run(Demand demand)
 	{
 		try
 		{
-			if (point.SetFactionToSpawnee) return true;
-			if (MySession.Static?.RemoteAdminSettings.TryGetValue(userId, out AdminSettingsEnum settings) == true
-				&& (settings & AdminSettingsEnum.UseTerminals) != 0) return true;
-			long identityId = MySession.Static?.Players.TryGetIdentityId(userId) ?? 0;
-			return identityId > 0 && MyIDModule.GetRelationPlayerBlock(point.OwnerIdentityId, identityId,
-				(MyOwnershipShareModeEnum)point.ShareMode).IsFriendly();
+			int seconds = Math.Clamp(ClusterConfig.GetInt("offline.callUpSeconds"), 1, 1200);
+			long nextLoad = 0, nextNotice = demand.Started + ClusterConfig.GetInt("offline.callUpNoticeSeconds") * 1000L;
+			bool pulling = false;
+			while (Environment.TickCount64 - demand.Started < seconds * 1000L)
+			{
+				int replay = await OnGame(demand, () =>
+				{
+					var server = (MyReplicationServer)MyMultiplayer.Static.ReplicationLayer;
+					if (ClusterRuntime.IsFrozen(demand.Entity) || server.m_callback.GetReplicableByEntityId(demand.Entity) == null) return 0;
+					return server.ReplayRequest(demand.Entity, demand.Medical, demand.Interacted, demand.Flags, demand.Sender) ? 1 : 2;
+				});
+				if (replay == 1) { Count("accepted"); return; }
+				if (replay == 2)
+				{
+					if (demand.LocalSince == 0) demand.LocalSince = Environment.TickCount64;
+					// A newly registered grid's antenna receivers can lag its replicable by Update100.
+					if (demand.Medical == 0 && Environment.TickCount64 - demand.LocalSince >= 3000)
+					{ Count("refused-rights"); await Notice(demand, true); return; }
+				}
+				AntennaGraphEntry entry = AntennaGraphService.Entries().FirstOrDefault(x => x.GridEntityId == demand.Entity && x.Origin != Node);
+				if (demand.Medical != 0)
+				{
+					ClusterRespawnPoint point = await OnGame(demand, () => RespawnRegistryService.Points.FirstOrDefault(x =>
+						x.RespawnEntityId == demand.Medical && x.GridEntityId == demand.Entity && x.Working && MaySpawnAt(x, demand.Sender.Id.Value)));
+					if (point != null && !OfflinePartitionService.IsOfflineOrigin(point.Origin) && point.Origin != Node)
+					{
+						await OnGame(demand, () => { RespawnRegistryService.SwitchForPreview(demand.Sender.Id.Value, demand.Medical, point); return true; });
+						return;
+					}
+					if (point != null && OfflinePartitionService.IsOfflineOrigin(point.Origin) && Environment.TickCount64 >= nextLoad)
+					{
+						await OnGame(demand, () => { OfflinePartitionService.RequestLoad(point.PartitionId, Node, "spawn"); return true; });
+						nextLoad = Environment.TickCount64 + 15000;
+					}
+				}
+				else if (entry != null && OfflinePartitionService.IsOfflineOrigin(entry.Origin))
+				{
+					if (!demand.Offline)
+					{
+						string refusal = await OnGame(demand, () => Admit(demand, entry));
+						if (refusal != null) { Count(refusal); await Notice(demand, true); return; }
+					}
+					if (Environment.TickCount64 >= nextLoad)
+					{
+						// Revalidate reach/access on every renewed demand: a stale click is not an authorization lease.
+						bool reachable = await OnGame(demand, () => CanReach(demand.Sender.Id.Value, entry));
+						if (!reachable) { Count("refused-reach"); await Notice(demand, true); return; }
+						await OnGame(demand, () => { OfflinePartitionService.RequestLoad(OfflinePartitionService.PartitionOfOrigin(entry.Origin), Node, "remote"); return true; });
+						nextLoad = Environment.TickCount64 + 15000;
+					}
+				}
+				else if (demand.Medical == 0 && entry != null && !pulling)
+				{
+					pulling = true;
+					string refusal = await Pull(demand, entry.Origin);
+					if (refusal != null) { Count(refusal); await Notice(demand, true); return; }
+				}
+				if (demand.Medical == 0 && Environment.TickCount64 >= nextNotice)
+				{
+					await Notice(demand, false);
+					nextNotice = Environment.TickCount64 + 10000;
+				}
+				await Task.Delay(1000);
+			}
+			Count("timeout");
+			if (demand.Medical == 0) await Notice(demand, true);
 		}
-		catch
+		catch (OperationCanceledException) { Count("cancelled"); }
+		catch (Exception e)
 		{
-			return false;
+			Count("failed");
+			Console.WriteLine("[ClusterPlugin] remote request failed: " + SecretRedactor.Redact(e.Message));
+			try { if (demand.Medical == 0) await Notice(demand, true); } catch (Exception) { /* client left or game thread unavailable */ }
 		}
+		finally
+		{
+			lock (Sync)
+			{
+				demand.Cancelled = true;
+				if (Pending.TryGetValue((demand.Sender, demand.Entity), out var current) && current == demand)
+					Pending.Remove((demand.Sender, demand.Entity));
+			}
+		}
+	}
+
+	private static string Admit(Demand demand, AntennaGraphEntry entry)
+	{
+		if (!ClusterConfig.GetBool("offline.callUp")) return "disabled";
+		if (!CanReach(demand.Sender.Id.Value, entry)) return "refused-reach";
+		lock (Sync)
+		{
+			ulong user = demand.Sender.Id.Value;
+			if (Pending.Values.Any(x => x != demand && x.Sender.Id.Value == user && x.Offline)) return "refused-rate";
+			if (!WakeTimes.TryGetValue(user, out var times)) WakeTimes[user] = times = new();
+			long now = Environment.TickCount64;
+			while (times.Count > 0 && now - times.Peek() >= 60000) times.Dequeue();
+			if (times.Count >= ClusterConfig.GetInt("offline.callUpPerMinute")) return "refused-rate";
+			times.Enqueue(now);
+			demand.Offline = true;
+			foreach (ulong old in WakeTimes.Where(x => x.Value.Count == 0 || now - x.Value.Last() >= 60000).Select(x => x.Key).ToArray()) WakeTimes.Remove(old);
+			return null;
+		}
+	}
+
+	internal static bool CanReach(ulong user, AntennaGraphEntry entry)
+	{
+		if (PromotionService.IsModerator(user)) return true;
+		MySession.Static.Players.TryGetPlayerBySteamId(user, out MyPlayer player);
+		if (player?.Identity == null) return false;
+		var origins = new List<MyEntity>();
+		if (player.Character != null) origins.Add(player.Character);
+		if (player.Controller?.ControlledEntity?.Entity is MyEntity controlled) origins.Add(controlled);
+		foreach (var broadcaster in MyAntennaSystem.Static.GetAllRelayedBroadcasters(origins, player.Identity.IdentityId, mutual: true))
+		{
+			if (!broadcaster.CanBeUsedByPlayer(player.Identity.IdentityId)) continue;
+			var reachable = AntennaGraphService.Entries().FirstOrDefault(e => e.GridEntityId == entry.GridEntityId
+				&& e.Origin == entry.Origin && e.AntennaEntityId == broadcaster.AntennaEntityId);
+			if (reachable == null) continue;
+			var proxy = AntennaGraphCodec.ReadBuilderShared(reachable);
+			if (MyIDModule.GetRelationPlayerBlock(proxy.Owner, player.Identity.IdentityId, proxy.Share).IsFriendly()
+				|| proxy.HasRemote && MyIDModule.GetRelationPlayerBlock(proxy.MainRemoteOwner ?? 0, player.Identity.IdentityId, proxy.MainRemoteSharing).IsFriendly()) return true;
+		}
+		return false;
+	}
+
+	private static Task<bool> Notice(Demand demand, bool failed) => OnGame(demand, () =>
+	{
+		long identity = MySession.Static.Players.TryGetIdentityId(demand.Sender.Id.Value);
+		if (identity != 0) MyVisualScriptLogicProvider.ShowNotification(failed ? "Remote connection failed" : "Establishing remote connection...", 5000, failed ? "Red" : "White", identity);
+		return true;
+	});
+
+	private static async Task<string> Pull(Demand demand, string origin)
+	{
+		(_, string control) = SpawnDirectorService.ResolveNodeControl(origin);
+		string payload = await Gateway.GetStringAsync(control.TrimEnd('/') + "/cluster/partition-of?entity=" + demand.Entity);
+		ulong partition = JsonSerializer.Deserialize<PartitionOf>(payload)?.partition ?? 0;
+		if (partition == 0) return "partition-unknown";
+		// Cancellation can stop before dispatch. A handover already accepted by the gateway completes normally.
+		await OnGame(demand, () => true);
+		string registry = Environment.GetEnvironmentVariable("CLUSTER_GATEWAY_REGISTRY")?.TrimEnd('/');
+		using var empty = new StringContent(string.Empty);
+		using var response = await Gateway.PostAsync(registry + "/registry/pull-demands?partition=" + partition
+			+ "&source=" + Uri.EscapeDataString(origin) + "&target=" + Uri.EscapeDataString(Node)
+			+ "&grid=" + demand.Entity + "&client=" + demand.Sender.Id.Value, empty);
+		using JsonDocument answer = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+		bool accepted = response.IsSuccessStatusCode && answer.RootElement.GetProperty("accepted").GetBoolean();
+		Console.WriteLine($"[ClusterPlugin] remote pull grid={demand.Entity} origin={origin} via=antenna partition={partition} client={demand.Sender.Id.Value} accepted={accepted}");
+		return accepted ? null
+			: answer.RootElement.TryGetProperty("reason", out var reason) ? reason.GetString() : "refused";
+	}
+
+	private static bool MaySpawnAt(ClusterRespawnPoint point, ulong user)
+	{
+		if (point.SetFactionToSpawnee || PromotionService.IsModerator(user)) return true;
+		if (MySession.Static.RemoteAdminSettings.TryGetValue(user, out AdminSettingsEnum settings) && (settings & AdminSettingsEnum.UseTerminals) != 0) return true;
+		long identity = MySession.Static.Players.TryGetIdentityId(user);
+		return identity > 0 && MyIDModule.GetRelationPlayerBlock(point.OwnerIdentityId, identity, (MyOwnershipShareModeEnum)point.ShareMode).IsFriendly();
 	}
 
 	private sealed record PartitionOf(ulong partition);

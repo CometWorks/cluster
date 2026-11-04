@@ -98,6 +98,23 @@ reason they cannot go offline right now) and, on the World Authority, the cluste
 (`cluster`: retained antennas and respawn points, load requests). Knobs are the `offline.*` keys of the
 handover-config document (ClusterConfig.cs).
 
+SE-346/SE-347 add `owner.compensation` (profiling, modeled results, confidence/skips and
+the rate cache) and `callUps` counters. Partition reports carry `remoteUsers`; these pins
+block offlining, balancing and conflicting clientless pulls. Spatial co-location can still
+end a remote session. The implementation is a review draft with native acceptance pending;
+see [OfflinePartitions.md](../OfflinePartitions.md) for defaults, limitations and evidence.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /cluster/profiles?partition=N` | Captured online profiles, or the exact offline Final's profiles on a holder host; no recovery claim or wake |
+| `POST /cluster/trigger/profile?partition=N` | Advance the normal profiling pass with its readiness and policy gates |
+| `POST /cluster/trigger/compensate-dry-run?partition=N&hours=H` | Model the exact offline Final on this holder without applying or saving it |
+| `POST /cluster/compensate-dry-run?hours=H` | Model an uploaded MPS Final (512 MiB maximum), without loading entities |
+| `POST /cluster/profiles/cache/clear?key=K` | Journal a per-key WA cache invalidation; epochs reject stale contributions |
+
+Dry-run hours must be finite and within 0..168 authority hours (225,000 game frames/hour).
+These routes use the existing admin-route authorization described above.
+
 ## Concealment
 
 `GET|POST /cluster/concealment` — inspect/steer entity concealment (grace and pre-wake are

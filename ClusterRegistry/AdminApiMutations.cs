@@ -35,6 +35,11 @@ internal sealed partial class DirectGateway
             AdminClearKickCooldown(context, actor, clearKickUser);
             return;
         }
+        if (context.Request.HttpMethod == "POST" && path.Equals(prefix + "/offline/cache/clear", StringComparison.OrdinalIgnoreCase))
+        {
+            AdminOfflineCacheClear(context, actor);
+            return;
+        }
         if (context.Request.HttpMethod == "POST" && path.Equals(prefix + "/shutdown", StringComparison.OrdinalIgnoreCase))
         {
             AdminShutdown(context, actor);
@@ -650,6 +655,11 @@ internal sealed partial class DirectGateway
     private void AdminTrigger(HttpListenerContext context, AdminActor actor, string task)
     {
         task = task.ToLowerInvariant();
+        if (task == "profile")
+        {
+            AdminOfflineProfile(context, actor);
+            return;
+        }
         if (!AdminTriggerTasks.Contains(task))
         {
             WriteAdminError(context, 400, "invalid_arguments",

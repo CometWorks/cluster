@@ -18,7 +18,7 @@ internal sealed partial class DirectGateway
 
     /// <summary>Stable trigger vocabulary (Orchestration.md §11.2); unknown tasks are refused.</summary>
     internal static readonly string[] AdminTriggerTasks =
-        ["balance", "save", "split-sweep", "membership-eval", "conceal-eval", "compact", "catalog-gc", "rotation-check"];
+        ["balance", "save", "split-sweep", "membership-eval", "conceal-eval", "compact", "catalog-gc", "rotation-check", "profile"];
 
     private static readonly IReadOnlyDictionary<string, string> AdminFeatures = new Dictionary<string, string>
     {
@@ -29,6 +29,7 @@ internal sealed partial class DirectGateway
         ["clientDiagnostics"] = "v1",
         ["rotationPublication"] = "v1",
         ["playerModeration"] = "v1",
+        ["offlinePartitions"] = "v1",
     };
 
     /// <summary>
@@ -55,6 +56,13 @@ internal sealed partial class DirectGateway
     }
 
     private void HandleAdminRequest(HttpListenerContext context, string path, AdminActor actor)
+    {
+        try { HandleAdminRequestCore(context, path, actor); }
+        catch (ArgumentException e) when (e is not ArgumentNullException)
+        { WriteAdminError(context, 400, "invalid_arguments", e.Message); }
+    }
+
+    private void HandleAdminRequestCore(HttpListenerContext context, string path, AdminActor actor)
     {
         context.Response.Headers["X-Cluster-Gateway-Protocol"] = Admin.AdminProtocol.Version.ToString();
         if (actor.Scope == Admin.AdminScope.Executor)
@@ -108,6 +116,7 @@ internal sealed partial class DirectGateway
             WriteAdminEnvelope(context, _registry.AdminStatus(_clients.Count, _paused));
             return;
         }
+        if (HandleAdminOfflineRead(context, path)) return;
         if (path.Equals(Admin.AdminProtocol.RoutePrefix + "/nodes", StringComparison.OrdinalIgnoreCase))
         {
             WriteAdminEnvelope(context, _registry.AdminNodes());

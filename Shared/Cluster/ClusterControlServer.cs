@@ -1054,7 +1054,8 @@ internal sealed partial class ClusterControlServer
 				ulong partition = ulong.Parse(context.Request.QueryString["partition"] ?? throw new ArgumentException("Missing partition query parameter"));
 				Guid? transferId = OptionalTransferId(context);
 				uint? generation = OptionalGeneration(context, transferId);
-				byte[] body = InvokePhase("capture", transferId, partition, () => Capture(clients, partition, transferId, generation));
+				bool allowRemoteUse = context.Request.QueryString["allowRemoteUse"] == "true";
+				byte[] body = InvokePhase("capture", transferId, partition, () => Capture(clients, partition, transferId, generation, allowRemoteUse));
 				// HandoverDelta: the target staged this partition from baseline ?presync=ID; answer with the
 				// patch against it. A missing baseline (expired, or a different partition) means the full
 				// capture, logged, never an error: the freeze already happened.
@@ -1142,6 +1143,65 @@ internal sealed partial class ClusterControlServer
 				return;
 			}
 
+			if (context.Request.HttpMethod == "GET" && path.EndsWith("/offline/admin", StringComparison.OrdinalIgnoreCase))
+			{
+				string raw = context.Request.QueryString["partition"];
+				string result;
+				if (raw == null) result = Invoke(() => JsonSerializer.Serialize(new { capability = "v1", cache = OfflineRateCache.Status() }));
+				else
+				{
+					ulong partition = ulong.Parse(raw, CultureInfo.InvariantCulture);
+					byte[] profiles = null;
+					if (context.Request.QueryString["offline"] == "true")
+						profiles = m_persistence.ReadOfflineFinal(partition).Profiles ?? Encoding.UTF8.GetBytes("[]");
+					result = Invoke(() => JsonSerializer.Serialize(OfflineCompensation.AdminRead(partition, m_partitions, profiles), OfflineCompensation.Json));
+				}
+				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
+				return;
+			}
+			if (context.Request.HttpMethod == "POST" && path.EndsWith("/profiles/cache/clear", StringComparison.OrdinalIgnoreCase))
+			{
+				string expected = context.Request.QueryString["expectedEpoch"];
+				string result = expected == null ? OfflineRateCache.Clear(context.Request.QueryString["key"])
+					: OfflineRateCache.Clear(context.Request.QueryString["key"], int.Parse(expected, CultureInfo.InvariantCulture),
+						Guid.Parse(context.Request.QueryString["operation"] ?? throw new ArgumentException("Missing operation id")));
+				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
+				return;
+			}
+			if (context.Request.HttpMethod == "GET" && path.EndsWith("/profiles", StringComparison.OrdinalIgnoreCase))
+			{
+				ulong partition = ulong.Parse(context.Request.QueryString["partition"] ?? throw new ArgumentException("Missing partition"), CultureInfo.InvariantCulture);
+				bool online = Invoke(() => m_partitions.Evaluate().Any(p => p.Id == partition));
+				string result = online ? Invoke(() => JsonSerializer.Serialize(OfflineCompensation.Profiles(partition, m_partitions), OfflineCompensation.Json))
+					: Encoding.UTF8.GetString(m_persistence.ReadOfflineFinal(partition).Profiles ?? Encoding.UTF8.GetBytes("[]"));
+				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
+				return;
+			}
+			if (context.Request.HttpMethod == "POST" && (path.EndsWith("/trigger/compensate-dry-run", StringComparison.OrdinalIgnoreCase)
+				|| path.EndsWith("/compensate-dry-run", StringComparison.OrdinalIgnoreCase)))
+			{
+				double hours = double.Parse(context.Request.QueryString["hours"] ?? throw new ArgumentException("Missing hours"), CultureInfo.InvariantCulture);
+				if (!double.IsFinite(hours) || hours < 0 || hours > 168) throw new ArgumentException("hours must be between 0 and 168");
+				PartitionSaveFile.Parsed source;
+				if (context.Request.HasEntityBody)
+				{
+					// Same bounded admission as other admin file uploads; no path supplied by a caller is opened.
+					const int limit = 512 * 1024 * 1024;
+					if (context.Request.ContentLength64 > limit) throw new ArgumentException("Save upload exceeds 512 MiB");
+					using var stream = new MemoryStream();
+					byte[] chunk = new byte[65536]; int read;
+					while ((read = context.Request.InputStream.Read(chunk, 0, chunk.Length)) > 0)
+					{
+						if (stream.Length + read > limit) throw new ArgumentException("Save upload exceeds 512 MiB");
+						stream.Write(chunk, 0, read);
+					}
+					source = PartitionSaveFile.Read(stream.ToArray());
+				}
+				else source = m_persistence.ReadOfflineFinal(ulong.Parse(context.Request.QueryString["partition"] ?? throw new ArgumentException("Missing partition"), CultureInfo.InvariantCulture), context.Request.QueryString["save"]);
+				string result = Invoke(() => JsonSerializer.Serialize(OfflineCompensation.DryRun(source, hours), OfflineCompensation.Json));
+				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
+				return;
+			}
 			// Orchestration.md 11.2: run a scheduled maintenance task now. POST because it mutates; the
 			// admin-token gate above already covers it.
 			if (context.Request.HttpMethod == "POST" && path.Contains("/trigger/", StringComparison.OrdinalIgnoreCase))
@@ -1149,8 +1209,14 @@ internal sealed partial class ClusterControlServer
 				string task = path.Substring(path.LastIndexOf('/') + 1);
 				ulong? triggerPartition = ulong.TryParse(context.Request.QueryString["partition"], NumberStyles.Integer,
 					CultureInfo.InvariantCulture, out ulong triggerParsed) ? triggerParsed : null;
-				string result = Invoke(() => JsonSerializer.Serialize(
-					MaintenanceTriggers.Run(task, m_partitions, m_persistence, triggerPartition)));
+				string expectedGeneration = context.Request.QueryString["generation"];
+				string result = Invoke(() =>
+				{
+					if (task == "profile" && expectedGeneration != null && (!triggerPartition.HasValue
+						|| m_persistence.OwnedGeneration(triggerPartition.Value) != uint.Parse(expectedGeneration, CultureInfo.InvariantCulture)))
+						throw new InvalidOperationException("Profile ownership generation changed");
+					return JsonSerializer.Serialize(MaintenanceTriggers.Run(task, m_partitions, m_persistence, triggerPartition));
+				});
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 				return;
 			}
@@ -1209,7 +1275,7 @@ internal sealed partial class ClusterControlServer
 			}
 			if (context.Request.HttpMethod == "GET" && path.EndsWith("/offline", StringComparison.OrdinalIgnoreCase))
 			{
-				string result = Invoke(() => JsonSerializer.Serialize(new { owner = m_persistence.OfflineStatus(), cluster = OfflinePartitionService.Status() }));
+				string result = Invoke(() => JsonSerializer.Serialize(new { owner = m_persistence.OfflineStatus(), cluster = OfflinePartitionService.Status(), callUps = RemotePullService.Status() }, OfflineCompensation.Json));
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 				return;
 			}
@@ -1679,7 +1745,7 @@ internal sealed partial class ClusterControlServer
 	/// that all of them leave the source at the same instant: their replication views are exported
 	/// from a single frozen state, never one freeze per client. Empty means a clientless capture.
 	/// </param>
-	private static byte[] Capture(ulong[] clients, ulong partitionId, Guid? transferId, uint? generation)
+	private static byte[] Capture(ulong[] clients, ulong partitionId, Guid? transferId, uint? generation, bool allowRemoteUse = false)
 	{
 		if (transferId.HasValue && m_sourceTransfers.TryGetValue(transferId.Value, out Transfer existing))
 		{
@@ -1738,6 +1804,10 @@ internal sealed partial class ClusterControlServer
 			timer?.Step("freeze");
 			if (transfer != null)
 			{
+				// Same game-thread operation as Freeze: a terminal/camera opened after the gateway's
+				// report/presync must still refuse a clientless pull. Only deliberate co-location wins.
+				if (clients.Length == 0 && !allowRemoteUse && RemoteUse.Capture(new[] { partition }).ContainsKey(partitionId))
+					throw new InvalidOperationException("remote-use");
 				Freeze(transfer, entities);
 				// Attached children (a seated pilot above all) serialize INSIDE their parent's
 				// object builder. Vanilla re-tops the pilot character when the switching client
@@ -3079,6 +3149,7 @@ internal sealed partial class ClusterControlServer
 	/// validation sees the source's velocities and the thaw enables and moves it as the source had it.</param>
 	private static void Freeze(Transfer transfer, IEnumerable<MyEntity> entities, IReadOnlyDictionary<long, DeferredBody> deferred = null)
 	{
+		OfflineCompensation.CancelScope(transfer.Partition);
 		foreach (MyEntity entity in entities)
 		{
 			if (entity == null || transfer.Frozen.ContainsKey(entity.EntityId)) continue;

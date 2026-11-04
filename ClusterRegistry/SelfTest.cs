@@ -149,6 +149,7 @@ internal static partial class SelfTest
     /// output that also happened to pass.
     public static readonly (string Name, Action Body)[] Sections =
     [
+        ("accounting-clock", TestAccountingClock),
         ("diagnostic-reports", TestDiagnosticReports),
         ("linux-limits", TestLinuxLimits),
         ("endpoints", TestEndpoints),
@@ -160,6 +161,7 @@ internal static partial class SelfTest
         ("codec", TestCodec),
         ("admin-contract", TestAdminContract),
         ("client-diagnostics", TestClientDiagnostics),
+        ("offline-admin", TestOfflineAdmin),
         ("executor-contract", TestExecutorContract),
         ("executor-spawning-receipt", TestExecutorSpawningBeforeReceipt),
         ("managed-deployment", TestManagedDeployment),
@@ -348,6 +350,7 @@ internal static partial class SelfTest
         ("split-keeps-input-id", TestSplitKeepsInputId),
         ("topology-transfer", TestTopologyTransfer),
         ("offline-partitions", TestOfflinePartitions),
+        ("remote-use", TestRemoteUse),
         ("npc-census", TestNpcCensus),
         ("offline-grids", TestOfflineGrids),
         ("drain-offline", TestDrainOffline),

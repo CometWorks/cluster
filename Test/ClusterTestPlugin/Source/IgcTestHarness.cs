@@ -175,8 +175,34 @@ public static class IgcTestHarness
 	public static object LaserConnect(long gridEntityId, long targetAntennaId)
 	{
 		MyLaserAntenna laser = LaserOf(gridEntityId);
+		TraceLaserPair(laser.EntityId, targetAntennaId);
 		bool connected = laser.ClusterConnectTo(targetAntennaId);
 		return new { grid = gridEntityId, laser = laser.EntityId, target = targetAntennaId, requested = connected };
+	}
+
+	private static readonly HashSet<long> TracedLasers = new();
+	private static bool laserTraceInstalled;
+	private static void TraceLaserPair(long source, long target)
+	{
+		TracedLasers.Add(source); TracedLasers.Add(target);
+		if (laserTraceInstalled) return;
+		var harmony = new HarmonyLib.Harmony("ClusterTestPlugin.laser-state-trace");
+		harmony.Patch(HarmonyLib.AccessTools.Method(typeof(MyLaserAntenna), "DoChangeMode"),
+			prefix: new HarmonyLib.HarmonyMethod(typeof(IgcTestHarness), nameof(TraceLaserMode)));
+		harmony.Patch(HarmonyLib.AccessTools.Method(typeof(MyLaserAntenna), "DoConnectTo"),
+			postfix: new HarmonyLib.HarmonyMethod(typeof(IgcTestHarness), nameof(TraceLaserConnect)));
+		laserTraceInstalled = true;
+	}
+	private static void TraceLaserMode(MyLaserAntenna __instance, MyLaserAntenna.StateEnum Mode)
+	{
+		if (!TracedLasers.Contains(__instance.EntityId)) return;
+		Plugin.Log("laser trace mode=" + Mode + " laser=" + __instance.EntityId + " target=" + __instance.TargetId
+			+ " old=" + __instance.State + (Mode == MyLaserAntenna.StateEnum.idle ? "\n" + Environment.StackTrace : ""));
+	}
+	private static void TraceLaserConnect(MyLaserAntenna __instance)
+	{
+		if (TracedLasers.Contains(__instance.EntityId))
+			Plugin.Log("laser trace connect laser=" + __instance.EntityId + " target=" + __instance.TargetId + " state=" + __instance.State);
 	}
 
 	/// <summary>SE1-0226: points this grid's laser antenna at GPS coordinates, the terminal's "Connect" to a pasted GPS.</summary>

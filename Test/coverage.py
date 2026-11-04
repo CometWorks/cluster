@@ -70,6 +70,15 @@ PLAN_GAPS: dict[str, str] = {
 # Host capabilities (doctor.py `capabilities`): scenario id -> (capability, why it needs it). On a
 # host that has the capability the id counts as unported until a native scenario exists: the
 # Phase 3 Steam lane (steam_lane.py, removed 2026-09-17, in git history) has no native port yet.
+# SE-346/347 acceptance obligations. Detailed assertions and pending fixtures are recorded in
+# Docs/OfflinePartitions.md; do not alias a model self-check to a native differential/GUI run.
+PLAN_GAPS.update({
+    **{f"T-OC-{i:02}": "Offline compensation game differential/fixture not yet available; deterministic model/container proofs cover only the mapped invariants (Docs/OfflinePartitions.md)." for i in (1, 2, 3, 4)},
+    "T-OC-05": "Measure-node decision pending real observed-world evidence; no Measure role implemented.",
+    "T-OC-06": "Short observation exists; Measure-node full-rotation mod fixture/decision pending.",
+    "PRF-OC-01": "Needs the 200-panel planet/ridge fixture and exclusive frame-budget measurement; no performance claim.",
+})
+
 HOST_CAPABILITIES: dict[str, tuple[str, str]] = {
     "P1-REC-11": ("root", "packet loss/latency/reorder per leg needs tc/netem, which needs root on this box."),
     "P1-REC-13": ("twoHosts", "clock skew between hosts needs two hosts with independently settable clocks."),
@@ -117,7 +126,7 @@ ALIASES = {
 def plan_scenarios() -> list[str]:
     """Every scenario id TestPlan.md names, in sorted order."""
     text = TEST_PLAN.read_text()
-    return sorted({match.group(0) for match in re.finditer(r"\bP[123]-[A-Z]+-\d+[a-c]?\b", text)})
+    return sorted({match.group(0) for match in re.finditer(r"\b(?:P[123]-[A-Z]+-\d+[a-c]?|T-OC-\d{2}|PRF-OC-\d{2}|P2-OFF-CALL-[A-Z]+)\b", text)})
 
 
 def classify(native: dict, capabilities: dict | None = None) -> dict[str, tuple[str, str]]:

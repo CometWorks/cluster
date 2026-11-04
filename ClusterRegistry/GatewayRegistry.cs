@@ -4177,7 +4177,11 @@ internal sealed partial class GatewayRegistry : IDisposable
                 partition.LeaseExpires,
                 partition.Recovering,
                 quarantined.Contains(partition.Partition),
-                IsRetired(partition.Partition))).ToArray();
+                IsRetired(partition.Partition),
+                _state.OfflinePartitions.ContainsKey(partition.Partition),
+                _state.OfflinePartitions.GetValueOrDefault(partition.Partition)?.OfflineGameFrame,
+                OfflineGroups(_state.OfflinePartitions.GetValueOrDefault(partition.Partition)?.ProfileSummary),
+                HasRemoteUse(partition.Partition) ? _remoteUse[partition.Partition].Users.ToArray() : [])).ToArray();
         }
     }
 
@@ -4414,6 +4418,23 @@ internal sealed partial class GatewayRegistry : IDisposable
         {
             if (!_state.AdminOperations.TryGetValue(operationId, out var record) || record.Kind != "player-promotion"
                 || record.State != AdminOperationPhase.Failed || record.ErrorCode != "promotion_uncertain") return false;
+            record.State = AdminOperationPhase.Running;
+            record.ErrorCode = record.ErrorMessage = null;
+            record.UpdatedAt = _clock();
+            Emit("operation.resumed", operationId, new Dictionary<string, string> { ["kind"] = record.Kind, ["actor"] = record.Actor });
+            Persist();
+            return true;
+        }
+    }
+
+    /// <summary>A lost/malformed clear reply is uncertain, not proof of no effect. Retrying
+    /// its original key reuses the WA ledger GUID and CAS, including after Gateway restart.</summary>
+    internal bool ResumeOfflineCacheClear(string operationId)
+    {
+        lock (_lock)
+        {
+            if (!_state.AdminOperations.TryGetValue(operationId, out var record) || record.Kind != "offline-cache-clear"
+                || record.State != AdminOperationPhase.Failed || record.ErrorCode != "offline_clear_uncertain") return false;
             record.State = AdminOperationPhase.Running;
             record.ErrorCode = record.ErrorMessage = null;
             record.UpdatedAt = _clock();
@@ -5827,6 +5848,8 @@ internal sealed partial class GatewayRegistry : IDisposable
         public Guid? LastManagedRestore { get; set; }
         public Dictionary<string, ManagedProof> ManagedProofs { get; set; } = [];
         public long StateSequence { get; set; }
+        public AccountingClockSample? AccountingClock { get; set; }
+        public TrackedList<AccountingSunRun> AccountingSun { get; set; } = [];
         public Dictionary<string, NodeRegistration> Nodes { get; set; } = [];
         public WorldAuthority WorldAuthority { get; set; } = new(null, 0, 0);
         public TrackedDictionary<ulong, PartitionOwnership> Partitions { get; set; } = [];

@@ -28,6 +28,26 @@ public static class RcTestHarness
 {
 	private const string HostGridName = "cluster-rc-host";
 	private const string RelayGridName = "cluster-rc-relay";
+	public static object Sibling(long gridId, long owner)
+	{
+		var parent = (MyCubeGrid)MyEntities.GetEntityById(gridId);
+		var grid = SpawnStation("offline-conflict-sibling", parent.PositionComp.GetPosition() + Vector3D.Right * 30, owner, true);
+		return new { grid = grid.EntityId };
+	}
+
+	public static object RateFixtures(long ownerId, int count = 20)
+	{
+		if (count is < 1 or > 20) throw new ArgumentOutOfRangeException(nameof(count));
+		var player = PositionRegistryService.Players.FirstOrDefault(p => p.ClientId != 0 && p.IdentityId == ownerId)
+			?? PositionRegistryService.Players.First(p => p.ClientId != 0);
+		Vector3D origin = new(player.X, player.Y, player.Z);
+		return Enumerable.Range(0, count).Select(i =>
+		{
+			Vector3D position = origin + Vector3D.Right * ((i % 5 - 2) * 8000) + Vector3D.Up * (18000 + i / 5 * 8000);
+			var grid = SpawnStation("offline-rate-" + i, position, ownerId, true);
+			return new { grid = grid.EntityId, block = grid.GetFatBlocks<MyRemoteControl>().Single().EntityId };
+		}).ToArray();
+	}
 
 	/// <summary>
 	/// Ensures this node hosts a dedicated remote-control station 20 km out plus a relay antenna 150 m from
@@ -37,11 +57,12 @@ public static class RcTestHarness
 	/// partition owned by this node, which is exactly what the handover freeze under test needs; the relay
 	/// joins the player's own partition and completes the suit -> relay -> station chain in both directions.
 	/// </summary>
-	public static object EnsureRemoteControlGrid(long ownerId)
+	public static object EnsureRemoteControlGrid(long ownerId, bool dynamic = false)
 	{
 		if (ownerId == 0) throw new ArgumentOutOfRangeException(nameof(ownerId),
 			"A remote control owned by identity 0 fails the ownership validation of every use request");
-		ClusterPlayerPosition anyPlayer = PositionRegistryService.Players.FirstOrDefault(player => player.ClientId != 0)
+		ClusterPlayerPosition anyPlayer = PositionRegistryService.Players.FirstOrDefault(player => player.ClientId != 0 && player.IdentityId == ownerId)
+			?? PositionRegistryService.Players.FirstOrDefault(player => player.ClientId != 0)
 			?? throw new InvalidOperationException("No cluster player position to anchor the remote control grid");
 		Vector3D reference = new(anyPlayer.X, anyPlayer.Y, anyPlayer.Z);
 		MyPlanet planet = MyGamePruningStructure.GetClosestPlanet(reference);
@@ -58,7 +79,7 @@ public static class RcTestHarness
 				withRemoteControl: false);
 		MyCubeGrid host = MyEntities.GetEntities().OfType<MyCubeGrid>()
 			.FirstOrDefault(grid => grid.DisplayName == HostGridName)
-			?? SpawnStation(HostGridName, reference + up * 20000.0 + lateral, ownerId, withRemoteControl: true);
+			?? SpawnStation(HostGridName, reference + up * 20000.0 + lateral, ownerId, withRemoteControl: true, dynamic: dynamic);
 		return Describe(host, relay);
 	}
 
@@ -103,10 +124,13 @@ public static class RcTestHarness
 			working = remoteControl.IsWorking,
 			controlled = remoteControl.PreviousControlledEntity != null,
 			controllingIdentity = remoteControl.ControllerInfo?.ControllingIdentityId ?? 0,
+			position = new[] { remoteControl.CubeGrid.PositionComp.GetPosition().X, remoteControl.CubeGrid.PositionComp.GetPosition().Y, remoteControl.CubeGrid.PositionComp.GetPosition().Z },
+			speed = remoteControl.CubeGrid.Physics?.LinearVelocity.Length() ?? 0,
+			isStatic = remoteControl.CubeGrid.IsStatic,
 		};
 	}
 
-	private static MyCubeGrid SpawnStation(string name, Vector3D position, long ownerId, bool withRemoteControl)
+	internal static MyCubeGrid SpawnStation(string name, Vector3D position, long ownerId, bool withRemoteControl, bool dynamic = false)
 	{
 		var antenna = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_RadioAntenna>("LargeBlockRadioAntenna");
 		antenna.Min = new SerializableVector3I(0, 0, 0);
@@ -124,7 +148,7 @@ public static class RcTestHarness
 		battery.CurrentStoredPower = 3f;
 		var builder = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_CubeGrid>();
 		builder.GridSizeEnum = MyCubeSize.Large;
-		builder.IsStatic = true;
+		builder.IsStatic = !dynamic;
 		builder.CreatePhysics = true;
 		// Without InScene the entity is only registered, never added to the scene: no update scheduling, no
 		// resource distributor ticks, and the blocks sit functional-but-unpowered forever.
@@ -141,6 +165,19 @@ public static class RcTestHarness
 			remoteControl.ShareMode = MyOwnershipShareModeEnum.All;
 			remoteControl.CustomName = name + "-target";
 			builder.CubeBlocks.Add(remoteControl);
+		}
+		if (dynamic)
+		{
+			var thrust = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Thrust>("LargeBlockSmallThrust");
+			thrust.Min = new SerializableVector3I(3, 0, 0);
+			thrust.BlockOrientation = new SerializableBlockOrientation(Base6Directions.Direction.Backward, Base6Directions.Direction.Up);
+			thrust.Owner = ownerId;
+			thrust.Enabled = true;
+			builder.CubeBlocks.Add(thrust);
+			var gyro = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_Gyro>("LargeBlockGyro");
+			gyro.Min = new SerializableVector3I(2, 1, 0);
+			gyro.Owner = ownerId;
+			builder.CubeBlocks.Add(gyro);
 		}
 		MyEntity spawned = MyEntities.CreateFromObjectBuilderAndAdd(builder, fadeIn: false)
 			?? throw new InvalidOperationException("Could not spawn " + name);

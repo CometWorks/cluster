@@ -11,6 +11,7 @@ from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 import managed_deployment as managed
+from magnetar_config import CONCEALMENT_ID
 from test_packaged_plugins import PackagedPluginsTest
 
 
@@ -108,6 +109,7 @@ class ManagedPreparationTest(unittest.TestCase):
             payload = root / "Dependencies/payload"
             for folder, plugin in ((package / "plugins/ClusterNode", "cluster-node"),
                 (package / "plugins/WorldAuthority", "cluster-wa"),
+                (package / "plugins/Concealment", CONCEALMENT_ID),
                 (payload / "DirectTransport", "direct-transport"),
                 (payload / "CommonPlugins/Dotnet", "dotnet-compat"),
                 (payload / "CommonPlugins/Linux", "linux-compat"),

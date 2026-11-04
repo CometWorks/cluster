@@ -552,13 +552,14 @@ internal sealed class PartitionManager
 		IReadOnlyCollection<Partition> evaluated = Evaluate();
 		SampleSimLoad(evaluated);
 		ClientPartition[] routes = ClientPartitions(evaluated);
+		var remoteUsers = RemoteUse.Capture(evaluated);
 		// One pass over the routes instead of re-scanning them per partition, and one PCU walk per partition
 		// instead of two (EstimatedSnapshotBytes recomputed it). This report is polled by the balancer and is
 		// also emitted after every handover commit, so both scans were paid on the game thread.
 		Dictionary<ulong, string> clientsByPartition = routes.GroupBy(x => x.Partition)
 			.ToDictionary(x => x.Key, x => string.Join(',', x.Select(route => route.Client)));
 		string partitions = string.Join(',', evaluated.Select(partition => string.Format(CultureInfo.InvariantCulture,
-			"{{\"id\":{0},\"memberCount\":{1},\"anchored\":{2},\"fenced\":{12},\"fast\":{16},\"fastSpeed\":{17:R},\"sphere\":{{\"x\":{3:R},\"y\":{4:R},\"z\":{5:R},\"radius\":{6:R}}},\"maxMemberSpeed\":{7:R},\"pcu\":{10},\"estimatedSnapshotBytes\":{11},\"simLoadUs\":{14},\"clients\":[{8}],\"members\":[{9}],\"seated\":[{15}],\"memberSpheres\":[{13}],\"npc\":[{18}]}}",
+			"{{\"id\":{0},\"memberCount\":{1},\"anchored\":{2},\"fenced\":{12},\"fast\":{16},\"fastSpeed\":{17:R},\"sphere\":{{\"x\":{3:R},\"y\":{4:R},\"z\":{5:R},\"radius\":{6:R}}},\"maxMemberSpeed\":{7:R},\"pcu\":{10},\"estimatedSnapshotBytes\":{11},\"simLoadUs\":{14},\"clients\":[{8}],\"members\":[{9}],\"seated\":[{15}],\"memberSpheres\":[{13}],\"npc\":[{18}],\"remoteUsers\":[{19}]}}",
 			partition.Id, partition.Members.Count, partition.Anchored.ToString().ToLowerInvariant(), partition.Sphere.Center.X,
 			partition.Sphere.Center.Y, partition.Sphere.Center.Z, partition.Sphere.Radius, partition.MaxMemberSpeed,
 			clientsByPartition.TryGetValue(partition.Id, out string attached) ? attached : string.Empty,
@@ -566,7 +567,8 @@ internal sealed class PartitionManager
 			IsStartupFenced(partition.Id).ToString().ToLowerInvariant(), MemberSpheresJson(partition),
 			(long)Math.Round(m_simLoadUs.TryGetValue(partition.Id, out double simLoad) ? simLoad : 0.0),
 			SeatedJson(partition), partition.Fast.ToString().ToLowerInvariant(), Math.Round(partition.FastSpeed, 1),
-			NpcCensusService.RowsJson(partition.Members))));   // #1354: the cluster-wide NPC census
+			NpcCensusService.RowsJson(partition.Members),
+			remoteUsers.TryGetValue(partition.Id, out var users) ? string.Join(',', users) : string.Empty)));   // #1354: the cluster-wide NPC census
 		// The node's load is what says whether it is keeping up, and every consumer of this report - the
 		// balancer, the monitor, a handover self-test - wants it alongside the partitions rather than from a
 		// second call. threadLoad is Partitioning.md 7.2's metric already built, but NOT a percentage:

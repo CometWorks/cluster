@@ -26,7 +26,7 @@ internal static partial class BlockSafeZones
 		return Encoding.UTF8.GetString(stream.ToArray());
 	}
 
-	private static MyObjectBuilder_SafeZone Parse(string value)
+	internal static MyObjectBuilder_SafeZone Parse(string value)
 	{
 		using var stream = new MemoryStream(Encoding.UTF8.GetBytes(value), writable: false);
 		if (!MyObjectBuilderSerializerKeen.DeserializeXML(stream, out MyObjectBuilder_SafeZone builder))

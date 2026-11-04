@@ -19,7 +19,7 @@ namespace ClusterPlugin;
 /// </remarks>
 internal static class MaintenanceTriggers
 {
-	internal static readonly string[] Tasks = { "split-sweep", "membership-eval", "save", "conceal-eval", "compact" };
+	internal static readonly string[] Tasks = { "split-sweep", "membership-eval", "save", "conceal-eval", "compact", "profile", "compensate-dry-run" };
 
 	internal static object Run(string task, PartitionManager partitions, PartitionPersistence persistence, ulong? partitionFilter)
 	{
@@ -54,6 +54,13 @@ internal static class MaintenanceTriggers
 				var queued = targets.Select(id => new { partition = id, accepted = persistence.QueueTestCapture(id) }).ToArray();
 				return new { task, queued };
 			}
+			case "profile":
+				if (partitionFilter is not ulong profiling) throw new ArgumentException("profile requires partition");
+				var candidate = partitions.Peek(profiling);
+				if (ClusterRuntime.IsClustered && (!ClusterRuntime.IsServing || ClusterRuntime.IsAuthorityFenced
+				    || persistence.OwnedGeneration(profiling) == 0 || candidate.Members.Any(ClusterRuntime.IsFrozen)))
+				    throw new InvalidOperationException("Profile requires current serving, non-frozen ownership");
+				return new { task, partition = profiling, complete = OfflineCompensation.Prepare(candidate) };
 			case "conceal-eval":
 				return new { task, concealment = persistence.TriggerConcealEval() };
 			case "compact":

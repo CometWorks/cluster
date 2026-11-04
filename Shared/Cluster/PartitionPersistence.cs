@@ -139,6 +139,9 @@ internal sealed partial class PartitionPersistence
 	/// <summary>Sum of loaded member counts, refreshed on the game thread for the heartbeat.</summary>
 	private volatile int m_projectedLoad;
 	/// <summary>Per-partition member counts for heartbeat Ownerships; swapped whole on the game thread.</summary>
+	private long m_nextRemoteUse;
+	private sealed record RemotePresence(uint Generation, ulong[] Users);
+	private volatile Dictionary<ulong, RemotePresence> m_remoteUsers = new();
 	private volatile Dictionary<ulong, int> m_partitionMembers = new Dictionary<ulong, int>();
 	private long m_nodeEpoch;
 	private volatile bool m_registryReady;
@@ -336,6 +339,13 @@ internal sealed partial class PartitionPersistence
 		IReadOnlyCollection<PartitionManager.Partition> loadSnapshot = m_partitions.Evaluate();
 		m_projectedLoad = loadSnapshot.Sum(x => x.Members.Count);
 		m_partitionMembers = loadSnapshot.ToDictionary(x => x.Id, x => x.Members.Count);
+		if (Environment.TickCount64 >= m_nextRemoteUse)
+		{
+			m_nextRemoteUse = Environment.TickCount64 + 1000;
+			var remote = RemoteUse.Capture(loadSnapshot);
+			lock (m_owned) m_remoteUsers = m_owned.ToDictionary(x => x.Key,
+				x => new RemotePresence(x.Value, remote.GetValueOrDefault(x.Key) ?? []));
+		}
 		if (m_disconnectForFence)
 		{
 			m_disconnectForFence = false;
@@ -343,7 +353,9 @@ internal sealed partial class PartitionPersistence
 				foreach (ulong client in m_partitions.ClientPartitions(m_partitions.Evaluate()).Select(x => x.Client).Distinct())
 					MyMultiplayer.Static.DisconnectClient(client);
 		}
-		while (m_recoveries.TryDequeue(out RecoveryClaim recovery))
+		// A readiness-deferred claim stays pending until a later update. Bound this
+		// pass to its original queue so requeueing cannot spin on the game thread.
+		for (int pending = m_recoveries.Count; pending > 0 && m_recoveries.TryDequeue(out RecoveryClaim recovery); pending--)
 		{
 			// T-0297: the heartbeat dropped this claim (the registry no longer holds it for this node at this
 			// generation) while it waited in the queue. Loading it would duplicate the new claimant's load.
@@ -354,11 +366,16 @@ internal sealed partial class PartitionPersistence
 					+ recovery.Generation + " was lost before its load (T-0297)");
 				continue;
 			}
+			if (recovery.WaitForOfflineReadiness && !OfflineLoadReady)
+			{
+				m_recoveries.Enqueue(recovery);
+				continue;
+			}
 			Volatile.Write(ref m_recoveryLoadInFlight, 1);
 			try
 			{
 				int saved = LoadRecovery(recovery);
-				if (saved == DeferredLoad) continue;   // #1286: back on the replication thread for a census check, still claimed
+				if (saved == DeferredLoad) continue;   // still claimed in its readiness or census queue
 				lock (m_owned) m_owned[recovery.Partition] = recovery.Generation;
 				m_claimedPending.TryRemove(recovery.Partition, out _);
 				lock (m_recoveryFailureCounts) m_recoveryFailureCounts.Remove(recovery.Partition);
@@ -753,6 +770,7 @@ internal sealed partial class PartitionPersistence
 	public uint GetGeneration(ulong partitionId) => GetState(partitionId).Generation;
 	public void SetGeneration(ulong partitionId, uint generation)
 	{
+		if (OwnedGeneration(partitionId) != generation) OfflineCompensation.CancelScope(partitionId);
 		State state = GetState(partitionId);
 		state.Generation = generation;
 		state.Sequence = 0;
@@ -761,6 +779,7 @@ internal sealed partial class PartitionPersistence
 
 	public void ForgetOwnership(ulong partitionId)
 	{
+		OfflineCompensation.CancelScope(partitionId);
 		lock (m_owned) m_owned.Remove(partitionId);
 		m_partitions.Remove(partitionId);
 	}
@@ -1782,7 +1801,7 @@ internal sealed partial class PartitionPersistence
 				m_apply.Finish(operation);
 				continue;
 			}
-			foreach (ulong input in change.Inputs) { m_state.TryRemove(input, out _); lock (m_owned) m_owned.Remove(input); }
+			foreach (ulong input in change.Inputs) { OfflineCompensation.CancelScope(input); m_state.TryRemove(input, out _); lock (m_owned) m_owned.Remove(input); }
 			foreach ((ulong id, uint generation) in operation.Answer)
 			{
 				m_state[id] = new State { Generation = generation };
@@ -2451,8 +2470,10 @@ internal sealed partial class PartitionPersistence
 	// (see Update). 0 = off.
 	private static readonly int DiscardDelayMs =
 		int.TryParse(Environment.GetEnvironmentVariable("CLUSTER_TEST_DISCARD_DELAY_MS"), out int discardDelay) && discardDelay > 0 ? discardDelay : 0;
-	// LoadRecovery's answer for a load handed back to the replication thread (m_censusChecks) instead of loaded.
+	// A load requeued for offline readiness or handed to the replication thread for census checks.
 	private const int DeferredLoad = -1;
+	private static bool OfflineLoadReady => !ClusterConfig.GetBool("offline.compensate") || ClusterRuntime.HasAuthorityClock && AccountingClock.Ready && OfflineCompensation.ContentReady
+		&& SessionClockPatch.AppliedOffsetMilliseconds == TimeOfDayService.OffsetMilliseconds;
 
 	private bool BelowRecoveryCapacity()
 	{
@@ -2785,6 +2806,7 @@ internal sealed partial class PartitionPersistence
 						Members = memberCounts.TryGetValue(x.Key, out int members) ? members : 0 })
 						// At zero members, as a pending claim: it renews a lease and reports no content.
 						.Concat(expected.Select(x => new { Partition = x.Key, Generation = x.Value, Members = 0 })).ToArray(),
+					RemoteUsers = m_remoteUsers,
 					ClientPartitions = m_clientPartitions.Select(x => new { x.Client, x.Partition, x.Entity, x.Generation }).ToArray(),
 					RecoveryCapacity = m_maxPartitions,
 					ProjectedLoad = m_projectedLoad,
@@ -3713,6 +3735,7 @@ internal sealed partial class PartitionPersistence
 	{
 		Dictionary<long, MyObjectBuilder_EntityBase> entities = new Dictionary<long, MyObjectBuilder_EntityBase>();
 		HashSet<long> created = new HashSet<long>();
+		var offlineProfiles = new List<(byte[] Profiles, HashSet<long> Members)>();
 		// T-0207: every location this claim offered and what happened to it. The failure below used
 		// to name only the partition, and ReadRecoveryFile logs a line only for a location it
 		// actually OPENED - so a claim whose locations are all absent produced no explanation at
@@ -3739,7 +3762,19 @@ internal sealed partial class PartitionPersistence
 					+ " to " + fallback.Generation + "/" + fallback.Sequence + " for partition " + file.Partition);
 			}
 			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] recovery read save " + loaded.Partition + "/" + loaded.Generation + "/" + loaded.Sequence);
-			PartitionSaveFile.MergeEntities(entities, Deserialize(save), file.EntityIds);
+			var selected = Deserialize(save).Where(e => (file.EntityIds == null || file.EntityIds.Contains(e.EntityId)) && !entities.ContainsKey(e.EntityId)).ToArray();
+			PartitionSaveFile.MergeEntities(entities, selected, null);
+			if (save.Profiles != null)
+				offlineProfiles.Add((save.Profiles, selected.Select(e => e.EntityId).ToHashSet()));
+		}
+		// Never permanently drop a profile by applying against a boot-local or not-yet-offset clock.
+		if (offlineProfiles.Count != 0 && !OfflineLoadReady)
+		{
+			// Content hashing is asynchronous on a fresh modded node. No census worker
+			// owns this deferral: retain the claim ourselves, without repeatedly reading
+			// or deserializing its immutable Final while the clock/content is pending.
+			m_recoveries.Enqueue(recovery with { WaitForOfflineReadiness = true });
+			return DeferredLoad;
 		}
 		int saved = entities.Count;
 		if (StaleCopyCheck && recovery.Census != null && DeferForCensusCheck(recovery, entities)) return DeferredLoad;
@@ -3775,6 +3810,9 @@ internal sealed partial class PartitionPersistence
 			StripPilots(recovery.Partition, entities.Values, staleCharacters.Contains,
 				"its player's character home is newer and in another partition (stale seated copy, T-0237)");
 		}
+		// Stale-member filtering must precede compensation: a partial logical group cannot spend
+		// stocks carried by a grid that was removed as live elsewhere.
+		OfflineCompensation.Apply(entities, offlineProfiles);
 		// T-0237: a FENCE-TAINTED local copy of a recovered entity is stale by construction - an assigned seed
 		// save loaded at boot whose claim never confirmed - and the create-if-absent loop below used to keep it
 		// and adopt it into the recovered partition, discarding the save's newer state. w32 2026-09-25 00:07:48:
@@ -4209,6 +4247,7 @@ internal sealed partial class PartitionPersistence
 		HashSet<long> members = next.Members.ToHashSet();
 		// T-0237: decided BEFORE the freeze below, which disables physics and would read every body as at rest.
 		Func<PendingSave, object> offlineOffer = DrainOfflineOffer(next, clients);
+		byte[] profiles = offlineOffer == null ? null : OfflineCompensation.CaptureForDrain(next);
 		Dictionary<long, DrainFrozenState> frozen = new Dictionary<long, DrainFrozenState>();
 		foreach (MyEntity entity in MyEntities.GetEntities().Where(x => members.Contains(x.EntityId)))
 		{
@@ -4219,7 +4258,7 @@ internal sealed partial class PartitionPersistence
 		}
 		try
 		{
-			PendingSave save = QueueCapture(next, "Final", frozen: frozen);
+			PendingSave save = QueueCapture(next, "Final", frozen: frozen, profiles: profiles);
 			var drainSave = new DrainSave(next.Id, GetState(next.Id).Generation, members, freezeId, save, frozen) { OfflineBody = offlineOffer?.Invoke(save) };
 			lock (m_drainSaves) m_drainSaves[next.Id] = drainSave;
 		}
@@ -4324,7 +4363,7 @@ internal sealed partial class PartitionPersistence
 	}
 
 	private PendingSave QueueCapture(PartitionManager.Partition partition, string kind, bool waitForSlot = true,
-		Dictionary<long, DrainFrozenState> frozen = null)
+		Dictionary<long, DrainFrozenState> frozen = null, byte[] profiles = null)
 	{
 		Stopwatch capture = Stopwatch.StartNew();
 		MyObjectBuilder_EntityBase[] entities = MyEntities.GetEntities().Where(entity => partition.Members.Contains(entity.EntityId))
@@ -4339,7 +4378,7 @@ internal sealed partial class PartitionPersistence
 			}).ToArray();
 		capture.Stop();
 		WarnOnDoubleCapturedPilots(partition.Id, kind, entities);
-		return QueueCaptured(partition, kind, entities, waitForSlot, capture.Elapsed.TotalMilliseconds);
+		return QueueCaptured(partition, kind, entities, waitForSlot, capture.Elapsed.TotalMilliseconds, profiles: profiles);
 	}
 
 	/// <summary>
@@ -4522,7 +4561,7 @@ internal sealed partial class PartitionPersistence
 	public bool RegistryClaimOnly(ulong partition) => m_apply.IsClaimOnly(partition);
 
 	private PendingSave QueueCaptured(PartitionManager.Partition partition, string kind, MyObjectBuilder_EntityBase[] entities, bool waitForSlot,
-		double captureMilliseconds = 0, byte[] presetFile = null, uint presetSequence = 0)
+		double captureMilliseconds = 0, byte[] presetFile = null, uint presetSequence = 0, byte[] profiles = null)
 	{
 		State state = GetState(partition.Id);
 		PendingSave pending;
@@ -4538,6 +4577,7 @@ internal sealed partial class PartitionPersistence
 				entities, ClusterRuntime.CatalogClusterMilliseconds(), captureMilliseconds)
 			{
 				File = presetFile,
+				Profiles = profiles,
 				HomeStamps = entities == null ? null : CharacterHomeService.HomeStamps(partition.Id, entities),
 			};
 			state.ActiveSave = pending;
@@ -4620,7 +4660,7 @@ internal sealed partial class PartitionPersistence
 					{
 						byte[] body = PartitionSaveFile.SerializeEntities(save.Entities);
 						save.File = PartitionSaveFile.Write(save.PartitionId, save.Generation, save.Sequence, save.Kind == "Final" ? (byte)2 : save.Kind == "HandoverTee" ? (byte)1 : (byte)0,
-							save.Sphere, save.Anchored, save.Entities.Length, body, save.ClusterTime);
+							save.Sphere, save.Anchored, save.Entities.Length, body, save.ClusterTime, save.Profiles);
 					}
 					serialize.Stop();
 					save.SerializeMilliseconds = serialize.Elapsed.TotalMilliseconds;
@@ -5092,6 +5132,7 @@ internal sealed partial class PartitionPersistence
 		public ManualResetEventSlim Completed { get; } = new ManualResetEventSlim();
 		public bool Succeeded { get; set; }
 		public byte[] File { get; set; }
+		public byte[] Profiles { get; init; }
 		public double SerializeMilliseconds { get; set; }
 		public double WriteMilliseconds { get; set; }
 		public int Attempts { get; set; }
@@ -5145,6 +5186,7 @@ internal sealed partial class PartitionPersistence
 		string[] Locations, HashSet<long> EntityIds, Dictionary<string, (string Node, string Endpoint)> HolderProxies = null);
 	internal sealed record RecoveryClaim(ulong Partition, uint Generation, RecoveryFile[] Files, RecoveryFile[] Fallbacks)
 	{
+		public bool WaitForOfflineReadiness { get; init; }
 		/// <summary>
 		/// Entity ids live on OTHER nodes at claim time. A recovered save may carry an entity whose
 		/// newer incarnation rides a different partition id on another node - the per-partition-id

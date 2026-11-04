@@ -22,6 +22,7 @@ class PackagedPluginsTest(unittest.TestCase):
         self.plugins = self.root / "plugins"
         for role, name in config.BINARIES.items():
             self.bundle(self.plugins / name, config.PROFILES[role])
+        self.bundle(self.plugins / "Concealment", config.CONCEALMENT_ID)
         self.transport = self.root / "DirectTransport"
         self.bundle(self.transport, config.TRANSPORT_ID)
         (self.transport / "LiteNetLib.dll").write_bytes(b"dependency")
@@ -48,12 +49,12 @@ class PackagedPluginsTest(unittest.TestCase):
         for role, name in config.BINARIES.items():
             ids = self.write(role)
             profile = self.profile(config.PROFILES[role])
-            self.assertEqual(ids, ["direct-transport", config.PROFILES[role]])
+            self.assertEqual(ids, ["direct-transport", config.PROFILES[role], config.CONCEALMENT_ID])
             self.assertEqual({entry.text for entry in profile.findall("Local/string")}, set(ids))
             self.assertEqual([entry.text for entry in profile.findall("GitHub/GitHubPluginConfig/Id")],
                              ["common-plugin"])
             self.assertEqual(list(profile.find("DevFolder")), [])
-            for source in (self.plugins / name, self.transport):
+            for source in (self.plugins / name, self.plugins / "Concealment", self.transport):
                 for file in source.iterdir():
                     self.assertEqual(file.read_bytes(),
                                      (self.output / "Local" / source.name / file.name).read_bytes())
@@ -77,6 +78,18 @@ class PackagedPluginsTest(unittest.TestCase):
         self.assertIn("direct-transport", [entry.text for entry in
                       self.profile("cluster-node").findall("GitHub/GitHubPluginConfig/Id")])
 
+    def test_aliased_dev_source_cannot_override_the_pinned_core(self):
+        source = self.root / "core-dev"
+        source.mkdir()
+        (source / "Concealment.xml").write_text(f"<PluginData><Id>{config.CONCEALMENT_ID}</Id></PluginData>")
+        self.write()
+        path = self.output / "Sources/sources.xml"
+        root = ET.parse(path).getroot()
+        config._register(root, "arbitrary friendly alias", str(source), "Concealment.xml")
+        config._write_xml(root, path)
+        self.write()
+        self.assertEqual(list(ET.parse(path).getroot().find("LocalPluginSources")), [])
+
     def test_invalid_transport_never_falls_back_to_hub(self):
         manifest = self.transport / "DirectTransport.xml"
         original = manifest.read_text()
@@ -94,7 +107,7 @@ class PackagedPluginsTest(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_infrastructure_overrides_and_invalid_roles_are_rejected(self):
-        for plugin_id in ("cluster-node", "cluster-wa", "direct-transport"):
+        for plugin_id in ("cluster-node", "cluster-wa", "direct-transport", config.CONCEALMENT_ID):
             with self.subTest(plugin_id=plugin_id):
                 extra = self.root / plugin_id
                 self.bundle(extra, plugin_id)
@@ -223,7 +236,7 @@ class PackagedPluginsTest(unittest.TestCase):
             profile = self.profile("cluster-node")
             self.assertEqual(list(profile.find("GitHub")), [])
             self.assertEqual({e.text for e in profile.findall("Local/string")},
-                             {"cluster-node", "direct-transport", "ordinary-plugin"})
+                             {"cluster-node", "direct-transport", "ordinary-plugin", config.CONCEALMENT_ID})
             self.assertTrue((self.output / "Local/linux-compat/linux-compat.dll").is_file())
             (self.output / "Local/unmanaged.dll").write_bytes(b"unexpected")
             with self.assertRaises(ValueError):

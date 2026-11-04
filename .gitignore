@@ -384,3 +384,6 @@ Test/ProfileOptimization/
 
 # Rust gateway (GatewayRs) build output
 GatewayRs/target/
+
+# Pinned Concealment source/build, prepared by Build/prepare-concealment.py.
+/Dependencies/Concealment/

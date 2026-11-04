@@ -99,8 +99,23 @@ public static class GlobalStateChannel
 		=> SendCommand(subsystem, payload, Guid.NewGuid(), timeoutMilliseconds);
 
 	public static string SendCommand(string subsystem, string payload, Guid operationId, int timeoutMilliseconds = 5000)
+		=> SendCommandCore(subsystem, payload, operationId, timeoutMilliseconds, localAuthority: false);
+
+	/// <summary>Off-game-thread authority callers use the same ledger, journal and held-answer path
+	/// as remote commands. The game thread consumes the existing authority queue.</summary>
+	internal static string ExecuteLocalCommand(string subsystem, string payload, int timeoutMilliseconds = 5000)
+		=> ExecuteLocalCommand(subsystem, payload, Guid.NewGuid(), timeoutMilliseconds);
+
+	internal static string ExecuteLocalCommand(string subsystem, string payload, Guid operationId, int timeoutMilliseconds = 5000)
 	{
-		if (ClusterRuntime.IsWorldAuthority) throw new InvalidOperationException("The World Authority cannot send a command to itself");
+		if (!ClusterRuntime.IsWorldAuthority) throw new InvalidOperationException("Local authority command requires the World Authority");
+		if (Sandbox.MySandboxGame.Static?.UpdateThread == Thread.CurrentThread) throw new InvalidOperationException("Local authority command cannot wait on the game thread");
+		return SendCommandCore(subsystem, payload, operationId, timeoutMilliseconds, localAuthority: true);
+	}
+
+	private static string SendCommandCore(string subsystem, string payload, Guid operationId, int timeoutMilliseconds, bool localAuthority)
+	{
+		if (ClusterRuntime.IsWorldAuthority && !localAuthority) throw new InvalidOperationException("The World Authority cannot send a command to itself");
 		if (string.IsNullOrWhiteSpace(subsystem)) throw new ArgumentException("A subsystem is required", nameof(subsystem));
 		if (operationId == Guid.Empty) throw new ArgumentException("An operation ID is required", nameof(operationId));
 		if (timeoutMilliseconds <= 0) throw new ArgumentOutOfRangeException(nameof(timeoutMilliseconds));
@@ -114,8 +129,16 @@ public static class GlobalStateChannel
 			// T-0140: the sending end of the same question.
 			Console.WriteLine("[ClusterPlugin] global_command_send subsystem=" + subsystem
 				+ " sequence=" + sequence + " operation=" + operationId + " generation=" + generation);
-			if (!TrySend(new Envelope("Command", generation, subsystem, sequence, m_node, null, payload ?? string.Empty, operationId)))
-				throw new InvalidOperationException("Global-state node link is disconnected");
+			var command = new Envelope("Command", generation, subsystem, sequence, m_node, null, payload ?? string.Empty, operationId);
+			if (localAuthority)
+			{
+				lock (Sync)
+				{
+					if (AuthorityQueue.Count >= 4096) throw new InvalidOperationException("Global-state authority queue is full");
+					AuthorityQueue.Enqueue(command);
+				}
+			}
+			else if (!TrySend(command)) throw new InvalidOperationException("Global-state node link is disconnected");
 			if (!pending.Task.Wait(timeoutMilliseconds))
 			{
 				Interlocked.Increment(ref m_timedOutCommands);
@@ -697,6 +720,12 @@ public static class GlobalStateChannel
 
 	private static bool TrySend(Envelope envelope)
 	{
+		if (ClusterRuntime.IsWorldAuthority && envelope.Kind == "Response" && envelope.Target == m_node)
+		{
+			if (ClusterRuntime.IsAuthorityFenced) return false;
+			ReceiveAtReplica(envelope);
+			return true;
+		}
 		if (TestPartitionActive)
 		{
 			Interlocked.Increment(ref m_testDroppedFrames);

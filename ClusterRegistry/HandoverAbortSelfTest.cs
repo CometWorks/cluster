@@ -181,7 +181,7 @@ internal static partial class SelfTest
         {
             const BindingFlags Private = BindingFlags.NonPublic | BindingFlags.Instance;
             Task Once() => (Task)typeof(DirectGateway).GetMethod("FencedClientlessHandover", Private)!
-                .Invoke(_gateway, [_sourceControl, _targetControl, IPEndPoint.Parse(_targetEndpoint), partition, false])!;
+                .Invoke(_gateway, [_sourceControl, _targetControl, IPEndPoint.Parse(_targetEndpoint), partition, false, false])!;
             return Wait(delay == null ? Once() : DirectGateway.WhenRegistryApplied(partition, Once, delay));
         }
 

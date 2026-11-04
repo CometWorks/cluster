@@ -41,6 +41,7 @@ from pathlib import Path
 
 HUB = {"Name": "MagnetarHub", "Repo": "CometWorks/magnetar-hub", "Branch": "main",
        "Enabled": "true", "Trusted": "true"}
+CONCEALMENT_ID = "C88741F0-0AA5-4263-BD78-5D21467A84D3"
 
 #: How long Magnetar treats a fetched source as fresh, in HOURS. Once the cluster is up,
 #: nothing may go back to GitHub or NuGet: the caches are warmed once at start and every
@@ -126,7 +127,16 @@ def _unregister(root: ET.Element, name: str) -> None:
     if locals_ is None:
         return
     for entry in list(locals_):
-        if entry.findtext("Name") == name:
+        matches = entry.findtext("Name") == name
+        # Magnetar 2.4.3.9 keys dev folders by manifest Id, regardless of the
+        # user-visible source Name. An alias must not override a pinned local DLL.
+        if not matches and entry.findtext("Folder") and entry.findtext("File"):
+            try:
+                manifest = Path(entry.findtext("Folder")) / entry.findtext("File")
+                matches = ET.parse(manifest).getroot().findtext("Id") == name
+            except (OSError, ET.ParseError):
+                pass
+        if matches:
             locals_.remove(entry)
     if len(locals_) == 0:
         locals_.text = None  # ET.indent leaves the parsed whitespace of a now-empty element alone
@@ -310,9 +320,9 @@ def write_config(config: Path, cluster: Path | None = None, transport: Path | No
             raise ValueError("frozen plugins require dotnet-compat and linux-compat")
     extras = [Path(folder).expanduser().absolute() for folder in (extra_local or [])]
     extra_ids = [_local_id(folder) for folder in extras]
-    if set(extra_ids) & {TRANSPORT_ID, *PROFILES.values()}:
+    if set(extra_ids) & {TRANSPORT_ID, CONCEALMENT_ID, *PROFILES.values()}:
         raise ValueError("extra plugins cannot replace required infrastructure")
-    if not frozen and set(HUB_PLUGINS) & {TRANSPORT_ID, *PROFILES.values(), *extra_ids}:
+    if not frozen and set(HUB_PLUGINS) & {TRANSPORT_ID, CONCEALMENT_ID, *PROFILES.values(), *extra_ids}:
         raise ValueError("hub plugin selection duplicates local or required infrastructure")
     if transport_binaries is not None:
         transport_binaries = Path(transport_binaries).expanduser().absolute()
@@ -329,6 +339,12 @@ def write_config(config: Path, cluster: Path | None = None, transport: Path | No
         for r in roles:
             if not (Path(cluster) / MANIFESTS[r]).is_file():
                 raise FileNotFoundError(f"missing plugin manifest: {cluster}/{MANIFESTS[r]}")
+        core = Path(cluster) / "Dependencies/Concealment"
+    else:
+        core = Path(binaries).expanduser().absolute() / "Concealment"
+    if _local_id(core) != CONCEALMENT_ID:
+        raise ValueError("Cluster requires the pinned Concealment accounting plugin; run Build/prepare-concealment.py")
+    extras.insert(0, core)
 
     sources_path = config / "Sources/sources.xml"
     root = _load_sources(sources_path)
@@ -349,10 +365,12 @@ def write_config(config: Path, cluster: Path | None = None, transport: Path | No
         _register(root, TRANSPORT_ID, transport, "DirectTransportServer.xml")
         dev_ids.append(TRANSPORT_ID)
     if binaries is not None:
+        _unregister(root, CONCEALMENT_ID)
         for r in ("node", "wa"):
             _unregister(root, PROFILES[r])
         local_ids = _install_local(config, Path(binaries).expanduser().resolve(), roles)
     else:
+        _unregister(root, CONCEALMENT_ID)
         for r in ("node", "wa"):
             if r not in roles:
                 _unregister(root, PROFILES[r])
@@ -371,8 +389,8 @@ def write_config(config: Path, cluster: Path | None = None, transport: Path | No
 
     profiles = config / "Profiles"
     for r in roles:
-        role_dev = [i for i in dev_ids if i == TRANSPORT_ID or i == PROFILES[r]]
+        role_dev = [i for i in dev_ids if i in (TRANSPORT_ID, CONCEALMENT_ID, PROFILES[r])]
         role_local = [i for i in local_ids if i == PROFILES[r]] + installed_extra_ids
         _write_xml(_profile(PROFILES[r], hub_ids, role_dev, role_local, debug), profiles / f"{PROFILES[r]}.xml")
     _write_xml(_profile("Current", hub_ids, dev_ids, local_ids + installed_extra_ids, debug), profiles / "Current.xml")
-    return [TRANSPORT_ID] + [PROFILES[r] for r in roles] + extra_ids
+    return [TRANSPORT_ID] + [PROFILES[r] for r in roles] + [CONCEALMENT_ID] + extra_ids

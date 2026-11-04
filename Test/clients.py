@@ -253,9 +253,11 @@ class Client:
             shutil.copytree(template, self.pulsar_data, symlinks=True,
                             ignore=shutil.ignore_patterns("*.log", "info_*"))
         share_cache(self.pulsar_data / "GitHub", PULSAR_GITHUB_CACHE)
-        # Which plugins load is decided by the client's own copy of Profiles/: refresh it every start.
-        for entry in (template / "Profiles").glob("*.xml"):
-            shutil.copy2(entry, self.pulsar_data / "Profiles" / entry.name)
+        # Profiles and their source registrations are one pinned version set. Refresh both on
+        # reused homes, or changing a task's Remote fixture leaves the old source silently loaded.
+        for folder in ("Profiles", "Sources"):
+            if (template / folder).is_dir():
+                shutil.copytree(template / folder, self.pulsar_data / folder, dirs_exist_ok=True)
         pin_source_age(self.pulsar_data)
         live = Path.home() / ".config/SpaceEngineers"
         cfg = self.user_data / "SpaceEngineers.cfg"

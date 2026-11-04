@@ -36,8 +36,7 @@ internal static class GlobalSaveFile
 				// present. WorldAuthority.md 5.5's settings store, §8.2's time-of-day state, the stored ships
 				// (SE1-0233), the admin safe zones (SE1-0252), then §6.3's accepted contracts (SE1-0247); a later
 				// section forces empty placeholders for the earlier ones it follows. The optional
-				// offline-rates slot is preserved for compatibility with the shared offline branch;
-				// this build leaves it empty. Promotion records follow that slot.
+				// offline-rates slot precedes the promotion record for save compatibility.
 				string[] sections = { characterRecord, timeOfDayRecord, shipStorageRecord, adminSafeZonesRecord, contractRecord, offlineRatesRecord, promotionRecord };
 				int count = Array.FindLastIndex(sections, section => section != null) + 1;
 				for (int i = 0; i < count; i++)

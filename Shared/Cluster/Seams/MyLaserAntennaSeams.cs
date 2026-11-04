@@ -76,6 +76,7 @@ public static class MyLaserAntennaSeams
 		}
 		self.IdleOther();
 		self.DoConnectTo(destId);
+		LaserCallUpService.Request(self, destId);
 		return true;
 	}
 

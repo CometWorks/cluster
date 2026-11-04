@@ -287,17 +287,29 @@ def _hub_snapshot() -> Path | None:
 
 
 def start_standalone(bench, world_dir: Path, name: str = "stock", hub_plugins: list[str] | None = None,
-                     timeout: float = SERVER_TIMEOUT, ready: tuple[str, ...] = ("Game ready",)) -> Standalone:
+                     timeout: float = SERVER_TIMEOUT, ready: tuple[str, ...] = ("Game ready",),
+                     local_plugins: list[Path] | None = None, extra_env: dict[str, str] | None = None,
+                     port_slot: int | None = None) -> Standalone:
     """Load ``world_dir`` on a stock dedicated server: the Magnetar launcher, the host's
     DedicatedServer64, and a profile with the hub plugins only - no cluster plugin, no Direct
     Transport, no test plugin. Runs in the next free port slot after the cluster's nodes, with the
     vanilla Remote API on that slot's control port, and returns once every ``ready`` marker is in
     its log. The process lives under the run root, so ``bench.close`` kills it too."""
     config = bench.cluster.config
-    slot = max(node.epoch for node in config.nodes) + 1
+    slot = port_slot if port_slot is not None else max(node.epoch for node in config.nodes) + 1
     while True:
         spec = config.node_spec(name, slot)
-        if not any(port_open(*split_endpoint(endpoint)) for endpoint in (spec.backend, spec.control)):
+        # The native game endpoint is UDP. A TCP-only probe misses a live
+        # Gateway data-plane socket on a shared isolated host.
+        import socket
+        game_host, game_port_number = split_endpoint(spec.backend)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            try:
+                probe.bind((game_host, game_port_number))
+                game_available = True
+            except OSError:
+                game_available = False
+        if game_available and not port_open(*split_endpoint(spec.control)):
             break
         slot += 1
     game_port = spec.backend.rpartition(":")[2]
@@ -316,13 +328,22 @@ def start_standalone(bench, world_dir: Path, name: str = "stock", hub_plugins: l
         if (snapshot / "Hubs").is_dir():
             shutil.copytree(snapshot / "Hubs", sources_dir / "Hubs", dirs_exist_ok=True)
     root = magnetar_config._load_sources(sources_dir / "sources.xml")
+    # This is a hub snapshot, never another bench's dev-plugin selection. A
+    # manifest Id overrides a local DLL even if it was enabled through <Local>.
+    local_sources = root.find("LocalPluginSources")
+    if local_sources is not None:
+        local_sources.clear()
     for plugin_id in (magnetar_config.TRANSPORT_ID, *magnetar_config.PROFILES.values()):
         magnetar_config._unregister(root, plugin_id)
     magnetar_config._write_xml(root, sources_dir / "sources.xml")
     shutil.rmtree(magnetar / "Local", ignore_errors=True)
     hub_ids = list(magnetar_config.HUB_PLUGINS if hub_plugins is None else hub_plugins)
+    local_ids = []
+    for folder in local_plugins or []:
+        local_ids.append(magnetar_config._local_id(folder))
+        shutil.copytree(folder, magnetar / "Local" / folder.name, dirs_exist_ok=True)
     for profile in (name, "Current"):
-        magnetar_config._write_xml(magnetar_config._profile(profile, hub_ids, [], [], False),
+        magnetar_config._write_xml(magnetar_config._profile(profile, hub_ids, [], local_ids, False),
                                    magnetar / "Profiles" / f"{profile}.xml")
     share_github_cache(magnetar, MAGNETAR_GITHUB_CACHE)
     # Only the very first stock start on a host without a bench snapshot may fetch the hub list,
@@ -330,8 +351,15 @@ def start_standalone(bench, world_dir: Path, name: str = "stock", hub_plugins: l
     update_args = ["-noupdate"] if snapshot is not None or not hub_ids else []
 
     key = base64.b64encode(secrets.token_bytes(32)).decode()
+    # The dedicated config's default SessionSettings otherwise overwrites the premade
+    # world's Survival mode with Creative. Preserve the same fixture rules as the cluster.
+    settings = ET.parse(world_dir / "Sandbox_config.sbc").getroot().find("Settings")
+    if settings is None: raise ValueError("Standalone world has no explicit Settings")
+    settings.tag = "SessionSettings"
+    session_settings = ET.tostring(settings, encoding="unicode")
     (data / "SpaceEngineers-Dedicated.cfg").write_text(f"""<?xml version="1.0" encoding="utf-8"?>
 <MyConfigDedicated xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  {session_settings}
   <LoadWorld />
   <IP>0.0.0.0</IP>
   <SteamPort>8766</SteamPort>
@@ -354,6 +382,7 @@ def start_standalone(bench, world_dir: Path, name: str = "stock", hub_plugins: l
 """)
     env = {key_: value for key_, value in os.environ.items() if not key_.startswith("CLUSTER_")}
     env.update(CRASH_ENV)
+    env.update(extra_env or {})
     env["DOTNET_DbgMiniDumpName"] = str(config.dumps / f"{name}.%p.dmp")
     process = bench.cluster._spawn(name, [
         str(config.launcher), "-config", str(magnetar), "-ds64", str(config.ds64), "-profile", name,

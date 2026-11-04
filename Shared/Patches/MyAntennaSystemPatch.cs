@@ -56,4 +56,12 @@ public static class MyAntennaSystemPatch
 		}
 		return false;
 	}
+
+	[HarmonyPostfix]
+	[HarmonyPatch(nameof(MyAntennaSystem.AddLaser))]
+	private static void AddLaserPostfix(MyLaserBroadcaster laser)
+	{
+		if (ClusterRuntime.IsClustered && !ClusterRuntime.IsWorldAuthority && laser.RealAntenna != null)
+			LaserCallUpService.TargetAvailable(laser.RealAntenna);
+	}
 }

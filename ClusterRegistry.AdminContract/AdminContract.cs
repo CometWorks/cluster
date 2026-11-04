@@ -22,6 +22,11 @@ public static class AdminProtocol
         "GET /admin/v1/nodes",
         "GET /admin/v1/world-authority",
         "GET /admin/v1/partitions",
+        "GET /admin/v1/offline/partitions",
+        "GET /admin/v1/offline/details",
+        "GET /admin/v1/offline/cache",
+        "GET /admin/v1/offline/prediction",
+        "POST /admin/v1/offline/cache/clear",
         "GET /admin/v1/snapshots",
         "GET /admin/v1/events",
         "GET /admin/v1/operations",
@@ -307,7 +312,11 @@ public sealed record PartitionSummary(
     DateTimeOffset LeaseExpires,
     bool Recovering,
     bool Quarantined,
-    bool Retired);
+    bool Retired,
+    bool Offline = false,
+    long? OfflineGameFrame = null,
+    OfflineGroupSummary[]? ProfileGroups = null,
+    ulong[]? RemoteUsers = null);
 
 public enum AdminSnapshotKind { CleanShutdown, Online, Conversion }
 

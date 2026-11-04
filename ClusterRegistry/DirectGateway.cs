@@ -893,7 +893,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         Console.WriteLine($"Automatic partition handover triggered for {moving.Id}, reason {chosen.Move.Reason}, envelope gap {chosen.Move.Gap:F1}m, raw gap {chosen.Move.RawGap:F1}m, direction {(toTarget ? "source->target" : "target->source")}, clients {movingClients}, component home {(chosen.Move.HomeIsTarget ? "target" : "source")} of {chosen.Move.ComponentSize}, route {chosen.From.Node.Node}->{chosen.To.Node.Node}; why: {chosen.Move.Why}");
                         attempting = moving.Id;
                         if (movingClients == 0)
-                            FencedClientlessHandover(chosen.From.Node.Control, chosen.To.Node.Control, chosen.To.Node.Backend, moving.Id).GetAwaiter().GetResult();
+                            FencedClientlessHandover(chosen.From.Node.Control, chosen.To.Node.Control, chosen.To.Node.Backend, moving.Id, allowRemoteUse: chosen.Move.Reason == "co-location").GetAwaiter().GetResult();
                         else if (moving.Clients.Length == 0)
                         {
                             // Deferred is not free: the pin survives the pass and the same plan is
@@ -1999,7 +1999,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // node but is not reassignable this pass; it stays fully moveable later.
                 // T-0292: a fast partition stays with its owner until it slows down - never migrated.
                 bool movable = !members.Any(m => blocked(m.Id) || (validationBlocked?.Invoke(m.Id) ?? false)
-                    || (alreadyPinned?.Invoke(m.Id) ?? false) || m.Fast);
+                    || (alreadyPinned?.Invoke(m.Id) ?? false) || m.Fast || m.RemoteUsers is { Length: > 0 });
                 if (members.Any(m => m.Fast)) FastPartitionCounters.Migration();
                 // T-0074: a partition in flight is not a placement unit. Its load is the flying
                 // ship's own physics, which leaves the node with the ship inside the time a migration
@@ -4476,16 +4476,6 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 ulong pullPartition = ulong.Parse(Required(context, "partition"));
                 string pullSource = Required(context, "source");
                 string pullTarget = Required(context, "target");
-                lock (_pullLock)
-                {
-                    if (_pullCooldowns.TryGetValue(pullPartition, out DateTimeOffset lastPull)
-                        && DateTimeOffset.UtcNow - lastPull < TimeSpan.FromSeconds(60))
-                    {
-                        WriteJson(context, 200, new { accepted = false, reason = "cooldown" });
-                        return;
-                    }
-                    _pullCooldowns[pullPartition] = DateTimeOffset.UtcNow;
-                }
                 PartitionOwnership pullOwner;
                 try { pullOwner = _registry.GetPartitionOwner(pullPartition); }
                 catch (Exception)
@@ -4520,6 +4510,23 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     WriteJson(context, 200, new { accepted = false, reason = "source or target node is not active with a control endpoint" });
                     return;
                 }
+                // Read the source now: a pin may be newer than the scheduler's cached report.
+                if (GetPartitions(StripScheme(pullSourceNode.ControlEndpoint)).Partitions
+                    .Any(p => p.Id == pullPartition && p.RemoteUsers is { Length: > 0 }) || _registry.HasRemoteUse(pullPartition))
+                {
+                    WriteJson(context, 200, new { accepted = false, reason = "remote-use" });
+                    return;
+                }
+                lock (_pullLock)
+                {
+                    if (_pullCooldowns.TryGetValue(pullPartition, out DateTimeOffset lastPull)
+                        && DateTimeOffset.UtcNow - lastPull < TimeSpan.FromSeconds(60))
+                    {
+                        WriteJson(context, 200, new { accepted = false, reason = "cooldown" });
+                        return;
+                    }
+                    _pullCooldowns[pullPartition] = DateTimeOffset.UtcNow;
+                }
                 // T-0296 r3: a retiring target is draining; the scale-in pass would pin the pulled partition straight out again.
                 if (_registry.IsRetiring(pullTarget))
                 {
@@ -4541,7 +4548,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     // reads as Active here). Nothing was transferred - refuse cleanly; the caller's
                     // retry lands after recovery reassigns the partition.
                     Console.WriteLine($"Pull demand partition {pullPartition} refused: {exception.Message}");
-                    WriteJson(context, 200, new { accepted = false, reason = "the source node did not serve the handover" });
+                    WriteJson(context, 200, new { accepted = false, reason = exception.Message == "remote-use" ? "remote-use" : "the source node did not serve the handover" });
                     return;
                 }
                 finally { _rotation.Release(); }
@@ -4605,6 +4612,22 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 WriteJson(context, 200, _registry.HandoverConfig());
                 return;
             }
+            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/offline-accounting-clock", StringComparison.OrdinalIgnoreCase))
+            {
+                WriteJson(context, 200, (object?)_registry.AccountingClock("", 0, null) ?? new { unavailable = true });
+                return;
+            }
+            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/offline-accounting-sun", StringComparison.OrdinalIgnoreCase))
+            {
+                WriteJson(context, 200, _registry.AccountingSun(Required(context, "epoch"), long.Parse(Required(context, "from")), long.Parse(Required(context, "through"))));
+                return;
+            }
+            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/offline-accounting-clock", StringComparison.OrdinalIgnoreCase))
+            {
+                var request = ReadJson<AccountingClockRequest>(context);
+                WriteJson(context, 200, _registry.AccountingClock(request.Node, request.Epoch, request.Sample));
+                return;
+            }
             if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/nodes/heartbeat", StringComparison.OrdinalIgnoreCase))
             {
                 HeartbeatRequest request = ReadJson<HeartbeatRequest>(context);
@@ -4612,6 +4635,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     request.SimulationFrame, request.SaveFailure, request.RecoveryCapacity, request.Quarantined,
                     request.ProjectedLoad, request.LoadCapacity, request.RecoveryLoadsPending, request.Serving,
                     request.DeploymentRevision, request.ConfigurationVerified, request.ConfigurationFailure, request.Liveness);
+                if (!request.Liveness) _registry.ReportRemoteUse(request.Node, request.Epoch, request.Ownerships, request.RemoteUsers);
                 if (request.Hitches != null)
                     foreach (HitchReport hitch in request.Hitches)
                         _handoverTelemetry.Hitch(hitch.TransferId, request.Node, hitch.Phase, hitch.Ms, hitch.Utc, hitch.PhaseMs);
@@ -4641,7 +4665,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 WriteJson(context, 200, new HeartbeatResponse(node.Node, node.Epoch, node.Endpoint, node.Registered, node.State,
                     node.LeaseExpires, node.ForceDrainAt, node.Role, node.AuthorityGeneration, authority.Generation, accepted,
                     request.LocalSendMilliseconds, gatewayMilliseconds, currentAuthorityMilliseconds, _registry.HandoverConfigRevision,
-                    _registry.ShuttingDown));
+                    _registry.ShuttingDown, AccountingClock: _registry.AccountingClock(node.Node, node.Epoch, request.AccountingClock)));
                 return;
             }
             if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/nodes/close", StringComparison.OrdinalIgnoreCase))
@@ -6524,7 +6548,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         }
     }
 
-    private async Task FencedClientlessHandover(string source, string target, IPEndPoint backend, ulong partition, bool pauseAfterCapture = false)
+    private async Task FencedClientlessHandover(string source, string target, IPEndPoint backend, ulong partition, bool pauseAfterCapture = false, bool allowRemoteUse = false)
     {
         GatewayRegistry registry = _registry ?? throw new InvalidOperationException("Clientless handover requires the registry");
         (NodeRegistration sourceNode, NodeRegistration targetNode) = ResolveFencedNodes(registry, source, target, backend);
@@ -6535,6 +6559,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // partition holding an abandoned character permanently unmovable ("not clientless",
         // partition 74's spawn-point pulls, 2026-08-11). Only a client with a live gateway session
         // needs its session moved with the partition; a resident body without one is cargo.
+        if (!allowRemoteUse && (sourcePartition.RemoteUsers is { Length: > 0 } || registry.HasRemoteUse(partition)))
+            throw new InvalidOperationException("remote-use");
         ulong[] connectedReported = sourcePartition.Clients.Where(_clients.ContainsKey).ToArray();
         if (connectedReported.Length != 0)
             throw new InvalidOperationException($"Partition {partition} is not clientless (connected: {string.Join(",", connectedReported)})");
@@ -6603,7 +6629,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             LogTransfer(transferId, partition, "begun", presyncId == null ? "" : $" presync={presyncId}");
 
             captured = true;
-            byte[] capture = await FencedCapture(ClusterUrl(source, "capture") + fence + "&clientless=true" + presyncQuery, partition);
+            byte[] capture = await FencedCapture(ClusterUrl(source, "capture") + fence + "&clientless=true"
+                + (allowRemoteUse ? "&allowRemoteUse=true" : "") + presyncQuery, partition);
             HandoverCapture handover = HandoverCapture.Parse(capture);
             if (handover.ClientStates.Count != 0)
                 throw new InvalidDataException("Clientless capture included client state");
@@ -8417,13 +8444,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         long? RecoveryCapacity = null, ulong[]? Quarantined = null, long? ProjectedLoad = null, long? LoadCapacity = null,
         long? RecoveryLoadsPending = null, HitchReport[]? Hitches = null, long? ConfigRevision = null, bool? Serving = null,
         string? DeploymentRevision = null, bool ConfigurationVerified = false, string? ConfigurationFailure = null,
-        bool Liveness = false);
+        bool Liveness = false, Dictionary<ulong, RemoteUseReport>? RemoteUsers = null, AccountingClockSample? AccountingClock = null);
     /// <summary>A game-thread frame over the node's hitch threshold, with the handover phase that held it (§3).</summary>
     private sealed record HitchReport(DateTime Utc, double Ms, string Phase, string? TransferId, ulong Partition, double PhaseMs);
+    private sealed record AccountingClockRequest(string Node, long Epoch, AccountingClockSample Sample);
     private sealed record HeartbeatResponse(string Node, long Epoch, string Endpoint, DateTimeOffset Registered, NodeState State,
         DateTimeOffset LeaseExpires, DateTimeOffset? ForceDrainAt, NodeRole Role, long AuthorityGeneration, long WorldAuthorityGeneration,
         PartitionVersion[] Ownerships, double LocalSendMilliseconds, double GatewayMilliseconds, double? AuthorityMilliseconds,
-        long HandoverConfigRevision = 0, bool ClusterDraining = false, bool TopologyTransfer = true);
+        long HandoverConfigRevision = 0, bool ClusterDraining = false, bool TopologyTransfer = true, AccountingClockSample? AccountingClock = null);
     // T-0339 (design C): TopologyTransfer tells the node this registry applies a transfer (GatewayRegistry.IsTransfer); a
     // registry without the field is one that refuses it, and the node then makes the split and the merge instead.
     private sealed record RecoveryRequest(string Node, long Epoch, ulong[] Partitions);

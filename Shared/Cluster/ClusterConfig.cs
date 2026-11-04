@@ -274,6 +274,20 @@ public static class ClusterConfig
 		// offline.enabled=false stops NEW offline transitions at once; partitions already offline
 		// still come back on demand (that side needs no switch).
 		["offline.enabled"] = "true",
+		["offline.compensate"] = "true",
+		["offline.velocityReadiness"] = "true",
+		["offline.settleFrames"] = "300",
+		["offline.observeSeconds"] = "180",
+		["offline.rotateProduction"] = "true",
+		["offline.solarSteps"] = "72",
+		["offline.cacheTolerance"] = "0.02",
+		["offline.unknownBlocks"] = "Freeze",
+		["offline.longObservation"] = "Skip",
+		["offline.compensateMaxHours"] = "72",
+		["offline.callUp"] = "true",
+		["offline.callUpSeconds"] = "120",
+		["offline.callUpPerMinute"] = "6",
+		["offline.callUpNoticeSeconds"] = "2",
 		["offline.graceSeconds"] = "180",   // T-0237 (Viktor 2026-09-24): offline after 3 min of inactivity
 		["offline.minOnlineSeconds"] = "60",   // T-0237: covers the route-to-attach window of a join (10-13 s)
 		["offline.quietMeters"] = "8000",
@@ -473,6 +487,8 @@ public static class ClusterConfig
 		// been settable only by editing the source - i.e. the documented rollback would have failed
 		// at the moment it was needed.
 		["balance.unattributedLoad"] = new[] { "thread", "cpu", "off" },
+		["offline.unknownBlocks"] = new[] { "Freeze", "Mean", "Block" },
+		["offline.longObservation"] = new[] { "Skip", "InPlace" },
 		["import.prepareScope"] = new[] { "scoped", "full", "check" },
 	};
 
@@ -490,7 +506,7 @@ public static class ClusterConfig
 	// config returned 400: the knobs could only ever hold their defaults.
 	private static readonly HashSet<string> Decimals = new HashSet<string>
 	{
-		"fast.enterMps", "fast.enterMarginFraction", "fast.exitFraction", "offline.wakeOverloadRatio",
+		"offline.cacheTolerance", "fast.enterMps", "fast.enterMarginFraction", "fast.exitFraction", "offline.wakeOverloadRatio",
 		"npc.visitRadius", "npc.gapRemovalFactor", "cleanup.unownedVisitRadius", "cleanup.wreckAggressiveSimSpeed", "cleanup.wreckTouchMeters",
 	};
 

@@ -405,6 +405,8 @@ public static class ClusterRuntime
 
     internal static bool PartitionClaimPending(ulong partition) => m_persistence?.ClaimPending(partition) ?? false;
 
+    internal static bool CanProfile(ulong partition, uint generation = 0) => m_persistence?.CanProfile(partition, generation) == true;
+
     internal static bool PartitionOfflining(ulong partition) => m_persistence?.Offlining(partition) ?? false;
 
     internal static Dictionary<ulong, long> PluginOwnershipSnapshot() =>
@@ -438,6 +440,8 @@ public static class ClusterRuntime
 		OfflinePartitionService.Install();
 		if (IsClustered) NpcCensusService.Install();   // #1354: the census slots for mod-mes; unset on a plain server
 		RemotePullService.Install();
+		OfflineRateCache.Install();
+		AccountingClock.Install();
 		MyGlobalEventsPatch.Install();
 		MyPirateAntennasPatch.Install();
 		MySessionComponentContainerDropSystemPatch.Install();
@@ -699,7 +703,8 @@ public static class ClusterRuntime
 					// handler re-attaches the sun offset (AdvanceAuthorityClock), so sending it
 					// here too compounds the offset by one heartbeat period per second - a runaway
 					// the whole cluster then slews after (WorldAuthority.md §8.2).
-					AuthorityMilliseconds = IsWorldAuthority && MySession.Static?.Ready == true
+					AccountingClock = AccountingClock.Proposal(),
+                    AuthorityMilliseconds = IsWorldAuthority && MySession.Static?.Ready == true
 						? AuthorityClockMilliseconds : (double?)null
 				}), System.Text.Encoding.UTF8, "application/json");
 				using HttpResponseMessage response = m_registryClient.PostAsync(gateway + "/registry/nodes/heartbeat", content).GetAwaiter().GetResult();
@@ -713,7 +718,9 @@ public static class ClusterRuntime
 					FenceWorldAuthority();
 					return;
 				}
-				JsonElement state = heartbeat.RootElement.GetProperty("State");
+				if (heartbeat.RootElement.TryGetProperty("AccountingClock", out JsonElement accountingClock))
+                    AccountingClock.Receive(accountingClock.Deserialize<AccountingClock.Sample>(), worldGeneration);
+                JsonElement state = heartbeat.RootElement.GetProperty("State");
 				bool closed = state.ValueKind == JsonValueKind.String ? state.GetString() == "Closed" : state.GetInt32() == 1;
 				if (IsWorldAuthority && closed) m_worldAuthorityPersistence?.RequestShutdown();
 				if (heartbeat.RootElement.TryGetProperty("AuthorityMilliseconds", out JsonElement authorityClock)
@@ -968,6 +975,7 @@ public static class ClusterRuntime
 	public static void Update()
 	{
 		Interlocked.Exchange(ref m_lastGameThreadUpdate, Environment.TickCount64);
+        AccountingClock.Update();
         if (IsClustered) ClientDiagnostics.Update();
 		GridListCommand.Update();
 		WatchGameThreadExit();
@@ -1016,6 +1024,9 @@ public static class ClusterRuntime
 		// Measurement only, one ratio read per tick while an import is recovering. See ImportRecoveryProbe.
 		ImportRecoveryProbe.Update();
 		AntennaGraphService.Update();
+		LaserCallUpService.Update();
+		OfflineRateCache.Update();
+		OfflineCompensation.UpdateObservations();
 		ShipAntennaService.Update();   // T-0186, no-op unless CLUSTER_SHIP_ANTENNA_RULE is set (default off)
 		RespawnRegistryService.Update();
 		IgcEndpointRegistryService.Update();

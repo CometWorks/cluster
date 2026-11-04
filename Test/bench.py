@@ -49,6 +49,18 @@ LEGACY_REMOTE_PORT = 24158
 
 GAMEPLAY_SCREEN = "MyGuiScreenGamePlay"
 
+
+def complete_png(path: Path) -> bool:
+    """Remote's save endpoint queues a render-thread write; a returned path is not a screenshot yet."""
+    try:
+        with path.open("rb") as stream:
+            if stream.read(8) != b"\x89PNG\r\n\x1a\n":
+                return False
+            stream.seek(-12, 2)
+            return stream.read() == b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    except OSError:
+        return False
+
 # Each leg's key. TestPlan §1.2 asks for "a short walk (when standing on a surface) and a jetpack
 # burst" - and a jetpack burst is Space, not W. Measured on a live client: from rest, a freshly
 # spawned character in deep space travels 0.019 m under a 4 s W hold and 169.3 m under Space. Once it
@@ -150,6 +162,7 @@ class Bench:
         path = self.dir / f"{name}.png"
         try:
             api.screenshot_save(str(path))
+            wait_until(lambda: complete_png(path), 10, f"complete render-thread screenshot {name}", interval=0.1)
         except Exception as error:  # a screenshot is evidence, never a gate
             print(f"  (screenshot {name} failed: {error})")
             return None
@@ -652,6 +665,12 @@ def run_scenario(function, scenario: str, title: str, tier: str, results_root: P
     print(f"\n=== {scenario} - {title} ===")
     try:
         function(bench)
+    except (KeyboardInterrupt, SystemExit) as error:
+        # Teardown still records the run. An interrupted scenario must never leave a
+        # default-success result.json, even if it had not reached its first assertion.
+        bench.result.passed = False
+        bench.result.error = f"{type(error).__name__}: interrupted before completion"
+        raise
     except (ClusterError, AssertionError, Exception) as error:  # noqa: BLE001 - a scenario failure is data
         bench.result.passed = False
         bench.result.error = f"{type(error).__name__}: {error}"

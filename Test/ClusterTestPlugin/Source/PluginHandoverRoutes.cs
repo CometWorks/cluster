@@ -11,6 +11,7 @@ internal static class PluginHandoverRoutes
     private static readonly object Sync = new();
     private static readonly List<object> Events = new();
     private static readonly Dictionary<long, string> States = new();
+    private static readonly Dictionary<long, string> Failures = new();
     private static IDisposable registration;
 
     private sealed class Hooks : IPluginGridHandover
@@ -26,8 +27,10 @@ internal static class PluginHandoverRoutes
         }
         public byte[] Leaving(long gridId)
         {
-            string state;
-            lock (Sync) States.TryGetValue(gridId, out state);
+            string state, failure;
+            lock (Sync) { States.TryGetValue(gridId, out state); Failures.TryGetValue(gridId, out failure); }
+            if (failure == "throw") { Record("LeavingThrow", gridId); throw new InvalidOperationException("injected optional hint failure"); }
+            if (failure == "oversize") { Record("LeavingOversize", gridId); return new byte[PluginGridHandover.MaxStateBytes + 1]; }
             byte[] bytes = state == null ? null : Encoding.UTF8.GetBytes(state);
             Record("Leaving", gridId, bytes);
             return bytes;
@@ -50,7 +53,13 @@ internal static class PluginHandoverRoutes
                 if (registration == null)
                     try { registration = PluginCluster.ForPlugin(id).RegisterGridHandover(new Hooks()); }
                     catch (Exception failure) { error = failure.GetType().Name + ": " + failure.Message; }
-                if (long.TryParse(context.Request.QueryString["grid"], out long grid)) States[grid] = context.Request.QueryString["state"];
+                if (long.TryParse(context.Request.QueryString["grid"], out long grid))
+                {
+                    States[grid] = context.Request.QueryString["state"];
+                    string failure = context.Request.QueryString["failure"];
+                    if (failure is not (null or "" or "throw" or "oversize")) throw new ArgumentException("failure is throw or oversize");
+                    Failures[grid] = failure;
+                }
             }
             object[] events;
             lock (Sync) events = Events.ToArray();

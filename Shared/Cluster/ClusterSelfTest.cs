@@ -26,6 +26,8 @@ internal static partial class ClusterSelfTest
 	public static readonly (string Name, Action Body)[] Sections = new (string, Action)[]
 	{
 		("membership-determinism", MembershipDeterminism),
+		("offline-save-sections", OfflineSaveSections),
+		("offline-solar-pivots", OfflineSolarPivots),
 		("membership-hysteresis", MembershipHysteresis),
 		("membership-atomicity", MembershipAtomicity),
 		("membership-conga", MembershipConga),

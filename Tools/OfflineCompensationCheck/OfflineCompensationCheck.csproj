@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <NoWarn>CS0649</NoWarn>
+    <RunPostBuildEvent>Never</RunPostBuildEvent>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(AccountingSourceChecks)' == 'true'">
+    <!-- Keep SDK-only reference/deps caches apart from production-DLL checks. -->
+    <IntermediateOutputPath>obj/$(Configuration)/source-checks/$(TargetFramework)/</IntermediateOutputPath>
+    <OutputPath>bin/$(Configuration)/source-checks/</OutputPath>
+  </PropertyGroup>
+  <!-- CI without game libraries checks the exact pinned pure model source.
+       Native/reference checks default to the actual production plugin DLL. -->
+  <ItemGroup Condition="'$(AccountingSourceChecks)' == 'true'">
+    <Compile Include="../../Dependencies/Concealment/Source/ServerPlugin/Accounting/OfflineModel*.cs" Link="Accounting/%(Filename)%(Extension)" />
+    <Compile Include="../../Dependencies/Concealment/Source/ServerPlugin/Accounting/OfflineProfile.cs" Link="Accounting/OfflineProfile.cs" />
+    <Compile Include="../../Dependencies/Concealment/Source/ServerPlugin/Accounting/SunWorkPath.cs" Link="Accounting/SunWorkPath.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(AccountingSourceChecks)' != 'true'">
+    <Reference Include="Concealment">
+      <HintPath>$(MSBuildThisFileDirectory)../../Dependencies/Concealment/Concealment.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

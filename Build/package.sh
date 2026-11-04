@@ -62,6 +62,9 @@ rm -rf "$STAGING"
 mkdir -p "$STAGING"
 
 echo "== Building ($CONFIGURATION)"
+concealment_args=()
+[[ -n "${CONCEALMENT_SOURCE:-}" ]] && concealment_args+=(--source "$CONCEALMENT_SOURCE")
+MAGNETAR_SDK="$MAGNETAR_HOME" python3 "$CLUSTER_REPO/Build/prepare-concealment.py" "${concealment_args[@]}"
 # The plugins are compiled by Magnetar on the target host from the packaged sources; building
 # them here only proves the sources compile against the publicized game assemblies - and against the
 # PluginSdk of the Magnetar tree this archive ships (MAGNETAR_HOME), not whatever ~/.config/Magnetar holds.
@@ -85,6 +88,10 @@ done
 # Plugin sources: tracked files only (Magnetar compiles whatever *.cs it finds under the
 # manifest's SourceDirectories; bin/obj never travel).
 git -C "$CLUSTER_REPO" archive HEAD | tar -x -C "$STAGING/plugins/cluster"
+mkdir -p "$STAGING/plugins/cluster/Dependencies/Concealment"
+cp -a "$CLUSTER_REPO/Dependencies/Concealment/Concealment.dll" "$CLUSTER_REPO/Dependencies/Concealment/Concealment.xml" \
+    "$CLUSTER_REPO/Dependencies/Concealment/provenance.json" "$CLUSTER_REPO/Dependencies/Concealment/licenses" \
+    "$STAGING/plugins/cluster/Dependencies/Concealment/"
 rm -rf "$STAGING/plugins/cluster/Build/out"
 # Magnetar compiles only the manifests' SourceDirectories. The Gateway ships built under registry/,
 # its docs under docs/ and its test world under examples/, so none of it travels as plugin source.

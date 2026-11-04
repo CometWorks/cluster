@@ -72,6 +72,8 @@ internal static class TestRoutes
         GlobalSaveHoldRoutes.Register(); // #1270 a global save held before its registration
         NpcCensusRoutes.Register();   // #1354 the NPC census slot as mod-mes calls it, and a stand-in gap band
         MeteorRoutes.Register();      // #1381 a meteor probe and its carried lifetime
+        OfflineTestRoutes.Register(); // SE-347 shared LoadRecovery apply/crash boundary and real production
+        AccountingInterlockObserver.Register();
     }
 
     public static bool Dispatch(HttpListenerContext context, string path)
