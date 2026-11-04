@@ -62,6 +62,40 @@ internal sealed class AdmissionBook
         set => Interlocked.Exchange(ref _modsTotalSize, (long)value);
     }
 
+    private byte[]? _serverData;
+
+    /// <summary>
+    /// The vanilla server-details blob (SE-1076): MyCachedServerItem.GetServerData() as a node computed it from its
+    /// session, i.e. the compressed MyServerData with the world settings and the mod list. Null until a node reported
+    /// it. The client's server details screen reads its Settings and Mods tabs from nothing else.
+    /// </summary>
+    public byte[]? ServerData => Volatile.Read(ref _serverData);
+
+    /// <summary>Stores a node's report; true when it differs from what is held.</summary>
+    public bool SetServerData(byte[] data)
+    {
+        byte[]? old = Interlocked.Exchange(ref _serverData, data);
+        return old == null || !old.AsSpan().SequenceEqual(data);
+    }
+
+    /// <summary>
+    /// The A2S rules MyCachedServerItem.SendSettingsToSteam sets: "sc" is the blob's length, "sc0".."scN" its 93-byte
+    /// chunks in base64. Empty until a node reported the blob.
+    /// </summary>
+    public IEnumerable<(string Key, string Value)> ServerDataRules()
+    {
+        byte[]? data = ServerData;
+        if (data == null)
+            yield break;
+        yield return ("sc", data.Length.ToString());
+        for (int i = 0; i * ServerDataChunk < data.Length; i++)
+            yield return ("sc" + i, Convert.ToBase64String(data, i * ServerDataChunk,
+                Math.Min(ServerDataChunk, data.Length - i * ServerDataChunk)));
+    }
+
+    // MyCachedServerItem.RULE_LENGTH
+    private const int ServerDataChunk = 93;
+
     public AdmissionBook(AdmissionSettings settings)
     {
         Settings = settings;

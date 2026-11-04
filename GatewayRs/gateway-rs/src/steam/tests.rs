@@ -342,6 +342,7 @@ fn publish_names_players_and_counts_the_rest_as_bots() {
         tags: "t".into(),
         mod_count: 2,
         mods_total_size: 1714928497,
+        rules: vec![],
         players: vec![SteamPlayer { user_id: 1, name: "steam".into() }, SteamPlayer { user_id: 2, name: "direct".into() }],
     };
     mailbox.send(WorkerCmd::SteamPublish(Box::new(publish)));

@@ -10,15 +10,18 @@ and must not download.
 """
 from __future__ import annotations
 
+import base64
+import gzip
 import json
 import re
 import shutil
+import socket
 import time
 from collections import Counter
 from pathlib import Path
 
 import bench as benchmod
-from cluster import WORLD_ID
+from cluster import WORLD_ID, wait_until
 
 PROBE_ID = 9990001
 PROBE_NAME = f"{PROBE_ID}.sbm"
@@ -119,6 +122,109 @@ def p1_mod_local_red(bench) -> None:
     bench.check("node-2 did not download", "Downloading world mods - START" not in logs["node-2"])
     bench.check("wa-1 (staged) still loaded the probe", PROBE_LINE in logs["wa-1"])
     bench.exercised(mod=PROBE_ID, missing="node-2")
+
+
+def _a2s_rules(address: str) -> dict[str, str]:
+    """The A2S_RULES answer of the Steam frontend, as the client's server browser reads it."""
+    host, _, port = address.rpartition(":")
+    target = ("127.0.0.1" if host == "0.0.0.0" else host, int(port))
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.settimeout(2)
+        s.sendto(b"\xff\xff\xff\xffV\xff\xff\xff\xff", target)
+        data = s.recv(65535)
+        if data[4:5] == b"A":  # challenge
+            s.sendto(b"\xff\xff\xff\xffV" + data[5:9], target)
+            data = s.recv(65535)
+        if data[:4] == b"\xfe\xff\xff\xff":  # split answer: id, total, number, size, then the payload
+            parts = {data[9]: data[12:]}
+            while len(parts) < data[8]:
+                data = s.recv(65535)
+                parts[data[9]] = data[12:]
+            data = b"".join(parts[i] for i in sorted(parts))
+    if data[4:5] != b"E":
+        raise AssertionError(f"not an A2S_RULES answer: {data[:8]!r}")
+    items = data[7:].split(b"\0")
+    count = int.from_bytes(data[5:7], "little")
+    return {items[2 * i].decode(errors="replace"): items[2 * i + 1].decode(errors="replace") for i in range(count)}
+
+
+def _protobuf(raw: bytes) -> dict[int, list]:
+    """Field number -> values (varints as int, length-delimited as bytes) of one protobuf message."""
+    fields: dict[int, list] = {}
+    i = 0
+
+    def varint() -> int:
+        nonlocal i
+        value = shift = 0
+        while True:
+            byte = raw[i]
+            i += 1
+            value |= (byte & 0x7F) << shift
+            shift += 7
+            if byte < 0x80:
+                return value
+
+    while i < len(raw):
+        key = varint()
+        kind = key & 7
+        if kind == 0:
+            value = varint()
+        elif kind == 2:
+            size = varint()
+            value, i = raw[i:i + size], i + size
+        elif kind in (1, 5):
+            size = 8 if kind == 1 else 4
+            value, i = raw[i:i + size], i + size
+        else:
+            raise AssertionError(f"wire type {kind}")
+        fields.setdefault(key >> 3, []).append(value)
+    return fields
+
+
+def _server_details(rules: dict[str, str]) -> dict[int, list]:
+    """MyCachedServerItem.DeserializeSettings: "sc" bytes in 93-byte base64 chunks of MyCompression (length
+    prefix + gzip) around the protobuf MyServerData (1 Settings, 7 Mods, 10 Description, 14 UsedServices)."""
+    size = int(rules["sc"])
+    blob = b"".join(base64.b64decode(rules[f"sc{i}"]) for i in range((size + 92) // 93))
+    if len(blob) != size:
+        raise AssertionError(f"sc says {size} bytes, the chunks hold {len(blob)}")
+    return _protobuf(gzip.decompress(blob[4:]))
+
+
+def p1_server_details(bench) -> None:
+    """SE-1076: the Steam frontend publishes the "sc" rules a vanilla DS sets, so the client's server
+    details list the world's mods and settings. The blob comes from a node's session via the heartbeat."""
+    config = bench.cluster.config
+    config.steam_listen = f"127.0.0.1:{27016 + config.port_base}"
+    _run(bench, None)
+    rules: dict[str, str] = {}
+
+    def published() -> bool:
+        nonlocal rules
+        try:
+            rules = _a2s_rules(config.steam_listen)
+        except OSError:
+            return False
+        return "sc" in rules
+
+    try:
+        wait_until(published, 90, "the sc rules on the Steam frontend", interval=2)
+    except Exception:  # noqa: BLE001 - the check below reports it
+        pass
+    bench.record("a2s-rules", rules)
+    bench.check("the Steam frontend publishes the sc rules", "sc" in rules, ", ".join(sorted(rules)))
+    if "sc" not in rules:
+        return
+    details = _server_details(rules)
+    mods = [_protobuf(item) for item in details.get(7, [])]
+    listed = [(mod.get(1, [0])[0], mod.get(4, [b""])[0].decode()) for mod in mods]
+    bench.record("server-details", {"mods": listed, "settingsBytes": len(details.get(1, [b""])[0]),
+                                    "usedServices": [s.decode() for s in details.get(14, [])]})
+    bench.check("the server details list the world's mod", listed == [(PROBE_ID, "Steam")], str(listed))
+    bench.check("the server details carry the world settings", len(details.get(1, [b""])[0]) > 100)
+    gateway = (bench.run_root / "gateway.log").read_text(errors="replace")
+    bench.check("the Gateway took the blob from a node", "published as the server details' sc rules" in gateway)
+    bench.exercised(mod=PROBE_ID, steam=config.steam_listen, rules=len(rules))
 
 
 def p1_mod_storage_00(bench) -> None:
@@ -610,6 +716,7 @@ SCENARIOS_MODS = {
     "P1-MOD-LOCAL": (p1_mod_local, "T-0290: world mods load from each process's staged folder, no download", "3"),
     "P1-MOD-LOCAL-RED": (p1_mod_local_red, "T-0290: a process whose mod folder is missing fails its load, no download", "3"),
     "P1-MOD-COMPAT": (p1_mod_compat, "T-0242: per-mod class/placement record on every process, WA-only skip, overrides, write counters", "3"),
+    "P1-SERVER-DETAILS": (p1_server_details, "SE-1076: the Steam frontend publishes the sc rules, the server details list the world's mods", "3"),
     "P1-WORLD-NAME": (p1_world_name_save_folder, "SE-788: the save folder stays Saves/<world id> whatever the world is called; mods read the configs seeded there", "3"),
     "P1-MOD-CHANNEL-00": (p1_mod_channel_00, "#1280: mod channel v1 self-test - roster resets, to-owner codec rule", "1"),
     "P1-MOD-MSG-SERVER": (p1_mod_msg_server, "DF-671: a client's mod message to the server reaches the node's mods, whatever server id it addressed", "1"),

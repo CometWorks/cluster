@@ -1619,6 +1619,14 @@ internal static partial class SelfTest
         modded.ModsTotalSize = 1714928497;
         Assert(modded.GameTags("1.210.014", acceptAll: false)
             == "groupId0 version1210014 datahash mods2 gamemodeS10-3-3-3 view3000 modsTotalSize1714928497");
+        // SE-1076: the server details blob as MyCachedServerItem.SendSettingsToSteam splits it, 93 bytes per rule
+        Assert(!modded.ServerDataRules().Any());
+        byte[] blob = Enumerable.Range(0, 200).Select(i => (byte)i).ToArray();
+        Assert(modded.SetServerData(blob) && !modded.SetServerData([.. blob]));
+        (string Key, string Value)[] rules = [.. modded.ServerDataRules()];
+        Assert(rules.Select(rule => rule.Key).SequenceEqual(["sc", "sc0", "sc1", "sc2"]) && rules[0].Value == "200");
+        Assert(rules.Skip(1).SelectMany(rule => Convert.FromBase64String(rule.Value)).SequenceEqual(blob));
+        Assert(Convert.FromBase64String(rules[3].Value).Length == 14);
 
         // Security.md §9 item 1: every Steam verdict has to reach the client as the JoinResult
         // vanilla shows for it, and anything Valve adds later must fail closed as TicketInvalid.

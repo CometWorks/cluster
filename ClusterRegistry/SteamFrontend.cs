@@ -370,6 +370,9 @@ internal sealed class SteamFrontend : IDisposable
         // MyDedicatedServerBase.ModCount / ModsTotalSize also set these A2S rules
         SteamGameServer.SetKeyValue("mods", _admission.Settings.ModCount.ToString());
         SteamGameServer.SetKeyValue("modsTotalSize", _admission.ModsTotalSize.ToString());
+        // MyCachedServerItem.SendSettingsToSteam: the server details' settings and mod list (SE-1076)
+        foreach ((string key, string value) in _admission.ServerDataRules())
+            SteamGameServer.SetKeyValue(key, value);
     }
 
     /// <summary>
