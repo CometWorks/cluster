@@ -26,6 +26,11 @@ node, so a traversal usually raises nothing. USUALLY - on w32, 2026-09-19, 6 of 
 the source node stop reporting the player before the target started, and the whole cluster was told
 that somebody who never went anywhere left and came back, 67 ms to 1.03 s apart. That is what the
 grace period exists for and it is what the middle of this scenario measures.
+
+SE-1081: only players admitted through Steam are announced; Direct Transport clients are bots. Every
+bench client joins through Direct Transport, so ``P2-PRS-01`` turns their announcements back on with
+``CLUSTER_PRESENCE_DIRECT=1`` on the World Authority, and ``P2-PRS-03`` checks the default: a Direct
+Transport login and logout say nothing.
 """
 
 from __future__ import annotations
@@ -108,6 +113,8 @@ def p2_prs_01(bench) -> None:
     """One announcement per login, none per traversal, and every node sees every cluster player."""
     record = {}
     try:
+        # The bench clients join through Direct Transport, which the announcer skips by default (SE-1081).
+        bench.cluster.config.node_env_by_id.setdefault("wa-1", {})["CLUSTER_PRESENCE_DIRECT"] = "1"
         bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
         # Taken BEFORE the client joins, so the join line has to fall inside the window we read.
         # A scenario that reads the whole history instead would pass on a line left by an earlier
@@ -362,10 +369,61 @@ def p2_prs_02(bench) -> None:
         bench.record("early-self-announce", record)
 
 
+def p2_prs_03(bench) -> None:
+    """SE-1081: a Direct Transport client (a bot) is neither announced joining nor leaving the cluster."""
+    record = {}
+    try:
+        bench.start_cluster(nodes=["node-1", "wa-1"])
+        _, cursor = _chat(bench, "wa-1")
+        # Past the seeding window, or the silence below would be the window's and not the rule's.
+        time.sleep(SEEDING_WINDOW_SECONDS)
+        api = bench.start_client(CLIENT_ID)
+        bench.wait_spawned(CLIENT_ID)
+        player = wait_until(lambda: next(iter(_cluster_players(bench, "wa-1")), None),
+                            60, "the joined client to appear in the cluster player list")
+        name = player["name"]
+        record["player"] = player
+        bench.check("the World Authority's list marks the client as Direct Transport",
+                    player.get("directTransport") is True, json.dumps(player))
+        # COVERAGE: a chat line the client sends after its login must show up in the same window, so
+        # the absence of a join line is read from a chat path that works.
+        marker = f"se1081-marker-{int(time.time())}"
+        def send() -> bool:
+            # Retried only while the send itself fails; a sent line is never sent again.
+            try:
+                api.send_chat(marker)
+                return True
+            except Exception:  # noqa: BLE001 - the Remote API is still coming up
+                return False
+        wait_until(send, 30, "the client to send a chat line")
+        messages, cursor = wait_until(
+            lambda: (lambda page: page if any(m.get("text") == marker for m in page[0]) else None)(
+                _chat(bench, "wa-1", cursor)),
+            60, "the client's chat line to reach the World Authority's history")
+        joins = _presence(messages, name)
+        record["login"] = {"lines": joins, "texts": [m.get("text") for m in messages]}
+        bench.check("a Direct Transport login is not announced", joins == [], json.dumps(record["login"]))
+
+        bench.kill_client(CLIENT_ID)
+        # The gateway notices a killed client after its 120 s peer timeout (see P2-PRS-01).
+        wait_until(lambda: not _cluster_players(bench, "wa-1") or None,
+                   180, "the client to leave the cluster player list")
+        time.sleep(GRACE_MARGIN_SECONDS)
+        messages, cursor = _chat(bench, "wa-1", cursor)
+        leaves = _presence(messages, name)
+        record["logout"] = {"lines": leaves, "texts": [m.get("text") for m in messages]}
+        bench.check("a Direct Transport logout is not announced", leaves == [], json.dumps(record["logout"]))
+        bench.exercised(route="node-1 (Direct Transport login, chat, logout)")
+    finally:
+        bench.record("presence-direct-transport", record)
+
+
 p2_prs_01.regular_nodes = 2
 p2_prs_02.regular_nodes = 1
+p2_prs_03.regular_nodes = 1
 
 SCENARIOS_PRESENCE = {
     "P2-PRS-01": (p2_prs_01, "cluster presence: one announcement per login, none per traversal", "3"),
     "P2-PRS-02": (p2_prs_02, "a login's own member message survives a mirror pass before the world request", "2"),
+    "P2-PRS-03": (p2_prs_03, "a Direct Transport login and logout are not announced (SE-1081)", "2"),
 }
