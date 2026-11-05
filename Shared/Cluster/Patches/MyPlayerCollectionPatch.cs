@@ -30,6 +30,14 @@ public static class MyPlayerCollectionPatch
 	private static readonly Dictionary<ulong, PlayerReady> PendingAttach = new Dictionary<ulong, PlayerReady>();
 
 	/// <summary>
+	/// SE-1081: clients the Gateway admitted through Direct Transport. Unlike <see cref="PendingAttach"/> an id
+	/// stays here after its detach: the player can still be in the online list for a report or two after the
+	/// binding left, and the departure must still read as a Direct Transport one. A later attach of the same id
+	/// over Steam takes it out again.
+	/// </summary>
+	private static readonly HashSet<ulong> DirectTransportClients = new HashSet<ulong>();
+
+	/// <summary>
 	/// An immutable copy of <see cref="Bindings"/> and <see cref="ReverseBindings"/>, republished under
 	/// <see cref="SnapshotSync"/> after every mutation. The two hot readers take this reference and never
 	/// take the lock.
@@ -136,6 +144,8 @@ public static class MyPlayerCollectionPatch
 				else
 					SetBinding(playerId, ready.Identity.IdentityId);
 				PendingAttach[clientId] = ready;
+				if (ready.ServiceName == DirectTransportServiceName) DirectTransportClients.Add(clientId);
+				else DirectTransportClients.Remove(clientId);
 			}
 			return true;
 		}
@@ -628,6 +638,15 @@ public static class MyPlayerCollectionPatch
 	private static void PublishBindingView()
 		=> m_bindingView = new BindingView(new Dictionary<MyPlayer.PlayerId, long>(Bindings),
 			new Dictionary<long, MyPlayer.PlayerId>(ReverseBindings));
+
+	/// <summary>The ServiceName the Gateway gives a client it admitted through Direct Transport.</summary>
+	private const string DirectTransportServiceName = "DirectTransport";
+
+	/// <summary>Whether the Gateway admitted this client through Direct Transport (SE-1081).</summary>
+	internal static bool IsDirectTransport(ulong clientId)
+	{
+		lock (SnapshotSync) return DirectTransportClients.Contains(clientId);
+	}
 
 	private static void RemoveAttachBinding(ulong clientId)
 	{

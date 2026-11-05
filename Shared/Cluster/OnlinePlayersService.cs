@@ -66,9 +66,14 @@ public static class OnlinePlayersService
 	/// <paramref name="IsAdmin"/> is a SNAPSHOT of the reporting node's view. PromotionService
 	/// replicates promote levels cluster-wide and is the live source, so a consumer that has it
 	/// should prefer it; this field is for the case where the entry travels on its own.
+	///
+	/// SE-1081: <paramref name="DirectTransport"/> says the Gateway admitted the player through
+	/// Direct Transport (bots and headless clients) rather than Steam. <paramref name="ServiceName"/>
+	/// cannot say it: that is what the client asserted in its join message, and the SE-988 trader
+	/// bots assert "Steam". The flag comes from the Gateway's credential in the attach binding.
 	/// </summary>
 	public sealed record OnlinePlayerEntry(string Node, ulong SteamId, int SerialId, long IdentityId, string Name,
-		string ServiceName = "", bool IsAdmin = false);
+		string ServiceName = "", bool IsAdmin = false, bool DirectTransport = false);
 	public sealed record OnlineReport(string Origin, OnlinePlayerEntry[] Players);
 	public sealed record OnlineSnapshot(OnlinePlayerEntry[] Players);
 
@@ -165,7 +170,8 @@ public static class OnlinePlayersService
 		return session.Players.GetOnlinePlayers()
 			.Select(player => new OnlinePlayerEntry(Node, player.Id.SteamId, player.Id.SerialId,
 				player.Identity?.IdentityId ?? 0, player.DisplayName ?? string.Empty,
-				ServiceNameOf(player.Id.SteamId), IsAdminOf(player.Id.SteamId)))
+				ServiceNameOf(player.Id.SteamId), IsAdminOf(player.Id.SteamId),
+				MyPlayerCollectionPatch.IsDirectTransport(player.Id.SteamId)))
 			.OrderBy(entry => entry.SteamId).ThenBy(entry => entry.SerialId)
 			.Take(MaxPlayersPerReport)
 			.ToArray();
@@ -269,10 +275,10 @@ public static class OnlinePlayersService
 			node = Node,
 			local = CaptureLocal().Select(entry => new { steamId = entry.SteamId, serialId = entry.SerialId,
 				identityId = entry.IdentityId, name = entry.Name, serviceName = entry.ServiceName,
-				isAdmin = entry.IsAdmin }),
+				isAdmin = entry.IsAdmin, directTransport = entry.DirectTransport }),
 			cluster = cluster.Select(entry => new { node = entry.Node, steamId = entry.SteamId,
 				serialId = entry.SerialId, identityId = entry.IdentityId, name = entry.Name,
-				serviceName = entry.ServiceName, isAdmin = entry.IsAdmin })
+				serviceName = entry.ServiceName, isAdmin = entry.IsAdmin, directTransport = entry.DirectTransport })
 		};
 	}
 

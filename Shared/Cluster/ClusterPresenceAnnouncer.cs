@@ -57,12 +57,23 @@ namespace ClusterPlugin;
 /// for every login, not just handovers - would mean a cluster with a broken chat path announces
 /// nothing at all. Fail-safe wins; if the duplication is unwanted, that is a one-line change to
 /// <see cref="TraversalAnnouncementPatch"/> and Viktor's call, not a silent one to make here.
+///
+/// SE-1081: ONLY PLAYERS ADMITTED THROUGH STEAM (or EOS) ARE ANNOUNCED. Clients that join through
+/// Direct Transport are bots and headless clients, and fifty trader bots logging in and out drowned
+/// the chat on Octahedron. The Gateway decides the transport, so the reporting node marks the entry
+/// (<see cref="OnlinePlayersService.OnlinePlayerEntry.DirectTransport"/>) instead of trusting the
+/// ServiceName the client asserted. CLUSTER_PRESENCE_DIRECT=1 announces them too, for test benches
+/// whose clients all join through Direct Transport.
 /// </summary>
 public static class ClusterPresenceAnnouncer
 {
 	/// <summary>Off switch, matching the mirror's: CLUSTER_PRESENCE_ANNOUNCE=0 restores silence.</summary>
 	private static readonly bool Enabled =
 		(Environment.GetEnvironmentVariable("CLUSTER_PRESENCE_ANNOUNCE") ?? "1") != "0";
+
+	/// <summary>SE-1081: CLUSTER_PRESENCE_DIRECT=1 announces Direct Transport players as well.</summary>
+	private static readonly bool AnnounceDirect =
+		Environment.GetEnvironmentVariable("CLUSTER_PRESENCE_DIRECT") == "1";
 
 	/// <summary>
 	/// How long a departure is held before it is spoken, so a handover gap can cancel it.
@@ -103,8 +114,7 @@ public static class ClusterPresenceAnnouncer
 		// arriving. Announcing those would have a World Authority restart tell the cluster that
 		// everyone just logged in.
 		if (!Enabled || seeding || !ClusterRuntime.IsClustered || !ClusterRuntime.IsWorldAuthority) return;
-		// A second character on the same account is not a second person arriving.
-		if (entry.SerialId != 0) return;
+		if (!Announces(entry, AnnounceDirect)) return;
 		var key = (entry.SteamId, entry.SerialId);
 		string name = NameOf(entry);
 		if (entered)
@@ -127,6 +137,13 @@ public static class ClusterPresenceAnnouncer
 		lock (SyncRoot)
 			Pending[key] = (name, DateTime.UtcNow.AddSeconds(GraceSeconds));
 	}
+
+	/// <summary>
+	/// Whether a login or logout of this entry is worth a chat line. A second character on the same
+	/// account is not a second person arriving, and a Direct Transport client is a bot (SE-1081).
+	/// </summary>
+	internal static bool Announces(OnlinePlayersService.OnlinePlayerEntry entry, bool announceDirect) =>
+		entry.SerialId == 0 && (announceDirect || !entry.DirectTransport);
 
 	/// <summary>Speak the departures whose grace has run out and that are really gone.</summary>
 	private static void Flush()
