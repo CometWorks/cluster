@@ -290,6 +290,7 @@ internal static partial class SelfTest
         ("character-home-lineage", TestCharacterHomeFollowsLineage),
         ("restart-reconciliation", TestRestartReconciliationDecision),
         ("handover-adopt-ready-transport-failure", TestHandoverAdoptReadyTransportFailure),
+        ("handover-balance-readiness-budget", TestHandoverBalanceReadinessBudget),
         ("handover-abort-readopts-on-source", TestHandoverAbortReadoptsOnSource),
         ("handover-pass-skips-closed-node-item", TestHandoverPassSkipsClosedNodeItem),
         ("closed-node-placeholder-drains", TestClosedNodePlaceholderDrains),

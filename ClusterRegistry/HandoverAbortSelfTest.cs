@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Reflection;
 
@@ -164,7 +165,7 @@ internal static partial class SelfTest
         /// T-0354b: the client-bearing handover of <paramref name="partition"/>, and with <paramref name="delay"/> set as a
         /// requested move does it (DirectGateway.WhenRegistryApplied, its waits replaced by <paramref name="delay"/>).
         /// </summary>
-        public Exception? Handover(ulong partition, Func<TimeSpan, Task>? delay)
+        public Exception? Handover(ulong partition, Func<TimeSpan, Task>? delay, TimeSpan? readinessBudget = null)
         {
             const BindingFlags Private = BindingFlags.NonPublic | BindingFlags.Instance;
             object session = ((IDictionary)typeof(DirectGateway).GetField("_clients", Private)!.GetValue(_gateway)!)[Client]
@@ -172,7 +173,7 @@ internal static partial class SelfTest
             Array sessions = Array.CreateInstance(session.GetType(), 1);
             sessions.SetValue(session, 0);
             Task Once() => (Task)typeof(DirectGateway).GetMethod("FencedHandover", Private)!
-                .Invoke(_gateway, [sessions, _sourceControl, _targetControl, IPEndPoint.Parse(_targetEndpoint), partition, false])!;
+                .Invoke(_gateway, [sessions, _sourceControl, _targetControl, IPEndPoint.Parse(_targetEndpoint), partition, false, readinessBudget])!;
             return Wait(delay == null ? Once() : DirectGateway.WhenRegistryApplied(partition, Once, delay));
         }
 
@@ -258,6 +259,27 @@ internal static partial class SelfTest
         Check(scripted.Count("target commit") == 1 && scripted.Count("source release") == 1, "no target commit or source release");
         Check(scripted.Count("source thaw") == 0 && scripted.Count("target discard") == 0, "a committed handover was cleaned up as aborted");
         Check(!scripted.ClientDisconnected, "the client was disconnected");
+    }
+
+    /// <summary>
+    /// SE-1080: a balance migration passes a short adopt-ready budget, so a target that never gets ready (live: a
+    /// trader crew whose binding never matched) aborts it in that budget instead of 30 s + 10 s per extra client,
+    /// during which the partition stays frozen and the automatic loop does nothing else. The abort cleans up as
+    /// any other: the target copy is discarded and the source thawed.
+    /// </summary>
+    private static void TestHandoverBalanceReadinessBudget()
+    {
+        static void Check(bool value, string what) { if (!value) throw new InvalidOperationException("handover-balance-readiness-budget: " + what); }
+        using var scripted = new ScriptedHandover((call, _) => call == "target adopt-ready" ? 500 : 200);
+        Stopwatch watch = Stopwatch.StartNew();
+        Exception? failure = scripted.Handover(ScriptedHandover.Partition, null, TimeSpan.FromSeconds(2));
+        watch.Stop();
+        Console.WriteLine($"handover-balance-readiness-budget: failure={failure?.GetType().Name ?? "none"} after {watch.Elapsed.TotalSeconds:F1}s"
+            + $" owner={scripted.Owner} adoptReadyPolls={scripted.Count("target adopt-ready")}");
+        Check(failure is TimeoutException, "the handover did not time out on readiness: " + (failure?.Message ?? "it committed"));
+        Check(watch.Elapsed < TimeSpan.FromSeconds(10), $"the readiness wait took {watch.Elapsed.TotalSeconds:F1}s, not the 2 s budget");
+        Check(scripted.Owner == "source", "the partition is owned by " + scripted.Owner + " after the abort");
+        Check(scripted.Count("target discard") == 1 && scripted.Count("source thaw") == 1, "the abort did not discard the target copy and thaw the source");
     }
 
     /// <summary>
