@@ -12,6 +12,7 @@ using SpaceEngineers.Game.Entities.Blocks;
 using SpaceEngineers.Game.Entities.Blocks.SafeZone;
 using VRage.Game;
 using VRage.ObjectBuilders;
+using VRage.Utils;
 using VRageMath;
 
 namespace ClusterPlugin;
@@ -37,7 +38,7 @@ internal static class OfflineCompensation
                 ["clock"] = (Func<double>)(() => AccountingClock.NativeMilliseconds),
                 ["nativeFrame"] = (Func<long>)(() => AccountingClock.NativeFrame),
                 ["nativeEpoch"] = (Func<string>)(() => AccountingClock.NativeEpoch),
-                ["authorityClock"] = (Func<(string Epoch, long Frame, long Generation, long SunTicks)>)AccountingClock.ReadFresh,
+                ["authorityClock"] = (Func<(string Epoch, long Frame, long Generation, long SunTicks)>)AuthorityClock,
                 ["sunPath"] = (Func<string, string, long, long, byte[]>)AccountingClock.SunPath,
                 ["sunClock"] = (Func<long>)(() => AccountingClock.SunTicks(MySession.Static)),
                 ["setting"] = (Func<string, string>)ClusterConfig.Get,
@@ -79,7 +80,44 @@ internal static class OfflineCompensation
     }
     internal static bool Prepare(PartitionManager.Partition partition, bool quick = false) => !ClusterConfig.GetBool("offline.compensate") || (bool)Call("Prepare", partition.Id, Groups(partition), Occluders(partition), quick);
     internal static byte[] CaptureFor(PartitionManager.Partition partition, bool quick = false) => !ClusterConfig.GetBool("offline.compensate") ? null : (byte[])Call("Capture", partition.Id, Groups(partition), Occluders(partition), quick);
-    internal static byte[] CaptureForDrain(PartitionManager.Partition partition) => CaptureFor(partition, true);
+    internal static byte[] CaptureForDrain(PartitionManager.Partition partition) => DrainCapture(partition.Id, () => CaptureFor(partition, true));
+
+    // SE-1091: the drain runs on the game thread inside ClusterRuntime.Update, where nothing catches, and its Final is the
+    // partition's last save. A capture that threw there (the World Authority's answer to the fresh clock read never came)
+    // ended the node with its Finals unwritten, and the stop ended dirty. So the drain falls back to the durable clock the
+    // last heartbeat brought, at most one heartbeat older than a fresh read, and with no clock or any other capture
+    // failure it saves the Final without offline profiles: the partition then only misses compensation. Game thread only.
+    internal static Func<(string Epoch, long Frame, long Generation, long SunTicks)> FreshClock = AccountingClock.ReadFresh, LastKnownClock = AccountingClock.Read;
+    private static bool s_drainCapture;
+    // Once lost, lost for the rest of this node's drains: every later capture would hold the game thread for the full
+    // command timeout again. A drained node exits.
+    internal static bool DrainClockLost;
+    internal static (string Epoch, long Frame, long Generation, long SunTicks) AuthorityClock()
+    {
+        if (!s_drainCapture) return FreshClock();
+        if (!DrainClockLost)
+        {
+            try { return FreshClock(); }
+            catch (Exception e) when (e is TimeoutException or InvalidOperationException)
+            {
+                DrainClockLost = true;
+                MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] drain offline capture uses the last durable clock, the fresh read failed: " + e.Message);
+            }
+        }
+        return LastKnownClock();
+    }
+    internal static byte[] DrainCapture(ulong partition, Func<byte[]> capture)
+    {
+        s_drainCapture = true;
+        try { return capture(); }
+        catch (Exception e)
+        {
+            MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] drain offline capture of partition " + partition
+                + " failed, its Final is saved without offline profiles: " + SecretRedactor.Redact(e.Message));
+            return null;
+        }
+        finally { s_drainCapture = false; }
+    }
     internal static void Apply(IDictionary<long, MyObjectBuilder_EntityBase> entities, IEnumerable<(byte[] Profiles, HashSet<long> Members)> sections)
     {
         if (!ClusterConfig.GetBool("offline.compensate")) return;

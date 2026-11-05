@@ -3166,8 +3166,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
 					if (kind is "Broadcast" or "Snapshot" && root.GetProperty("Subsystem").GetString() == "identities"
 						&& AcceptIdentitySnapshot(generation, root.GetProperty("Sequence").GetInt64()))
 						UpdatePlayerBindings(root.GetProperty("Payload").GetString() ?? string.Empty, generation);
-                    foreach (NodeRegistration node in _registry.Nodes().Where(node => node.Role == NodeRole.Regular && node.State == NodeState.Active
-                        && (target == null || node.Node == target)))
+                    foreach (NodeRegistration node in _registry.Nodes().Where(node => ReceivesGlobal(node, target)))
                         SendGlobal(GetNodeLink(EndpointParser.Parse(node.Endpoint, DirectTransportConstants.DefaultPort)), payload, GlobalDelivery(kind));
 				}
             }
@@ -3188,6 +3187,15 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             Console.Error.WriteLine("Rejected global-state frame: " + e.Message);
         }
     }
+
+    /// <summary>
+    /// Which regular nodes a World Authority frame goes to. A broadcast goes to the Active ones. A frame addressed to
+    /// one node, like the answer to its command, also reaches it while it drains (Closed): the drain still asks the WA,
+    /// and with only Active nodes served every answer was dropped, the command timed out and the drain ended the node
+    /// unsaved (SE-1091).
+    /// </summary>
+    internal static bool ReceivesGlobal(NodeRegistration node, string? target) => node.Role == NodeRole.Regular
+        && (target == null ? node.State == NodeState.Active : node.Node == target && node.State is NodeState.Active or NodeState.Closed);
 
     /// <summary>
     /// T-0154: bulk global frames (publishes, snapshots, node reports) go ReliableOrdered; a command
