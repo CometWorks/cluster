@@ -179,6 +179,7 @@ internal static partial class SelfTest
         ("admin-fleet", TestAdminFleet),
         ("admin-lifecycle", TestAdminLifecycle),
         ("plugin-services", TestPluginServices),
+        ("global-route", TestGlobalRoute),
         ("plugin-persistence", TestPluginPersistence),
         ("admin-admission", TestAdminAdmission),
         ("player-moderation", TestPlayerModeration),
