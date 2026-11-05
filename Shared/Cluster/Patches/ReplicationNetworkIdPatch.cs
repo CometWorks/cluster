@@ -451,8 +451,14 @@ public static class ReplicationNetworkIdPatch
 		return identity.ToString();
 	}
 
-	private static string StableChildIdentity(IMyReplicable replicable)
+	internal static string StableChildIdentity(IMyReplicable replicable)
 	{
+		// SE-1083: an entity under another replicable is a character seated in a block of a grid, and its InstanceName
+		// is MyCharacter.ToString(), the character model. Two seated "Default_Astronaut"s on one station grid had one
+		// identity, the export kept only the first one's ids, and the target minted new ones for the other, so that
+		// client's adopt-ready failed "binding does not match source" until the readiness budget ran out (trader bots
+		// in the lounge seats of North Station, octahedron-test 2026-11-05). The EntityId goes over unchanged.
+		if (replicable is IMyEntityReplicable entity) return entity.EntityId.ToString(CultureInfo.InvariantCulture);
 		string typeName = replicable.GetType().FullName;
 		if (typeName == "Sandbox.Game.Replication.MyEventProxyEntityComponentReplicable")
 		{
