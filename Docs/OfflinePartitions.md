@@ -139,10 +139,13 @@ profile to credit again. The existing deferred-Final recovery cover behavior is 
 
 The model does not run on the game thread (SE-1096). A base offline for 14 hours needs over 150,000
 model events, which took up to four minutes, and the registry fenced the node meanwhile. `LoadRecovery`
-reads the authority clock, validates the timebases and starts the wake's models on a worker thread,
-then requeues the claim. The claim waits in the recovery queue until the models are ready. Then
-`LoadRecovery` reads and screens the saves again and commits on the game thread. The wake frame is
-the one taken at the start. Admission, content and stock checks and every failure rule are as before.
+reads the saves' files, takes the authority clock and validates the timebases, then starts the wake on
+a worker thread, before any save is deserialized, and requeues the claim. The worker hashes the
+definitions and runs the models. The claim waits in the recovery queue until the wake is ready. Then
+`LoadRecovery` reads and screens the saves again and commits on the game thread, one recovery load per
+update. The wake frame is the one taken at the start. Admission, content and stock checks and every
+failure rule are as before. The "recovery loaded partition" line says how long the game thread spent
+reading, screening, compensating and creating entities.
 `OfflineCompensationCheck --wake-equivalence` recomputes the results a cluster wake logged with the
 model it is built with.
 `CompensatedTo` is reported in the node result; offline rows already end at the first member
