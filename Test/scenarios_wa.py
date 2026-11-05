@@ -2494,9 +2494,12 @@ def p2_wa_rename(bench) -> None:
                  _poll(lambda: True if _session(bench, client_id) is None else None, 360, 5))
         again = login(client_id, port, new)
         _require(bench, f"client {client_id} came back to the same identity", again == identity, f"{identity} then {again}")
-        seen = everywhere(identity, expected)
+        # The WA's name is the cluster's. The node serving the world request also renames the identity
+        # (vanilla) to the platform name it sees, which for a Steam client carries the same icon; this bench's
+        # Direct Transport client has none, so that node may show the bare name until the next snapshot.
+        seen = _poll(lambda: names(identity)["wa-1"] == expected or None, HANDOVER_TIMEOUT)
         bench.record(f"rename-{client_id}", {"identity": identity, "old": old, "new": new, "names": names(identity)})
-        bench.check(f"{old!r} logging in as {new!r} is {expected!r} on every role", seen, json.dumps(names(identity)))
+        bench.check(f"{old!r} logging in as {new!r} is {expected!r} on the WA", seen, json.dumps(names(identity)))
         return identity
 
     bot = relog(CLIENT_ID, None, "SE-1100 Bot", "[B] SE-1100 Bot", "[B] SE-1100 Bot")
