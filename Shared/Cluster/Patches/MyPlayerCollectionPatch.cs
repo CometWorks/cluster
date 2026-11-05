@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -13,6 +14,7 @@ using Sandbox.Game.GameSystems.BankingAndCurrency;
 using Sandbox.Game.Multiplayer;
 using Sandbox.Game.World;
 using VRage.Game;
+using VRage.GameServices;
 using VRage.Serialization;
 using VRageMath;
 
@@ -415,6 +417,8 @@ public static class MyPlayerCollectionPatch
 				}
 				if (identity == null)
 					identity = MySession.Static.Players.CreateNewIdentity(request.Name, null, null, initialPlayer: true, addToNpcs: false);
+				else if (JoinedName(identity.DisplayPlatformName, request.Name, request.UserId) is string renamed)
+					identity.SetDisplayName(renamed);
 				lock (SnapshotSync) SetBinding(playerId, identity.IdentityId);
 				if (MyBankingSystem.Static != null && !MyBankingSystem.Static.TryGetAccountInfo(identity.IdentityId, out var _))
 					MyBankingSystem.Static.CreateAccount(identity.IdentityId);
@@ -659,6 +663,22 @@ public static class MyPlayerCollectionPatch
 	internal static HashSet<long> AttachedIdentities()
 	{
 		lock (SnapshotSync) return PendingAttach.Values.Select(ready => ready.Identity.IdentityId).ToHashSet();
+	}
+
+	/// <summary>
+	/// SE-1100: the name an identity takes when its player logs in as <paramref name="joined"/>, or null to keep
+	/// <paramref name="current"/>. Vanilla renames the identity on every world request, but on a cluster that
+	/// node-local rename lasts only until the World Authority's next identity snapshot, so the WA renames it
+	/// here. A stored platform icon (a Steam player's \ue030) stays when the joining name has none, and a client
+	/// without a name, which the Gateway names after its id, keeps the old one.
+	/// </summary>
+	internal static string JoinedName(string current, string joined, ulong userId)
+	{
+		if (string.IsNullOrEmpty(joined) || joined == userId.ToString(CultureInfo.InvariantCulture)) return null;
+		string name = PlatformIcon.TrimIcon(joined), had = PlatformIcon.TrimIcon(current ?? string.Empty);
+		if (name.Length == 0 || name == had) return null;
+		if (name != joined) return joined;
+		return (current ?? string.Empty).Substring(0, (current ?? string.Empty).Length - had.Length) + name;
 	}
 
 	private static IdentityAuthorityEntry From(MyIdentity identity, bool isNpc) => new(identity.IdentityId, identity.DisplayPlatformName,
