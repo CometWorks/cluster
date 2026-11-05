@@ -72,6 +72,7 @@ internal static partial class ClusterSelfTest
 		("havok-disposed-world", HavokDisposedWorld),
 		("antenna-delta", AntennaDelta),
 		("antenna-parse-alloc", AntennaParseAllocation),
+		("identity-joined-name", IdentityJoinedName),
 		("antenna-fastpath", AntennaFastPath),
 		("stale-home-copy", StaleHomeCopy),
 		("close-attached-children", CloseAttachedChildren),

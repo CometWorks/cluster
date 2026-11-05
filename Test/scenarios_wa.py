@@ -2452,6 +2452,60 @@ def p2_wa_bcast(bench) -> None:
                     author=author, identity=ctx.binding_identity, other=other)
 
 
+def p2_wa_rename(bench) -> None:
+    """SE-1100: a player who logs in again under a new name keeps it on every role, also after the World
+    Authority's next identity snapshot. Vanilla renames the identity on each world request, but on a cluster
+    only the node serving it did, and the WA's next snapshot put the old name back: a bot fleet that started
+    prefixing its names kept the old ones. Two players: a bot renamed from ``Name`` to ``[B] Name``, and a
+    Steam-style name stored with its platform icon (\\ue030) logging in without one, which keeps the icon. A
+    third login publishes one more snapshot, after which every role must still hold the new names."""
+    _wa_cluster(bench)
+    roles = ("node-1", "node-2", "wa-1")
+
+    def login(client_id: int, port: int | None, name: str) -> int:
+        if port is None:
+            bench.start_client(client_id, render=False, name=name)
+        else:
+            bench.start_client(client_id, port, render=False, name=name)
+
+        def ready():
+            session = _session(bench, client_id) or {}
+            return session if session.get("admissionState") == "Ready" and (session.get("identityId") or 0) > 0 else None
+        session = _poll(ready, CLIENT_TIMEOUT)
+        _require(bench, f"client {client_id} logged in as {name!r}", session, json.dumps(_session(bench, client_id)))
+        return session["identityId"]
+
+    def names(identity: int) -> dict:
+        rows = {node: _try(bench, node, f"/identity-test-status?identityId={identity}") for node in roles}
+        return {node: row.get("name") if isinstance(row, dict) else None for node, row in rows.items()}
+
+    def everywhere(identity: int, name: str):
+        return _poll(lambda: (lambda seen: seen if all(value == name for value in seen.values()) else None)(names(identity)),
+                     HANDOVER_TIMEOUT)
+
+    def relog(client_id: int, port: int | None, old: str, new: str, expected: str) -> int:
+        identity = login(client_id, port, old)
+        _require(bench, f"{old!r} reached every role", everywhere(identity, old), json.dumps(names(identity)))
+        bench.kill_client(client_id)
+        _require(bench, f"client {client_id}'s Gateway session cleared",
+                 _poll(lambda: True if _session(bench, client_id) is None else None, 360, 5))
+        again = login(client_id, port, new)
+        _require(bench, f"client {client_id} came back to the same identity", again == identity, f"{identity} then {again}")
+        seen = everywhere(identity, expected)
+        bench.record(f"rename-{client_id}", {"identity": identity, "old": old, "new": new, "names": names(identity)})
+        bench.check(f"{old!r} logging in as {new!r} is {expected!r} on every role", seen, json.dumps(names(identity)))
+        return identity
+
+    bot = relog(CLIENT_ID, None, "SE-1100 Bot", "[B] SE-1100 Bot", "[B] SE-1100 Bot")
+    human = relog(CLIENT2_ID, CLIENT2_PORT, "\ue030SE-1100 Steam", "SE-1100 Steam 2", "\ue030SE-1100 Steam 2")
+    login(CLIENT3_ID, CLIENT3_PORT, "SE-1100 Third")
+    time.sleep(5)
+    for identity, name in ((bot, "[B] SE-1100 Bot"), (human, "\ue030SE-1100 Steam 2")):
+        bench.check(f"{name!r} stayed on every role after the next identity snapshot", everywhere(identity, name),
+                    json.dumps(names(identity)))
+    bench.exercised(route="relog under a new name, then another player's binding snapshot", bot=bot, human=human)
+
+
 def _gps_state(bench, node_id: str) -> dict:
     state = _node(bench, node_id, "/global-state")
     gps = next(x for x in state["subsystems"] if x["subsystem"] == "gps")
@@ -2999,6 +3053,8 @@ SCENARIOS_WA = {
                            "(write-ahead journal)", "3"),
     "P2-WA-01": (p2_wa_01, "cross-node chat, faction and GPS", "3"),
     "P2-WA-03": (p2_wa_03, "global encounter dispatched once cluster-wide; counts converge", "3"),
+    "P2-WA-RENAME": (p2_wa_rename, "SE-1100: a player logging in under a new name keeps it on every role after the WA's next "
+                                   "identity snapshot, a stored platform icon too", "3"),
     "P2-WA-BCAST": (p2_wa_bcast, "SE-943: a broadcast controller message names its block, not Good.bot, after the WA's chat path", "3"),
     "P2-WA-ECON": (p2_wa_econ, "WA-2 economy: store, trade, contracts, PCU ledger, grid transfer", "3"),
     "P2-MOD-LASER-GPS": (p2_mod_laser_gps, "SE1-0226, SE1-0235: a laser links by GPS to a laser on another node, which points back", "3"),
