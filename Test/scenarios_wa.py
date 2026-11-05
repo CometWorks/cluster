@@ -2461,6 +2461,9 @@ def p2_wa_rename(bench) -> None:
     third login publishes one more snapshot, after which every role must still hold the new names."""
     _wa_cluster(bench)
     roles = ("node-1", "node-2", "wa-1")
+    selftest = bench.cluster.node("wa-1", "/self-test?section=identity-joined-name")
+    bench.check("WA self-test identity-joined-name (bot prefix, Steam icon kept or replaced, id-only and empty logins)",
+                selftest.get("ok") is True and selftest.get("ran") == ["identity-joined-name"], json.dumps(selftest)[:300])
 
     def login(client_id: int, port: int | None, name: str) -> int:
         if port is None:
