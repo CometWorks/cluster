@@ -136,6 +136,15 @@ per group, including inventory stock identity, mass/volume bounds and retained i
 apply failure leaves that group's builders untouched. A crash before the new-generation save reloads
 the original Final and recomputes; a catalogued ordinary Final contains the compensated state and no
 profile to credit again. The existing deferred-Final recovery cover behavior is retained.
+
+The model does not run on the game thread (SE-1096). A base offline for 14 hours needs over 150,000
+model events, which took up to four minutes, and the registry fenced the node meanwhile. `LoadRecovery`
+reads the authority clock, validates the timebases and starts the wake's models on a worker thread,
+then requeues the claim. The claim waits in the recovery queue until the models are ready. Then
+`LoadRecovery` reads and screens the saves again and commits on the game thread. The wake frame is
+the one taken at the start. Admission, content and stock checks and every failure rule are as before.
+`OfflineCompensationCheck --wake-equivalence` recomputes the results a cluster wake logged with the
+model it is built with.
 `CompensatedTo` is reported in the node result; offline rows already end at the first member
 heartbeat in the current registry, so no durable claim is made that a vanished row retains that
 diagnostic.
