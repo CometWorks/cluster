@@ -327,6 +327,75 @@ def p3_hnd_04(bench) -> None:
 p3_hnd_04.split_step = "to-handover"
 p3_hnd_04.administrators = [CLIENT_ID, CLIENT2_ID]  # the vanilla admin teleport moves both characters
 
+
+def p3_hnd_crew(bench) -> None:
+    """SE-1083: two clients seated in two seats of one grid move together in one handover.
+
+    A seated character is a child replicable of its grid, and its InstanceName is the character model. Two crew
+    members with the same model on one grid had one replicable identity: the source exported the first one's network
+    ids only (``duplicate replicable identity skipped in export``), the target minted new ones for the other, and that
+    client's adopt-ready failed ``binding does not match source`` until the readiness budget ran out. On
+    octahedron-test (2026-11-05) that held every balance migration of the trader crews in the station lounges for
+    100-110 s and the gateway's automatic pass with it.
+
+    Checks: the crew handover commits, both riders are still seated on the target, the source exported no duplicate
+    character identity and the target logged no binding mismatch.
+    """
+    from scenarios import _all_partitions, _node_of_entity
+    bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
+    bench.cluster.post("/automatic/pause")  # the only partition move is the forced handover
+    api_a = bench.start_client(CLIENT_ID, render=False)
+    bench.wait_spawned(CLIENT_ID)
+    bench.start_client(CLIENT2_ID, remote_port=CLIENT2_PORT, render=False)
+    bench.wait_spawned(CLIENT2_ID)
+
+    riders = [bench._server_character(CLIENT_ID), bench._server_character(CLIENT2_ID)]
+    _require(bench, "the server reports both characters", all(riders), str(riders))
+    home = _node_of_entity(bench, riders[0])
+    _require(bench, "both characters are on one node", home and _node_of_entity(bench, riders[1]) == home,
+             str([_node_of_entity(bench, rider) for rider in riders]))
+    x, y, z = _xyz((_character(api_a) or {}).get("position")) or (0.0, 0.0, 0.0)
+    spawned = bench.cluster.node(home, f"/rich-test-spawn?kind=lounge&x={x + 30}&y={y}&z={z}", "POST")
+    grid = spawned["grids"][0]["grid"]
+    for rider in riders:
+        bench.cluster.node(home, f"/rich-test-act?grid={grid}&action=seat&target={rider}", "POST")
+    seated = _poll(lambda: sorted(c["pilot"] for c in bench.cluster.node(home, f"/rich-test-state?grid={grid}")["cockpits"])
+                   == sorted(riders), 60)
+    _require(bench, "both characters sit in the lounge's two seats", seated,
+             json.dumps(bench.cluster.node(home, f"/rich-test-state?grid={grid}")))
+    shared = _poll(lambda: _shared_partition(bench), 120, interval=3)
+    _require(bench, "A and B ride one partition", shared and shared[0] == home, str(shared))
+    source, partition = shared
+    target = next(node for node in NODES if node != source)
+    bench.record("00-setup", {"grid": grid, "riders": riders, "source": source, "target": target, "partition": partition})
+
+    duplicate = r"duplicate replicable identity skipped in export: \d+/U2FuZGJveC5HYW1lLlJlcGxpY2F0aW9uLk15Q2hhcmFjdGVyUmVwbGljYWJsZ"
+    mismatch = r"binding does not match source"
+    before = {"duplicate": len(_lines(bench, source, duplicate)), "mismatch": len(_lines(bench, target, mismatch))}
+    try:
+        answer = bench.cluster.post(_handover_url(bench, partition, source=source, target=target, client=CLIENT_ID), timeout=300)
+    except ClusterError as error:
+        answer = {"error": str(error)[:500]}
+    bench.record("10-handover", answer)
+    duplicates = _lines(bench, source, duplicate)[before["duplicate"]:]
+    mismatches = _lines(bench, target, mismatch)[before["mismatch"]:]
+    bench.record("11-lines.txt", "\n".join(duplicates + ["", "-- mismatches --"] + mismatches[:20]))
+    bench.check(f"{source} exported each seated character under its own identity", not duplicates,
+                f"{len(duplicates)} duplicates; first: {duplicates[:1]}")
+    bench.check(f"{target} logged no binding mismatch", not mismatches, f"{len(mismatches)} lines; first: {mismatches[:1]}")
+    owner = _try(lambda: _all_partitions(bench).get(partition))
+    bench.check(f"the crew handover committed: partition {partition} is on {target}",
+                "error" not in answer and owner == target, json.dumps(answer)[:300] + f" owner={owner}")
+    pilots = sorted(c["pilot"] for c in _try(lambda: bench.cluster.node(target, f"/rich-test-state?grid={grid}")["cockpits"], []))
+    bench.check(f"both riders are still seated on {target}", pilots == sorted(riders), str(pilots))
+    bench.exercised(source=source, target=target, grid=grid, riders=riders, partition=partition,
+                    duplicates=len(duplicates), mismatches=len(mismatches))
+
+
+p3_hnd_crew.administrators = [CLIENT_ID, CLIENT2_ID]
+
+
 SCENARIOS_REDELIVER = {
     "P3-HND-04": (p3_hnd_04, "redeliver of a grid with a seated character while it is still streaming (T-0396)", "3"),
+    "P3-HND-CREW": (p3_hnd_crew, "two clients seated on one grid move in one handover (SE-1083)", "3"),
 }
