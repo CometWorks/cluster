@@ -2461,7 +2461,7 @@ def p2_wa_rename(bench) -> None:
     third login publishes one more snapshot, after which every role must still hold the new names."""
     _wa_cluster(bench)
     roles = ("node-1", "node-2", "wa-1")
-    selftest = bench.cluster.node("wa-1", "/self-test?section=identity-joined-name")
+    selftest = _try(bench, "wa-1", "/self-test?section=identity-joined-name") or {}
     bench.check("WA self-test identity-joined-name (bot prefix, Steam icon kept or replaced, id-only and empty logins)",
                 selftest.get("ok") is True and selftest.get("ran") == ["identity-joined-name"], json.dumps(selftest)[:300])
 
@@ -2501,7 +2501,11 @@ def p2_wa_rename(bench) -> None:
 
     bot = relog(CLIENT_ID, None, "SE-1100 Bot", "[B] SE-1100 Bot", "[B] SE-1100 Bot")
     human = relog(CLIENT2_ID, CLIENT2_PORT, "\ue030SE-1100 Steam", "SE-1100 Steam 2", "\ue030SE-1100 Steam 2")
-    login(CLIENT3_ID, CLIENT3_PORT, "SE-1100 Third")
+    # Only its binding matters: the WA publishes a snapshot of every identity with it. The client itself is
+    # not kept (the backend drops a third headless client on this bench).
+    bench.start_client(CLIENT3_ID, CLIENT3_PORT, render=False, name="SE-1100 Third")
+    _wait_line(bench, "gateway", rf"Player binding granted client {CLIENT3_ID} identity", CLIENT_TIMEOUT)
+    bench.kill_client(CLIENT3_ID)
     time.sleep(5)
     for identity, name in ((bot, "[B] SE-1100 Bot"), (human, "\ue030SE-1100 Steam 2")):
         bench.check(f"{name!r} stayed on every role after the next identity snapshot", everywhere(identity, name),
