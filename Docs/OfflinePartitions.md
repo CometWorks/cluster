@@ -151,6 +151,11 @@ model it is built with. With `--tolerance` it accepts a model that steps differe
 and frames must match, stocks, fuel and production within 1e-6, and energies within 1e-6 relative.
 A sun step runs to the next real bin change, not to each run of the WA sun/work path (one per heartbeat),
 so a solar base takes about 600 events for 15 hours instead of 55,000.
+`offline.compensateMaxEvents` bounds a group's model like `compensateMaxHours` bounds its time: at that
+many events it stops at the event boundary it reached, the result is `Capped` with the frames it
+simulated, and the rest is forfeited. Bases whose batteries settle on Update100 take about 9,000 events
+per offline hour, so the default 500,000 covers 50-70 hours of them. The wake logs one line with its
+groups, events and worker seconds, its longest group and the groups the budget capped.
 `CompensatedTo` is reported in the node result; offline rows already end at the first member
 heartbeat in the current registry, so no durable claim is made that a vanished row retains that
 diagnostic.
@@ -356,7 +361,7 @@ never prints it.
 
 New defaults: `offline.compensate=true`, `velocityReadiness=true`, `settleFrames=300`,
 `observeSeconds=180`, `rotateProduction=true`, `solarSteps=72`, `cacheTolerance=0.02`,
-`unknownBlocks=Freeze`, `longObservation=Skip`, `compensateMaxHours=72`, `callUp=true`,
+`unknownBlocks=Freeze`, `longObservation=Skip`, `compensateMaxHours=72`, `compensateMaxEvents=500000`, `callUp=true`,
 `callUpSeconds=120`, `callUpPerMinute=6`, `callUpNoticeSeconds=2` (all under `offline.`). Existing
 grace/minOnline defaults stay 180/60 seconds.
 
