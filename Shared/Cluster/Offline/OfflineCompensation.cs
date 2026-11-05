@@ -125,8 +125,8 @@ internal static class OfflineCompensation
         Call("Apply", entities, entries.Select(e => e.Profiles).ToArray(), entries.Select(e => e.Members.ToArray()).ToArray());
     }
     // SE-1096: a wake's models run on a worker thread; LoadRecovery keeps the claim queued until they are ready.
-    internal static object BeginWake(IEnumerable<(byte[] Profiles, HashSet<long> Members)> sections)
-        => !ClusterConfig.GetBool("offline.compensate") ? null : Call("BeginApply", (object)sections.Select(e => e.Profiles).ToArray());
+    internal static object BeginWake(IEnumerable<byte[]> sections)
+        => !ClusterConfig.GetBool("offline.compensate") ? null : Call("BeginApply", (object)sections.ToArray());
     internal static bool WakeReady(object wake) => (bool)Call("WakeReady", wake);
     internal static void Apply(IDictionary<long, MyObjectBuilder_EntityBase> entities, IEnumerable<(byte[] Profiles, HashSet<long> Members)> sections, object wake)
     {
