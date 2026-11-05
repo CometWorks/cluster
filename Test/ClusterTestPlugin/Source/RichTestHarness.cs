@@ -48,6 +48,7 @@ public static class RichTestHarness
 			"pistonrig" => SpawnPistonRig(origin, builtBy),
 			"antennaship" => SpawnAntennaShip(origin, builtBy),
 			"targetdummy" => SpawnTargetDummy(origin, builtBy),
+			"lounge" => SpawnLounge(origin, builtBy),
 			_ => throw new ArgumentException($"Unknown fixture kind '{kind}'"),
 		};
 		return new
@@ -129,6 +130,19 @@ public static class RichTestHarness
 		antenna.EnableBroadcasting = true;
 		antenna.BroadcastRadius = 500f;
 		return new List<MyEntity> { ship.Build() };
+	}
+
+	/// <summary>SE-1083: two seats on one grid, like the lounge of a station where a crew of traders waits.</summary>
+	private static List<MyEntity> SpawnLounge(Vector3D origin, long builtBy)
+	{
+		GridBuilder lounge = new GridBuilder("cluster-lounge", origin, builtBy);
+		for (int x = 0; x <= 3; x++)
+			for (int z = 0; z <= 1; z++)
+				lounge.Armor(x, -1, z);
+		lounge.Add<MyObjectBuilder_Cockpit>("LargeBlockCockpit", 0, 0, 1);
+		lounge.Add<MyObjectBuilder_Cockpit>("LargeBlockCockpit", 2, 0, 1);
+		lounge.Add<MyObjectBuilder_BatteryBlock>("LargeBlockBatteryBlock", 3, 0, 0).CurrentStoredPower = 3f;
+		return new List<MyEntity> { lounge.Build() };
 	}
 
 	/// <summary>SE1-0225: a target dummy on an armor bed. The dummy writes its destroyed state only once
@@ -291,6 +305,8 @@ public static class RichTestHarness
 				var cockpit = Fat<MyCockpit>(grid);
 				if (action == "seat")
 				{
+					// The first free seat, so a second rider takes the lounge's second seat (SE-1083).
+					cockpit = grid.GetFatBlocks().OfType<MyCockpit>().FirstOrDefault(seat => seat.Pilot == null) ?? cockpit;
 					if (!MyEntities.TryGetEntityById(targetId, out MyEntity rider)
 						|| rider is not Sandbox.Game.Entities.Character.MyCharacter character)
 						throw new InvalidOperationException($"Seat rider {targetId} is not a character on this node");
