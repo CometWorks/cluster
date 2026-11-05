@@ -374,6 +374,9 @@ def p2_prs_03(bench) -> None:
     record = {}
     try:
         bench.start_cluster(nodes=["node-1", "wa-1"])
+        selftest = bench.cluster.node("wa-1", "/self-test?section=presence-transport")
+        bench.check("self-test presence-transport: Steam announced, Direct Transport not, the flag round-trips",
+                    selftest.get("ok") is True, json.dumps(selftest)[:300])
         _, cursor = _chat(bench, "wa-1")
         # Past the seeding window, or the silence below would be the window's and not the rule's.
         time.sleep(SEEDING_WINDOW_SECONDS)
