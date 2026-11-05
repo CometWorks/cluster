@@ -366,7 +366,7 @@ internal sealed partial class PartitionPersistence
 					+ recovery.Generation + " was lost before its load (T-0297)");
 				continue;
 			}
-			if (recovery.WaitForOfflineReadiness && !OfflineLoadReady)
+			if (recovery.WaitForOfflineReadiness && !OfflineLoadReady || recovery.OfflineWake != null && !OfflineCompensation.WakeReady(recovery.OfflineWake))
 			{
 				m_recoveries.Enqueue(recovery);
 				continue;
@@ -3814,9 +3814,19 @@ internal sealed partial class PartitionPersistence
 			StripPilots(recovery.Partition, entities.Values, staleCharacters.Contains,
 				"its player's character home is newer and in another partition (stale seated copy, T-0237)");
 		}
+		// SE-1096: the offline model of a long-offline group ran on the game thread for minutes (237 s on nas), and the
+		// registry fenced the node. Its wake starts here on a worker thread, and the claim waits in the queue, read again
+		// and screened again, until the models are ready. The models' wake frame is this one.
+		if (offlineProfiles.Count != 0 && recovery.OfflineWake == null && OfflineCompensation.BeginWake(offlineProfiles) is { } wake)
+		{
+			m_recoveries.Enqueue(recovery with { OfflineWake = wake });
+			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] recovery of partition " + recovery.Partition + " generation " + recovery.Generation
+				+ " waits for its offline compensation, computed off the game thread (SE-1096)");
+			return DeferredLoad;
+		}
 		// Stale-member filtering must precede compensation: a partial logical group cannot spend
 		// stocks carried by a grid that was removed as live elsewhere.
-		OfflineCompensation.Apply(entities, offlineProfiles);
+		OfflineCompensation.Apply(entities, offlineProfiles, recovery.OfflineWake);
 		// T-0237: a FENCE-TAINTED local copy of a recovered entity is stale by construction - an assigned seed
 		// save loaded at boot whose claim never confirmed - and the create-if-absent loop below used to keep it
 		// and adopt it into the recovered partition, discarding the save's newer state. w32 2026-09-25 00:07:48:
@@ -5191,6 +5201,8 @@ internal sealed partial class PartitionPersistence
 	internal sealed record RecoveryClaim(ulong Partition, uint Generation, RecoveryFile[] Files, RecoveryFile[] Fallbacks)
 	{
 		public bool WaitForOfflineReadiness { get; init; }
+		/// <summary>SE-1096: this claim's offline compensation wake, running or ready (Concealment's handle).</summary>
+		public object OfflineWake { get; init; }
 		/// <summary>
 		/// Entity ids live on OTHER nodes at claim time. A recovered save may carry an entity whose
 		/// newer incarnation rides a different partition id on another node - the per-partition-id
