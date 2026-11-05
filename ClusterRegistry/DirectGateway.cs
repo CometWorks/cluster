@@ -84,6 +84,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     // failing partition off so the cluster keeps working on what it can and the failure stays visible.
     private readonly Dictionary<ulong, (int Failures, DateTime NextAttempt)> _handoverBackoff = new();
     private const double HandoverBackoffCapSeconds = 300;
+    // SE-1080: a balance migration is optional, but while its crew's adopt-ready poll runs the moving partition
+    // is frozen on the source and this loop does nothing else - no co-location, wake or drain. The full budget
+    // (30 s + 10 s per extra client) let a trader crew whose binding never matched hold the loop 101-112 s per
+    // attempt for 10 minutes on the live cluster (2026-11-05 00:14-00:24Z); a player who arrived by gate 58 m
+    // from another node's Moon Station waited 82 s for the co-location that shows him its grids. Healthy crews
+    // are ready in 3.3 s at p95 and 4.5 s at most (w22), so a balance migration gives up after this, and a
+    // partition whose readiness timed out stays out of balancing for the backoff cap.
+    private static readonly TimeSpan BalanceReadinessBudget = TimeSpan.FromSeconds(15);
 
     /// <summary>
     /// T-0251: a partition that just ARRIVED on a node (a balance migration or an offline load) stays
@@ -148,12 +156,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             return _handoverBackoff.TryGetValue(partition, out var state) && DateTime.UtcNow < state.NextAttempt;
     }
 
-    private void RecordHandoverFailure(ulong partition)
+    private void RecordHandoverFailure(ulong partition, bool backOffFully = false)
     {
         lock (_handoverBackoff)
         {
             int failures = _handoverBackoff.TryGetValue(partition, out var state) ? state.Failures + 1 : 1;
-            double seconds = Math.Min(HandoverBackoffCapSeconds, Math.Pow(2, Math.Min(failures, 9)));
+            double seconds = backOffFully ? HandoverBackoffCapSeconds : Math.Min(HandoverBackoffCapSeconds, Math.Pow(2, Math.Min(failures, 9)));
             _handoverBackoff[partition] = (failures, DateTime.UtcNow.AddSeconds(seconds));
             if (failures == 1 || failures % 10 == 0)
                 Console.Error.WriteLine($"Partition {partition} handover has failed {failures} time(s); next attempt in {seconds:F0}s");
@@ -549,6 +557,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         while (_running)
         {
             ulong? attempting = null;
+            bool attemptingBalance = false;
             long passStarted = Stopwatch.GetTimestamp();
             try
             {
@@ -892,6 +901,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         }
                         Console.WriteLine($"Automatic partition handover triggered for {moving.Id}, reason {chosen.Move.Reason}, envelope gap {chosen.Move.Gap:F1}m, raw gap {chosen.Move.RawGap:F1}m, direction {(toTarget ? "source->target" : "target->source")}, clients {movingClients}, component home {(chosen.Move.HomeIsTarget ? "target" : "source")} of {chosen.Move.ComponentSize}, route {chosen.From.Node.Node}->{chosen.To.Node.Node}; why: {chosen.Move.Why}");
                         attempting = moving.Id;
+                        attemptingBalance = chosen.Move.Reason.StartsWith("balance");
                         if (movingClients == 0)
                             FencedClientlessHandover(chosen.From.Node.Control, chosen.To.Node.Control, chosen.To.Node.Backend, moving.Id, allowRemoteUse: chosen.Move.Reason == "co-location").GetAwaiter().GetResult();
                         else if (moving.Clients.Length == 0)
@@ -936,7 +946,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         }
                         else
                         {
-                            Handover(movingSessions, chosen.From.Node.Control, chosen.To.Node.Control, chosen.To.Node.Backend, moving.Id).GetAwaiter().GetResult();
+                            Handover(movingSessions, chosen.From.Node.Control, chosen.To.Node.Control, chosen.To.Node.Backend, moving.Id,
+                                readinessBudget: attemptingBalance ? BalanceReadinessBudget : null).GetAwaiter().GetResult();
                             // The directed §7.4 move landed; the next encounter for this client is priced normally.
                             foreach (ulong client in moving.Clients) ClearTeleportIntent(client);
                             handedOver = true;
@@ -972,7 +983,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // (live 2026-10-02 07:04:35). The type and the first frame of ours, once a minute per distinct message.
                 if (PassLogDue(_passFailureLogged, "pass|" + e.Message, DateTime.UtcNow))
                     Console.Error.WriteLine("Automatic handover check failure detail: " + DescribeFailure(e));
-                if (attempting is ulong failed) RecordHandoverFailure(failed);
+                if (attempting is ulong failed) RecordHandoverFailure(failed, backOffFully: attemptingBalance && e is TimeoutException);
             }
             finally { if (_rotation.CurrentCount == 0) _rotation.Release(); }
             // SE1-0084: one second between passes, unless a node asks for one now (its fast state changed).
@@ -5718,7 +5729,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     private async Task Handover(ClientSession session, string source, string target, IPEndPoint backend, ulong partition, bool pauseAfterCapture = false)
         => await Handover([session], source, target, backend, partition, pauseAfterCapture);
 
-    private async Task Handover(IReadOnlyList<ClientSession> sessions, string source, string target, IPEndPoint backend, ulong partition, bool pauseAfterCapture = false)
+    private async Task Handover(IReadOnlyList<ClientSession> sessions, string source, string target, IPEndPoint backend, ulong partition, bool pauseAfterCapture = false,
+        TimeSpan? readinessBudget = null)
     {
         // Switch locks in client-id order: two handovers that overlap on a client take them the same
         // way round and one waits instead of both deadlocking half-held.
@@ -5753,7 +5765,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 await UnfencedHandover(sessions[0], source, target, backend, partition);
             }
             else
-                await FencedHandover(sessions, source, target, backend, partition, pauseAfterCapture);
+                await FencedHandover(sessions, source, target, backend, partition, pauseAfterCapture, readinessBudget);
         }
         finally
         {
@@ -6003,7 +6015,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// makes the move authoritative. Handing them over one at a time would put two players who share
     /// a grid on two different nodes for the duration, which is the desync this exists to prevent.
     /// </param>
-    private async Task FencedHandover(IReadOnlyList<ClientSession> sessions, string source, string target, IPEndPoint backend, ulong partition, bool pauseAfterCapture)
+    private async Task FencedHandover(IReadOnlyList<ClientSession> sessions, string source, string target, IPEndPoint backend, ulong partition, bool pauseAfterCapture,
+        TimeSpan? readinessBudget = null)
     {
         GatewayRegistry registry = _registry!;
         (NodeRegistration sourceNode, NodeRegistration targetNode) = ResolveFencedNodes(registry, source, target, backend);
@@ -6206,8 +6219,9 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 fence + "&client=" + each.ClientId + "&state=" + Uri.EscapeDataString(handover.StateFor(each.ClientId));
             // One budget for the whole crew, because it bounds the frozen window - but it grows with
             // the crew, so a big platform partition does not spend the last client's share waiting
-            // for the first. The per-client 30 s of the single-client path is the floor.
-            using (CancellationTokenSource readinessTimeout = new(TimeSpan.FromSeconds(30 + 10 * (sessions.Count - 1))))
+            // for the first. The per-client 30 s of the single-client path is the floor. An optional move
+            // passes a shorter budget (BalanceReadinessBudget).
+            using (CancellationTokenSource readinessTimeout = new(readinessBudget ?? TimeSpan.FromSeconds(30 + 10 * (sessions.Count - 1))))
             {
                 foreach (ClientSession each in sessions)
                 {

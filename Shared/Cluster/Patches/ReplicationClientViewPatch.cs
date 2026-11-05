@@ -710,7 +710,9 @@ public static class ReplicationClientViewPatch
 		long controlledEntity = (clientState.ControlledReplicable as IMyEntityReplicable)?.EntityId ?? 0;
 		long characterEntity = (clientState.CharacterReplicable as IMyEntityReplicable)?.EntityId ?? 0;
 		if (controlled != state.ControlledReplicableId || character != state.CharacterReplicableId || controlledEntity != state.ControlledEntityId || characterEntity != state.CharacterEntityId)
-			throw new InvalidOperationException("Target controlled or character binding does not match source");
+			throw new InvalidOperationException("Target controlled or character binding does not match source: controlled " + controlled + "/" + controlledEntity
+				+ " vs " + state.ControlledReplicableId + "/" + state.ControlledEntityId + ", character " + character + "/" + characterEntity
+				+ " vs " + state.CharacterReplicableId + "/" + state.CharacterEntityId);
 	}
 
 	private static ClientHandoverState ExportClientState(MyClient client, IEnumerable<IMyReplicable> replicables, Func<IMyReplicable, uint> getId,
