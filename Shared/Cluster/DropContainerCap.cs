@@ -6,7 +6,7 @@ using PluginSdk.Stats;
 namespace ClusterPlugin;
 
 /// <summary>
-/// #1443: the cluster-wide cap on active container drops (drops.maxActive, default 3), World Authority only. Vanilla decides
+/// #1443: the cluster-wide cap on active container drops (drops.maxActive, default 5 since SE-1146), World Authority only. Vanilla decides
 /// drops per player, so the cluster's rate grows with its pilots (#1378: ~+240/h at ~160 pilots). The WA is the one place
 /// that dispatches drops (<see cref="DropContainerDirectorService"/>), so the cap holds there and no node can race past it.
 /// <para>

@@ -32,7 +32,7 @@ public static class GpsAuthorityCodec
 {
 	private static readonly HashSet<string> Operations = new HashSet<string>(StringComparer.Ordinal)
 	{
-		"Add", "Delete", "Modify", "ShowOnHud", "AlwaysVisible", "Color"
+		"Add", "Delete", "DeleteContainer", "Modify", "ShowOnHud", "AlwaysVisible", "Color"
 	};
 
 	public static string WriteSnapshot(IEnumerable<GpsAuthorityEntry> entries)
