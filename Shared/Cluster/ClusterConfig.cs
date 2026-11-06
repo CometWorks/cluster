@@ -305,6 +305,11 @@ public static class ClusterConfig
 		// (Relative Top Speed at 360 m/s: 360), or a fast pair gets less warning than the relocation lead. Listed here so
 		// the fan-out of the gateway's document is not refused by the nodes; they never read it.
 		["lookahead.maxSpeed"] = "100",
+		// GATEWAY only, managed (Quasar) deployments (SE-1168): every lifetimeSeconds / n (n serving regular nodes) the
+		// oldest serving node is recycled onto the hot spare, so each node serves about lifetimeSeconds; 0 = never.
+		// A recycle still draining after drainTimeoutSeconds closes the node: its own drain hands out or offlines the rest.
+		["rotation.lifetimeSeconds"] = "7200",
+		["rotation.drainTimeoutSeconds"] = "600",
 		// GATEWAY only (T-0269): a wake whose demander's node is above this multiple of the mean node load
 		// loads on the least-loaded node instead; 0 = always the demander's node.
 		["offline.wakeOverloadRatio"] = "1.5",

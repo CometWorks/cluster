@@ -202,7 +202,11 @@ internal sealed partial class GatewayRegistry
     {
         lock (_lock)
         {
-            if (_state.ManagedDeployment is not null) return;
+            if (_state.ManagedDeployment is not null)
+            {
+                if (ManagedRotationStep(_clock())) Persist();
+                return;
+            }
             if (NodeControlStep(_clock(), "registry", null, null, [], [])) Persist();
         }
     }
@@ -598,6 +602,7 @@ internal sealed partial class GatewayRegistry
     {
         lock (_lock)
         {
+            if (_state.ManagedRotation is { } recycle && recycle.Node == node) return recycle.Spare;
             if (!Control.Live.TryGetValue(node, out NodeRecord? record) || record.ReplacedBy is not { } receiver) return null;
             return _state.Nodes.TryGetValue(receiver, out NodeRegistration? row) && row.State == NodeState.Active && row.Serving
                 && !row.Spare && !_state.SpareNodes.Contains(receiver) ? receiver : null;

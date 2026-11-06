@@ -167,6 +167,7 @@ internal static partial class SelfTest
         ("managed-deployment", TestManagedDeployment),
         ("managed-hot-spares", TestManagedHotSpares),
         ("managed-hung-node-kill", TestManagedHungNodeKill),
+        ("managed-rotation", TestManagedRotation),
         ("managed-removed-slots", TestManagedRemovedSlots),
         ("managed-configuration-drift", TestManagedConfigurationDrift),
         ("managed-restore", TestManagedRestore),
