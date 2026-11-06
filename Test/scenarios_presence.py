@@ -660,7 +660,13 @@ def p2_prs_05(bench) -> None:
                     json.dumps(record["placement"]))
 
         # -- a player without admin rights gets nothing done ------------------------------------------
-        # Client 2's own F3: vanilla greys Kick and Ban out for a non-admin.
+        # Client 2's own F3: vanilla greys Kick and Ban out for a non-admin. Its level is set to none first, so the
+        # check does not depend on what the world seeded.
+        record["client2Level"] = bench.cluster.node(admin_node, f"/promote-test?userId={CLIENT2_ID}")
+        bench.cluster.node(admin_node, f"/promote-test?userId={CLIENT2_ID}&level=0", "POST")
+        wait_until(lambda: bench.cluster.node(admin_node, f"/promote-test?userId={CLIENT2_ID}").get("promoted") == 0
+                   or None, 60, "client 2 without admin rights on its node")
+        time.sleep(2)  # the client learns its level a moment after its node
         _, index = _f3(api2, keep_open=True)
         try:
             enabled = {button: _f3_click(api2, index, names[CLIENT3_ID], button) for button in ("Kick", "Ban")}

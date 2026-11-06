@@ -33,7 +33,7 @@ internal sealed partial class DirectGateway
             refusal = $"A node's kick or ban must name the admin it acts for in {ClusterNet.ModeratorHeader}.";
         else if (!_admission.IsAdmin(admin))
             refusal = $"{admin} is not on the cluster's administrator list.";
-        else if (!_clients.TryGetValue(admin, out ClientSession? session) || session.RegistryRoute?.Node is not { } attached)
+        else if (!_clients.TryGetValue(admin, out ClientSession? session) || AttachedNode(session) is not { } attached)
             refusal = $"Admin {admin} is not connected to the cluster.";
         else if (!string.Equals(attached, node, StringComparison.Ordinal))
             refusal = $"Admin {admin} is attached to {attached}, not to {node ?? "(no node)"}.";
@@ -44,6 +44,10 @@ internal sealed partial class DirectGateway
         }
         return new AdminActor($"node:{node}/admin:{admin}", Admin.AdminScope.Manage);
     }
+
+    /// <summary>The node serving the session's backend now (the registry route is not set for every arrival).</summary>
+    private string? AttachedNode(ClientSession session) =>
+        GatewayRegistry.LiveFirst((_registry?.Nodes() ?? []).Where(node => node.Endpoint == session.BackendEndpoint.ToString()))?.Node;
 
     private static bool IsNodeModerationRoute(string method, string path)
     {

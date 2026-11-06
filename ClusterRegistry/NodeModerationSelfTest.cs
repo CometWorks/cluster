@@ -26,8 +26,15 @@ internal static partial class SelfTest
         var book = (AdmissionBook)typeof(DirectGateway).GetField("_admission", flags)!.GetValue(gateway)!;
         var sessions = (System.Collections.IDictionary)typeof(DirectGateway).GetField("_clients", flags)!.GetValue(gateway)!;
         var sessionType = typeof(DirectGateway).GetNestedType("ClientSession", BindingFlags.NonPublic)!;
+        // Each node's backend; a session's node is the one serving its backend endpoint, as for a real arrival.
+        var backends = new Dictionary<string, IPEndPoint>();
+        foreach (string node in new[] { "node-1", "node-2" })
+        {
+            backends[node] = new IPEndPoint(IPAddress.Loopback, FreeUdpPort());
+            registry.RegisterNode(Join(node, backends[node].ToString(), Guid.NewGuid()));
+        }
         void Connect(ulong client, string node) => sessions[client] = Activator.CreateInstance(sessionType,
-            [client, new IPEndPoint(IPAddress.Loopback, 1), new ClientRoute(client, 1, node, 1, 1, "127.0.0.1:1")]);
+            [client, backends[node], null]);
         Connect(100, "node-1"); Connect(101, "node-1"); Connect(200, "node-2"); Connect(201, "node-1");
 
         using var listener = new HttpListener(); listener.Prefixes.Add($"http://127.0.0.1:{control}/"); listener.Start();
