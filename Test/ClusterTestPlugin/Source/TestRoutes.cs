@@ -74,6 +74,7 @@ internal static class TestRoutes
         MeteorRoutes.Register();      // #1381 a meteor probe and its carried lifetime
         OfflineTestRoutes.Register(); // SE-347 shared LoadRecovery apply/crash boundary and real production
         AccountingInterlockObserver.Register();
+        GameThreadLoadRoutes.Register(); // SE-1134 real game-thread time: a busy node, a single hitch
     }
 
     public static bool Dispatch(HttpListenerContext context, string path)

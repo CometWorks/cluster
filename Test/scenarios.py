@@ -702,6 +702,97 @@ def p1_bal_01(bench) -> None:
                     worstDeviation=status.get("worstDeviation"), tolerance=status.get("tolerance"))
 
 
+# ---------------------------------------------------------------------------
+# P1-BAL-RATIO - a single sim-ratio dip moves nothing, a lasting overload does (SE-1134)
+# ---------------------------------------------------------------------------
+
+def p1_bal_ratio(bench) -> None:
+    """SE-1134: live, one hitch sample of the node's simulationRatio (0.72-0.92) read as 1e6/ratio, over the 800k load
+    floor, and the gateway pinned a balance migration every 1.8 min. On a node with real but sub-floor load (worker-pool
+    time every frame through the test plugin, which the node charges to its partitions by member count) single
+    main-thread hitches must move nothing; a lasting overload (more worker time and a slow frame) must still migrate."""
+    bench.start_cluster()
+    # The fixture is far from every player; offline it would leave the nodes before the overload phase.
+    for node in ("node-1", "node-2"):
+        bench.record(f"offline-off-{node}", _put_config(bench, node, {"offline.enabled": "false"}))
+    # A connected client keeps the paced planner (the one with the floor) in charge; with none the idle-cluster plan runs.
+    bench.start_client(CLIENT_ID)
+    bench.wait_spawned(CLIENT_ID)
+    bench.quiesce()
+    # The P1-BAL-01 fixture with a battery the player owns: the game's trash collector removes the ownerless armor
+    # cubes P1-BAL-01 spawns within a minute.
+    owner = wait_until(lambda: _identity_of(bench, CLIENT_ID), 60, "the client's identity")
+    spawned = [bench.cluster.node("node-1", f"/trash-test-spawn?x={400_000 + index * 12_000}&y={member * 30}&z=0"
+                                            f"&npc=true&owner={owner}&blocks=27&spin=0.5", "POST")
+               for index in range(8) for member in range(15)]
+    bench.record("fixture", spawned)
+
+    def node1_partitions() -> int:
+        return len(bench.cluster.node("node-1", "/partitions").get("partitions", []))
+
+    wait_until(lambda: True if node1_partitions() >= 9 else None, 120, "node-1 to report the fixture's partitions")
+    pin = r"Automatic balance migration pinned: .*node-1->"
+
+    def node_sample() -> tuple[float, int]:
+        report = bench.cluster.node("node-1", "/partitions")
+        return float(report.get("simulationRatio", 1)), sum(int(p.get("simLoadUs", 0)) for p in report.get("partitions", []))
+
+    # Sub-floor load: 2 x 3 ms of worker time every frame, ~360k sim-us/s measured at a ratio of 1.
+    bench.cluster.node("node-1", "/test-worker-load?ms=3&items=2", "POST")
+    time.sleep(20)  # the node's 10 s load EMA
+    bench.record("baseline", {"status": bench.cluster.get("/balance/status"), "node1": node_sample()})
+    # Hitches: one 200 ms frame every 15 s for 150 s, the node's ratio sampled twice a second throughout.
+    pins_before = len(_gateway_lines(bench, pin))
+    samples = []
+    hitches = 0
+    started = time.time()
+    while time.time() - started < 150:
+        if time.time() - started >= hitches * 15:
+            bench.cluster.node("node-1", "/test-game-thread-hitch?ms=200", "POST")
+            hitches += 1
+        samples.append(node_sample())
+        time.sleep(0.5)
+    hitch_pins = _gateway_lines(bench, pin)[pins_before:]
+    ratios = [round(ratio, 2) for ratio, _ in samples]
+    low = sum(1 for ratio in ratios if ratio < 0.98)
+    measured = max(load for _, load in samples)
+    bench.record("hitch-phase", {"hitches": hitches, "ratioSamples": len(samples), "below098": low,
+                                 "min": min(ratios), "maxMeasured": measured, "pins": hitch_pins})
+    bench.check("the hitches dip node-1's simulationRatio under 0.98", low > 0, f"{low} of {len(samples)}, min {min(ratios)}")
+    bench.check("node-1 measures real load under the 800k floor", 100_000 <= measured < 800_000, f"max {measured} sim-us/s")
+    bench.check("single hitches move nothing off node-1", not hitch_pins, f"{len(hitch_pins)} pin(s): {hitch_pins[:3]}")
+
+    # A lasting overload: 4 x 12 ms of worker time and a 10 ms main-thread sleep every frame, ~2.9M sim-us/s measured
+    # at a ratio of about 0.7, until the node sheds load.
+    pins_before = len(_gateway_lines(bench, pin))
+    overloaded = time.time()
+    bench.cluster.node("node-1", "/test-worker-load?ms=12&items=4", "POST")
+    bench.cluster.node("node-1", "/test-game-thread-load?ms=10", "POST")
+    trace = []
+
+    def migrated():
+        trace.append({"t": round(time.time() - overloaded, 1), "status": bench.cluster.get("/balance/status"),
+                      "node1": node_sample()})
+        return (_gateway_lines(bench, pin)[pins_before:] or [None])[0]
+
+    try:
+        first = wait_until(migrated, 180, "a balance migration off the overloaded node-1", interval=5)
+    except ClusterError:
+        first = None
+    seconds = round(time.time() - overloaded, 1)
+    loaded = node_sample()
+    # The planner's own input, for an offline --balance-replay node-1=... node-2=...
+    bench.record("overload-reports", {node: bench.cluster.node(node, "/partitions") for node in ("node-1", "node-2")})
+    bench.record("overload-trace", trace)
+    reported = {node: len(bench.cluster.node(node, "/partitions").get("partitions", [])) for node in ("node-1", "node-2")}
+    bench.check("the fixture's partitions outlast the phases", sum(reported.values()) >= 10, str(reported))
+    bench.cluster.node("node-1", "/test-game-thread-load?ms=0", "POST")
+    bench.cluster.node("node-1", "/test-worker-load?ms=0&items=0", "POST")
+    bench.record("overload-phase", {"node1": loaded, "firstPin": first, "seconds": seconds})
+    bench.check("a lasting overload still migrates off node-1", first is not None, f"after {seconds} s: {first}")
+    bench.exercised(hitches=hitches, below098=low, hitchPins=len(hitch_pins), overloadPinSeconds=seconds)
+
+
 def _gateway_lines(bench, pattern: str) -> list[str]:
     return _lines(bench, "gateway", pattern)
 
@@ -1370,6 +1461,7 @@ SCENARIOS = {
     "P1-CHR-03": (p1_chr_03, "control-liveness fallback", "4"),
     "P1-CHR-04": (p1_chr_04, "cross-node transition corner-case matrix", "3/4"),
     "P1-BAL-01": (p1_bal_01, "automatic balancing exists and converges", "3"),
+    "P1-BAL-RATIO": (p1_bal_ratio, "a single sim-ratio dip moves nothing, a lasting overload does", "3"),
     "P2-CHR-01": (p2_chr_01, "Character Registry uniqueness under chaos", "4"),
     "P2-CHR-02": (p2_chr_02, "teleport & spawn-elsewhere direction", "3"),
     "P2-CHR-03": (p2_chr_03, "spawn defaults", "3"),
