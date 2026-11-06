@@ -122,6 +122,7 @@ internal sealed class SteamFrontend : IDisposable
         _callbacks.Add(Callback<SteamServerConnectFailure_t>.CreateGameServer(result =>
             Console.Error.WriteLine($"Steam GameServer logon failed: {result.m_eResult} retrying={result.m_bStillRetrying}")));
         _callbacks.Add(Callback<GSPolicyResponse_t>.CreateGameServer(result => Secure = result.m_bSecure != 0));
+        _callbacks.Add(Callback<SteamInventoryDefinitionUpdate_t>.CreateGameServer(_ => LoadSkinDefinitions()));
 
         SteamGameServer.SetProduct("Space Engineers");
         SteamGameServer.SetGameDescription("Space Engineers");
@@ -589,6 +590,19 @@ internal sealed class SteamFrontend : IDisposable
         if (count > 0 && !SteamGameServerInventory.GetResultItems(check.Handle, items, ref count))
             return null;
         return items.Select(item => SkinOf(item.m_iDefinition)).Where(skin => skin.Length > 0).Distinct().ToArray();
+    }
+
+    /// <summary>Steam sent the item definitions (MySteamInventoryServer.OnSteamInventoryDefinitionUpdate): learn the skins now.</summary>
+    private void LoadSkinDefinitions()
+    {
+        uint count = 0;
+        if (!SteamGameServerInventory.GetItemDefinitionIDs(null, ref count))
+            return;
+        var definitions = new SteamItemDef_t[count];
+        if (!SteamGameServerInventory.GetItemDefinitionIDs(definitions, ref count))
+            return;
+        int skins = definitions.Count(definition => SkinOf(definition).Length > 0);
+        Console.WriteLine($"Steam inventory definitions: {definitions.Length} items, {skins} armor and block skins");
     }
 
     /// <summary>MySessionComponentGameInventory keeps only the Armor and Block slot items, by asset_modifier_id.</summary>
