@@ -317,7 +317,9 @@ def p2_wa_06e(bench) -> None:
     bench.check("refuse: the client never reconnected", not refused["reconnected"])
     bench.check("refuse: the client never paused", refused["pausedSamples"] == 0, str(refused["pausedSamples"]))
     bench.check("refuse: the client is still on the medical screen", refused["medicalAtEnd"] is True)
-    bench.check("refuse: the client is back on node-2", refused["nodeAtEnd"] == "node-2", str(refused["nodeAtEnd"]))
+    # Its new medical screen asks for the kit again at once, so the next switch may already have taken it to node-1.
+    bench.check("refuse: the client came back to node-2", any(x["node"] == "node-2" for x in refused["samples"]),
+                str([x["node"] for x in refused["samples"]]))
     bench.check("refuse: node-2 took the client in again", bool(refused["restored"]))
     _reselect(bench, api)
     first = _preview_and_respawn(bench, api, "refuse-retry", name, grid)
