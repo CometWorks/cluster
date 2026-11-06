@@ -13,8 +13,13 @@ public sealed record PlayerBindingRequest(string ServiceName, ulong UserId, ulon
 	long ExpectedIdentityId = 0);
 public sealed record PlayerBindingEntry(ulong UserId, int SerialId, long IdentityId);
 public sealed record PlayerRebindRequest(ulong UserId, int SerialId, long PreviousIdentityId, long IdentityId);
+/// <summary>
+/// SE-1158: <paramref name="MissingDlcs"/> and <paramref name="Skins"/> are what the Gateway's Steam frontend found the
+/// player owns, added to the attach binding only (the World Authority never sets them). Null when the Gateway has no Steam
+/// auth session for the player (Direct Transport, EOS) or predates them; see <see cref="PlayerEntitlements"/>.
+/// </summary>
 public sealed record PlayerReady(long AuthorityGeneration, string ServiceName, ulong UserId, ulong OwnerId, int SerialId,
-	bool IsAdmin, IdentityAuthorityEntry Identity);
+	bool IsAdmin, IdentityAuthorityEntry Identity, uint[] MissingDlcs = null, string[] Skins = null);
 public sealed record IdentityAuthoritySnapshot(IdentityAuthorityEntry[] Identities, PlayerBindingEntry[] Bindings);
 
 public static class IdentityAuthorityCodec

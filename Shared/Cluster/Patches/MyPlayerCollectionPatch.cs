@@ -149,6 +149,7 @@ public static class MyPlayerCollectionPatch
 				if (ready.ServiceName == DirectTransportServiceName) DirectTransportClients.Add(clientId);
 				else DirectTransportClients.Remove(clientId);
 			}
+			PlayerEntitlements.Attach(ready);
 			return true;
 		}
 		catch (Exception exception)
@@ -655,6 +656,7 @@ public static class MyPlayerCollectionPatch
 	private static void RemoveAttachBinding(ulong clientId)
 	{
 		lock (SnapshotSync) PendingAttach.Remove(clientId);
+		PlayerEntitlements.Detach(clientId);
 	}
 
 	/// <summary>The identities of every client attached to this node, joined or still joining. The attach

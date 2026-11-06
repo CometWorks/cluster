@@ -19,6 +19,20 @@ namespace ClusterRegistry;
 internal sealed class SteamFrontend : IDisposable
 {
     private const uint SpaceEngineersAppId = 244850;
+
+    /// <summary>
+    /// SE-1158: the game's DLC app ids (Content/Data/Game/DLCs.sbc, MyDLCs.DLCs), which a vanilla DS asks
+    /// UserHasLicenseForApp about for every client. The nodes can't ask: Direct Transport answers yes to all. A DLC
+    /// released after this list counts as owned by everyone until it is added here.
+    /// </summary>
+    internal static readonly uint[] DlcAppIds =
+    [
+        573160, 999999990, 999999991, 1049790, 1084680, 1135960, 1167910, 1241550, 1307680, 1374610, 1475830, 1676100,
+        1783760, 1958640, 2504720, 2569770, 2914120, 3066290, 3601770, 3858380, 4116960, 4502100, 4835530,
+    ];
+
+    /// <summary>How long a Steam inventory blob may stay pending before the check gives up.</summary>
+    private const long SkinCheckTimeoutMilliseconds = 5000;
     private const int MaximumPacket = 1024 * 1024 + 1024;
 
     private readonly IPEndPoint _endpoint;
@@ -26,6 +40,11 @@ internal sealed class SteamFrontend : IDisposable
     private readonly AdmissionBook _admission;
     private readonly bool _acceptAllTag;
     private readonly ConcurrentQueue<Outgoing> _outgoing = new();
+    private readonly ConcurrentQueue<SkinCheck> _skinChecks = new();
+    /// <summary>Inventory blobs Steam is still deserializing; pump thread only.</summary>
+    private readonly List<SkinCheck> _pendingSkinChecks = [];
+    /// <summary>asset_modifier_id of each Steam item definition that is an armor or block skin, "" for the rest; pump thread only.</summary>
+    private readonly Dictionary<int, string> _skinOfItem = [];
     private readonly ConcurrentDictionary<ulong, SteamSession> _sessions = new();
     private readonly List<IDisposable> _callbacks = [];
     private Socket? _query;
@@ -46,8 +65,11 @@ internal sealed class SteamFrontend : IDisposable
     public Action<ulong, string> SessionFailed = (_, _) => { };
     /// <summary>The Gateway closed the session; Steam P2P has no disconnect event of its own.</summary>
     public Action<ulong> SessionClosed = _ => { };
-    /// <summary>Ticket verdict, also fired for mid-session revocations (§2.6).</summary>
-    public Action<ulong, JoinResult, ulong> TicketValidated = (_, _, _) => { };
+    /// <summary>
+    /// Ticket verdict, also fired for mid-session revocations (§2.6). The last argument is the DLC app ids of
+    /// <see cref="DlcAppIds"/> the player has no license for (SE-1158), null unless the verdict is OK.
+    /// </summary>
+    public Action<ulong, JoinResult, ulong, uint[]?> TicketValidated = (_, _, _, _) => { };
     public Action<ulong, bool> GroupStatus = (_, _) => { };
     /// <summary>Cluster-wide player list for the browser row: id and display name.</summary>
     /// <summary>
@@ -114,6 +136,8 @@ internal sealed class SteamFrontend : IDisposable
         SteamGameServer.SetGameData(AdmissionBook.BuildNumber(_version));
         SteamGameServer.SetKeyValue("CONSOLE_COMPATIBLE", "0");
         SteamGameServer.LogOnAnonymous();
+        // MySteamInventoryServer does the same: the item definitions name the skin each inventory item is (SE-1158).
+        SteamGameServerInventory.LoadItemDefinitions();
         SteamGameServer.SetAdvertiseServerActive(true);
 
         _query = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
@@ -224,6 +248,7 @@ internal sealed class SteamFrontend : IDisposable
                 if (!_modSizesAsked && LoggedOn)
                     QueryModSizes();
                 DrainOutgoing();
+                PumpSkinChecks();
                 foreach (byte channel in VanillaChannels)
                     while (SteamGameServerNetworking.IsP2PPacketAvailable(out uint size, channel) && size <= MaximumPacket)
                     {
@@ -305,7 +330,7 @@ internal sealed class SteamFrontend : IDisposable
                     {
                         Interlocked.Increment(ref _authRejections);
                         Console.Error.WriteLine($"Steam BeginAuthSession for {message.UserId} failed: {result}");
-                        TicketValidated(message.UserId, JoinResult.TicketInvalid, 0);
+                        TicketValidated(message.UserId, JoinResult.TicketInvalid, 0, null);
                     }
                     break;
                 case OutgoingKind.EndAuth:
@@ -504,9 +529,85 @@ internal sealed class SteamFrontend : IDisposable
         JoinResult result = Verdict(response.m_eAuthSessionResponse);
         if (result != JoinResult.OK)
             Interlocked.Increment(ref _authRejections);
+        uint[]? missingDlcs = result == JoinResult.OK ? MissingDlcs(response.m_SteamID) : null;
         Console.WriteLine($"Steam ticket verdict for {(ulong)response.m_SteamID}: {result}"
-            + $" owner {(ulong)response.m_OwnerSteamID}");
-        TicketValidated((ulong)response.m_SteamID, result, (ulong)response.m_OwnerSteamID);
+            + $" owner {(ulong)response.m_OwnerSteamID}"
+            + (missingDlcs == null ? "" : $" DLCs {DlcAppIds.Length - missingDlcs.Length}/{DlcAppIds.Length}"));
+        TicketValidated((ulong)response.m_SteamID, result, (ulong)response.m_OwnerSteamID, missingDlcs);
+    }
+
+    /// <summary>SE-1158: what MySessionComponentDLC.UpdateClientDLC asks a vanilla DS's game server, for the nodes.</summary>
+    private static uint[] MissingDlcs(CSteamID user) => DlcAppIds
+        .Where(app => SteamGameServer.UserHasLicenseForApp(user, (AppId_t)app)
+            != EUserHasLicenseForAppResult.k_EUserHasLicenseResultHasLicense)
+        .ToArray();
+
+    /// <summary>
+    /// SE-1158: the armor and block skins in a client's Steam inventory blob, the one the client sends a vanilla DS
+    /// in MySessionComponentGameInventory.RequestUpdateClientGameInventory, which the DS checks with its game server
+    /// (MySteamInventoryServer.CheckItemData). Null when Steam refuses the blob or it belongs to someone else.
+    /// </summary>
+    public Task<string[]?> CheckSkins(ulong userId, byte[] data)
+    {
+        var check = new SkinCheck(userId, data);
+        _skinChecks.Enqueue(check);
+        return check.Result.Task;
+    }
+
+    private void PumpSkinChecks()
+    {
+        while (_skinChecks.TryDequeue(out SkinCheck? check))
+        {
+            if (!SteamGameServerInventory.DeserializeResult(out check.Handle, check.Data, (uint)check.Data.Length))
+            {
+                check.Result.TrySetResult(null);
+                continue;
+            }
+            check.Deadline = Environment.TickCount64 + SkinCheckTimeoutMilliseconds;
+            _pendingSkinChecks.Add(check);
+        }
+        _pendingSkinChecks.RemoveAll(check =>
+        {
+            EResult status = SteamGameServerInventory.GetResultStatus(check.Handle);
+            if (status == EResult.k_EResultPending && Environment.TickCount64 < check.Deadline)
+                return false;
+            check.Result.TrySetResult(status == EResult.k_EResultOK ? SkinsOf(check) : null);
+            SteamGameServerInventory.DestroyResult(check.Handle);
+            return true;
+        });
+    }
+
+    private string[]? SkinsOf(SkinCheck check)
+    {
+        // Vanilla takes any valid blob; a blob of someone else's inventory would lend that player's skins.
+        if (!SteamGameServerInventory.CheckResultSteamID(check.Handle, (CSteamID)check.UserId))
+            return null;
+        uint count = 0;
+        if (!SteamGameServerInventory.GetResultItems(check.Handle, null, ref count))
+            return null;
+        var items = new SteamItemDetails_t[count];
+        if (count > 0 && !SteamGameServerInventory.GetResultItems(check.Handle, items, ref count))
+            return null;
+        return items.Select(item => SkinOf(item.m_iDefinition)).Where(skin => skin.Length > 0).Distinct().ToArray();
+    }
+
+    /// <summary>MySessionComponentGameInventory keeps only the Armor and Block slot items, by asset_modifier_id.</summary>
+    private string SkinOf(SteamItemDef_t definition)
+    {
+        if (_skinOfItem.TryGetValue(definition.m_SteamItemDef, out string? skin))
+            return skin;
+        string slot = DefinitionProperty(definition, "item_slot");
+        if (slot.Length == 0)
+            return ""; // definitions not loaded yet: ask again next time
+        skin = slot is "Armor" or "Block" ? DefinitionProperty(definition, "asset_modifier_id") : "";
+        _skinOfItem[definition.m_SteamItemDef] = skin;
+        return skin;
+    }
+
+    private static string DefinitionProperty(SteamItemDef_t definition, string name)
+    {
+        uint size = 2048;
+        return SteamGameServerInventory.GetItemDefinitionProperty(definition, name, out string value, ref size) ? value : "";
     }
 
     private void OnGroupStatus(GSClientGroupStatus_t status) =>
@@ -556,6 +657,15 @@ internal sealed class SteamFrontend : IDisposable
 
     private readonly record struct Outgoing(ulong UserId, byte Channel, byte[] Payload, DeliveryMethod Delivery,
         OutgoingKind Kind = OutgoingKind.Packet);
+
+    private sealed class SkinCheck(ulong userId, byte[] data)
+    {
+        public readonly ulong UserId = userId;
+        public readonly byte[] Data = data;
+        public readonly TaskCompletionSource<string[]?> Result = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public SteamInventoryResult_t Handle;
+        public long Deadline;
+    }
 
     private sealed class SteamSession(ulong userId)
     {

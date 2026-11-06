@@ -435,6 +435,7 @@ public static class ClusterRuntime
 		GpsAuthorityPatch.Install();
 		PositionRegistryService.Install();
 		SpawnDirectorService.Install();
+		PlayerEntitlements.Install();
 		GridAddTrace.Install();
 		AntennaGraphService.Install();
 		OfflinePartitionService.Install();
