@@ -57,6 +57,16 @@ internal static class MovedRoutes
 						Encoding.UTF8.GetBytes(JsonSerializer.Serialize(RespawnRegistryService.ConfigureTestDelay(respawnDelayMs))));
 					return;
 		});
+        // SE-1150: this node's next reports carry these respawn points (a JSON array of ClusterRespawnPoint) as they are,
+        // past the capture's checks, for `seconds`; an empty array clears them.
+        TestRoutes.Add("POST", "/respawn-test-raw-points", (context, path) =>
+		{
+					ClusterRespawnPoint[] points = JsonSerializer.Deserialize<ClusterRespawnPoint[]>(Query(context, "points"));
+					double seconds = Double(context, "seconds");
+					Write(context, 200, "application/json", Encoding.UTF8.GetBytes(JsonSerializer.Serialize(
+						RespawnRegistryService.ConfigureTestRawPoints(points, seconds))));
+					return;
+		});
         TestRoutes.Add("GET", "/respawn-test-delay", (context, path) =>
 		{
 					Write(context, 200, "application/json",

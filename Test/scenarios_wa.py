@@ -2409,6 +2409,79 @@ def _broadcast_chat(bench, ctx, node_id: str, identity: int, author: str) -> str
     return text
 
 
+def p2_wa_respawn_points(bench) -> None:
+    """SE-1150: one bad respawn point no longer costs a node its whole list at the World Authority. On
+    octahedron-test a medbay in an overfilled room reported an oxygen level just above 1 for 12 minutes; the WA
+    refused node-1's whole report every second ("global_state rejected=true error=Invalid respawn registry
+    payload") and kept its stale list. node-1 sends, besides its real points, a good point, one reading 1.0000001
+    (the live case), one with generation 0 and a duplicate id. The WA keeps the real points and the good one,
+    clamps the oxygen to 1, drops the other two, logs each once over several reports, and every replica gets
+    the same list. Reports go every second, so a few seconds cover several."""
+    _wa_cluster(bench)
+    roles = ("node-1", "node-2", "wa-1")
+    selftest = _try(bench, "wa-1", "/self-test?section=respawn-registry") or {}
+    bench.check("WA self-test respawn-registry (clamp, truncate, drop, duplicates, envelope, log once)",
+                selftest.get("ok") is True and selftest.get("ran") == ["respawn-registry"], json.dumps(selftest)[:300])
+    base, good, over, broken = 9_150_000_000, 9_150_000_001, 9_150_000_002, 9_150_000_003
+
+    def registry(node_id: str) -> list[dict]:
+        return list((_try(bench, node_id, "/respawn-points") or {}).get("points") or [])
+
+    def real(points: list[dict]) -> list[dict]:
+        return sorted((p for p in points if p.get("Origin") == "node-1" and p["RespawnEntityId"] < base),
+                      key=lambda p: p["RespawnEntityId"])
+    # node-1's own points (the bench world may have none: the raw good point stands in for them then).
+    _poll(lambda: _try(bench, "wa-1", "/respawn-points") is not None, HANDOVER_TIMEOUT)
+    time.sleep(3)  # two reports: the WA holds node-1's current list
+    before = real(registry("wa-1"))
+    bench.record("respawn-points-before", before)
+
+    def raw(entity: int, **fields) -> dict:
+        return {"Origin": "node-1", "RespawnEntityId": entity, "GridEntityId": entity + 1000, "PartitionId": 1,
+                "Generation": 1, "Name": f"SE-1150 {entity}", "OwnerIdentityId": 0, "ShareMode": 2, "Working": True,
+                "SpawnWithoutOxygen": True, "SetFactionToSpawnee": False, "OxygenLevel": 0.5, "X": 0, "Y": 0, "Z": 0,
+                **fields}
+    points = [raw(good), raw(over, OxygenLevel=1.0000001), raw(broken, Generation=0), raw(good, Name="SE-1150 duplicate")]
+    started = time.time()
+    _post(bench, "node-1", "/respawn-test-raw-points?" + _q(points=json.dumps(points), seconds=60))
+    seen: dict[str, list[dict]] = {}
+
+    def converged():
+        for node_id in roles:
+            seen[node_id] = registry(node_id)
+        wa = {p["RespawnEntityId"]: p for p in seen["wa-1"]}
+        return (good in wa and over in wa and broken not in wa and wa[good]["Name"] == f"SE-1150 {good}"
+                and wa[over]["OxygenLevel"] == 1 and all(p["RespawnEntityId"] in wa for p in before)
+                and all(_dumps(seen[n]) == _dumps(seen["wa-1"]) for n in ("node-1", "node-2")))
+    ok = _poll(converged, 30)
+    bench.record("respawn-points-with-bad", seen)
+    bench.check("the WA kept node-1's real points and the good one, clamped 1.0000001 to 1 and dropped generation 0 "
+                "and the duplicate; every replica has the same list", ok, json.dumps(seen.get("wa-1"))[:400])
+    # Several more reports with the same bad points: still one line each.
+    _poll(lambda: time.time() - started > 8, 15)
+    lines = {f"{kind} {entity}": _lines(bench, "wa-1", rf"respawn_point {kind} where=authority origin=node-1 entity={entity} ")
+             for kind, entity in (("repaired", over), ("dropped", broken), ("dropped", good))}
+    rejected = {node_id: _lines(bench, node_id, r"global_state rejected=true error=Invalid respawn registry payload")
+                for node_id in roles}
+    bench.record("respawn-point-log", {"lines": lines, "rejected": rejected})
+    bench.check("the WA logged each repaired or dropped point once over 8 s of reports",
+                all(len(found) == 1 for found in lines.values()) and "check='duplicate RespawnEntityId'" in lines[f"dropped {good}"][0]
+                and "value=1.0000001" in lines[f"repaired {over}"][0], json.dumps(lines)[:400])
+    bench.check("no role refused a whole respawn payload", not any(rejected.values()), json.dumps(rejected)[:300])
+
+    _post(bench, "node-1", "/respawn-test-raw-points?" + _q(points="[]", seconds=0))
+
+    def cleared():
+        for node_id in roles:
+            seen[node_id] = registry(node_id)
+        return all(not any(p["RespawnEntityId"] >= base for p in seen[n]) for n in roles) \
+            and all(any(p["RespawnEntityId"] == q["RespawnEntityId"] for p in seen["wa-1"]) for q in before)
+    bench.check("with the bad points gone the WA list is node-1's real points again, on every role",
+                _poll(cleared, 30), json.dumps(seen.get("wa-1"))[:300])
+    bench.exercised(route="node-1 reports 1.0000001 oxygen, generation 0 and a duplicate id -> the WA repairs or drops just those",
+                    realPoints=len(before))
+
+
 def p2_wa_bcast(bench) -> None:
     """SE-943: a broadcast controller message sent on a regular node goes through the WA's chat path. The
     node the targeted client is on relays it with the block's name in CustomData.AuthorName, which the
@@ -3065,6 +3138,8 @@ SCENARIOS_WA = {
     "P2-WA-03": (p2_wa_03, "global encounter dispatched once cluster-wide; counts converge", "3"),
     "P2-WA-RENAME": (p2_wa_rename, "SE-1100: a player logging in under a new name keeps it on every role after the WA's next "
                                    "identity snapshot, a stored platform icon too", "3"),
+    "P2-WA-RESPAWN-POINTS": (p2_wa_respawn_points, "SE-1150: a bad respawn point is repaired or dropped at the WA, the rest of "
+                                                   "the node's points kept, each logged once", "3"),
     "P2-WA-BCAST": (p2_wa_bcast, "SE-943: a broadcast controller message names its block, not Good.bot, after the WA's chat path", "3"),
     "P2-WA-ECON": (p2_wa_econ, "WA-2 economy: store, trade, contracts, PCU ledger, grid transfer", "3"),
     "P2-MOD-LASER-GPS": (p2_mod_laser_gps, "SE1-0226, SE1-0235: a laser links by GPS to a laser on another node, which points back", "3"),
