@@ -15,6 +15,39 @@ internal static partial class ClusterSelfTest
 	{
 		HandoverDriftWarhead();
 		HandoverDriftBlockGroups();
+		HandoverDriftSuitOxygen();
+	}
+
+	/// <summary>
+	/// SE-1154: a suit one breath under full against a refilled one, seated (Pilot and the hierarchy copy) or free, and
+	/// a free character's reading of a room the import has not rebuilt yet. The values are partition 5888's and 5774's.
+	/// </summary>
+	private static void HandoverDriftSuitOxygen()
+	{
+		string Gases(string oxygen) => "<OxygenLevel>" + oxygen + "</OxygenLevel><StoredGases>"
+			+ "<StoredGas><Id Type=\"MyObjectBuilder_GasProperties\" Subtype=\"Hydrogen\" /><FillLevel>0.9864242</FillLevel></StoredGas>"
+			+ "<StoredGas><Id Type=\"MyObjectBuilder_GasProperties\" Subtype=\"Oxygen\" /><FillLevel>" + oxygen + "</FillLevel></StoredGas></StoredGases>";
+		string Character(string oxygen) => "<SubtypeName>Default_Astronaut_Female</SubtypeName><EntityId>9</EntityId>" + Gases(oxygen) + "<MovementState>Sitting</MovementState>";
+		string Seated(string oxygen) => DriftHead + "<MyObjectBuilder_EntityBase xsi:type=\"MyObjectBuilder_CubeGrid\"><EntityId>1</EntityId><CubeBlocks>"
+			+ "<MyObjectBuilder_CubeBlock xsi:type=\"MyObjectBuilder_Cockpit\"><SubtypeName>LargeBlockCockpitSeat</SubtypeName><EntityId>2</EntityId>"
+			+ "<ComponentContainer><Components><ComponentData><TypeId>MyHierarchyComponentBase</TypeId><Component xsi:type=\"MyObjectBuilder_HierarchyComponentBase\">"
+			+ "<Children><MyObjectBuilder_EntityBase xsi:type=\"MyObjectBuilder_Character\">" + Character(oxygen) + "</MyObjectBuilder_EntityBase></Children>"
+			+ "</Component></ComponentData></Components></ComponentContainer>"
+			+ "<Pilot>" + Character(oxygen) + "</Pilot><OxygenLevel>0.8792505</OxygenLevel></MyObjectBuilder_CubeBlock></CubeBlocks></MyObjectBuilder_EntityBase>" + DriftTail;
+		List<string> residuals = ImportRoundTrip.ResidualsOfXml(Seated("0.9979011"), Seated("1"));
+		Assert(residuals.Count == 0, "a seated pilot's suit one breath under full was reported: " + DriftReport(residuals));
+		residuals = ImportRoundTrip.ResidualsOfXml(Seated("0.9"), Seated("1"));
+		Assert(residuals.Count == 4 && residuals.TrueForAll(entry => entry.EndsWith("/OxygenLevel: 0.9 != 1") || entry.EndsWith("/FillLevel: 0.9 != 1")),
+			"a seated pilot's LOST suit oxygen must stay a residual in both copies, got: " + DriftReport(residuals));
+
+		string Free(string oxygen, string environment) => DriftHead + "<MyObjectBuilder_EntityBase xsi:type=\"MyObjectBuilder_Character\"><EntityId>8</EntityId>"
+			+ Gases(oxygen) + "<EnvironmentOxygenLevel>" + environment + "</EnvironmentOxygenLevel></MyObjectBuilder_EntityBase>" + DriftTail;
+		residuals = ImportRoundTrip.ResidualsOfXml(Free("1", "0.99324"), Free("1", "0"));
+		Assert(residuals.Count == 0, "a free character's reading of a room the import has not rebuilt was reported: " + DriftReport(residuals));
+		residuals = ImportRoundTrip.ResidualsOfXml(Free("0.9979011", "1"), Free("1", "1"));
+		Assert(residuals.Count == 0, "a free character's suit one breath under full was reported: " + DriftReport(residuals));
+		residuals = ImportRoundTrip.ResidualsOfXml(Free("0.5", "1"), Free("1", "1"));
+		Assert(residuals.Count == 2, "a free character's LOST suit oxygen must stay a residual, got: " + DriftReport(residuals));
 	}
 
 	/// <summary>SE-1153: a block group without blocks is dropped by the load; one with blocks stays compared.</summary>
