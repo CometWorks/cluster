@@ -2422,18 +2422,18 @@ def p2_wa_respawn_points(bench) -> None:
     selftest = _try(bench, "wa-1", "/self-test?section=respawn-registry") or {}
     bench.check("WA self-test respawn-registry (clamp, truncate, drop, duplicates, envelope, log once)",
                 selftest.get("ok") is True and selftest.get("ran") == ["respawn-registry"], json.dumps(selftest)[:300])
-    base, good, over, broken = 9_150_000_000, 9_150_000_001, 9_150_000_002, 9_150_000_003
+    good, over, broken = 9_150_000_001, 9_150_000_002, 9_150_000_003
+    raw_ids = {good, over, broken}
 
     def registry(node_id: str) -> list[dict]:
         return list((_try(bench, node_id, "/respawn-points") or {}).get("points") or [])
 
     def real(points: list[dict]) -> list[dict]:
-        return sorted((p for p in points if p.get("Origin") == "node-1" and p["RespawnEntityId"] < base),
+        return sorted((p for p in points if p.get("Origin") == "node-1" and p["RespawnEntityId"] not in raw_ids),
                       key=lambda p: p["RespawnEntityId"])
-    # node-1's own points (the bench world may have none: the raw good point stands in for them then).
-    _poll(lambda: _try(bench, "wa-1", "/respawn-points") is not None, HANDOVER_TIMEOUT)
-    time.sleep(3)  # two reports: the WA holds node-1's current list
-    before = real(registry("wa-1"))
+    # node-1's own points, once its reports reach the WA (the bench world's survival kit).
+    before = _poll(lambda: real(registry("wa-1")) or None, HANDOVER_TIMEOUT)
+    _require(bench, "node-1's own respawn points reached the WA", before, json.dumps(registry("wa-1"))[:300])
     bench.record("respawn-points-before", before)
 
     def raw(entity: int, **fields) -> dict:
@@ -2451,7 +2451,7 @@ def p2_wa_respawn_points(bench) -> None:
             seen[node_id] = registry(node_id)
         wa = {p["RespawnEntityId"]: p for p in seen["wa-1"]}
         return (good in wa and over in wa and broken not in wa and wa[good]["Name"] == f"SE-1150 {good}"
-                and wa[over]["OxygenLevel"] == 1 and all(p["RespawnEntityId"] in wa for p in before)
+                and wa[over]["OxygenLevel"] == 1 and all(wa.get(p["RespawnEntityId"]) == p for p in before)
                 and all(_dumps(seen[n]) == _dumps(seen["wa-1"]) for n in ("node-1", "node-2")))
     ok = _poll(converged, 30)
     bench.record("respawn-points-with-bad", seen)
@@ -2474,7 +2474,7 @@ def p2_wa_respawn_points(bench) -> None:
     def cleared():
         for node_id in roles:
             seen[node_id] = registry(node_id)
-        return all(not any(p["RespawnEntityId"] >= base for p in seen[n]) for n in roles) \
+        return all(not any(p["RespawnEntityId"] in raw_ids for p in seen[n]) for n in roles) \
             and all(any(p["RespawnEntityId"] == q["RespawnEntityId"] for p in seen["wa-1"]) for q in before)
     bench.check("with the bad points gone the WA list is node-1's real points again, on every role",
                 _poll(cleared, 30), json.dumps(seen.get("wa-1"))[:300])
