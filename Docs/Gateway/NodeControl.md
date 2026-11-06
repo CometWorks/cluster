@@ -155,7 +155,8 @@ keeps the newest 2000 records.
   applied partially.
 - **Rotation** (the regression harness): per host, the oldest serving node past the lifetime limit is recycled
   (`requestedBy: rotator`). Rotation never changes the counts. The rotator waits while any node is Starting,
-  Draining or Stopping.
+  Draining or Stopping. A managed deployment refuses `recycle`; the Gateway rotates it itself ("Rotation" in
+  ManagedDeployment.md).
 
 ## Stopped nodes (T-0323)
 

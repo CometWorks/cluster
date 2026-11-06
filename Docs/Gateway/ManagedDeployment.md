@@ -112,6 +112,33 @@ configuration, holds nothing and runs dormant (4 Hz) until it is needed.
   a released slot is served through a live node of that slot's host when it comes back. Rows of slots still in the
   inventory stay (#1210).
 
+### Rotation (SE-1168)
+
+The Gateway recycles the regular nodes of a managed deployment itself: a node process grows the longer it runs, and no
+other component rotates a Quasar cluster (the regression harness's rotator works through node control, which a
+managed deployment refuses). Every `rotation.lifetimeSeconds` / n, where n is the number of serving regular nodes,
+the oldest serving node is recycled if it has served that long, so in steady state each node serves about one
+lifetime. Both knobs are handover-config keys, live-tunable with `PUT /admin/v1/handover-config`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `rotation.lifetimeSeconds` | 7200 | how long a node serves; 0 = never recycle |
+| `rotation.drainTimeoutSeconds` | 600 | a recycle still draining after this closes the node |
+
+One recycle runs at a time:
+
+1. A live, proven spare is activated (on the node's host first), and the node starts retiring. The scale-in drain
+   pins its components to the spare, clients last, as for a node-control recycle.
+2. Once the node owns nothing it is closed and reports Empty, which turns its slot's incumbent action from Draining
+   into Kill. Past the drain timeout it is closed anyway, and its own close drain hands out or offlines the rest.
+3. Empty (or Dead) designates the slot a spare. Host kills that incarnation and reports Gone; the slot is still
+   wanted, so Host restarts it, and the new incarnation registers as the spare holding nothing.
+
+It waits while the cluster is not Serving, a recovery is pending, any node is retiring or closed, any slot has an
+incumbent action, or no live, proven spare exists, and logs the reason once (`Rotation: ... waiting: ...`). The
+counts never change. A Gateway restart keeps a recycle in flight (it is in the registry state), and the first
+recycle after a start comes lifetime / n after it. A deployment without a spare is never rotated.
+
 Release capability `managedHotSpares: 1` declares this. An older package ignores `spare`, so its spares would
 serve; Quasar checks the capability before it writes a spare into a specification.
 

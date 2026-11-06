@@ -74,3 +74,6 @@ than one host), `force` and `retire` are ignored. `GET` keeps its fields (`targe
 The regression harness rotator recycles, per host, the oldest serving node past its lifetime
 (`requestedBy: rotator`): the spare takes over and a new spare refills. It never changes the counts, and it waits
 while any node is Starting, Draining or Stopping.
+
+A managed (Quasar) deployment is rotated by the Gateway itself, on `rotation.lifetimeSeconds` (default 2 h): see
+"Rotation" in ManagedDeployment.md.

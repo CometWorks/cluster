@@ -5919,6 +5919,9 @@ internal sealed partial class GatewayRegistry : IDisposable
         public Dictionary<string, string> HostStoreAliases { get; set; } = [];
         /// <summary>T-0400: archived save locations whose file archive retention deleted (acknowledged), ever.</summary>
         public long ArchiveFilesDeleted { get; set; }
+        /// <summary>SE-1168: the managed lifetime recycle in flight, if any, and when the last one started (ManagedRotation.cs).</summary>
+        public ManagedRecycle? ManagedRotation { get; set; }
+        public DateTimeOffset? LastManagedRotationAt { get; set; }
     }
 }
 
