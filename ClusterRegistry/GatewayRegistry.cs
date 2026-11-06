@@ -1032,7 +1032,8 @@ internal sealed partial class GatewayRegistry : IDisposable
 
     /// <param name="memberless">The owner holds no member of the partition (a drain's member-less release, T-0048):
     /// see <see cref="ReapIfMemberlessUnsaved"/>.</param>
-    public PartitionOwnership ReleasePartition(ulong partition, string node, long epoch, long generation, bool memberless = false)
+    public PartitionOwnership ReleasePartition(ulong partition, string node, long epoch, long generation, bool memberless = false,
+        bool failedRecovery = false)
     {
         lock (_lock)
         {
@@ -1048,6 +1049,7 @@ internal sealed partial class GatewayRegistry : IDisposable
             owner.LeaseExpires = DateTimeOffset.MinValue;
             Touch(owner);
             EmitPartition("released", partition, null, 0, owner.Generation, "release");
+            if (failedRecovery) NoteFailedRecovery(partition, node);   // SE-1161 (FailedRecoveries.cs)
             if (!ReapIfStillborn(owner) && !(memberless && ReapIfMemberlessUnsaved(owner))) ReapIfEmpty(owner);
             Persist();
             return owner;
@@ -1688,6 +1690,7 @@ internal sealed partial class GatewayRegistry : IDisposable
                     if (IsRetired(candidate.Partition)) continue;
                     if (_state.OfflinePartitions.ContainsKey(candidate.Partition)) continue;
                     if (reservedElsewhere.Contains(candidate.Partition)) continue;
+                    if (RecoveryHeldBack(candidate.Partition, _clock())) continue;   // SE-1161: failed loads back off, quarantined stay out
                     // T-0347: before the empty-row reap below - the unreported Final may be the save that holds the content.
                     if (HeldForLateSave(candidate.Partition, _clock())) continue;
                     if (PartitionWeight(candidate.Partition) > headroom) continue;
@@ -1708,6 +1711,8 @@ internal sealed partial class GatewayRegistry : IDisposable
                     best = null;
                 requested = best == null ? [] : [best.Partition];
             }
+            // SE-1161: directed loads, spare reservations and a warm node's own list wait out a failure backoff too.
+            requested = requested.Where(partition => !RecoveryHeldBack(partition, _clock())).ToArray();
             foreach (ulong partition in requested)
                 if (_state.Partitions.TryGetValue(partition, out PartitionOwnership? row) && EmptyAndUnclaimed(row, out _))
                     reapedEmpty.Add(partition);
@@ -2635,6 +2640,7 @@ internal sealed partial class GatewayRegistry : IDisposable
                 throw new RegistryConflictException($"Save {id} is fenced by partition ownership");
             if (id.Sequence < 1 || sizeBytes < 0 || string.IsNullOrWhiteSpace(checksum) || string.IsNullOrWhiteSpace(location))
                 throw new ArgumentException("A save requires a positive sequence, non-negative size, checksum, and location");
+            _failedRecoveries.Remove(id.Partition);   // SE-1161: a node holds it and saves it, so its load worked
 
             string key = Key(id);
             if (TryGetSave(key, out SaveRegistration? old))

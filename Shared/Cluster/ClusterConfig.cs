@@ -377,6 +377,14 @@ public static class ClusterConfig
 		// partition unowned once its empty Final is catalogued, and the registry reaps the row. "false" restores
 		// holding it, unreported, until the node's drain releases it.
 		["recovery.releaseEmpty"] = "true",
+		// SE-1161: a recovery load that keeps failing. quarantineAfter (NODE): after this many failed loads in a row of one
+		// partition, cold or warm recovery alike, the node quarantines it (/cluster/quarantine, repairable in place) and
+		// the registry hands it to nobody while the node reports it; 0 = never. failedBackoffSeconds and
+		// failedBackoffMaxSeconds (GATEWAY): after each failed load the registry holds the partition back from every claim
+		// for failedBackoffSeconds, doubled per failure in a row up to failedBackoffMaxSeconds; 0 = no backoff.
+		["recovery.quarantineAfter"] = "3",
+		["recovery.failedBackoffSeconds"] = "5",
+		["recovery.failedBackoffMaxSeconds"] = "300",
 		// T-0400, GATEWAY only (the registry's retention pass): the files of the saves of a partition ARCHIVED more than
 		// this many days ago are deleted from the per-host stores (the registry rows stay). 0 = off. Listed here so the
 		// fan-out of the gateway's document is not refused by the nodes; they never read it.
