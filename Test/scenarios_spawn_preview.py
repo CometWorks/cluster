@@ -7,6 +7,10 @@
   client must get the grid and an enabled Respawn button without reconnecting, and respawn at the kit. Last, a
   preview switch queued for a client whose view a cross-node respawn already detached must be refused, not crash
   the node (#1287).
+* ``P2-WA-06e`` - the kit's node refuses a preview switch outright (SE-1124): the client must come back to its own
+  node with its view, stay connected and unpaused on the medical screen, and preview and respawn at the kit afterwards.
+* ``P2-WA-06f`` - the kit's partition is split on its node between the Gateway's ownership check and the target's (a
+  trader shuttle leaving Alpha on octahedron-test, SE-1124): the preview must still arrive.
 
 The Respawn button is checked through ``respawnButtonEnabled`` before it is clicked: the Remote API's click raises
 the button's event even when the button is disabled, which is how the older respawn scenarios passed while players
@@ -217,6 +221,137 @@ def p2_wa_06d(bench) -> None:
     bench.exercised(kit=entity, grid=grid, aboard=first["node"], offline=second["node"], race=race_node)
 
 
+def _own_partition_on(bench, grid: int, target: str) -> None:
+    """Client 1 far from the kit, in a partition of its own on ``target``."""
+    _move_away(bench, CLIENT_ID, grid, AWAY)
+    source = _node_of(bench, CLIENT_ID)
+    if source == target:
+        return
+
+    def own_partition():
+        rows = _try(_partitions, bench, source)
+        rows = rows if isinstance(rows, list) else []
+        return next((p for p in rows if CLIENT_ID in (p.get("clients") or [])
+                     and not any(m.get("id") == grid for m in p.get("members") or [])), None)
+
+    row = _poll(own_partition, HANDOVER_TIMEOUT)
+    _require(bench, f"client 1 has a partition of its own on {source}, away from the kit", row is not None)
+    bench.record(f"to-{target}-handover.txt", bench.cluster.post(
+        _handover_url(bench, row["id"], source=source, target=target, client=CLIENT_ID), timeout=300))
+    _require(bench, f"client 1 went to {target}",
+             _poll(lambda: _node_of(bench, CLIENT_ID) == target, HANDOVER_TIMEOUT) is not None)
+
+
+def _watch_failed_switch(bench, api, leg: str, node_id: str, seconds: float = 25) -> dict:
+    """What the client goes through after its preview switch failed: reconnects, its paused state (the "Paused" a
+    stranded Steam client showed), the medical screen, and where its session ends up."""
+    before = _session_of(bench, CLIENT_ID) or {}
+    failed = _poll(lambda: _lines(bench, node_id, rf"spawn preview switch operation=\S+ failed"), 60)
+    samples = []
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        state = _try(api.get_state) or {}
+        screens = _try(api.list_screens)
+        session = _session_of(bench, CLIENT_ID) or {}
+        samples.append({"t": round(time.time(), 1), "active": state.get("active"), "ready": state.get("ready"),
+                        "paused": state.get("paused"), "frame": state.get("frameCounter"),
+                        "medical": isinstance(screens, list) and any(x.get("type") == "MyGuiScreenMedicals" for x in screens),
+                        "connectedAt": session.get("connectedAt"), "node": _node_of(bench, CLIENT_ID)})
+        time.sleep(1)
+    summary = {
+        "switchFailed": bool(failed),
+        "reconnected": any(x["connectedAt"] != before.get("connectedAt") for x in samples),
+        "pausedSamples": sum(1 for x in samples if x["paused"]),
+        "medicalAtEnd": samples[-1]["medical"] if samples else None,
+        "nodeAtEnd": samples[-1]["node"] if samples else None,
+        "restored": _lines(bench, node_id, r"spawn switch restored")[-3:],
+        "rollbackDisconnect": _lines(bench, node_id, rf"spawn preview switch operation=\S+ failed")[-3:],
+        "samples": samples,
+    }
+    bench.record(f"{leg}-after-failure", summary)
+    return summary
+
+
+def _reselect(api) -> None:
+    """The screen asks for a preview only when the selected row changes: Refresh empties the table."""
+    screens = _try(api.list_screens)
+    screen = next((x["index"] for x in screens if x.get("type") == "MyGuiScreenMedicals"), None) \
+        if isinstance(screens, list) else None
+    if screen is not None:
+        _try(api.control_click, text="Refresh", screen=screen)
+        time.sleep(2)
+
+
+def _kit_on_node1(bench):
+    api = _join(bench)
+    bench.cluster.post("/automatic/pause")
+
+    def converged():
+        points = _points(bench, "wa-1")
+        mine = [p for p in points.get("points") or [] if p.get("Origin") == "node-1" and p.get("Working")]
+        return min(mine, key=lambda p: p["RespawnEntityId"]) if mine else None
+
+    point = _poll(converged, HANDOVER_TIMEOUT)
+    _require(bench, "a node-1 respawn point converged at the World Authority", point is not None)
+    return api, point["RespawnEntityId"], point["GridEntityId"], point["Name"]
+
+
+def p2_wa_06e(bench) -> None:
+    """The kit's node refuses a spawn preview switch: the client stays, unpaused, and previews again (SE-1124)."""
+    api, entity, grid, name = _kit_on_node1(bench)
+    _own_partition_on(bench, grid, "node-2")
+    _kill(bench, CLIENT_ID)
+    bench.record("refuse-armed", bench.cluster.node("node-1", "/respawn-execute-fault?mode=refuse&count=1", "POST"))
+    _medical_click(bench, api, name)
+    refused = _watch_failed_switch(bench, api, "refuse", "node-2")
+    bench.record("refuse-fault", bench.cluster.node("node-1", "/respawn-execute-fault"))
+    bench.screenshot(CLIENT_ID, "refuse-after-failure")
+    _require(bench, "refuse: the preview switch failed", refused["switchFailed"])
+    bench.check("refuse: the client never reconnected", not refused["reconnected"])
+    bench.check("refuse: the client never paused", refused["pausedSamples"] == 0, str(refused["pausedSamples"]))
+    bench.check("refuse: the client is still on the medical screen", refused["medicalAtEnd"] is True)
+    bench.check("refuse: the client is back on node-2", refused["nodeAtEnd"] == "node-2", str(refused["nodeAtEnd"]))
+    bench.check("refuse: node-2 took the client in again", bool(refused["restored"]))
+    _reselect(api)
+    first = _preview_and_respawn(bench, api, "refuse-retry", name, grid)
+    bench.check("refuse-retry: the client respawned on node-1, where the kit is", first["node"] == "node-1", str(first["node"]))
+    bench.exercised(kit=entity, grid=grid, refused=refused["switchFailed"], reconnected=refused["reconnected"])
+
+
+def p2_wa_06f(bench) -> None:
+    """The kit's partition is split on its node between the Gateway's ownership check and the target's (SE-1124)."""
+    api, entity, grid, name = _kit_on_node1(bench)
+    _own_partition_on(bench, grid, "node-2")
+
+    def mover():
+        rows = _try(_partitions, bench, "node-1")
+        rows = rows if isinstance(rows, list) else []
+        row = next((p for p in rows if any(m.get("id") == grid for m in p.get("members") or [])), {})
+        others = [m for m in row.get("members") or [] if m.get("id") != grid]
+        others.sort(key=lambda m: m.get("type") == "MyCubeGrid")   # a body or a loose object before a grid
+        return (row, others[0]) if others else None
+
+    found = _poll(mover, HANDOVER_TIMEOUT)
+    bench.record("split-partition", found)
+    _require(bench, "the kit's partition has a second member to split off", found is not None)
+    kit_partition, moved = found
+    _kill(bench, CLIENT_ID)
+    bench.record("split-armed", bench.cluster.node("node-1", f"/respawn-execute-fault?mode=split&count=1&mover={moved['id']}", "POST"))
+    second = _preview_and_respawn(bench, api, "split", name, grid)
+    fault = bench.cluster.node("node-1", "/respawn-execute-fault")
+    bench.record("split-fault", fault)
+    faulted = (fault.get("faulted") or [{}])[0]
+    bench.check("split: the bench split the kit's partition during the switch",
+                faulted.get("partition") != kit_partition.get("id") or faulted.get("generation") != faulted.get("requestedGeneration"),
+                json.dumps(faulted))
+    bench.check("split: the client respawned on node-1, where the kit is", second["node"] == "node-1", str(second["node"]))
+    bench.check("split: node-1 executed at the kit's new partition",
+                bool(_lines(bench, "node-1", rf"respawn execute operation=\S+ grid={grid} partition-moved")))
+    bench.exercised(kit=entity, grid=grid, split=faulted)
+
+
 SCENARIOS_SPAWN_PREVIEW = {
     "P2-WA-06d": (p2_wa_06d, "the respawn screen previews a spawn point on another node or offline (SE1-0122)", "3"),
+    "P2-WA-06e": (p2_wa_06e, "a refused spawn preview switch keeps the client on its node, unpaused (SE-1124)", "3"),
+    "P2-WA-06f": (p2_wa_06f, "a split of the kit's partition during a spawn preview switch does not fail it (SE-1124)", "3"),
 }
