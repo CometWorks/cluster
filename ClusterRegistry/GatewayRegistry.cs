@@ -335,6 +335,7 @@ internal sealed partial class GatewayRegistry : IDisposable
                 archived++;
             }
             _archivedPartitions[partition] = located;
+            ClearHandoverBlockLocked(partition, "archived");
             // T-0400: archive retention counts its age from here; same write as the move.
             _store.Stamp(partition, _clock().ToUnixTimeMilliseconds());
             ArchivedPartitionsTotal++;
@@ -3403,6 +3404,41 @@ internal sealed partial class GatewayRegistry : IDisposable
             Console.WriteLine($"handover block cleared partition={partition} by={cause}");
     }
 
+    /// <summary>SE-1185: a lineage that retires a blocked input ends the block, which otherwise kept the retired row
+    /// in the summary listing for good.</summary>
+    private void ClearRetiredHandoverBlocksLocked(PartitionVersion[] inputs)
+    {
+        foreach (PartitionVersion input in inputs)
+            if (IsRetired(input.Partition))
+                ClearHandoverBlockLocked(input.Partition, "retired");
+    }
+
+    /// <summary>How often <see cref="SweepHandoverBlocks"/> runs. A test sets it to seconds.</summary>
+    internal TimeSpan HandoverBlockSweepInterval { get; set; } = TimeSpan.FromSeconds(EnvInt("CLUSTER_HANDOVER_BLOCK_SWEEP_SECONDS", 30));
+    private DateTimeOffset _lastHandoverBlockSweep = DateTimeOffset.MinValue;
+
+    /// <summary>
+    /// SE-1185: drops the blocks of partitions that have no owner and are not being recovered, at most once per
+    /// <see cref="HandoverBlockSweepInterval"/>. It is the rule cluster-monitor.sh of the regression harness applied
+    /// from outside, which a cluster under Quasar never ran. Returns how many blocks it dropped.
+    /// </summary>
+    public int SweepHandoverBlocks()
+    {
+        lock (_lock)
+        {
+            DateTimeOffset now = _clock();
+            if (now - _lastHandoverBlockSweep < HandoverBlockSweepInterval) return 0;
+            _lastHandoverBlockSweep = now;
+            ulong[] dissolved = _state.HandoverBlocks.Keys
+                .Where(x => !_state.Partitions.TryGetValue(x, out PartitionOwnership? row) || row.Node == null && !row.Recovering)
+                .ToArray();
+            foreach (ulong partition in dissolved)
+                ClearHandoverBlockLocked(partition, "dissolved");
+            if (dissolved.Length != 0) Persist();
+            return dissolved.Length;
+        }
+    }
+
     /// <summary>One prompt retry for a partition whose content changed: the backoff gate opens, the
     /// attempt count stays, so a repeat abort re-blocks immediately at the escalated backoff.</summary>
     public void ReleaseHandoverBackoff(ulong partition, string cause)
@@ -3592,6 +3628,7 @@ internal sealed partial class GatewayRegistry : IDisposable
             }
             _state.Lineage.Add(record);
             IndexLineage(record);
+            ClearRetiredHandoverBlocksLocked(inputs);
             // A recorded lineage retires its inputs just as surely as ApplyLineage does, so it
             // must repair client state the same way - this path (the rotator's retire-empty
             // merge) used to leave any placement naming an input pointing at a partition that
@@ -3673,6 +3710,7 @@ internal sealed partial class GatewayRegistry : IDisposable
             // keep the attempt count, and a repeat abort re-blocks immediately at the escalated backoff.
             // SE-1134: only if the residual's entity has left the partition. Alpha Station (partition 4728, an open
             // maintenance panel) had its backoff released by a trader shuttle's split, and the next pin froze Alpha again.
+            ClearRetiredHandoverBlocksLocked(inputs);
             foreach (ulong changed in inputs.Select(x => x.Partition).Concat(outputIds).Distinct())
                 if (ResidualStays(changed, kind, outputIds, members) is { } entity)
                     Console.WriteLine($"handover backoff kept partition={changed} on membership-change: residual entity {entity} is still in it");
