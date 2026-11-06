@@ -337,6 +337,7 @@ internal static partial class SelfTest
         ("relay-ipc-stale-answer", TestRelayIpcStaleAnswer),
         ("relay-ipc-dispose-mid-send", TestRelayIpcDisposeMidSend),
         ("stranded-partition", TestStrandedPartition),
+        ("failed-recovery-backoff", TestFailedRecoveryBackoff),
         ("invariant-audit", TestInvariantAudit),
         ("route-over-report", TestRouteOverReport),
         ("drain-sources", TestDrainSources),
