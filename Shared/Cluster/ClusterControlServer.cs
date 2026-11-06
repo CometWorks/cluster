@@ -562,6 +562,7 @@ internal sealed partial class ClusterControlServer
 				ClusterRespawnExecution request = JsonSerializer.Deserialize<ClusterRespawnExecution>(context.Request.InputStream,
 					new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
 					?? throw new ArgumentException("Request body is required");
+				ClusterSeams.BeforeRespawnExecute?.Invoke(request);
 				string result = Invoke(() => JsonSerializer.Serialize(RespawnRegistryService.ExecuteExactRespawn(request)));
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 				return;
