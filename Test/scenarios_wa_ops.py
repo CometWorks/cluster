@@ -1327,7 +1327,7 @@ def p2_drop_gps(bench) -> None:
     vanilla had no countdown entry for its marker. In both the marker must be gone on the WA and both nodes and stay
     gone past a full WA table. Leg 3: with drops.maxActive at 1 the WA deletes the older of two markers. Leg 4: with
     drops.lifetimeSeconds 4 the WA deletes a marker held past 8 s. Leg 5: the production drop loop at a 2 s interval, drops
-    living 8 s, cap 2: never more than 2 markers anywhere, none left after. Leg 6: a WA restart, as a deploy does, leaves no
+    living 8 s, cap 3, until a 4th drop: never more than 3 markers anywhere, none left after. Leg 6: a WA restart, as a deploy does, leaves no
     marker anywhere (they are not in the WA's save): the clean-up of the leftovers. Every wait is seconds long."""
     bench.cluster.config.world_template = _pod_world(bench)
     _join(bench)
@@ -1429,25 +1429,28 @@ def p2_drop_gps(bench) -> None:
     bench.check("leg4: the drop itself is still there (only the marker expired)", any(second_grid in grids(n) for n in ("node-1", "node-2")))
     bench.check("leg4: the WA logged the expiry", bool(_lines(bench, "wa-1", r"drop_container gps sweep expired=1 overCap=0")))
 
-    # 5. Drops in seconds: the WA's drop interval at 2 s (its sweep runs every 5 s), each drop living 8 s, the cap at 2.
+    # 5. Drops in seconds: the WA's drop interval at 2 s (its sweep runs every 5 s), each drop living 8 s, the cap at 3.
     # The production loop spawns drop after drop; the markers on the WA and both nodes never go over the cap, and none
-    # is left once the drops stop. Before SE-1146 every despawned drop left its marker behind.
+    # is left once the drops stop. Before SE-1146 every despawned drop left its marker behind. The cap counts a drop for
+    # 30 s after the census last listed it (#1443), so a slot frees ~40 s after its drop spawned: the 4th drop is the
+    # first that replaces a despawned one, and the leg stops there.
     bench.cluster.node(second_node, f"/drop-test-deadline?grid={second_grid}&seconds=1", "POST")  # frees its cap slot
-    bench.record("config-storm", bench.cluster.handover_config({"drops.maxActive": "2", "drops.lifetimeSeconds": "8"}))
+    bench.record("config-storm", bench.cluster.handover_config({"drops.maxActive": "3", "drops.lifetimeSeconds": "8"}))
     spawned_before = _cap_status(bench).get("spawned", 0)
     armed = bench.cluster.node("wa-1", "/drop-test-interval?ms=2000", "POST")
     _require(bench, "leg5: the drop-interval test knob armed", armed.get("intervalMs") == 2000, json.dumps(armed))
-    peak, samples, started = 0, [], time.time()
-    while time.time() - started < 45:
+    peak, samples, spawned, started = 0, [], 0, time.time()
+    while time.time() - started < 75 and spawned < 4:
         counts = {k: len(v) for k, v in markers().items()}
         samples.append(counts)
         peak = max(peak, *counts.values())
+        spawned = _cap_status(bench).get("spawned", 0) - spawned_before
         time.sleep(1)
+    took = time.time() - started
     bench.cluster.node("wa-1", "/drop-test-interval?ms=0", "POST")
-    spawned = _cap_status(bench).get("spawned", 0) - spawned_before
-    bench.record("leg5-samples", {"spawned": spawned, "peak": peak, "samples": samples})
-    bench.check("leg5: the WA spawned drops every few seconds (at least 3 in 45 s)", spawned >= 3, f"spawned {spawned}")
-    bench.check("leg5: never more markers than drops.maxActive (2) on the WA or a node", peak <= 2, f"peak {peak}")
+    bench.record("leg5-samples", {"spawned": spawned, "peak": peak, "seconds": took, "samples": samples})
+    bench.check("leg5: the WA's loop spawned 4 drops, one replacing a despawned drop", spawned >= 4, f"spawned {spawned} in {took:.0f} s")
+    bench.check("leg5: never more markers than drops.maxActive (3) on the WA or a node", peak <= 3, f"peak {peak}")
     drained = _poll(lambda: all(not held for held in markers().values()), 30)
     bench.check("leg5: no marker left once the drops stopped and expired", bool(drained),
                 json.dumps({k: sorted(v) for k, v in markers().items()}))
