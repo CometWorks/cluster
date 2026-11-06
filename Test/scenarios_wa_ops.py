@@ -1325,7 +1325,8 @@ def p2_drop_gps(bench) -> None:
     node, so a Strong Unknown Signal outlived its drop for good (~30 on octahedron-test, some at "T - 0sec"). Leg 1: a
     strong drop despawns on the node that spawned it. Leg 2: one handed over to the other node despawns there, where
     vanilla had no countdown entry for its marker. In both the marker must be gone on the WA and both nodes and stay
-    gone past a few WA tables. Leg 3: with drops.maxActive at 1 the WA deletes the older of two markers."""
+    gone past a few WA tables. Leg 3: with drops.maxActive at 1 the WA deletes the older of two markers. Leg 4: a WA
+    restart, as a deploy does, leaves no marker anywhere (they are not in the WA's save): the clean-up of the leftovers."""
     bench.cluster.config.world_template = _pod_world(bench)
     _join(bench)
     identity = _client_identity(bench)
@@ -1418,6 +1419,15 @@ def p2_drop_gps(bench) -> None:
     bench.check("leg3: the WA logged the over-cap deletion", bool(_lines(bench, "wa-1", r"drop_container gps sweep expired=0 overCap=1 cap=1")))
     bench.record("config-reset", bench.cluster.handover_config({"drops.maxActive": "5"}))
     _no_reconnect(bench, "drop gps")
+
+    # 4. Markers are not in the WA's save, so a WA restart (a deploy's) leaves no marker on any node, stale or not.
+    bench.record("leg4-before", {k: sorted(v) for k, v in markers().items()})
+    bench.cluster.restart_node("wa-1")
+    bench.cluster.wait_ready(nodes=["wa-1"])
+    cleared = _poll(lambda: all(not held for held in markers().values()), 120, interval=3)
+    held = markers()
+    bench.record("leg4-after", {k: sorted(v) for k, v in held.items()})
+    bench.check("leg4: after a WA restart no node holds a drop marker", bool(cleared), json.dumps({k: sorted(v) for k, v in held.items()}))
     bench.exercised(identity=identity, leg2={"source": source, "target": target, "partition": partition},
                     leg3={"grids": [first_grid, second_grid], "markers": [first, second]})
 
