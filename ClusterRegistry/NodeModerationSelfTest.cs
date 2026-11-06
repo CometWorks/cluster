@@ -74,11 +74,13 @@ internal static partial class SelfTest
             Assert(State(Request("/admission/bans", "100", body: "{\"userId\":300}")) == "Succeeded" && book.IsBanned(300));
             Assert(File.ReadAllText(Path.Combine(directory, "registry", "admission-bans.json")).Contains("300"));
 
-            // Refused, with the join token: no moderator, a non-admin, an admin who is offline, an admin on another node.
+            // Refused, with the join token: no moderator (the join token alone opens nothing), a malformed one, a
+            // non-admin, an admin who is offline, an admin on another node.
             Connect(200, "node-2");
             book.ClearKickCooldown(200);
+            Assert(Request("/clients/200/kick", null).Status == 401);
             foreach ((string? moderator, string? node) in new (string?, string?)[]
-                     { (null, "node-1"), ("x", "node-1"), ("101", "node-1"), ("102", "node-1"), ("100", "node-2"), ("100", null) })
+                     { ("x", "node-1"), ("101", "node-1"), ("102", "node-1"), ("100", "node-2"), ("100", null) })
             {
                 var refused = Request("/clients/200/kick", moderator, node);
                 Assert(refused.Status == 403 && Code(refused) == "moderator_refused");
@@ -100,6 +102,17 @@ internal static partial class SelfTest
             var standard = new AdmissionBook(new AdmissionSettings());
             standard.Kick(1);
             Assert(standard.KickCooldowns()[0].ExpiresAt - DateTimeOffset.UtcNow > TimeSpan.FromSeconds(299));
+            // A loopback Gateway with no admin token opens the admin contract to anyone, but a request naming a
+            // moderator is still held to the moderator rules (the bench runs this way).
+            var field = typeof(DirectGateway).GetField("_options", flags)!;
+            field.SetValue(gateway, options with { AdminToken = null });
+            Connect(200, "node-2");
+            book.ClearKickCooldown(200);
+            var open = Request("/clients/200/kick", "101", token: null);
+            Assert(open.Status == 403 && Code(open) == "moderator_refused" && !book.WasKickedRecently(200));
+            Assert(Request("/admission/bans/300", "100", method: "DELETE", token: null).Status == 401 && book.IsBanned(300));
+            Assert(State(Request("/clients/200/kick", "100", token: null)) == "Succeeded" && book.WasKickedRecently(200));
+            Assert(Request("/admission/bans", null, method: "GET", token: null).Status == 200);
             Console.WriteLine("Node moderation (SE-1197) join-token kick/ban, refusals and route confinement passed.");
         }
         finally

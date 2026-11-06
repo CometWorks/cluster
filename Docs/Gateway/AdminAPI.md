@@ -263,8 +263,10 @@ the Steam id of the admin who pressed the button. The Gateway accepts it only wh
 admin is on its own `administrators` list, is connected, and is attached to the node named
 in `X-Cluster-Node`; otherwise it answers `403 moderator_refused` and records
 `admin.denied`. The audit actor is `node:<node>/admin:<steamId>`. Every other route still
-answers the join token with 401. A node holding the join token can therefore kick or ban
-only while a Gateway-listed admin is online, and the action is recorded under that admin.
+answers the join token with 401. A request that names a moderator is held to these rules
+on a loopback Gateway too, where the admin contract is otherwise open. A node holding the
+join token can therefore kick or ban only while a Gateway-listed admin is online, and the
+action is recorded under that admin.
 
 ## Events
 

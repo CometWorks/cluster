@@ -580,12 +580,13 @@ def _moderation(bench) -> dict:
 def p2_prs_05(bench) -> None:
     """SE-1197: F3 kick and ban reach the Gateway's cluster-wide books, for a local and a remote row alike."""
     record = {}
-    forwarded = r"(kick|ban) of player={} by={} (done by the Gateway|failed: .*) \(SE-1197\)"
+    forwarded = r"{} of player={} by={} (done by the Gateway|failed: .*) \(SE-1197\)"
     try:
         bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
         bench.cluster.post("/automatic/pause")  # a co-location pass would put everyone on one node
         api1 = bench.start_client(CLIENT_ID)  # the admin, on the Gateway's administrator list and every node's
         bench.wait_spawned(CLIENT_ID)
+        api1.get_chat_messages(0)  # Remote records chat from its first read on: start it before any reply can come
 
         def player(client: int, node: str | None = None) -> dict:
             return wait_until(lambda: next((row for row in _cluster_players(bench, "wa-1") if row["steamId"] == client
@@ -602,12 +603,16 @@ def p2_prs_05(bench) -> None:
             return api
 
         def gone(client: int) -> bool:
-            return bool(wait_until(lambda: True if not _session(bench, client) else None, 60,
-                                   f"client {client}'s Gateway session to drop"))
+            try:
+                return bool(wait_until(lambda: True if not _session(bench, client) else None, 60,
+                                       f"client {client}'s Gateway session to drop"))
+            except ClusterError:
+                return False
 
         def press(api, actor: int, target: int, button: str, node: str) -> str | None:
-            """Press ``button`` on ``target``'s F3 row until ``node`` logs the forward; that line, or None."""
-            pattern = forwarded.format(target, actor)
+            """Press ``button`` on ``target``'s F3 row until ``node`` logs the forward's outcome; that line, or None."""
+            pattern = forwarded.format(button.lower(), target, actor)
+            seen = len(_lines(bench, node, pattern))
 
             def attempt():
                 # A client learns it is an admin a moment after its node does, and a click before that lands on a
@@ -615,7 +620,7 @@ def p2_prs_05(bench) -> None:
                 _, index = _f3(api, keep_open=True)
                 try:
                     _f3_click(api, index, names[target], button)
-                    return wait_until(lambda: next(iter(_lines(bench, node, pattern)), None), 10,
+                    return wait_until(lambda: next(iter(_lines(bench, node, pattern)[seen:]), None), 10,
                                       f"{node} to forward the {button.lower()}")
                 except ClusterError:
                     return None
@@ -692,8 +697,9 @@ def p2_prs_05(bench) -> None:
             bench.apis.pop(target, None)
         vanilla = _lines(bench, admin_node, r"Player .* (kicked|banned)$")
         bench.check("the admin's node did not run vanilla's node-local kick", not vanilla, json.dumps(vanilla))
-        messages = [message.get("Text") or message.get("text") for message in
-                    (api1.get_chat_messages(0).get("messages") or [])]
+        chat = api1.get_chat_messages(0)
+        messages = [message.get("Text") for message in chat.get("messages") or []] \
+            + [message.get("text") for message in chat.get("hud") or []]
         record["adminChat"] = messages
         bench.check("the admin is told each kick was done",
                     sum(1 for text in messages if text and text.endswith("was kicked from the cluster.")) >= 2,

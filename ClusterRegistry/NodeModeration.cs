@@ -13,19 +13,20 @@ namespace ClusterRegistry;
 /// /clients/{id}/kick), presenting the cluster join token it already holds for the registry. The join token alone
 /// is not enough: the request must name, in <see cref="ClusterNet.ModeratorHeader"/>, an admin from the Gateway's
 /// own administrator list who is connected right now and attached to the calling node
-/// (<see cref="ClusterNet.NodeHeader"/>). Any other admin route stays closed to the join token.
+/// (<see cref="ClusterNet.NodeHeader"/>). Any other admin route stays closed to the join token. A request that
+/// names a moderator is held to these rules on a loopback Gateway too, where the admin contract is otherwise open.
 /// </summary>
 internal sealed partial class DirectGateway
 {
     /// <summary>
     /// The actor for a node forwarding an admin's kick or ban, or null. <paramref name="refusal"/> is set when the
-    /// join token was presented on one of the two routes but the named admin does not qualify (403, not 401: the
-    /// credential is fine, the act is not).
+    /// join token was presented (or <paramref name="loopback"/> needs none) on one of the two routes but the named
+    /// admin does not qualify (403, not 401: the credential is fine, the act is not).
     /// </summary>
-    private AdminActor? NodeModerator(HttpListenerContext context, string path, out string? refusal)
+    private AdminActor? NodeModerator(HttpListenerContext context, string path, bool loopback, out string? refusal)
     {
         refusal = null;
-        if (!IsNodeModerationRoute(context.Request.HttpMethod, path) || !JoinTokenPresented(context))
+        if (!IsNodeModerationRoute(context.Request.HttpMethod, path) || !loopback && !JoinTokenPresented(context))
             return null;
         string? node = context.Request.Headers[ClusterNet.NodeHeader];
         if (!ulong.TryParse(context.Request.Headers[ClusterNet.ModeratorHeader], out ulong admin) || admin == 0)

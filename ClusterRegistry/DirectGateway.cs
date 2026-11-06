@@ -4183,8 +4183,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // token file are valid here even though the legacy routes do not know them.
                 AdminActor? actor = ResolveAdminActor(context);
                 string? refusal = null;
-                if (actor == null)
-                    actor = NodeModerator(context, path, out refusal);
+                // SE-1197: a node acting for an admin is held to the moderator rules even where loopback would let
+                // it in unauthenticated; an admin token (Quasar, the CLI) never names a moderator.
+                if (context.Request.Headers[ClusterProtocol.ClusterNet.ModeratorHeader] != null && actor is null or { Name: "loopback" })
+                    actor = NodeModerator(context, path, loopback: actor != null, out refusal);
                 if (actor == null && refusal != null)
                 {
                     WriteAdminError(context, 403, "moderator_refused", refusal);
