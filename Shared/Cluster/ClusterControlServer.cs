@@ -25,9 +25,11 @@ using Sandbox.Game.Multiplayer;
 using Sandbox.Game.Replication;
 using Sandbox.Game.Weapons;
 using Sandbox.Game.World;
+using VRage;
 using VRage.Game;
 using VRage.Game.ModAPI;
 using VRage.Game.Entity;
+using VRage.Game.ObjectBuilders.ComponentSystem;
 using VRage.ModAPI;
 using VRage.Network;
 using VRage.ObjectBuilders;
@@ -1698,6 +1700,48 @@ internal sealed partial class ClusterControlServer
 				fueled.Capacity = ImportRoundTrip.ClampCapacity(fueled.Capacity, max);
 	}
 
+	/// <summary>
+	/// SE-1155: a block inventory can hold a stack larger than the inventory loads back. MyInventory.InitItems clamps
+	/// each saved stack to what fits an empty inventory, in float arithmetic (ImportRoundTrip.LoadedAmount), while a
+	/// refill that sizes its stack as (int)((float)free / volume), as a station refuel does, overshoots it: a station
+	/// reactor held 461538.469939 kg of uranium where 461538.46674 load, and every handover of its partition failed on
+	/// that one Amount (octahedron-test 2026-11-05, partition 4519). The capture writes what the load restores, as
+	/// <see cref="ClampFuelCapacity"/> does. Only nearly full inventories are looked at: no other stack can be over.
+	/// </summary>
+	internal static void ClampInventoryAmounts(MyEntity entity, MyObjectBuilder_EntityBase builder)
+	{
+		if (entity is not MyCubeGrid grid || builder is not MyObjectBuilder_CubeGrid gridBuilder || gridBuilder.CubeBlocks == null) return;
+		foreach (MyCubeBlock block in grid.GetFatBlocks())
+			for (int index = 0; index < block.InventoryCount; index++)
+			{
+				if (block.GetInventory(index) is not MyInventory inventory || !inventory.IsConstrained
+					|| (double)inventory.CurrentVolume < 0.999 * (double)inventory.MaxVolume && (double)inventory.CurrentMass < 0.999 * (double)inventory.MaxMass) continue;
+				foreach (MyPhysicalInventoryItem item in inventory.GetItems())
+				{
+					Sandbox.Game.Entities.Inventory.MyInventoryItemAdapter adapter = Sandbox.Game.Entities.Inventory.MyInventoryItemAdapter.Static;
+					if (item.Content == null || !adapter.TryAdapt(item.Content.GetObjectId())) continue;
+					MyFixedPoint loaded = ImportRoundTrip.LoadedAmount(item.Amount, inventory.MaxVolume, inventory.MaxMass, adapter.Volume, adapter.Mass, adapter.HasIntegralAmounts);
+					if (loaded >= item.Amount) continue;
+					MyObjectBuilder_CubeBlock saved = gridBuilder.CubeBlocks.FirstOrDefault(candidate => candidate.EntityId == block.EntityId);
+					foreach (MyObjectBuilder_InventoryItem stack in SavedInventories(saved?.ComponentContainer)
+						.SelectMany(savedInventory => savedInventory.Items ?? new List<MyObjectBuilder_InventoryItem>())
+						.Where(stack => stack.ItemId == item.ItemId && stack.Amount == item.Amount && stack.PhysicalContent?.GetObjectId() == item.Content.GetObjectId()))
+						stack.Amount = loaded;
+				}
+			}
+	}
+
+	private static IEnumerable<MyObjectBuilder_Inventory> SavedInventories(MyObjectBuilder_ComponentContainer container)
+	{
+		static IEnumerable<MyObjectBuilder_Inventory> Of(MyObjectBuilder_ComponentBase component) => component switch
+		{
+			MyObjectBuilder_Inventory inventory => new[] { inventory },
+			MyObjectBuilder_InventoryAggregate aggregate => (aggregate.Inventories ?? new List<MyObjectBuilder_InventoryBase>()).SelectMany(Of),
+			_ => Enumerable.Empty<MyObjectBuilder_Inventory>(),
+		};
+		return (container?.Components ?? new List<MyObjectBuilder_ComponentContainer.ComponentData>()).SelectMany(data => Of(data.Component));
+	}
+
 	private static string VoxelTestCutout(string storage, Vector3I center, float radius)
 	{
 		if (!float.IsFinite(radius) || radius <= 0) throw new ArgumentOutOfRangeException(nameof(radius));
@@ -1840,6 +1884,7 @@ internal sealed partial class ClusterControlServer
 				entity.BeforeSave();
 				MyObjectBuilder_EntityBase builder = entity.GetObjectBuilder();
 				ClampFuelCapacity(entity, builder);
+				ClampInventoryAmounts(entity, builder);
 				if (transfer != null && transfer.Frozen.TryGetValue(entity.EntityId, out FrozenState frozen)) ApplyVelocity(builder, frozen);
 				return builder;
 			}).ToArray();
@@ -2209,7 +2254,7 @@ internal sealed partial class ClusterControlServer
 	{
 		int removed = 0;
 		if (entity.ComponentContainer?.Components == null) return removed;
-		foreach (VRage.Game.ObjectBuilders.ComponentSystem.MyObjectBuilder_ComponentContainer.ComponentData data in entity.ComponentContainer.Components)
+		foreach (MyObjectBuilder_ComponentContainer.ComponentData data in entity.ComponentContainer.Components)
 			if (data.Component is VRage.Game.ObjectBuilders.Components.MyObjectBuilder_HierarchyComponentBase hierarchy && hierarchy.Children != null)
 				removed += hierarchy.Children.RemoveAll(child => child != null && child.EntityId == childId);
 		return removed;

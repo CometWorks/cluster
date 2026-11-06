@@ -16,6 +16,22 @@ internal static partial class ClusterSelfTest
 		HandoverDriftWarhead();
 		HandoverDriftBlockGroups();
 		HandoverDriftSuitOxygen();
+		HandoverDriftInventoryLoad();
+	}
+
+	/// <summary>
+	/// SE-1155: the stack MyInventory.InitItems restores. Partition 4519's station reactor (8 m³ times
+	/// BlocksInventorySizeMultiplier 3, no mass limit) held 461538.469939 kg of uranium (0.052 L/kg) and the import
+	/// re-emitted 461538.46674; a stack that fits loads unchanged, and an integral item loads whole items only.
+	/// </summary>
+	private static void HandoverDriftInventoryLoad()
+	{
+		VRage.MyFixedPoint Loaded(string amount, double maxVolume, float volume, bool integral = false)
+			=> ImportRoundTrip.LoadedAmount(VRage.MyFixedPoint.DeserializeString(amount), (VRage.MyFixedPoint)maxVolume, VRage.MyFixedPoint.MaxValue, volume, 1f, integral);
+		VRage.MyFixedPoint uranium = Loaded("461538.469939", 24, 0.052f / 1000);
+		Assert(uranium.ToString() == "461538.46674", "an overfull reactor's uranium must load as 461538.46674, the model gives " + uranium);
+		Assert(Loaded("461538.307238", 24, 0.052f / 1000).ToString() == "461538.307238", "a stack that fits must load unchanged");
+		Assert(Loaded("4", 0.0001, 0.00003f, integral: true).ToString() == "3", "an integral stack loads whole items only, got " + Loaded("4", 0.0001, 0.00003f, integral: true));
 	}
 
 	/// <summary>

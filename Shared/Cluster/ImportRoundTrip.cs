@@ -996,6 +996,21 @@ internal static class ImportRoundTrip
 	internal static float ClampCapacity(float capacity, float maximum)
 		=> capacity < 0f ? 0f : capacity > maximum ? maximum : capacity;
 
+	/// <summary>
+	/// SE-1155: the amount MyInventory.InitItems restores from a saved stack: at most what ComputeAmountThatFits gives
+	/// for an EMPTY inventory (the load adds with simplifiedMassAndVolumeCalculation, so the volume and mass it compares
+	/// against stay 0 until the end), in the same double arithmetic over the item's float volume and mass. The slot
+	/// limit of an inventory with a MaxItemCount is not modelled.
+	/// </summary>
+	internal static MyFixedPoint LoadedAmount(MyFixedPoint amount, MyFixedPoint maxVolume, MyFixedPoint maxMass, float volume, float mass, bool integral)
+	{
+		MyFixedPoint byVolume = MyFixedPoint.Max((MyFixedPoint)((double)maxVolume * (1.0 / (double)volume)), 0);
+		MyFixedPoint byMass = MyFixedPoint.Max((MyFixedPoint)((double)maxMass * (1.0 / (double)mass)), 0);
+		MyFixedPoint fits = MyFixedPoint.Min(byVolume, byMass);
+		if (integral) fits = MyFixedPoint.Floor((MyFixedPoint)(Math.Round((double)fits * 1000.0) / 1000.0));
+		return MyFixedPoint.Min(fits, amount);
+	}
+
 	private static bool ValuesEqual(string left, string right, double absolute = 2e-5)
 	{
 		if (left == right) return true;
