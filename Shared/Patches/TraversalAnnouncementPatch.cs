@@ -48,9 +48,11 @@ public static class TraversalAnnouncementPatch
 	public static class SendClientConnected
 	{
 		[HarmonyPrefix]
-		private static void Prefix(ref ConnectedClientDataMsg msg)
+		private static void Prefix(ref ConnectedClientDataMsg msg, ulong sendTo)
 		{
-			if (!ClusterRuntime.IsClustered || !msg.Join) return;
+			if (!ClusterRuntime.IsClustered) return;
+			RemotePlayerMirrorService.NoteMemberSent(sendTo, msg.ClientId.Value);   // SE-1192
+			if (!msg.Join) return;
 			ulong client = msg.ClientId.Value;
 			if (!ClusterControlServer.IsArrivingByHandover(client)) return;
 			msg.Join = false;

@@ -143,9 +143,10 @@ public static class RemotePlayerMirrorService
 	private static readonly Dictionary<ulong, Holdings> Carried = new();
 
 	/// <summary>
-	/// The players vanilla gives every client here: hosted here (merged list) or attached here. A key new to this
-	/// set since the last pass reached every client by vanilla's own messages; a key gone from it lost its
-	/// MyPlayer on every client here (RemovePlayer's broadcast).
+	/// The players hosted or attached here as of the last pass. One gone from it lost its MyPlayer on every client
+	/// here (RemovePlayer's OnPlayerRemoved broadcast). One new to it is NOT assumed delivered: a client arriving
+	/// by a switch gets no SetUserAccepted round at all (SE-1192), so members are booked from what was actually
+	/// sent (<see cref="NoteMemberSent"/>), and a player event is simply broadcast again - it is idempotent.
 	/// </summary>
 	private static HashSet<(ulong SteamId, int SerialId)> m_present = new();
 
@@ -179,6 +180,16 @@ public static class RemotePlayerMirrorService
 		return holdings.Members.Union(holdings.Players)
 			.Select(key => new MirrorHolding(key.SteamId, key.SerialId, holdings.Members.Contains(key), holdings.Players.Contains(key)))
 			.ToList();
+	}
+
+	/// <summary>
+	/// SE-1192: every member message this node sends - vanilla's SetUserAccepted round and the mirror's own -
+	/// passes MyReplicationServer.SendClientConnected (TraversalAnnouncementPatch), and is booked here for a client
+	/// the mirror tracks. A client not tracked yet is still loading, and what it is sent now is flushed away.
+	/// </summary>
+	internal static void NoteMemberSent(ulong sendTo, ulong member)
+	{
+		if (Held.TryGetValue(sendTo, out Holdings holdings)) holdings.Members.Add((member, 0));
 	}
 
 	/// <summary>
@@ -294,20 +305,11 @@ public static class RemotePlayerMirrorService
 		foreach (ulong gone in Held.Keys.Where(client => !attached.Contains(client)).ToArray()) Held.Remove(gone);
 		foreach (ulong gone in Carried.Keys.Where(client => !attached.Contains(client)).ToArray()) Carried.Remove(gone);
 
-		// A player that became local or attached here since the last pass reached every client here by vanilla's own
-		// messages (SetUserAccepted's member message to every member, the OnPlayerCreated broadcast); one that left
-		// took its MyPlayer off every client here (RemovePlayer's OnPlayerRemoved broadcast).
-		var arrived = new HashSet<(ulong, int)>(present);
-		arrived.ExceptWith(m_present);
+		// A player that left this node took its MyPlayer off every client here (RemovePlayer's OnPlayerRemoved).
 		var departed = new HashSet<(ulong, int)>(m_present);
 		departed.ExceptWith(present);
 		m_present = present;
-		foreach (Holdings holdings in Held.Values.Concat(Carried.Values))
-		{
-			holdings.Members.UnionWith(arrived);
-			holdings.Players.UnionWith(arrived);
-			holdings.Players.ExceptWith(departed);
-		}
+		foreach (Holdings holdings in Held.Values.Concat(Carried.Values)) holdings.Players.ExceptWith(departed);
 
 		foreach (ulong target in targets)
 		{
@@ -338,8 +340,9 @@ public static class RemotePlayerMirrorService
 			return;
 		}
 
-		// Every cluster player some ready client here lacks: remote ones, and - for a client that arrived from
-		// another node without them - the ones hosted here. Never a client's own row, which it always has.
+		// Every cluster player some ready client here lacks: remote ones, and the ones hosted here that a client did
+		// not get from vanilla (a switch arrival, or a client that arrived from another node). Never a client's own
+		// row, which it always has.
 		var wanted = new List<(OnlinePlayersService.OnlinePlayerEntry Entry, bool Local)>();
 		foreach (var pair in desired) wanted.Add((pair.Value, false));
 		foreach (OnlinePlayersService.OnlinePlayerEntry entry in cluster)
@@ -479,7 +482,7 @@ public static class RemotePlayerMirrorService
 	/// delivery were targeted. The member message is NOT an event site - SendClientConnected writes
 	/// to one client - so that one still goes round the targets.
 	///
-	/// SE-1192: a player hosted HERE is installed only for a client that arrived from another node without it.
+	/// SE-1192: a player hosted HERE is installed only for a client here that vanilla did not give it to.
 	/// Its OnPlayerCreated broadcast also reaches that player's own client, so it carries what vanilla's own
 	/// would (CreateNewPlayer): the real player's builder with its promote level, creative tools and remote admin
 	/// settings. A phantom's defaults there would switch the player's creative tools off (T-0378).
