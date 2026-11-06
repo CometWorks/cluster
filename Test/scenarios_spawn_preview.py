@@ -272,14 +272,19 @@ def _watch_failed_switch(bench, api, leg: str, node_id: str, seconds: float = 25
     return summary
 
 
-def _reselect(api) -> None:
-    """The screen asks for a preview only when the selected row changes: Refresh empties the table."""
-    screens = _try(api.list_screens)
-    screen = next((x["index"] for x in screens if x.get("type") == "MyGuiScreenMedicals"), None) \
-        if isinstance(screens, list) else None
-    if screen is not None:
-        _try(api.control_click, text="Refresh", screen=screen)
-        time.sleep(2)
+def _reselect(bench, api) -> None:
+    """Taking the client in again creates its player on the node, and the client answers a new player without a
+    character with a medical screen of its own: keep the newest one, whose selection is empty, so a click on the
+    kit's row asks for a preview again."""
+    def screens():
+        listed = _try(api.list_screens)
+        found = [x["index"] for x in listed if x.get("type") == "MyGuiScreenMedicals"] if isinstance(listed, list) else []
+        return found or None
+
+    found = _poll(screens, 30) or []
+    bench.record("reselect-screens", _try(api.list_screens))
+    for index in sorted(found)[:-1][::-1]:
+        _try(api.close_screen, index)
 
 
 def _kit_on_node1(bench):
@@ -312,7 +317,7 @@ def p2_wa_06e(bench) -> None:
     bench.check("refuse: the client is still on the medical screen", refused["medicalAtEnd"] is True)
     bench.check("refuse: the client is back on node-2", refused["nodeAtEnd"] == "node-2", str(refused["nodeAtEnd"]))
     bench.check("refuse: node-2 took the client in again", bool(refused["restored"]))
-    _reselect(api)
+    _reselect(bench, api)
     first = _preview_and_respawn(bench, api, "refuse-retry", name, grid)
     bench.check("refuse-retry: the client respawned on node-1, where the kit is", first["node"] == "node-1", str(first["node"]))
     bench.exercised(kit=entity, grid=grid, refused=refused["switchFailed"], reconnected=refused["reconnected"])
@@ -323,26 +328,26 @@ def p2_wa_06f(bench) -> None:
     api, entity, grid, name = _kit_on_node1(bench)
     _own_partition_on(bench, grid, "node-2")
 
-    def mover():
+    def movers():
         rows = _try(_partitions, bench, "node-1")
         rows = rows if isinstance(rows, list) else []
         row = next((p for p in rows if any(m.get("id") == grid for m in p.get("members") or [])), {})
-        others = [m for m in row.get("members") or [] if m.get("id") != grid]
-        others.sort(key=lambda m: m.get("type") == "MyCubeGrid")   # a body or a loose object before a grid
-        return (row, others[0]) if others else None
+        others = [m["id"] for m in row.get("members") or [] if m.get("id") != grid]
+        return (row, others) if others else None
 
-    found = _poll(mover, HANDOVER_TIMEOUT)
+    found = _poll(movers, HANDOVER_TIMEOUT)
     bench.record("split-partition", found)
-    _require(bench, "the kit's partition has a second member to split off", found is not None)
-    kit_partition, moved = found
+    _require(bench, "the kit's partition has other members to split off", found is not None)
+    _, moved = found
     _kill(bench, CLIENT_ID)
-    bench.record("split-armed", bench.cluster.node("node-1", f"/respawn-execute-fault?mode=split&count=1&mover={moved['id']}", "POST"))
+    bench.record("split-armed", bench.cluster.node(
+        "node-1", f"/respawn-execute-fault?mode=split&count=1&movers={','.join(str(x) for x in moved)}", "POST"))
     second = _preview_and_respawn(bench, api, "split", name, grid)
     fault = bench.cluster.node("node-1", "/respawn-execute-fault")
     bench.record("split-fault", fault)
     faulted = (fault.get("faulted") or [{}])[0]
-    bench.check("split: the bench split the kit's partition during the switch",
-                faulted.get("partition") != kit_partition.get("id") or faulted.get("generation") != faulted.get("requestedGeneration"),
+    bench.check("split: the kit's partition was renumbered on node-1 during the switch",
+                faulted.get("partition") not in (0, faulted.get("requested")),
                 json.dumps(faulted))
     bench.check("split: the client respawned on node-1, where the kit is", second["node"] == "node-1", str(second["node"]))
     bench.check("split: node-1 executed at the kit's new partition",
