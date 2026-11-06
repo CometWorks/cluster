@@ -326,6 +326,7 @@ public static class RemotePlayerMirrorService
 			Held[target] = new Holdings(present);
 			AnnounceSelf(target);
 		}
+		targets = targets.Where(Held.ContainsKey).ToArray();
 		Served.Clear();
 		foreach (ulong target in targets) Served.Add(target);
 		if (attached.Count == 0)
