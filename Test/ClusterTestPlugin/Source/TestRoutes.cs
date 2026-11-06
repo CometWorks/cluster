@@ -77,6 +77,7 @@ internal static class TestRoutes
         OfflineTestRoutes.Register(); // SE-347 shared LoadRecovery apply/crash boundary and real production
         RespawnFaultRoutes.Register(); // SE-1124 a split or a refusal at a respawn switch target
         AccountingInterlockObserver.Register();
+        GameThreadLoadRoutes.Register(); // SE-1134 real game-thread time: a busy node, a single hitch
     }
 
     public static bool Dispatch(HttpListenerContext context, string path)
