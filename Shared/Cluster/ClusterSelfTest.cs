@@ -69,6 +69,7 @@ internal static partial class ClusterSelfTest
 		("global-scrub", GlobalScrub),
 		("time-of-day", TimeOfDay),
 		("round-trip-normalize", RoundTripNormalize),
+		("maintenance-panel-pending", MaintenancePanelPending),
 		("havok-disposed-world", HavokDisposedWorld),
 		("antenna-delta", AntennaDelta),
 		("antenna-parse-alloc", AntennaParseAllocation),
