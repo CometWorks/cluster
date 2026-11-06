@@ -147,7 +147,10 @@ update. The wake frame is the one taken at the start. Admission, content and sto
 failure rule are as before. The "recovery loaded partition" line says how long the game thread spent
 reading, screening, compensating and creating entities.
 `OfflineCompensationCheck --wake-equivalence` recomputes the results a cluster wake logged with the
-model it is built with.
+model it is built with. With `--tolerance` it accepts a model that steps differently: the flags, zones
+and frames must match, stocks, fuel and production within 1e-6, and energies within 1e-6 relative.
+A sun step runs to the next real bin change, not to each run of the WA sun/work path (one per heartbeat),
+so a solar base takes about 600 events for 15 hours instead of 55,000.
 `CompensatedTo` is reported in the node result; offline rows already end at the first member
 heartbeat in the current registry, so no durable claim is made that a vanished row retains that
 diagnostic.

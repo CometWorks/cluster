@@ -9,10 +9,12 @@ if (args.Length == 5 && args[0] == "--model-profile")
     return;
 }
 
-// SE-1096: --wake-equivalence PROFILES.json SUN_DIR LOGGED.jsonl [CAP_FRAMES] (default cap: 72 world hours)
-if (args.Length is 4 or 5 && args[0] == "--wake-equivalence")
+// SE-1096: --wake-equivalence PROFILES.json SUN_DIR LOGGED.jsonl [CAP_FRAMES] [--tolerance] (default cap: 72 world hours)
+if (args.Length >= 4 && args[0] == "--wake-equivalence")
 {
-    Environment.ExitCode = WakeEquivalenceCheck.Run(args[1], args[2], args[3], args.Length == 5 ? long.Parse(args[4]) : 72L * 225000);
+    bool tolerance = args[^1] == "--tolerance";
+    int count = args.Length - (tolerance ? 1 : 0);
+    Environment.ExitCode = WakeEquivalenceCheck.Run(args[1], args[2], args[3], count == 5 ? long.Parse(args[4]) : 72L * 225000, tolerance);
     return;
 }
 
