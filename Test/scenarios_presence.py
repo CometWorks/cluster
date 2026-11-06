@@ -31,6 +31,10 @@ SE-1081: only players admitted through Steam are announced; Direct Transport cli
 bench client joins through Direct Transport, so ``P2-PRS-01`` turns their announcements back on with
 ``CLUSTER_PRESENCE_DIRECT=1`` on the World Authority, and ``P2-PRS-03`` checks the default: a Direct
 Transport login and logout say nothing.
+
+SE-1192: ``P2-PRS-04`` checks T-0178 where a player sees it, in each client's own F3 table rather than in the
+node's bookkeeping: a fresh login while a player is on the other node, F3 kick and ban of that remote row (refused
+on the admin's node, the row stays), and a handover with the F3 list left open (every player exactly once).
 """
 
 from __future__ import annotations
