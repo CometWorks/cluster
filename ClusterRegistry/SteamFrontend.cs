@@ -45,6 +45,8 @@ internal sealed class SteamFrontend : IDisposable
     private readonly List<SkinCheck> _pendingSkinChecks = [];
     /// <summary>asset_modifier_id of each Steam item definition that is an armor or block skin, "" for the rest; pump thread only.</summary>
     private readonly Dictionary<int, string> _skinOfItem = [];
+    /// <summary>Steam sent the item definitions; until then a blob's items can't be named.</summary>
+    private bool _definitionsLoaded;
     private readonly ConcurrentDictionary<ulong, SteamSession> _sessions = new();
     private readonly List<IDisposable> _callbacks = [];
     private Socket? _query;
@@ -113,6 +115,9 @@ internal sealed class SteamFrontend : IDisposable
         {
             LoggedOn = true;
             Console.WriteLine($"Steam GameServer connected as {SteamGameServer.GetSteamID()}");
+            // As MySteamInventoryServer: the item definitions name the skin each inventory item is (SE-1158).
+            // Asked before the logon, Steam sent them only with the first inventory blob, too late for it.
+            SteamGameServerInventory.LoadItemDefinitions();
         }));
         _callbacks.Add(Callback<SteamServersDisconnected_t>.CreateGameServer(result =>
         {
@@ -137,8 +142,6 @@ internal sealed class SteamFrontend : IDisposable
         SteamGameServer.SetGameData(AdmissionBook.BuildNumber(_version));
         SteamGameServer.SetKeyValue("CONSOLE_COMPATIBLE", "0");
         SteamGameServer.LogOnAnonymous();
-        // MySteamInventoryServer does the same: the item definitions name the skin each inventory item is (SE-1158).
-        SteamGameServerInventory.LoadItemDefinitions();
         SteamGameServer.SetAdvertiseServerActive(true);
 
         _query = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
@@ -570,7 +573,8 @@ internal sealed class SteamFrontend : IDisposable
         _pendingSkinChecks.RemoveAll(check =>
         {
             EResult status = SteamGameServerInventory.GetResultStatus(check.Handle);
-            if (status == EResult.k_EResultPending && Environment.TickCount64 < check.Deadline)
+            if ((status == EResult.k_EResultPending || status == EResult.k_EResultOK && !_definitionsLoaded)
+                && Environment.TickCount64 < check.Deadline)
                 return false;
             check.Result.TrySetResult(status == EResult.k_EResultOK ? SkinsOf(check) : null);
             SteamGameServerInventory.DestroyResult(check.Handle);
@@ -602,6 +606,7 @@ internal sealed class SteamFrontend : IDisposable
         if (!SteamGameServerInventory.GetItemDefinitionIDs(definitions, ref count))
             return;
         int skins = definitions.Count(definition => SkinOf(definition).Length > 0);
+        _definitionsLoaded = true;
         Console.WriteLine($"Steam inventory definitions: {definitions.Length} items, {skins} armor and block skins");
     }
 
