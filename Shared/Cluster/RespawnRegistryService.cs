@@ -346,6 +346,7 @@ public static class RespawnRegistryService
 				if (ReplicationServerPatch.HasClient(restore.UserId)) MyMultiplayer.Static?.DisconnectClient(restore.UserId);
 				continue;
 			}
+			RemotePullService.ForgetDemands(restore.UserId);
 			Console.WriteLine($"[ClusterPlugin] spawn switch restored operation={restore.OperationId:D} user={restore.UserId}"
 				+ (restore.Retry != null ? $" failures={restore.Retry.Failures}" : restore.Pod ? " pod" : " preview"));
 			if (restore.Retry != null && restore.Retry.Failures < MaxSwitchFailures)

@@ -55,6 +55,14 @@ public static class RemotePullService
 		lock (Sync) return new { pending = Pending.Count, outcomes = new Dictionary<string, long>(Counters) };
 	}
 
+	/// <summary>SE-1124: a client taken back after a failed preview switch asks for the same spawn point again at once
+	/// (its new medical screen selects it), inside the cooldown that would drop the request.</summary>
+	internal static void ForgetDemands(ulong user)
+	{
+		lock (Sync)
+			foreach (var key in LastDemand.Keys.Where(x => x.Item1 == user).ToArray()) LastDemand.Remove(key);
+	}
+
 	internal static (ulong User, long Entity)[] WaitingUsers()
 	{
 		lock (Sync) return Pending.Values.Where(p => !p.Cancelled && p.Medical == 0 && p.Offline)
