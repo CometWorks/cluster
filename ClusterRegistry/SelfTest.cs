@@ -207,6 +207,7 @@ internal static partial class SelfTest
         ("balance-target-budget", TestBalanceTargetBudget),
         ("balance-load-floor", TestBalanceLoadFloor),
         ("balance-peak-drop", TestBalancePeakDrop),
+        ("balance-ratio-dip", TestBalanceRatioDip),
         ("balance-heavy-control", TestBalanceHeavyControl),
         ("balance-heavy-pin", TestBalanceHeavyPin),
         ("balance-heavy-split", TestBalanceHeavySplit),
@@ -6136,6 +6137,25 @@ internal static partial class SelfTest
             registry.Commit("h1");                                   // a committed handover clears the block
             Assert(!registry.HandoverScheduleBlocked(7));
             Assert(registry.HandoverBlocks().Length == 0);
+
+            // SE-1134: a block whose residual entity the node named keeps its backoff through membership changes that
+            // leave that entity in the partition, and releases it once a split takes the entity out.
+            PartitionOwnership station = registry.ClaimPartition(9, source.Node, source.Epoch, 0);
+            PartitionOwnership shuttle = registry.ClaimPartition(10, source.Node, source.Epoch, 0);
+            registry.RecordValidationAbort(9, "cccc", "gate", [100]);
+            registry.RecordValidationAbort(9, "cccc", "gate");       // an older node names nothing: the known set stays
+            Assert(registry.HandoverScheduleBlocked(9) && registry.HandoverBlocks().Single().Entities is [100]);
+            ulong[] split = registry.AllocatePartitionIds(source.Node, source.Epoch, 1);
+            LineageRecord left = registry.ApplyLineage("shuttle-leaves", LineageKind.Split, source.Node, source.Epoch, [new(9, station.Generation)],
+                [9, split[0]], new() { [9] = [100, 101], [split[0]] = [102] }, 1);
+            Assert(registry.HandoverScheduleBlocked(9));             // the trader split: the residual's grid stayed
+            LineageRecord docked = registry.ApplyLineage("shuttle-docks", LineageKind.Merge, source.Node, source.Epoch,
+                [left.Outputs.Single(x => x.Partition == 9), new(10, shuttle.Generation)], [9], null, 2);
+            Assert(registry.HandoverScheduleBlocked(9));             // a merge survivor keeps what it had
+            ulong[] carved = registry.AllocatePartitionIds(source.Node, source.Epoch, 1);
+            registry.ApplyLineage("residual-leaves", LineageKind.Split, source.Node, source.Epoch, [docked.Outputs.Single()],
+                [9, carved[0]], new() { [9] = [101], [carved[0]] = [100] }, 3);
+            Assert(!registry.HandoverScheduleBlocked(9));            // the residual's entity left: one prompt retry
         }
         finally { Directory.Delete(directory, recursive: true); }
     }

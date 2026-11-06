@@ -603,3 +603,79 @@ internal static partial class SelfTest
             + " the floor holds first below it; co-location unchanged");
     }
 }
+
+internal static partial class SelfTest
+{
+    // SE-1134: SE-1130's balance input at 2026-11-06 00:09:36Z (gateway "loads [local-node-0=1282051 local-node-1=188732
+    // local-node-2=146043 local-node-3=218568]"): node-0 measures ~215k, one simulationRatio sample of 0.78 made it 1e6/0.78.
+    // Alpha Station's partition 4728 carries 3 clients and ~58k; its estimated lag was 15.2 s (a ~42 MB estimate). node-0's other load is in
+    // flight, as most of it was (Alpha was the only movable component there); scale multiplies it and parks it (a real
+    // overload at 6).
+    private static (PartitionReport Report, string Node)[] PaceRatioDipShape(double ratio, double scale = 1.0)
+    {
+        double speed = scale == 1.0 ? 200 : 0;
+        PartitionInfo At(ulong id, double x, int members, long simLoad, ulong[]? clients = null, long bytes = 0, double v = 0) =>
+            new(id, members, true, new PartitionSphere(x, 0, 0, 100), v, clients ?? [], 1000,
+                bytes != 0 ? bytes : 400L * 1000 + 8_000L * members + 2_000, simLoad);
+        return
+        [
+            (new PartitionReport(3000, 1000, [At(4728, 0, 26, 57_681, [1, 2, 3], 42_200_000),
+                At(4800, 100_000, 1, (long)(80_000 * scale), v: speed), At(4801, 200_000, 1, (long)(80_000 * scale), v: speed)], 0, 50,
+                SimulationRatio: ratio, SimLoadSupported: true), "local-node-0"),
+            PaceSimNode("local-node-1", At(4810, 300_000, 1, 188_732)),
+            PaceSimNode("local-node-2", At(4820, 400_000, 1, 146_043)),
+            PaceSimNode("local-node-3", At(4830, 500_000, 1, 218_568)),
+        ];
+    }
+
+    /// <summary>SE-1134: a one-pass sim-ratio dip moves nothing, a lasting one does; a client move pays for its lag.</summary>
+    private static void TestBalanceRatioDip()
+    {
+        static void Check(bool value, string what) { if (!value) throw new InvalidOperationException("balance-ratio-dip: " + what); }
+        Check(new CostModel().SimRatioSustainSeconds == 0 && new CostModel().ClientMinGainPerLagSecond == 0
+            && CostModel.Deployed().SimRatioSustainSeconds == 10 && CostModel.Deployed().ClientMinGainPerLagSecond == 0.01,
+            "both are off by default, 10 s and 0.01 deployed");
+        PaceDefaultControl("balance-ratio-dip", PaceOverride("ClientMinGainPerLagSecond", "0"));
+
+        // The sustain window, one sample a second as the automatic pass reads them.
+        var runs = new Dictionary<string, List<(DateTime At, double Ratio)>>();
+        (PartitionReport Report, string Node)[] Sustain((PartitionReport Report, string Node)[] nodes, double sustain, DateTime at) =>
+            [.. SustainRatios([.. nodes.Select(n => (n.Node, n.Report))], n => n, runs, sustain, at).Select(n => (n.Report, n.Node))];
+        DateTime t0 = DateTime.UnixEpoch.AddDays(20000);
+        double Read(double ratio, double second, double sustain = 10) => Sustain(PaceRatioDipShape(ratio), sustain, t0.AddSeconds(second))[0].Report.SimulationRatio;
+        Check(Read(0.78, 0) == 1 && Read(1.0, 1) == 1.0 && !runs.ContainsKey("local-node-0"), "one dip reads 1, a healthy sample ends it");
+        double[] lasting = [.. Enumerable.Range(2, 12).Select(s => Read(s % 2 == 0 ? 0.7 : 0.85, s))];
+        Check(lasting.Take(10).All(r => r == 1) && lasting[10] == 0.85 && lasting[11] == 0.85,
+            $"a dip lasting 10 s reads its mildest ratio from then on: {string.Join(" ", lasting)}");
+        Check(Read(0.9, 40) == 1, "a gap in the samples starts a new run");
+        Check(Read(0.6, 41, sustain: 0) == 0.6 && runs.Count == 0, "sustain 0 passes every sample through");
+
+        CostModel live = CostModel.Deployed();
+        CostModel before = live with { SimRatioSustainSeconds = 0, ClientMinGainPerLagSecond = 0 };
+        // (a) Known positive: the pre-SE-1134 planner moves Alpha off node-0 on the one 0.78 sample (VOID otherwise).
+        var dip = PaceRatioDipShape(0.78);
+        RebalancePlan[] old = ChooseRebalancePlans(dip, before, [], _ => false, null, null, false, null, out _);
+        if (!old.Any(p => p.Members.Any(m => m.Id == 4728) && p.Kind == RebalanceKind.Client))
+            throw new InvalidOperationException($"balance-ratio-dip: VOID - SE-1130's input does not move 4728 as a client move: {PaceMoves(old)}");
+        // Fix 1: through the pass's sustain the one sample reads 1; at the measured loads (peak ~219k) nothing moves.
+        runs.Clear();
+        var sustained = Sustain(dip, live.SimRatioSustainSeconds, t0);
+        RebalancePlan[] held = ChooseRebalancePlans(sustained, live, [], _ => false, null, null, false, null, out var dHeld);
+        Check(sustained[0].Report.SimulationRatio == 1 && held.Length == 0, $"one dip moves nothing: {PaceMoves(held)}, {dHeld.Explain}");
+        // Fix 2: even if 0.78 had lasted, Alpha's client move gains ~4 % for a 15 s freeze and is refused.
+        RebalancePlan[] kept = ChooseRebalancePlans(dip, live, [], _ => false, null, null, false, null, out var dKept);
+        Check(!kept.Any(p => p.Members.Any(m => m.Id == 4728)) && dKept.MinGainSkipped > 0,
+            $"a lasting 0.78 still does not move Alpha for its gain: {PaceMoves(kept)}, min-gain skipped {dKept.MinGainSkipped}");
+
+        // A real overload still migrates: node-0 measures 1.02M and runs at 0.6 for 12 s; after the window the deployed
+        // planner sheds a load unit off it.
+        runs.Clear();
+        (PartitionReport Report, string Node)[] overload = [];
+        for (int s = 0; s <= 12; s++) overload = Sustain(PaceRatioDipShape(0.6, scale: 6), live.SimRatioSustainSeconds, t0.AddSeconds(s));
+        Check(overload[0].Report.SimulationRatio == 0.6, "a lasting 0.6 reads 0.6");
+        RebalancePlan[] shed = ChooseRebalancePlans(overload, live, [], _ => false, null, null, false, null, out _);
+        Check(shed.Any(p => p.Source == "local-node-0" && p.Kind == RebalanceKind.Load), $"a real overload migrates: {PaceMoves(shed)}");
+        Console.WriteLine($"balance-ratio-dip: one 0.78 sample moved {PaceMoves(old)} before, holds now; a lasting 0.78 refuses Alpha's"
+            + $" client move by gain per lag second; a lasting overload migrates {PaceMoves(shed)}");
+    }
+}
