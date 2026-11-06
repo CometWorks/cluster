@@ -65,7 +65,6 @@ internal sealed partial class PartitionPersistence
 	// fence killed the recovering node on every boot before this (node-3, 2026-08-11).
 	private int m_recoveryLoadInFlight;
 	private readonly Dictionary<ulong, int> m_recoveryFailureCounts = new Dictionary<ulong, int>();
-	private const int RecoveryFailureQuarantineThreshold = 3;
 	// T-0388: recoveries that loaded 0 members out of saves that held content (all of it screened as live elsewhere or
 	// stale), at their recovered generation. The game thread adds; RegistryLoop releases them once their empty Final
 	// is catalogued (ReleaseEmptyRecoveries).
@@ -410,16 +409,19 @@ internal sealed partial class PartitionPersistence
 				lock (m_recoveryFailureCounts)
 					failures = m_recoveryFailureCounts[recovery.Partition]
 						= m_recoveryFailureCounts.GetValueOrDefault(recovery.Partition) + 1;
-				if (m_warmRecovery && failures >= RecoveryFailureQuarantineThreshold)
+				int quarantineAfter = ClusterConfig.GetInt("recovery.quarantineAfter");
+				if (quarantineAfter > 0 && failures >= quarantineAfter)
 				{
-					// P2-REC-03 warm branch: content that keeps failing to load is poison, not a
-					// transient - a warm candidate re-added forever would reclaim and fail in a loop
-					// with the partition never becoming repairable. Quarantine it like the cold path:
-					// visible on /cluster/quarantine, repairable in place; the claim is still released
-					// so another holder can serve the partition if one exists.
+					// P2-REC-03: content that keeps failing to load is poison, not a transient - a warm
+					// candidate re-added forever would reclaim and fail in a loop with the partition never
+					// becoming repairable. SE-1161: the cold path looped the same way (the registry offered
+					// the released row straight back: node-1 claimed 3432 71 times in 3 minutes, 2026-11-06).
+					// Quarantine it: visible on /cluster/quarantine, repairable in place, and the registry
+					// hands it to nobody while this node reports it. The claim is still released.
 					string staged = m_assignedRecoveries.TryGetValue(recovery.Partition, out var assigned)
 						? assigned.Path : "<recovery claim " + recovery.Partition + ">";
 					Quarantine(staged, exception, recovery.Partition);
+					lock (m_recoveryFailureCounts) m_recoveryFailureCounts.Remove(recovery.Partition);
 					m_failedRecoveries.Enqueue(recovery);
 					continue;
 				}
@@ -2512,7 +2514,7 @@ internal sealed partial class PartitionPersistence
 			{
 				Post(client, "/registry/partitions/release?partition=" + failed.Partition.ToString(CultureInfo.InvariantCulture)
 					+ "&node=" + Uri.EscapeDataString(m_node) + "&epoch=" + m_nodeEpoch.ToString(CultureInfo.InvariantCulture)
-					+ "&generation=" + failed.Generation.ToString(CultureInfo.InvariantCulture)).Dispose();
+					+ "&generation=" + failed.Generation.ToString(CultureInfo.InvariantCulture) + "&failed=true").Dispose();
 			}
 			catch (HttpRequestException exception) when (exception.StatusCode == HttpStatusCode.Conflict)
 			{

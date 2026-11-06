@@ -4789,7 +4789,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                                 $"Partition {releasePartition} is routed to connected client {releaseClient}; refusing release");
                     }
                 WriteJson(context, 200, _registry.ReleasePartition(releasePartition, Required(context, "node"), long.Parse(Required(context, "epoch")),
-                    long.Parse(Required(context, "generation")), memberless: context.Request.QueryString["memberless"] == "true"));
+                    long.Parse(Required(context, "generation")), memberless: context.Request.QueryString["memberless"] == "true",
+                    failedRecovery: context.Request.QueryString["failed"] == "true"));
                 return;
             }
             if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/recoveries/claim", StringComparison.OrdinalIgnoreCase))
