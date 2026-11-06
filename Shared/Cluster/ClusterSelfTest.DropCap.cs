@@ -46,7 +46,7 @@ internal static partial class ClusterSelfTest
 		DropContainerCap.Merge(known, pending, new NpcCensusService.DropRow[] { new(3, true, 0) }, 101_000, 94_000);
 		Check(pending.Count == 2 && known[3].Offline, "a spawn dispatched after the pass stays pending");
 
-		Check(ClusterConfig.DefaultOf("drops.maxActive") == "3", "drops.maxActive defaults to 3");
+		Check(ClusterConfig.DefaultOf("drops.maxActive") == "5", "drops.maxActive defaults to 5");
 		Check(ClusterConfig.Normalize("drops.maxActive", "10") == "10" && ClusterConfig.Normalize("drops.maxActive", "0") == "0",
 			"drops.maxActive takes a count, 0 = no cap");
 		bool refused = false;
