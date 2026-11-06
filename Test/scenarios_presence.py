@@ -65,7 +65,7 @@ SEEDING_WINDOW_SECONDS = 35
 
 #: P2-PRS-05's admin kick cooldown (admission kickTimeoutSeconds; 300 s in production). Long enough for a client
 #: started right after the kick to be refused inside it, short enough to wait out for the return.
-KICK_TIMEOUT_SECONDS = 45
+KICK_TIMEOUT_SECONDS = 60
 
 
 def _chat(bench, node_id: str, cursor: int = 0) -> tuple[list[dict], int]:
