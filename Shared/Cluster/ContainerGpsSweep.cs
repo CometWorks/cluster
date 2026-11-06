@@ -12,7 +12,8 @@ namespace ClusterPlugin;
 /// that: a node that got it by a handover or a reload never counted its marker down, and markers from before the fix stayed
 /// on the WA for good. Octahedron collected ~30 of them in a day, several stuck at "T - 0sec". So the WA deletes a marker
 /// once it has had it for longer than vanilla keeps any drop (its grid timeout, plus a minute of slack), and deletes the
-/// oldest markers while more drops are marked than drops.maxActive allows. Markers are not saved with the WA's checkpoint
+/// oldest markers while more drops are marked than drops.maxActive allows (drops.lifetimeSeconds, when set, is the drop
+/// lifetime, and the slack is as long as that up to a minute). Markers are not saved with the WA's checkpoint
 /// (vanilla saves only GPS whose entity is on the saving server), so a WA restart starts them all fresh.
 /// </summary>
 internal static class ContainerGpsSweep
@@ -40,7 +41,9 @@ internal static class ContainerGpsSweep
 		foreach (long id in marked)
 			s_firstSeen.TryAdd(id, now);
 
-		double lifetime = (Math.Max(definition.PersonalContainerGridTimeOut, definition.CompetetiveContainerGridTimeOut) + SlackSeconds) * 1000.0;
+		int configured = ClusterConfig.GetInt("drops.lifetimeSeconds");
+		int drop = configured > 0 ? configured : Math.Max(definition.PersonalContainerGridTimeOut, definition.CompetetiveContainerGridTimeOut);
+		double lifetime = (drop + Math.Min(SlackSeconds, drop)) * 1000.0;
 		List<long> expired = s_firstSeen.Where(pair => now - pair.Value > lifetime).Select(pair => pair.Key).ToList();
 		int cap = ClusterConfig.GetInt("drops.maxActive");
 		int overCap = cap > 0 ? s_firstSeen.Count - expired.Count - cap : 0;
