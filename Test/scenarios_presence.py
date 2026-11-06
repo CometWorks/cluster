@@ -471,27 +471,28 @@ def p2_prs_04(bench) -> None:
     record = {}
     try:
         bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
+        # No balancing: a co-location pass would put both clients on one node and leave nothing remote to list.
+        bench.cluster.post("/automatic/pause")
         api1 = bench.start_client(CLIENT_ID)
         bench.wait_spawned(CLIENT_ID)
+        # Client 1 goes to node-2 first, so client 2 can log in and spawn on node-1 the usual way.
+        partition = _client_partition(_partitions(bench, "node-1"))
+        if partition is None:
+            raise ClusterError("client 1's partition was not reported before its handover")
+        record["client1Handover"] = bench.cluster.post(_handover_url(bench, partition, client=CLIENT_ID), timeout=300)
         first = wait_until(lambda: next((row for row in _cluster_players(bench, "wa-1")
-                                         if row["steamId"] == CLIENT_ID), None),
-                           60, "client 1 in the cluster player list")
-        bench.check("client 1 is attached to node-1", first["node"] == "node-1", json.dumps(first))
+                                         if row["steamId"] == CLIENT_ID and row["node"] == "node-2"), None),
+                           120, "client 1 reported on node-2")
 
         # -- a FRESH LOGIN while a player is online on another node --------------------------------
         # The live bug: the mirror sent client 2 its remote rows while client 2 was still loading its world, the
         # world request flushed them, and they were booked as delivered - client 2's F3 never listed client 1.
-        # Not spawned: a respawn may well put it on node-1. Its player exists from the join; the medical screen
-        # only has to go so that F3 reaches the game screen.
-        api2 = start_second_client(bench, route_node="node-2")
-        for screen in sorted((listed["index"] for listed in api2.list_screens() if listed.get("type") == "MyGuiScreenMedicals"),
-                             reverse=True):
-            api2.close_screen(screen)
+        api2 = start_second_client(bench, route_node="node-1", spawn=True)
         second = wait_until(lambda: next((row for row in _cluster_players(bench, "wa-1")
                                           if row["steamId"] == CLIENT2_ID), None),
                             60, "client 2 in the cluster player list")
         record["players"] = {"client1": first, "client2": second}
-        bench.check("client 2 is attached to node-2", second["node"] == "node-2", json.dumps(second))
+        bench.check("the two clients are on different nodes", second["node"] == "node-1", json.dumps(record["players"]))
         names = {CLIENT_ID: first["name"], CLIENT2_ID: second["name"]}
         expected = sorted(names.values())
 
@@ -505,8 +506,7 @@ def p2_prs_04(bench) -> None:
             rows2 = wait_until(lambda: listed(api2, expected), 30, "client 2's F3 to list both players")
         except ClusterError:
             rows2 = _f3(api2)[0]
-        record["fresh"] = {"client2Rows": rows2, "client2Node": second["node"],
-                           "node2Mirror": bench.cluster.node(second["node"], "/player-mirror")}
+        record["fresh"] = {"client2Rows": rows2, "node1Mirror": bench.cluster.node("node-1", "/player-mirror")}
         bench.check("a fresh login's F3 lists the player on the other node",
                     sorted(rows2) == expected, json.dumps(rows2))
         try:
@@ -518,11 +518,11 @@ def p2_prs_04(bench) -> None:
                     json.dumps(rows1))
 
         # -- F3 kick and ban of a REMOTE row ---------------------------------------------------------
-        # Client 1 is an admin on node-1; client 2 is hosted by another node. Vanilla would kick nobody, put
-        # client 2 on node-1's own kick list and ban config, and take its row off node-1's clients.
-        bench.cluster.node("node-1", f"/promote-test?userId={CLIENT_ID}&level=4", "POST")
-        wait_until(lambda: bench.cluster.node(first["node"], f"/promote-test?userId={CLIENT_ID}").get("level") == 4
-                   or None, 60, "client 1's admin level on its node")
+        # Client 1 is an admin on node-2; client 2 is hosted by node-1. Vanilla would kick nobody, put client 2
+        # on node-2's own kick list and ban config, and take its row off node-2's clients.
+        bench.cluster.node("node-2", f"/promote-test?userId={CLIENT_ID}&level=4", "POST")
+        wait_until(lambda: bench.cluster.node("node-2", f"/promote-test?userId={CLIENT_ID}").get("level") == 4
+                   or None, 60, "client 1's admin level on node-2")
         moderation = {}
         for button in ("Kick", "Ban"):
             _, index = _f3(api1, keep_open=True)
@@ -530,8 +530,8 @@ def p2_prs_04(bench) -> None:
                        f"client 1's F3 {button} button to be enabled on client 2's row")
             pattern = rf"{button.lower()} refused for player={CLIENT2_ID} "
             try:
-                refused = wait_until(lambda: next(iter(_lines(bench, "node-1", pattern)), None), 30,
-                                     f"node-1 to refuse the {button.lower()}")
+                refused = wait_until(lambda: next(iter(_lines(bench, "node-2", pattern)), None), 30,
+                                     f"node-2 to refuse the {button.lower()}")
             except ClusterError:
                 refused = None
             api1.close_screen(index)
@@ -542,41 +542,40 @@ def p2_prs_04(bench) -> None:
                         refused is not None, json.dumps(moderation[button]))
             bench.check(f"the {button.lower()}ed remote row stays on the admin's F3",
                         names[CLIENT2_ID] in rows_after, json.dumps(rows_after))
-        misfires = _lines(bench, "node-1", rf"Player {names[CLIENT2_ID]} (kicked|banned)")
+        misfires = _lines(bench, "node-2", rf"Player {names[CLIENT2_ID]} (kicked|banned)")
         session = _session(bench, CLIENT2_ID) or {}
         moderation["vanillaLines"] = misfires
         moderation["client2Session"] = {key: session.get(key) for key in ("backend", "admissionState")}
         record["moderation"] = moderation
-        bench.check("node-1 neither kicked nor banned the remote player", not misfires, json.dumps(misfires))
+        bench.check("node-2 neither kicked nor banned the remote player", not misfires, json.dumps(misfires))
         bench.check("client 2 is still in the cluster", session.get("admissionState") == "Ready", json.dumps(session))
 
         # -- a HANDOVER with the F3 list open --------------------------------------------------------
         # The client keeps its rows across a traversal. The target must send what it lacks and nothing it has:
         # a member message it already holds adds a second row to an open F3 (w33, 620 rows for 124 players).
-        _, index = _f3(api1, keep_open=True)
-        partition = _client_partition(_partitions(bench, "node-1"))
+        _, index = _f3(api2, keep_open=True)
+        partition = next((p["id"] for p in _partitions(bench, "node-1") if CLIENT2_ID in (p.get("clients") or [])), None)
         if partition is None:
-            raise ClusterError("client 1's partition was not reported before the handover")
-        target = "node-2"
+            raise ClusterError("client 2's partition was not reported before its handover")
+        passes = _mirror_passes(bench, "node-2")
         record["handover"] = {"partition": partition, "result": bench.cluster.post(
-            _handover_url(bench, partition, target=target, client=CLIENT_ID), timeout=300)}
-        wait_until(lambda: any(row["steamId"] == CLIENT_ID and row["node"] == target
+            _handover_url(bench, partition, client=CLIENT2_ID), timeout=300)}
+        wait_until(lambda: any(row["steamId"] == CLIENT2_ID and row["node"] == "node-2"
                                for row in _cluster_players(bench, "wa-1")) or None,
-                   120, "client 1 to be reported on the target after the handover")
-        passes = _mirror_passes(bench, target)
-        wait_until(lambda: _mirror_passes(bench, target) >= passes + 3 or None, 60,
-                   "three mirror passes on the target after the arrival")
-        controls = api1.get_controls(index, depth=10) or []
+                   120, "client 2 reported on node-2 after the handover")
+        wait_until(lambda: _mirror_passes(bench, "node-2") >= passes + 3 or None, 60,
+                   "three mirror passes on node-2 after the arrival")
+        controls = api2.get_controls(index, depth=10) or []
         table = next(control for control in controls if control.get("type") == "MyGuiControlTable")
         open_rows = [row["cells"][1] for row in (table.get("properties") or {}).get("rows") or []]
-        api1.close_screen(index)
-        reopened, _ = _f3(api1)
+        api2.close_screen(index)
+        reopened, _ = _f3(api2)
         record["handover"].update({"openRows": open_rows, "reopenedRows": reopened,
-                                   "targetMirror": bench.cluster.node(target, "/player-mirror")})
+                                   "node2Mirror": bench.cluster.node("node-2", "/player-mirror")})
         bench.check("an F3 left open across the handover lists every player exactly once",
                     sorted(open_rows) == expected, json.dumps(open_rows))
         bench.check("the F3 after the handover lists every player", sorted(reopened) == expected, json.dumps(reopened))
-        bench.exercised(route="node-1 + node-2 (fresh login, F3 kick/ban, handover with F3 open)")
+        bench.exercised(route="node-1 -> node-2 (client 1), fresh login on node-1, F3 kick/ban, handover with F3 open")
     finally:
         bench.record("f3-cluster-players", record)
 
