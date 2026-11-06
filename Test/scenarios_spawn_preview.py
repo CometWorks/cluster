@@ -419,6 +419,7 @@ def p2_wa_06g(bench) -> None:
     _kill(bench, CLIENT_ID)
     session_before = _session_of(bench, CLIENT_ID) or {}
     failed_before = len(_lines(bench, "node-2", r"spawn preview switch operation=\S+ failed"))
+    splits_before = len(_lines(bench, "node-1", r"topology Split committed"))
     bench.record("hold-armed", bench.cluster.node("node-2", "/respawn-switch-fault?mode=hold&count=1&seconds=60", "POST"))
     _medical_click(bench, api, name)
     held = _poll(lambda: (lambda s: s if isinstance(s, dict) and s.get("faulted") else None)(
@@ -426,8 +427,14 @@ def p2_wa_06g(bench) -> None:
     _require(bench, "node-2 holds the preview switch", held is not None, json.dumps(held))
     partition = held["faulted"][0]["partition"]
     bench.cluster.node("node-1", f"/fast-test-drive?entity={mover}&vx=3000&vy=0&vz=0&seconds=20&mode=teleport", "POST")
-    split = _poll(lambda: [line for line in _lines(bench, "node-1", r"topology Split committed inputs=\S+")
-                           if re.search(rf"inputs=(\S+,)?{partition}(,\S+)? ", line + " ")], 60)
+    def retired(line: str) -> bool:
+        # A distance split keeps the larger group's id; only a split with the partition among its inputs and not among
+        # its outputs retires it, as the trader's fast split retired Alpha's.
+        m = re.search(r"inputs=(\S+) outputs=([\d,]+)", line)
+        return bool(m) and str(partition) in m.group(1).split(",") and str(partition) not in m.group(2).split(",")
+
+    split = _poll(lambda: [line for line in _lines(bench, "node-1", r"topology Split committed")[splits_before:]
+                           if retired(line)], 60)
     bench.record("split", {"held": held, "split": split})
     _require(bench, f"a fast split retired the kit's partition {partition} while the switch was held", bool(split))
     bench.cluster.node("node-2", "/respawn-switch-fault-release", "POST")
