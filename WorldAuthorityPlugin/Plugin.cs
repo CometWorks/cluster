@@ -14,8 +14,8 @@ using VRage.Plugins;
 #if !LOCAL_BUILD
 using System.Reflection;
 
-[assembly: AssemblyVersion("0.2.9.0")]
-[assembly: AssemblyFileVersion("0.2.9.0")]
+[assembly: AssemblyVersion("0.2.10.0")]
+[assembly: AssemblyFileVersion("0.2.10.0")]
 #endif
 
 namespace WorldAuthorityPlugin;
