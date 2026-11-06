@@ -858,6 +858,12 @@ internal sealed partial class ClusterControlServer
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 				return;
 			}
+			if (context.Request.HttpMethod == "GET" && path.EndsWith("/drop-container-gps", StringComparison.OrdinalIgnoreCase))
+			{
+				string result = Invoke(() => JsonSerializer.Serialize(ContainerGpsSweep.Status()));
+				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
+				return;
+			}
 			if (context.Request.HttpMethod == "GET" && path.EndsWith("/drop-container-result", StringComparison.OrdinalIgnoreCase))
 			{
 				if (!Guid.TryParse(context.Request.QueryString["operation"], out Guid dropOperation))

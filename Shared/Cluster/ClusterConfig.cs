@@ -361,8 +361,13 @@ public static class ClusterConfig
 		// keeps the one it had at the freeze and leaves the world at it when its partition loads), plus the drops the WA has
 		// dispatched that the census does not show yet. A player whose drop falls due while the cluster is at the cap gets
 		// none: the drop is skipped, not queued, and the player's next one is due an interval later. While the census is
-		// unknown (none yet, or older than 60 s) every due drop is skipped. Read per sweep (5 s).
-		["drops.maxActive"] = "3",
+		// unknown (none yet, or older than 60 s) every due drop is skipped. Read per sweep (5 s). SE-1146: default 5 (was 3), and
+		// the WA deletes the oldest drop GPS markers over it (ContainerGpsSweep).
+		["drops.maxActive"] = "5",
+		// SE-1146: seconds a NEW container drop stays in the world before vanilla removes it (and the World Authority's drop GPS
+		// markers last this long plus up to a minute); 0 = vanilla's (the drop system definition's 15 min). Read by the node at
+		// each spawn and by the WA's marker sweep (5 s). A bench sets a few seconds so drops come and go within a lane.
+		["drops.lifetimeSeconds"] = "0",
 		// T-0265: carry each client's inventory delta counters across a handover. "false" restores the
 		// old fresh-counter adopt, only so a live A/B can earn the red on the same build.
 		["handover.inventoryCounters"] = "true",
