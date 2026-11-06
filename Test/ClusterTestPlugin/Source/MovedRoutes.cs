@@ -1325,6 +1325,22 @@ internal static class MovedRoutes
 					Write(context, 200, "application/json", Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { field = m_corruptImportField })));
 					return;
 		});
+        // SE-1167: keep a failing import's entities in the world for N seconds before the discard, so a test sees
+        // what plugins do with them. Acts only while /debug/corrupt-import is armed, inside its perturbation, so
+        // a passing import is never delayed. POST ?seconds=N arms it (0 clears), GET reads it. The import answers
+        // the gateway only after the hold, and the gateway gives it 10 s (DirectGateway._http.Timeout).
+        TestRoutes.Add("*", "/debug/hold-import", (context, path) =>
+		{
+					if (context.Request.HttpMethod == "POST")
+					{
+						double seconds = double.Parse(context.Request.QueryString["seconds"] ?? "0", CultureInfo.InvariantCulture);
+						if (seconds is < 0 or > 600) throw new ArgumentOutOfRangeException(nameof(seconds));
+						m_holdImportMs = (int)(seconds * 1000);
+						Log("hold-import " + (m_holdImportMs == 0 ? "cleared" : "armed ms=" + m_holdImportMs));
+					}
+					Write(context, 200, "application/json", Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { seconds = m_holdImportMs / 1000.0, held = Volatile.Read(ref m_heldImports) })));
+					return;
+		});
         // Names the IGC addresses this node hosts and the grids that could carry one. Moved out of the
         // product with IgcTestHarness (T-0171); only Test/scenarios_wa.py calls it.
         TestRoutes.Add("GET", "/igc-endpoints", (context, path) =>
