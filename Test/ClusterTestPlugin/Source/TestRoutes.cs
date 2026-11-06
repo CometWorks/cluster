@@ -76,6 +76,7 @@ internal static class TestRoutes
         MeteorRoutes.Register();      // #1381 a meteor probe and its carried lifetime
         OfflineTestRoutes.Register(); // SE-347 shared LoadRecovery apply/crash boundary and real production
         RespawnFaultRoutes.Register(); // SE-1124 a split or a refusal at a respawn switch target
+        RespawnSwitchFaultRoutes.Register(); // SE-1189 a held or refused spawn preview switch at its source
         StaleMemberRoutes.Register(); // SE-1156 a member with no session, injected or through the leave-before-login race
         AccountingInterlockObserver.Register();
         GameThreadLoadRoutes.Register(); // SE-1134 real game-thread time: a busy node, a single hitch

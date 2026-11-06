@@ -286,6 +286,7 @@ public static class RespawnRegistryService
 			{
 				try
 				{
+					ClusterSeams.BeforeSwitchPost?.Invoke(request);
 					ClusterRespawnExecutionResult result = PostSwitch(request);
 					Console.WriteLine($"[ClusterPlugin] spawn preview switch operation={operationId:D} success={result.Success}");
 				}

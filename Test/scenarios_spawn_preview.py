@@ -11,6 +11,11 @@
   node with its view, stay connected and unpaused on the medical screen, and preview and respawn at the kit afterwards.
 * ``P2-WA-06f`` - the kit's partition is split on its node between the Gateway's ownership check and the target's (a
   trader shuttle leaving Alpha on octahedron-test, SE-1124): the preview must still arrive.
+* ``P2-WA-06g`` - SE-1189, two legs on the client's own node. First the switch fails before the Gateway moves the
+  client (the bench refuses it there): the node still has the player, its body still its character, and must take the
+  client back unpaused. Then a fast flight splits the kit's partition after the click and before the Gateway's switch,
+  which retires the partition the request names (Viktor at Alpha on octahedron-test, 2026-11-06 19:07Z): the preview
+  must follow the kit to its new partition.
 
 The Respawn button is checked through ``respawnButtonEnabled`` before it is clicked: the Remote API's click raises
 the button's event even when the button is disabled, which is how the older respawn scenarios passed while players
@@ -20,6 +25,7 @@ could not respawn at a remote spawn point.
 from __future__ import annotations
 
 import json
+import re
 import time
 
 from scenarios_core import CLIENT_ID, HANDOVER_TIMEOUT, _handover_url, _join, _lines, _nodes, _owners, _partitions
@@ -59,11 +65,15 @@ def _kill(bench, client_id: int) -> str:
     return node_id
 
 
-def _preview_and_respawn(bench, api, leg: str, name: str, grid: int) -> dict:
-    """Select the spawn point on the respawn screen; the preview must arrive (the grid on the client, the button
-    enabled) with the player still dead and the session unbroken; then respawn there."""
-    session_before = _session_of(bench, CLIENT_ID) or {}
-    screen = _medical_click(bench, api, name)
+def _preview_and_respawn(bench, api, leg: str, name: str, grid: int, session_before: dict | None = None) -> dict:
+    """Select the spawn point on the respawn screen (unless SESSION_BEFORE says it was selected already); the preview
+    must arrive (the grid on the client, the button enabled) with the player still dead and the session unbroken; then
+    respawn there."""
+    if session_before is None:
+        session_before = _session_of(bench, CLIENT_ID) or {}
+        screen = _medical_click(bench, api, name)
+    else:
+        screen = _medical_screen(api)
     state = {"streak": 0}
 
     def previewed():
@@ -272,6 +282,12 @@ def _watch_failed_switch(bench, api, leg: str, node_id: str, seconds: float = 25
     return summary
 
 
+def _medical_screen(api) -> int | None:
+    screens = _try(api.list_screens)
+    return next((s["index"] for s in screens if s.get("type") == "MyGuiScreenMedicals"), None) \
+        if isinstance(screens, list) else None
+
+
 def _reselect(bench, api) -> None:
     """Taking the client in again creates its player on the node, and the client answers a new player without a
     character with a medical screen of its own: keep the newest one, whose selection is empty, so a click on the
@@ -359,8 +375,73 @@ def p2_wa_06f(bench) -> None:
     bench.exercised(kit=entity, grid=grid, split=faulted)
 
 
+def p2_wa_06g(bench) -> None:
+    """A preview switch that fails before the Gateway moves the client keeps it, and one whose kit partition a fast
+    split retired after the click follows the kit (SE-1189)."""
+    api, entity, grid, name = _kit_on_node1(bench)
+    _own_partition_on(bench, grid, "node-2")
+
+    # Leg 1: the switch fails before the Gateway moved the backend. node-2 still has the player and its dead body; the
+    # restore used to refuse those bindings, give up and disconnect the client, which left a Steam client "Paused".
+    _kill(bench, CLIENT_ID)
+    bench.record("refuse-armed", bench.cluster.node("node-2", "/respawn-switch-fault?mode=refuse&count=1", "POST"))
+    _medical_click(bench, api, name)
+    refused = _watch_failed_switch(bench, api, "early-refuse", "node-2")
+    abandoned = _lines(bench, "node-2", r"spawn switch restore abandoned")
+    bench.record("early-refuse-abandoned", abandoned)
+    bench.screenshot(CLIENT_ID, "early-refuse-after-failure")
+    _require(bench, "early refuse: the preview switch failed", refused["switchFailed"])
+    bench.check("early refuse: node-2 took the client back", bool(refused["restored"]) and not abandoned,
+                json.dumps(abandoned)[:400])
+    bench.check("early refuse: the client never reconnected", not refused["reconnected"])
+    bench.check("early refuse: the client never paused", refused["pausedSamples"] == 0, str(refused["pausedSamples"]))
+    bench.check("early refuse: the client is still on the medical screen", refused["medicalAtEnd"] is True)
+    _reselect(bench, api)
+    first = _preview_and_respawn(bench, api, "early-refuse-retry", name, grid)
+    bench.check("early refuse retry: the client respawned on node-1, where the kit is", first["node"] == "node-1",
+                str(first["node"]))
+
+    # Leg 2: a fast flight splits the kit's partition between the click and the Gateway's switch. A fast split gives
+    # every part a new id, so the request names a retired partition, whose row has no owner.
+    _own_partition_on(bench, grid, "node-2")
+
+    def movers():
+        rows = _try(_partitions, bench, "node-1")
+        rows = rows if isinstance(rows, list) else []
+        row = next((p for p in rows if any(m.get("id") == grid for m in p.get("members") or [])), {})
+        others = [m["id"] for m in row.get("members") or [] if m.get("id") != grid]
+        return (row["id"], others[0]) if others else None
+
+    found = _poll(movers, HANDOVER_TIMEOUT)
+    bench.record("split-partition", found)
+    _require(bench, "the kit's partition has another member to fly away", found is not None)
+    _, mover = found
+    _kill(bench, CLIENT_ID)
+    session_before = _session_of(bench, CLIENT_ID) or {}
+    failed_before = len(_lines(bench, "node-2", r"spawn preview switch operation=\S+ failed"))
+    bench.record("hold-armed", bench.cluster.node("node-2", "/respawn-switch-fault?mode=hold&count=1&seconds=60", "POST"))
+    _medical_click(bench, api, name)
+    held = _poll(lambda: (lambda s: s if isinstance(s, dict) and s.get("faulted") else None)(
+        _try(bench.cluster.node, "node-2", "/respawn-switch-fault")), 60)
+    _require(bench, "node-2 holds the preview switch", held is not None, json.dumps(held))
+    partition = held["faulted"][0]["partition"]
+    bench.cluster.node("node-1", f"/fast-test-drive?entity={mover}&vx=3000&vy=0&vz=0&seconds=20&mode=teleport", "POST")
+    split = _poll(lambda: [line for line in _lines(bench, "node-1", r"topology Split committed inputs=\S+")
+                           if re.search(rf"inputs=(\S+,)?{partition}(,\S+)? ", line + " ")], 60)
+    bench.record("split", {"held": held, "split": split})
+    _require(bench, f"a fast split retired the kit's partition {partition} while the switch was held", bool(split))
+    bench.cluster.node("node-2", "/respawn-switch-fault-release", "POST")
+    second = _preview_and_respawn(bench, api, "retired", name, grid, session_before=session_before)
+    bench.check("retired: the client respawned on node-1, where the kit is", second["node"] == "node-1", str(second["node"]))
+    failed = _lines(bench, "node-2", r"spawn preview switch operation=\S+ failed")[failed_before:]
+    bench.check("retired: the Gateway did not fail the switch", not failed, json.dumps(failed)[:400])
+    bench.exercised(kit=entity, grid=grid, refused=refused["switchFailed"], retired=partition, mover=mover)
+
+
 SCENARIOS_SPAWN_PREVIEW = {
     "P2-WA-06d": (p2_wa_06d, "the respawn screen previews a spawn point on another node or offline (SE1-0122)", "3"),
     "P2-WA-06e": (p2_wa_06e, "a refused spawn preview switch keeps the client on its node, unpaused (SE-1124)", "3"),
     "P2-WA-06f": (p2_wa_06f, "a split of the kit's partition during a spawn preview switch does not fail it (SE-1124)", "3"),
+    "P2-WA-06g": (p2_wa_06g, "a preview switch failing before the Gateway moves the client keeps it, and one whose kit "
+                  "partition was split away follows the kit (SE-1189)", "3"),
 }

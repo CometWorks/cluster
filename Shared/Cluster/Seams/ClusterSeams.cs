@@ -50,6 +50,13 @@ public static class ClusterSeams
 	/// </summary>
 	public static volatile Action<ClusterRespawnExecution> BeforeRespawnExecute;
 
+	/// <summary>
+	/// SE-1189: runs on the source node's worker before it asks the Gateway to switch a dead client for a spawn preview,
+	/// after the client's view was detached. A bench can hold the request here while the medbay's partition is split away,
+	/// or throw to stand for a Gateway that refuses the switch before it moves the client's backend.
+	/// </summary>
+	public static volatile Action<ClusterRespawnExecution> BeforeSwitchPost;
+
 	private static volatile Action m_servicesInstalled;
 	private static volatile bool m_servicesWereInstalled;
 
