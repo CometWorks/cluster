@@ -5,6 +5,7 @@ using PluginSdk.Clustering;
 using Sandbox.Game.Components;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Cube;
+using Sandbox.Game.Screens.Helpers;
 using Sandbox.Game.SessionComponents;
 using Sandbox.Game.World;
 using VRage.Game.Entity;
@@ -79,6 +80,24 @@ internal static class DropContainerRemovalService
 	{
 		system.m_delayedEntitiesForRemoval.RemoveAll(item => item.EntityId == gridId);
 		system.RegisterDelayedContainerRemovalInternal(gridId, seconds);
+		if (MyEntities.TryGetEntityById(gridId, out MyEntity entity) && entity is MyCubeGrid grid)
+			TrackGps(system, grid, system.m_delayedEntitiesForRemoval[^1]);
+	}
+
+	/// <summary>
+	/// SE-1146: vanilla counts a drop's marker down, and at the deadline deletes it, from m_gpsList, which only the spawning
+	/// node fills. On a node that got the drop by a handover or a reload the marker kept its last countdown ("T - 0sec") and
+	/// the deadline deleted nothing. The marker's entry shares the drop's removal entry, as vanilla's does.
+	/// </summary>
+	private static void TrackGps(MySessionComponentContainerDropSystem system, MyCubeGrid grid, MyEntityForRemoval removal)
+	{
+		MyContainerDropComponent drop = DropComponent(grid);
+		if (drop?.Entity == null || string.IsNullOrEmpty(drop.GPSName)) return;
+		foreach (MyGps stale in system.m_gpsList.Keys.Where(gps => gps.EntityId == drop.Entity.EntityId || system.m_gpsList[gps].EntityId == grid.EntityId).ToArray())
+			system.m_gpsList.Remove(stale);
+		var marker = new MyGps { Name = drop.GPSName, EntityId = drop.Entity.EntityId, IsContainerGPS = true };
+		marker.UpdateHash();
+		system.m_gpsList.Add(marker, removal);
 	}
 
 	/// <summary>
@@ -96,12 +115,20 @@ internal static class DropContainerRemovalService
 		s_nextSweep = now + SweepIntervalMilliseconds;
 		MySessionComponentContainerDropSystem system = System;
 		if (system?.m_delayedEntitiesForRemoval == null || system.m_definition == null) return;
-		var scheduled = new HashSet<long>(system.m_delayedEntitiesForRemoval.Select(item => item.EntityId));
+		var scheduled = new Dictionary<long, MyEntityForRemoval>();
+		foreach (MyEntityForRemoval item in system.m_delayedEntitiesForRemoval) scheduled.TryAdd(item.EntityId, item);
+		var tracked = new HashSet<long>(system.m_gpsList.Values.Select(item => item.EntityId));
 		Dictionary<long, ulong> holders = null;
 		int added = 0;
 		foreach (MyEntity entity in MyEntities.GetEntities())
 		{
-			if (entity is not MyCubeGrid grid || !grid.IsNpcSpawnedGrid || scheduled.Contains(grid.EntityId)) continue;
+			if (entity is not MyCubeGrid grid || !grid.IsNpcSpawnedGrid) continue;
+			if (scheduled.TryGetValue(grid.EntityId, out MyEntityForRemoval removal))
+			{
+				// SE-1146: a drop restored with its removal entry (a node restart) has no marker countdown yet
+				if (!tracked.Contains(grid.EntityId)) TrackGps(system, grid, removal);
+				continue;
+			}
 			MyContainerDropComponent drop = DropComponent(grid);
 			if (drop == null || ClusterRuntime.IsFrozen(grid.EntityId)) continue;
 			// #1443: a drop back from an offline partition keeps the deadline the census holds for it, so it leaves the world

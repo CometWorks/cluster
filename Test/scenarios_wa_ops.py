@@ -12,6 +12,8 @@ node-1 (``_join``):
   replicates, the WA's own drop schedule fires, and an inventory-full purchase refunds;
 * ``P2-DROP-REMOVAL`` - a drop container handed over to another node despawns there at its vanilla deadline,
   carried with the grid (#1391); ``P2-DROP-REMOVAL-RED`` is the same with the carry off and must outlive it;
+* ``P2-DROP-GPS`` - a drop's GPS marker leaves the World Authority and every node with the drop, also after a handover,
+  and the WA keeps at most ``drops.maxActive`` markers (SE-1146);
 * ``P2-DROP-CAP`` - at most ``drops.maxActive`` container drops are active cluster-wide (#1443): skipped, not queued,
   at the cap; replaced when one despawns; the knob live; an offline drop counted until its vanilla deadline; 0 = no cap;
 * ``P2-WA-06c`` - the WA is SIGKILLed holding a cross-node respawn arbitration: the respawn fails
@@ -1308,6 +1310,165 @@ def p2_drop_removal_red(bench) -> None:
     _drop_removal(bench, carried=False)
 
 
+# -- P2-DROP-GPS drop markers leave with their drops (SE-1146) -------------------------------------
+
+
+def _drop_markers(bench, node: str) -> dict[int, dict] | None:
+    """The node's drop container GPS markers by container entity id; None when the node did not answer."""
+    answer = _try(bench.cluster.node, node, "/drop-container-gps")
+    return None if "error" in answer else {int(row["entity"]): row for row in answer.get("markers") or []}
+
+
+def p2_drop_gps(bench) -> None:
+    """SE-1146: a drop's GPS marker leaves the World Authority and every node with the drop. Vanilla deleted a drop's
+    marker only on the node holding the drop; the WA kept its copy and its next GPS table put the marker back on every
+    node, so a Strong Unknown Signal outlived its drop for good (~30 on octahedron-test, some at "T - 0sec"). Leg 1: a
+    strong drop despawns on the node that spawned it. Leg 2: one handed over to the other node despawns there, where
+    vanilla had no countdown entry for its marker. In both the marker must be gone on the WA and both nodes and stay
+    gone past a full WA table. Leg 3: with drops.maxActive at 1 the WA deletes the older of two markers. Leg 4: with
+    drops.lifetimeSeconds 4 the WA deletes a marker held past 8 s. Leg 5: the production drop loop at a 2 s interval, drops
+    living 8 s, cap 3, until a 4th drop: never more than 3 markers anywhere, none left after. Leg 6: a WA restart, as a deploy does, leaves no
+    marker anywhere (they are not in the WA's save): the clean-up of the leftovers. Every wait is seconds long."""
+    bench.cluster.config.world_template = _pod_world(bench)
+    _join(bench)
+    identity = _client_identity(bench)
+    mapped = _poll(lambda: "error" not in _try(bench.cluster.get, f"/registry/client-routes?client={CLIENT_ID}"),
+                   HANDOVER_TIMEOUT)
+    _require(bench, "the registry mapped the client before the drops", bool(mapped))
+    # Cap off for legs 1-2 (only leg 3 tests the marker cap); the #1379 sweep must not take the lane's drops.
+    bench.record("config-setup", bench.cluster.handover_config({"npc.sweepSeconds": "0", "offline.enabled": "false",
+                                                                 "drops.maxActive": "0"}))
+    nodes = ("wa-1", "node-1", "node-2")
+
+    def grids(node: str) -> set:
+        return set(_try(bench.cluster.node, node, "/drop-container-grids").get("grids") or [])
+
+    def markers() -> dict[str, set]:
+        return {node: set((_drop_markers(bench, node) or {}).keys()) for node in nodes}
+
+    def strong_drop(label: str) -> tuple[str, int, int]:
+        """Dispatches a strong drop; its node, grid and marker (the container block's entity id) once the WA has it."""
+        before = {node: grids(node) for node in ("node-1", "node-2")}
+        known = markers()["wa-1"]
+        dispatch = bench.cluster.node("wa-1", f"/drop-container-dispatch?identity={identity}&competitive=true", "POST")
+        bench.record(f"{label}-dispatch", dispatch)
+        _require(bench, f"{label}: the WA dispatched a strong drop", dispatch.get("Spawned") is True, json.dumps(dispatch))
+        found: dict = {}
+
+        def spawned() -> bool:
+            for node in ("node-1", "node-2"):
+                new = grids(node) - before[node]
+                if new:
+                    found.update(node=node, grid=min(new))
+            fresh = markers()["wa-1"] - known
+            if found and fresh:
+                found["marker"] = min(fresh)
+                return True
+            return False
+
+        _require(bench, f"{label}: the drop materialised and the WA holds its marker", bool(_poll(spawned, 60)), json.dumps(found))
+        table = _drop_markers(bench, "wa-1") or {}
+        row = table.get(found["marker"]) or {}
+        bench.record(f"{label}-marker", {"found": found, "wa": row})
+        bench.check(f"{label}: the marker is a Strong Unknown Signal for every identity",
+                    str(row.get("name", "")).startswith("Strong Unknown Signal") and row.get("identities", 0) >= 1, json.dumps(row))
+        everywhere = _poll(lambda: all(found["marker"] in held for held in markers().values()), 20)
+        bench.check(f"{label}: both nodes got the marker from the WA", bool(everywhere), json.dumps({k: sorted(v) for k, v in markers().items()}))
+        return found["node"], found["grid"], found["marker"]
+
+    def despawn_and_check(label: str, node: str, grid: int, marker: int) -> None:
+        bench.cluster.node(node, f"/drop-test-deadline?grid={grid}&seconds=3", "POST")
+        gone = _poll(lambda: grid not in grids(node), 30, interval=1)
+        bench.check(f"{label}: the drop despawned on {node}", bool(gone))
+        cleared = _poll(lambda: all(marker not in held for held in markers().values()), 20, interval=1)
+        after = markers()
+        bench.check(f"{label}: the marker left the WA and both nodes with the drop", bool(cleared),
+                    json.dumps({k: sorted(v) for k, v in after.items()}))
+        time.sleep(7)  # past a full WA GPS table (every 5 s): a marker the WA kept would be back on the nodes by now
+        held = markers()
+        bench.record(f"{label}-after", {k: sorted(v) for k, v in held.items()})
+        bench.check(f"{label}: the marker stayed gone past a full WA GPS table", all(marker not in v for v in held.values()),
+                    json.dumps({k: sorted(v) for k, v in held.items()}))
+
+    # 1. A strong drop despawns on the node that spawned it.
+    source, grid, marker = strong_drop("leg1")
+    despawn_and_check("leg1", source, grid, marker)
+
+    # 2. A strong drop handed over to the other node despawns there.
+    source, grid, marker = strong_drop("leg2")
+    target = "node-2" if source == "node-1" else "node-1"
+    partition = bench.cluster.node(source, f"/partition-of?entity={grid}").get("partition")
+    _require(bench, "leg2: the drop grid is in a partition", bool(partition))
+    clientless = partition != _client_partition(_partitions(bench, source))
+    bench.record("leg2-handover", bench.cluster.post(
+        _handover_url(bench, partition, clientless=clientless, source=source, target=target), timeout=300))
+    moved = _poll(lambda: _owned_by(bench, partition, target) and grid in grids(target), HANDOVER_TIMEOUT)
+    _require(bench, f"leg2: the drop moved from {source} to {target}", bool(moved))
+    entry = _poll(lambda: next((row for row in _try(bench.cluster.node, target, "/drop-container-removals").get("removals") or []
+                                if row.get("grid") == grid), None), 15)
+    _require(bench, f"leg2: {target} holds the drop's removal entry", entry is not None, json.dumps(entry))
+    despawn_and_check("leg2", target, grid, marker)
+
+    # 3. The WA keeps at most drops.maxActive markers: of two, the older goes.
+    bench.record("config-cap1", bench.cluster.handover_config({"drops.maxActive": "1"}))
+    _, first_grid, first = strong_drop("leg3a")
+    second_node, second_grid, second = strong_drop("leg3b")
+    capped = _poll(lambda: markers()["wa-1"] == {second}, 20)
+    held = markers()
+    bench.record("leg3-markers", {k: sorted(v) for k, v in held.items()})
+    bench.check("leg3: with drops.maxActive 1 the WA kept only the newer marker", bool(capped), json.dumps({k: sorted(v) for k, v in held.items()}))
+    bench.check("leg3: the nodes dropped the older marker too", _poll(lambda: all(first not in v for v in markers().values()), 15) is not None)
+    bench.check("leg3: the WA logged the over-cap deletion", bool(_lines(bench, "wa-1", r"drop_container gps sweep expired=0 overCap=1 cap=1")))
+
+    # 4. Expiry: drops.lifetimeSeconds 4 makes the WA's marker lifetime 8 s; the live leg-3 drop (15 min deadline) keeps
+    # its grid, but its marker goes.
+    bench.record("config-lifetime4", bench.cluster.handover_config({"drops.lifetimeSeconds": "4"}))
+    expired = _poll(lambda: all(second not in v for v in markers().values()), 25)
+    bench.check("leg4: the WA deleted a marker held past drops.lifetimeSeconds (4 s + 4 s)", bool(expired),
+                json.dumps({k: sorted(v) for k, v in markers().items()}))
+    bench.check("leg4: the drop itself is still there (only the marker expired)", any(second_grid in grids(n) for n in ("node-1", "node-2")))
+    bench.check("leg4: the WA logged the expiry", bool(_lines(bench, "wa-1", r"drop_container gps sweep expired=1 overCap=0")))
+
+    # 5. Drops in seconds: the WA's drop interval at 2 s (its sweep runs every 5 s), each drop living 8 s, the cap at 3.
+    # The production loop spawns drop after drop; the markers on the WA and both nodes never go over the cap, and none
+    # is left once the drops stop. Before SE-1146 every despawned drop left its marker behind. The cap counts a drop for
+    # 30 s after the census last listed it (#1443), so a slot frees ~40 s after its drop spawned: the 4th drop is the
+    # first that replaces a despawned one, and the leg stops there.
+    bench.cluster.node(second_node, f"/drop-test-deadline?grid={second_grid}&seconds=1", "POST")  # frees its cap slot
+    bench.record("config-storm", bench.cluster.handover_config({"drops.maxActive": "3", "drops.lifetimeSeconds": "8"}))
+    spawned_before = _cap_status(bench).get("spawned", 0)
+    armed = bench.cluster.node("wa-1", "/drop-test-interval?ms=2000", "POST")
+    _require(bench, "leg5: the drop-interval test knob armed", armed.get("intervalMs") == 2000, json.dumps(armed))
+    peak, samples, spawned, started = 0, [], 0, time.time()
+    while time.time() - started < 75 and spawned < 4:
+        counts = {k: len(v) for k, v in markers().items()}
+        samples.append(counts)
+        peak = max(peak, *counts.values())
+        spawned = _cap_status(bench).get("spawned", 0) - spawned_before
+        time.sleep(1)
+    took = time.time() - started
+    bench.cluster.node("wa-1", "/drop-test-interval?ms=0", "POST")
+    bench.record("leg5-samples", {"spawned": spawned, "peak": peak, "seconds": took, "samples": samples})
+    bench.check("leg5: the WA's loop spawned 4 drops, one replacing a despawned drop", spawned >= 4, f"spawned {spawned} in {took:.0f} s")
+    bench.check("leg5: never more markers than drops.maxActive (3) on the WA or a node", peak <= 3, f"peak {peak}")
+    drained = _poll(lambda: all(not held for held in markers().values()), 30)
+    bench.check("leg5: no marker left once the drops stopped and expired", bool(drained),
+                json.dumps({k: sorted(v) for k, v in markers().items()}))
+    bench.record("config-reset", bench.cluster.handover_config({"drops.maxActive": "5", "drops.lifetimeSeconds": "0"}))
+    _no_reconnect(bench, "drop gps")
+
+    # 6. Markers are not in the WA's save, so a WA restart (a deploy's) leaves no marker on any node, stale or not.
+    bench.record("leg6-before", {k: sorted(v) for k, v in markers().items()})
+    bench.cluster.restart_node("wa-1")
+    bench.cluster.wait_ready(nodes=["wa-1"])
+    cleared = _poll(lambda: all(not held for held in markers().values()), 120, interval=3)
+    held = markers()
+    bench.record("leg6-after", {k: sorted(v) for k, v in held.items()})
+    bench.check("leg6: after a WA restart no node holds a drop marker", bool(cleared), json.dumps({k: sorted(v) for k, v in held.items()}))
+    bench.exercised(identity=identity, leg2={"source": source, "target": target, "partition": partition},
+                    leg3={"grids": [first_grid, second_grid], "markers": [first, second]})
+
+
 # -- P2-DROP-CAP the cluster-wide drop cap (#1443) --------------------------------------------------
 
 
@@ -1462,6 +1623,7 @@ SCENARIOS_WA_OPS = {
     "P2-WA-06c": (p2_wa_06c, "WA killed holding a cross-node respawn arbitration", "4"),
     "P2-DROP-REMOVAL": (p2_drop_removal, "#1391: a handed-over drop container despawns at its carried deadline", "3"),
     "P2-DROP-REMOVAL-RED": (p2_drop_removal_red, "#1391: the same with CLUSTER_DROP_REMOVAL_HANDOVER=0 outlives it", "3"),
+    "P2-DROP-GPS": (p2_drop_gps, "SE-1146: a drop's GPS marker leaves the WA and every node with the drop; drops.maxActive caps markers", "3"),
     "P2-DROP-CAP": (p2_drop_cap, "#1443: at most drops.maxActive container drops active cluster-wide, offline ones included", "3"),
     # P2-WA-02 (concurrent cross-node mutations never overdraw; balances converge) is asserted here.
     "P2-REC-01": (p2_rec_01, "WA killed inside a held mutation; queue replay conserves", "4"),
