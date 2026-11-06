@@ -18,6 +18,11 @@ internal sealed partial class DirectGateway
             ReplayHeavy(args);
             return;
         }
+        if (args.Length != 0 && args[0] == "--decisions")
+        {
+            ReplayDecisions(args);
+            return;
+        }
         CostModel model = CostModel.Deployed();
         HashSet<ulong> held = [];
         int passes = 0;
@@ -172,5 +177,107 @@ internal sealed partial class DirectGateway
         }
         Console.WriteLine($"samples {samples}: heavy-unit moves control {controlHeavyMoves}, heavy {heavyHeavyMoves}; clients carried by"
             + $" planned moves control {controlClients}, heavy {heavyClients}; evacuations {evacuations}");
+    }
+
+    /// <summary>
+    /// SE-1134: <c>--balance-replay --decisions FILE [--from HH:MM:SS] [--to HH:MM:SS] [--cost-model FILE] [--set FIELD=VALUE ...] [--assume-sustained]</c>
+    /// re-decides the pins of a gateway log (the "Automatic balance migration pinned", "Balancing declined" and "Balancing
+    /// held by the load floor" lines, in the log's own clock) under the model's SimRatioSustainSeconds,
+    /// BalanceMinPeakLoad and ClientMinGainPerLagSecond. A node load that is exactly EffectiveNodeLoad's 1e6 / ratio for a
+    /// two-decimal ratio under 0.98 is a sim-ratio reading; any other is the measured sum. Each logged line is one pass
+    /// through <see cref="SustainRatios"/>, so a dip counts only if the LOGGED passes show it lasting the window: the log
+    /// holds a fraction of the passes, and --assume-sustained instead counts every dip as lasting (fix 2 alone). A dip
+    /// that does not count leaves the node at its last logged measured load; a paced pin whose peak then falls under the
+    /// floor is held, a client pin whose gain does not pay for its lag is refused; an idle-cluster or heavy pin passes no
+    /// gate and is kept. The trajectory is not re-simulated: a pin
+    /// that would not have happened still shapes the lines after it. Reads a file, touches no cluster.
+    /// </summary>
+    private static void ReplayDecisions(string[] args)
+    {
+        string file = args[1];
+        CostModel model = CostModel.Deployed();
+        TimeSpan from = TimeSpan.Zero, to = TimeSpan.MaxValue;
+        bool assumeSustained = false;
+        for (int i = 2; i < args.Length; i++)
+        {
+            if (args[i] == "--from") from = TimeSpan.Parse(args[++i], CultureInfo.InvariantCulture);
+            else if (args[i] == "--to") to = TimeSpan.Parse(args[++i], CultureInfo.InvariantCulture);
+            else if (args[i] == "--cost-model") model = JsonSerializer.Deserialize<CostModel>(File.ReadAllText(args[++i]))!;
+            else if (args[i] == "--assume-sustained") assumeSustained = true;
+            else if (args[i] == "--set" && args[++i].Split('=', 2) is [var field, var value])
+                model = CostModel.WithOverrides(model, [KeyValuePair.Create(field, value)]);
+        }
+        // Every load a two-decimal ratio under 0.98 turns into, by EffectiveNodeLoad's own arithmetic.
+        Dictionary<long, double> reciprocal = [];
+        for (int hundredths = 1; hundredths < 98; hundredths++)
+        {
+            double ratio = hundredths / 100.0;
+            reciprocal.TryAdd(EffectiveNodeLoad(new PartitionReport(0, 0, [new(0, 1, true, new(0, 0, 0, 1), 0, [], SimLoadUs: 1)], 0, 0,
+                SimulationRatio: ratio, SimLoadSupported: true), true), ratio);
+        }
+        var line = new System.Text.RegularExpressions.Regex(@"^\[gateway [^\]]*\] (\d\d:\d\d:\d\d) (Automatic balance migration pinned|Balancing declined|Balancing held by the load floor)");
+        var loadsField = new System.Text.RegularExpressions.Regex(@"loads \[([^\]]*)\]");
+        var pinFields = new System.Text.RegularExpressions.Regex(@"kind ([a-z-]+), load \d+ \S+, (\S+)->(\S+), peak load (\d+)->\d+.*?overload reduction (-?\d+).*?estimated migration lag (\d+) ms.*?members \[([^\]]*)\].*gain=([0-9.]+|n/a)");
+        Dictionary<string, List<(DateTime At, double Ratio)>> runs = [];
+        Dictionary<string, long> lastMeasured = [];
+        DateTime clock = DateTime.UnixEpoch;
+        TimeSpan? previous = null;
+        int pins = 0, kept = 0, floorHeld = 0, gainRefused = 0;
+        Dictionary<string, int> keptByKind = [];
+        foreach (string text in File.ReadLines(file))
+        {
+            var m = line.Match(text);
+            if (!m.Success) continue;
+            TimeSpan time = TimeSpan.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+            // The log's clock has no date: a step back of more than 12 h is midnight.
+            clock = clock.Date + time + (previous is { } p && (p - time).TotalHours > 12 ? TimeSpan.FromDays(1) : TimeSpan.Zero);
+            previous = time;
+            if (loadsField.Match(text) is not { Success: true } loadsMatch) continue;
+            (string Node, long Load)[] logged = [.. loadsMatch.Groups[1].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => x.Split('=')).Select(x => (x[0], long.Parse(x[1], CultureInfo.InvariantCulture)))];
+            // This line as a pass: each node's ratio reading through the gateway's own sustain rule.
+            (string Node, PartitionReport Report)[] pass = [.. logged.Select(x => (x.Node, new PartitionReport(0, 0, [], 0, 0,
+                SimulationRatio: reciprocal.TryGetValue(x.Load, out double r) ? r : 1, SimLoadSupported: true)))];
+            (string Node, PartitionReport Report)[] read = assumeSustained ? pass
+                : SustainRatios(pass, n => n, runs, model.SimRatioSustainSeconds, clock);
+            Dictionary<string, long> effective = [];
+            foreach (((string node, long load), int i) in logged.Select((x, i) => (x, i)))
+            {
+                if (!reciprocal.ContainsKey(load)) lastMeasured[node] = load;
+                effective[node] = read[i].Report.SimulationRatio < 0.98 || !reciprocal.ContainsKey(load) ? load
+                    : lastMeasured.GetValueOrDefault(node, load);
+            }
+            if (m.Groups[2].Value != "Automatic balance migration pinned" || time < from || time > to) continue;
+            var pin = pinFields.Match(text);
+            if (!pin.Success) continue;
+            pins++;
+            string kind = pin.Groups[1].Value;
+            long peak = effective.Values.Max();
+            double meanLoad = effective.Values.Average();
+            long reduction = long.Parse(pin.Groups[5].Value, CultureInfo.InvariantCulture);
+            double lagMs = double.Parse(pin.Groups[6].Value, CultureInfo.InvariantCulture);
+            string verdict;
+            // The idle-cluster plan and the heavy moves pass neither gate (ChooseRebalancePlans): kept as logged.
+            if (kind is not ("load" or "client")) verdict = "pinned (passes no gate)";
+            else if (model.BalanceMinPeakLoad > 0 && peak < model.BalanceMinPeakLoad) { floorHeld++; verdict = $"held by the floor at peak {peak}"; }
+            else if (kind == "client" && model.ClientMinGainPerLagSecond > 0
+                && reduction / Math.Max(meanLoad, 1.0) < model.ClientMinGainPerLagSecond * lagMs / 1000)
+            {
+                gainRefused++;
+                verdict = $"refused: gain {reduction / Math.Max(meanLoad, 1.0):F3} < {model.ClientMinGainPerLagSecond * lagMs / 1000:F3} for {lagMs / 1000:F1} s";
+            }
+            else verdict = "pinned";
+            if (verdict.StartsWith("pinned"))
+            {
+                kept++;
+                keptByKind[kind] = keptByKind.GetValueOrDefault(kind) + 1;
+            }
+            Console.WriteLine($"{m.Groups[1].Value} {kind} [{pin.Groups[7].Value}] {pin.Groups[2].Value}->{pin.Groups[3].Value}"
+                + $" logged peak {pin.Groups[4].Value} lag {lagMs / 1000:F1} s gain {pin.Groups[8].Value}: {verdict}");
+        }
+        Console.WriteLine($"pins {pins}: still pinned {kept} ({string.Join(", ", keptByKind.Select(x => $"{x.Key} {x.Value}"))}),"
+            + $" held by the floor {floorHeld}, refused for gain per lag second {gainRefused}"
+            + $" (SimRatioSustainSeconds {(assumeSustained ? "assumed met" : model.SimRatioSustainSeconds.ToString(CultureInfo.InvariantCulture))},"
+            + $" BalanceMinPeakLoad {model.BalanceMinPeakLoad}, ClientMinGainPerLagSecond {model.ClientMinGainPerLagSecond})");
     }
 }

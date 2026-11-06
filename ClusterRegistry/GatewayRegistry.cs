@@ -3329,7 +3329,7 @@ internal sealed partial class GatewayRegistry : IDisposable
     /// the threshold: the partition is HandoverBlocked, scheduling backs off 1 min doubling to 1 h, and the
     /// policy layer moves the counterpart of any pending co-location instead.
     /// </summary>
-    public void RecordValidationAbort(ulong partition, string signature, string reason)
+    public void RecordValidationAbort(ulong partition, string signature, string reason, long[]? entities = null)
     {
         lock (_lock)
         {
@@ -3350,6 +3350,8 @@ internal sealed partial class GatewayRegistry : IDisposable
             block.Attempts++;
             block.Reason = reason;
             block.LastAbort = _clock();
+            // SE-1134: from a node that names them; an older node leaves the last known set.
+            if (entities is { Length: > 0 }) block.Entities = entities;
             Console.WriteLine($"handover validation abort partition={partition} signature={signature} attempts={block.Attempts} reason={reason}");
             if (block.Attempts >= HandoverValidationAborts)
             {
@@ -3410,6 +3412,21 @@ internal sealed partial class GatewayRegistry : IDisposable
             ReleaseHandoverBackoffLocked(partition, cause);
             Persist();
         }
+    }
+
+    /// <summary>
+    /// SE-1134: a residual entity of the partition's handover block that a lineage op leaves in it, or null when the op
+    /// may have taken the residual out (or the block names no entities). A merge survivor keeps all it had; a split or
+    /// transfer output keeps the members its list names. A retired input keeps nothing.
+    /// </summary>
+    private long? ResidualStays(ulong partition, LineageKind kind, ulong[] outputIds, Dictionary<ulong, long[]>? members)
+    {
+        if (!_state.HandoverBlocks.TryGetValue(partition, out HandoverBlockRecord? block) || block.Entities is not { Length: > 0 } entities
+            || !outputIds.Contains(partition))
+            return null;
+        if (kind == LineageKind.Merge) return entities[0];
+        return members != null && members.TryGetValue(partition, out long[]? kept) && kept.Intersect(entities).FirstOrDefault() is var e and not 0
+            ? e : null;
     }
 
     private void ReleaseHandoverBackoffLocked(ulong partition, string cause)
@@ -3654,8 +3671,13 @@ internal sealed partial class GatewayRegistry : IDisposable
             // busy partition had its block wiped every few minutes and the doomed retry churn never
             // ended. The changed member set does deserve exactly one prompt retry: release the backoff,
             // keep the attempt count, and a repeat abort re-blocks immediately at the escalated backoff.
+            // SE-1134: only if the residual's entity has left the partition. Alpha Station (partition 4728, an open
+            // maintenance panel) had its backoff released by a trader shuttle's split, and the next pin froze Alpha again.
             foreach (ulong changed in inputs.Select(x => x.Partition).Concat(outputIds).Distinct())
-                ReleaseHandoverBackoffLocked(changed, "membership-change");
+                if (ResidualStays(changed, kind, outputIds, members) is { } entity)
+                    Console.WriteLine($"handover backoff kept partition={changed} on membership-change: residual entity {entity} is still in it");
+                else
+                    ReleaseHandoverBackoffLocked(changed, "membership-change");
             RepointClientState(kind, inputs, outputIds, members ?? [], seated);
             // #1304: only a split re-IDs content that landed. A merge survivor and both sides of a transfer keep their own
             // arrival: octahedron-1191's lane partitions absorbed a just-woken parked grid every 1-2 min, took its arrival
@@ -6046,6 +6068,10 @@ internal sealed record HandoverBlockRecord(ulong Partition, string Signature, st
     public DateTimeOffset FirstAbort { get; set; }
     public DateTimeOffset LastAbort { get; set; }
     public DateTimeOffset? BackoffUntil { get; set; }
+    /// <summary>SE-1134: the top-level entities the residuals are in, as the importing node named them. Null from an
+    /// older node or a row persisted before it: a membership change then releases the backoff as before.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public long[]? Entities { get; set; }
 }
 internal sealed record PartitionVersion(ulong Partition, long Generation, long Members = 0);
 internal sealed record SaveRegistration(SaveId SaveId, string Node, long Epoch, SaveKind Kind, long SizeBytes, string Checksum, long ClusterTime, HashSet<string> Locations, DateTimeOffset Created)

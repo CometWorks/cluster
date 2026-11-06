@@ -580,6 +580,9 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     // planner, the route-contradiction clock and the published snapshot (offline admission).
                     List<(ServedNode Node, string Error)> silent = [];
                     (ServedNode Node, PartitionReport Report)[] reports = CollectReports(served, node => GetPartitions(node.Control), silent);
+                    // SE-1134: everything below - the balancer, scale-in, drains, /diag's balance load - reads a node's
+                    // sim ratio only once a dip has lasted (CostModel.SimRatioSustainSeconds).
+                    reports = SustainRatios(reports, node => node.Node, _lowRatioRuns, _costModel.SimRatioSustainSeconds, DateTime.UtcNow);
                     string? missingReports = MissingReportPause([.. silent.Select(x => x.Node.Node)]);
                     if (missingReports != _missingReports)
                     {
@@ -1191,10 +1194,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             Signature = System.Text.RegularExpressions.Regex.Match(body, "residual-signature=([0-9a-f]+)") is { Success: true } match
                 ? match.Groups[1].Value : null;
             Reason = FirstLine(body);
+            Entities = System.Text.RegularExpressions.Regex.Match(body, "residual-entities=([0-9,]+)") is { Success: true } entities
+                ? [.. entities.Groups[1].Value.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(long.Parse)] : null;
         }
 
         public ulong Partition { get; }
         public string? Signature { get; }
+        /// <summary>SE-1134: the top-level entities holding the residuals, from a node that names them.</summary>
+        public long[]? Entities { get; }
         public string Reason { get; }
 
         internal static string FirstLine(string body)
@@ -1703,6 +1710,54 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             return measured;
         long elapsed = (long)Math.Min(1_000_000.0 / speed, 1_000_000_000_000.0);
         return Math.Max(measured, elapsed);
+    }
+
+    /// <summary>SE-1134: each node's simulation ratios since its current run below 0.98 began, oldest first. Only the
+    /// automatic pass reads and writes it.</summary>
+    private readonly Dictionary<string, List<(DateTime At, double Ratio)>> _lowRatioRuns = new();
+
+    /// <summary>
+    /// SE-1134: the reports with each node's SimulationRatio as the planners should read it. A ratio below 0.98 that
+    /// has lasted less than <paramref name="sustainSeconds"/> reads 1, so EffectiveNodeLoad charges the measured sum
+    /// only; once it has lasted that long it reads as the highest (mildest) ratio of the last sustainSeconds, a lower
+    /// bound the node really ran under for the whole window. One hitch is one or two low samples at a pass a second,
+    /// a saturated node stays low. A healthy or unusable sample ends the run. 0 seconds returns the reports unchanged.
+    /// </summary>
+    internal static (T Node, PartitionReport Report)[] SustainRatios<T>((T Node, PartitionReport Report)[] reports,
+        Func<T, string> name, Dictionary<string, List<(DateTime At, double Ratio)>> runs, double sustainSeconds, DateTime now)
+    {
+        if (sustainSeconds <= 0)
+        {
+            runs.Clear();
+            return reports;
+        }
+        var sustained = new (T Node, PartitionReport Report)[reports.Length];
+        for (int i = 0; i < reports.Length; i++)
+        {
+            (T node, PartitionReport report) = reports[i];
+            double ratio = report.SimulationRatio;
+            string key = name(node);
+            if (!double.IsFinite(ratio) || ratio <= 0 || ratio >= 0.98)
+            {
+                runs.Remove(key);
+                sustained[i] = reports[i];
+                continue;
+            }
+            if (!runs.TryGetValue(key, out var run)) runs[key] = run = [];
+            // A gap in the samples (a silent node, suspended passes) is no evidence the node stayed slow.
+            if (run.Count != 0 && (now - run[^1].At).TotalSeconds > sustainSeconds) run.Clear();
+            run.Add((now, ratio));
+            double effective = 1;
+            if ((now - run[0].At).TotalSeconds >= sustainSeconds)
+            {
+                // The window keeps the sample at or just before its start, so it always spans sustainSeconds.
+                int first = run.FindLastIndex(x => (now - x.At).TotalSeconds >= sustainSeconds);
+                run.RemoveRange(0, first);
+                effective = run.Max(x => x.Ratio);
+            }
+            sustained[i] = (node, report with { SimulationRatio = effective });
+        }
+        return sustained;
     }
 
     /// <summary>
@@ -2218,6 +2273,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 long clientReduction = oldClientOverload - ClientOverload(adjustedCl);
                 if (clientReduction <= 0) { if (belowGain) minGainSkipped++; continue; }
                 if (clientReduction < minClientGain) { minGainSkipped++; continue; }
+                // SE-1134: its players sit through the whole estimated lag, so the load picture has to gain in proportion.
+                if (model.ClientMinGainPerLagSecond > 0
+                    && reduction / Math.Max(meanLoad, 1.0) < model.ClientMinGainPerLagSecond * components[i].CostMs / 1000)
+                { minGainSkipped++; continue; }
                 double adjMeanOthers = (adjusted.Sum() - newPeak) / (double)(nodes.Length - 1);
                 if (newPeak > oldPeak
                     && (newPeak - adjMeanOthers) / Math.Max(adjMeanOthers, 1.0)
@@ -6449,7 +6508,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                             aborted = true;
                             LogTransfer(transferId, partition, "aborted");
                             if (failure is HandoverImportException { Signature: { } signature } rejected)
-                                registry.RecordValidationAbort(partition, signature, rejected.Reason);
+                                registry.RecordValidationAbort(partition, signature, rejected.Reason, rejected.Entities);
                         }
                     }
                     catch (Exception e) { cleanupFailures.Add(e); }
@@ -6736,7 +6795,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                             registry.Abort(transferId);
                             LogTransfer(transferId, partition, "aborted");
                             if (failure is HandoverImportException { Signature: { } signature } rejected)
-                                registry.RecordValidationAbort(partition, signature, rejected.Reason);
+                                registry.RecordValidationAbort(partition, signature, rejected.Reason, rejected.Entities);
                         }
                     }
                     catch (Exception e) { cleanupFailures.Add(e); }

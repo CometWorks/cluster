@@ -197,7 +197,17 @@ internal sealed record CostModel(
     // #1454 corner cases 2 and 8: the balancer moves a heavy component only to split two heavy components sharing a
     // node, or onto an empty node when evacuating its neighbours would move more clients. After any such move (or a
     // drain) the component is not moved again by the balancer for this many seconds per client it carries.
-    double HeavyCooldownSecondsPerClient = 60)
+    double HeavyCooldownSecondsPerClient = 60,
+    // SE-1134 (2026-11-06): the sim-ratio term of EffectiveNodeLoad (1e6 / ratio below 0.98) counts only once a node's
+    // ratio has stayed below 0.98 for this many seconds, and then at the mildest ratio of that window. On
+    // octahedron-test 0.2.7 a single 0.72-0.92 sample (one hitch) lifted a node from a ~200k measured load over the
+    // 800k load floor to a 6x excess in one pass: 36 pins in 65 min, every peak a reciprocal of one sample, Alpha
+    // Station's partition with 3 clients among them. 0 = every sample counts at once (as before).
+    double SimRatioSustainSeconds = 0,
+    // SE-1134: a paced CLIENT move (tier 2) qualifies only if its load gain (overload reduction over the mean node
+    // load, the pin log's gain=) is at least this much per second of its estimated migration lag (CostMs). Alpha's
+    // move was gain 0.042 for a 15.2 s freeze of 3 clients. 0 = no such check (as before).
+    double ClientMinGainPerLagSecond = 0)
 {
     /// <summary>#1454: whether a component carrying <paramref name="clients"/> is heavy, given whether it was heavy on the
     /// previous pass (<paramref name="latched"/>): the hysteresis between <see cref="HeavyClients"/> and
@@ -281,6 +291,9 @@ internal sealed record CostModel(
         ColocationEngageFraction = 0.875,
         // #1454 (Viktor 2026-10-23): "a partition above a client threshold (configurable, e.g. 30) is heavy".
         HeavyClients = 30, HeavyReleaseClients = 20,
+        // SE-1134 (2026-11-06): a sim-ratio dip has to last 10 s, and a client move has to gain 1 % of the mean node
+        // load per second of its freeze.
+        SimRatioSustainSeconds = 10, ClientMinGainPerLagSecond = 0.01,
     };
 
     public static CostModel Load(string? path)

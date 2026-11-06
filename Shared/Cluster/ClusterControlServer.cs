@@ -2406,7 +2406,8 @@ internal sealed partial class ClusterControlServer
 				throw new InvalidDataException("Duplicate incarnation: entity " + entity.EntityId
 					+ " arriving with partition " + partitionId + " is already held by partition " + holder
 					+ " on this node; residual-signature="
-					+ ImportRoundTrip.Signature(new List<string> { "duplicate/" + entity.EntityId + "@" + holder }));
+					+ ImportRoundTrip.Signature(new List<string> { "duplicate/" + entity.EntityId + "@" + holder })
+					+ " residual-entities=" + entity.EntityId);
 			PartitionPersistence.CloseWithHierarchy(new[] { existingEntity });
 			ClusterRuntime.ClearFrozen(entity.EntityId);
 			Log("purged fenced duplicate: entity " + entity.EntityId + " held by unowned partition "
@@ -2622,7 +2623,7 @@ internal sealed partial class ClusterControlServer
 				if (evicted > 0) Log("handover-diff budget: deleted the " + evicted + " oldest dump files in " + directory);
 			}
 			string message = "Frozen source and imported target object builders differ; residuals=" + residuals.Count
-				+ " residual-signature=" + signature + "; " + retained;
+				+ " residual-signature=" + signature + ResidualEntities(residuals) + "; " + retained;
 			// Partitioning.md 6.10: abort (default) keeps a lossy import out of the world; warn is the
 			// production-only escape hatch and still logs, dumps and alarms exactly like the abort.
 			if (!m_importCheckWarn) throw new InvalidDataException(message);
@@ -2639,6 +2640,19 @@ internal sealed partial class ClusterControlServer
 	/// node in a day of octahedron-1191 (71 partitions), and every cluster backup copied them.
 	/// </summary>
 	internal const long HandoverDiffBudgetBytes = 256L << 20;
+
+	/// <summary>
+	/// SE-1134: " residual-entities=ID,ID" for the top-level entities the residual paths start in
+	/// (MyObjectBuilder_Sector/SectorObjects/MyObjectBuilder_EntityBase#ID/...), or "" when none does. The gateway keeps
+	/// a HandoverBlocked partition's backoff through a membership change that leaves these entities in it.
+	/// </summary>
+	internal static string ResidualEntities(IEnumerable<string> residuals)
+	{
+		string[] ids = residuals
+			.Select(residual => System.Text.RegularExpressions.Regex.Match(residual, "^[^/]+/SectorObjects/[^/#]+#([0-9]+)"))
+			.Where(match => match.Success).Select(match => match.Groups[1].Value).Distinct().ToArray();
+		return ids.Length == 0 ? "" : " residual-entities=" + string.Join(",", ids);
+	}
 
 	/// <summary>
 	/// Deletes the oldest files in <paramref name="directory"/> until it holds at most <paramref name="budget"/>
