@@ -63,6 +63,7 @@ internal static class TestRoutes
         StreamHoldRoutes.Register();  // T-0396 a grid held mid-stream to one client
         BroadcastChatRoutes.Register(); // SE-943 broadcast controller chat and the chat a node relays
         PanelTestRoutes.Register();   // SE-1133 maintenance panels open across a handover
+        DriftTestRoutes.Register();   // SE-1152..1155 benign drift the round-trip gate rejected
         BlueprintTestRoutes.Register(); // T-0401 parked ship pastes (Visitor Ion) for the Add bench
         BlockCoverageHarness.Register(); // SE1-0163 one fixture per vanilla functional block type
         ContractTestRoutes.Register(); // SE1-0232 contract offers across handover and restart

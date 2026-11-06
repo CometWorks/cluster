@@ -72,6 +72,7 @@ internal sealed partial class ClusterControlServer
 			entity.BeforeSave();
 			MyObjectBuilder_EntityBase builder = entity.GetObjectBuilder();
 			ClampFuelCapacity(entity, builder);
+			ClampInventoryAmounts(entity, builder);
 			return builder;
 		}).ToArray();
 		return new SnapshotData { Partition = partition, Generation = m_persistence.GetGeneration(partitionId), Builders = builders };
