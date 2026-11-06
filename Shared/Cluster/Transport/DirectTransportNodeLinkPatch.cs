@@ -28,6 +28,27 @@ public static class DirectTransportNodeLinkPatch
 	public static Func<ulong, byte[], bool> AttachBindingAccepted;
 	public static Action<ulong> AttachBindingRemoved;
 
+	// SE-1156: the server-side transport and its physical peer lookup, set when the node link connects.
+	private static object m_server;
+	private static Func<ulong, bool> m_physicalPeerExists;
+
+	/// <summary>
+	/// SE-1156: set on the game thread while a stale member is cleared, so the vanilla leave's
+	/// CloseSession keeps the client's new node-link session open.
+	/// </summary>
+	[ThreadStatic] public static ulong KeepSession;
+
+	/// <summary>
+	/// SE-1156: whether the client has an open session on this node, through the node link or as a
+	/// physical Direct Transport peer. Null before the node link has connected.
+	/// </summary>
+	public static bool? HasSession(ulong client)
+	{
+		object server = m_server;
+		if (server == null) return null;
+		return State(server).Contains(client) || m_physicalPeerExists(client);
+	}
+
 	/// <summary>
 	/// T-0154: <paramref name="ordered"/> false sends on LiteNetLib's ReliableUnordered channel, a
 	/// separate queue from the ReliableOrdered one the bulk publishes use, so a small frame never
@@ -99,6 +120,11 @@ public static class DirectTransportNodeLinkPatch
 		NodeLinkState<NetPeer> nodeLink = State(__instance);
 		if (!nodeLink.TryGetPeer(remotePeerId, out NetPeer peer))
 			return true;
+		if (remotePeerId == KeepSession)
+		{
+			result = true;
+			return false;
+		}
 		peer.Send(NodeLinkCodec.Write(NodeLinkMessage.Detach, remotePeerId), LinkChannel(remotePeerId), DeliveryMethod.ReliableOrdered);
 		nodeLink.Detach(remotePeerId);
 		AttachBindingRemoved?.Invoke(remotePeerId);
@@ -156,6 +182,8 @@ public static class DirectTransportNodeLinkPatch
 			peer.Disconnect();
 		else
 		{
+			m_physicalPeerExists = physicalPeerExists;
+			m_server = __instance;
 			lock (GlobalSync) m_globalPeer = peer;
 			GlobalLinkChanged?.Invoke(true);
 			log("Accepted cluster node link from " + request.RemoteEndPoint);

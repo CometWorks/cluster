@@ -64,6 +64,7 @@ from scenarios_wa_ops import SCENARIOS_WA_OPS  # noqa: E402
 from scenarios_ai import SCENARIOS_AI  # noqa: E402
 from scenarios_offline import SCENARIOS_OFFLINE  # noqa: E402
 from scenarios_rejoin import SCENARIOS_REJOIN  # noqa: E402
+from scenarios_stale_member import SCENARIOS_STALE_MEMBER  # noqa: E402
 from scenarios_fast import SCENARIOS_FAST  # noqa: E402
 from scenarios_orphan import SCENARIOS_ORPHAN  # noqa: E402
 from scenarios_delete_fault import SCENARIOS_DELETE_FAULT  # noqa: E402
@@ -78,7 +79,7 @@ from scenarios_contracts import SCENARIOS_CONTRACTS  # noqa: E402
 SCENARIOS = {**SCENARIOS_CORE, **SCENARIOS_LIVE, **SCENARIOS_EXT, **SCENARIOS_ADMIN, **SCENARIOS_PLAYER, **SCENARIOS_RECOVERY, **SCENARIOS_RESTART,
              **SCENARIOS_SAVES, **SCENARIOS_TOPOLOGY, **SCENARIOS_WA, **SCENARIOS_WA_OPS, **SCENARIOS_AI, **SCENARIOS_OFFLINE, **SCENARIOS_REJOIN, **SCENARIOS_PLANET, **SCENARIOS_PRESENCE, **SCENARIOS_SUITE, **SCENARIOS_FAST, **SCENARIOS_ORPHAN, **SCENARIOS_DELETE_FAULT, **SCENARIOS_GRID_DELETE, **SCENARIOS_STOP_AFTER_WARM_START, **SCENARIOS_NPC, **SCENARIOS_MODS,
              **SCENARIOS_REDELIVER, **SCENARIOS_PROPERTY_SYNC, **SCENARIOS_SPAWN_PREVIEW, **SCENARIOS_BLOCKS,
-             **SCENARIOS_CONTRACTS}
+             **SCENARIOS_CONTRACTS, **SCENARIOS_STALE_MEMBER}
 #: The longest a single scenario may take; used for the network-window guard.
 SCENARIO_BUDGET = timedelta(minutes=float(os.environ.get("CLUSTER_TEST_SCENARIO_BUDGET_MINUTES", "30")))
 #: Longest the suite will sit waiting for a network window to pass before giving up instead. The

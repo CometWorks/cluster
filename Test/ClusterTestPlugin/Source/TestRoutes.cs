@@ -73,6 +73,7 @@ internal static class TestRoutes
         NpcCensusRoutes.Register();   // #1354 the NPC census slot as mod-mes calls it, and a stand-in gap band
         MeteorRoutes.Register();      // #1381 a meteor probe and its carried lifetime
         OfflineTestRoutes.Register(); // SE-347 shared LoadRecovery apply/crash boundary and real production
+        StaleMemberRoutes.Register(); // SE-1156 a member with no session, injected or through the leave-before-login race
         AccountingInterlockObserver.Register();
     }
 
