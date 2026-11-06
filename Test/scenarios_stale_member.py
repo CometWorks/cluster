@@ -11,7 +11,7 @@
      (octahedron-test node-0, 2026-11-06 04:11:33Z). The node drops that CLIENT_CONNECTED
      (``client_connected_dropped``) instead of listing the client with no session, and the next join spawns.
 
-No timers: the legs wait only for the Gateway to see the killed client go (Direct Transport's disconnect timeout).
+No timers: the legs wait only for the Gateway to time out the killed client (Direct Transport, 120 s).
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ def _members(bench, node: str) -> list[int]:
 
 def _leave(bench, label: str) -> None:
     bench.kill_client(label)
-    gone = _poll(lambda: True if _session(bench) is None else None, 120, 2)
+    gone = _poll(lambda: True if _session(bench) is None else None, 360, 5)
     _require(bench, f"SETUP: the Gateway session of {label} cleared", gone is not None)
 
 
