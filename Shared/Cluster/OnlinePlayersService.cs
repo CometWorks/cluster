@@ -279,10 +279,11 @@ public static class OnlinePlayersService
 			node = Node,
 			local = CaptureLocal().Select(entry => new { steamId = entry.SteamId, serialId = entry.SerialId,
 				identityId = entry.IdentityId, name = entry.Name, serviceName = entry.ServiceName,
-				isAdmin = entry.IsAdmin, directTransport = entry.DirectTransport }),
+				isAdmin = entry.IsAdmin, directTransport = entry.DirectTransport, missingDlcs = entry.MissingDlcs }),
 			cluster = cluster.Select(entry => new { node = entry.Node, steamId = entry.SteamId,
 				serialId = entry.SerialId, identityId = entry.IdentityId, name = entry.Name,
-				serviceName = entry.ServiceName, isAdmin = entry.IsAdmin, directTransport = entry.DirectTransport })
+				serviceName = entry.ServiceName, isAdmin = entry.IsAdmin, directTransport = entry.DirectTransport,
+				missingDlcs = entry.MissingDlcs })
 		};
 	}
 

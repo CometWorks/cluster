@@ -74,6 +74,7 @@ internal static class TestRoutes
         MeteorRoutes.Register();      // #1381 a meteor probe and its carried lifetime
         OfflineTestRoutes.Register(); // SE-347 shared LoadRecovery apply/crash boundary and real production
         AccountingInterlockObserver.Register();
+        EntitlementRoutes.Register(); // SE-1158 DLC and skin ownership as the game checks it
     }
 
     public static bool Dispatch(HttpListenerContext context, string path)
