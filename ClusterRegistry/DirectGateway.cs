@@ -3128,7 +3128,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 target.RegistryRouteValidated = true;
 							if (target.AttachedBindingRevision != target.BindingRevision)
 							{
-								byte[] binding = target.PlayerReady == null ? [] : JsonSerializer.SerializeToUtf8Bytes(target.PlayerReady);
+								byte[] binding = AttachBinding(target);
 								target.AttachingAdmissionGeneration = target.PlayerReady?.AuthorityGeneration ?? 0;
 								target.AttachingIdentityId = target.PlayerReady?.Identity.IdentityId ?? 0;
 								target.AttachingBindingRevision = target.BindingRevision;
@@ -3433,7 +3433,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         }
     }
 
-    private void OnSteamTicket(ulong userId, JoinResult result, ulong ownerId)
+    private void OnSteamTicket(ulong userId, JoinResult result, ulong ownerId, uint[]? missingDlcs = null)
     {
         if (!_clients.TryGetValue(userId, out ClientSession? session))
             return;
@@ -3468,6 +3468,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             return;
         }
         session.TicketOwnerId = ownerId == 0 ? userId : ownerId;
+        session.MissingDlcs = missingDlcs;
         if (_admission.Settings.GroupId != 0)
         {
             session.AdmissionState = "GroupPending";
@@ -4174,6 +4175,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 return;
             }
             if (path == "/registry/plugins/v1") { HandlePluginOperation(context, path); return; }
+            if (path.Equals(SkinCheckRoute, StringComparison.OrdinalIgnoreCase)) { HandleSkinCheck(context, path); return; }
             if (IsAdminRequestPath(path))
             {
                 // The admin contract has its own credential resolution: scoped tokens from the
@@ -8006,7 +8008,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
 					}
 					session.AttachSkipped = null;
 					session.AttachCompleted.Reset();
-					byte[] binding = session.PlayerReady == null ? [] : JsonSerializer.SerializeToUtf8Bytes(session.PlayerReady);
+					byte[] binding = AttachBinding(session);
 					SendNodeLink(link, new(NodeLinkMessage.Attach, session.ClientId, 0, binding, DeliveryMethod.ReliableOrdered));
 					session.AttachingAdmissionGeneration = admissionGeneration;
 					session.AttachingIdentityId = identityId;
@@ -8375,6 +8377,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         public string? AssertedServiceName;
         public volatile bool IsProfiling;
         public ulong TicketOwnerId;
+        /// <summary>SE-1158: the DLC app ids Steam says the player has no license for; null without a Steam ticket.</summary>
+        public uint[]? MissingDlcs;
+        /// <summary>SE-1158: the skins the player's last inventory blob proved; null until a node asked.</summary>
+        public volatile string[]? Skins;
         public readonly CancellationTokenSource AdmissionCancellation = new();
         public int AdmissionStarted;
 		public int AttachRetryStarted;
@@ -8567,6 +8573,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         float ColorX, float ColorY, float ColorZ, bool IsNpc);
 	private sealed record PlayerBindingEntry(ulong UserId, int SerialId, long IdentityId);
 	private sealed record IdentityAuthoritySnapshot(IdentityAuthorityEntry[] Identities, PlayerBindingEntry[] Bindings);
+    /// <summary>The World Authority's player binding. The Gateway adds what Steam says the player owns (SE-1158) when it attaches them.</summary>
     private sealed record PlayerReady(long AuthorityGeneration, string ServiceName, ulong UserId, ulong OwnerId, int SerialId,
-        bool IsAdmin, IdentityAuthorityEntry Identity);
+        bool IsAdmin, IdentityAuthorityEntry Identity, uint[]? MissingDlcs = null, string[]? Skins = null);
+
+    /// <summary>The attach binding a node gets: the player binding with the Steam ownership of SE-1158.</summary>
+    private static byte[] AttachBinding(ClientSession session) => session.PlayerReady == null ? []
+        : JsonSerializer.SerializeToUtf8Bytes(session.PlayerReady with { MissingDlcs = session.MissingDlcs, Skins = session.Skins });
 }
