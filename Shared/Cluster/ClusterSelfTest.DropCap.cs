@@ -47,6 +47,7 @@ internal static partial class ClusterSelfTest
 		Check(pending.Count == 2 && known[3].Offline, "a spawn dispatched after the pass stays pending");
 
 		Check(ClusterConfig.DefaultOf("drops.maxActive") == "5", "drops.maxActive defaults to 5");
+		Check(ClusterConfig.DefaultOf("drops.lifetimeSeconds") == "0", "drops.lifetimeSeconds defaults to 0 (vanilla's drop lifetime)");
 		Check(ClusterConfig.Normalize("drops.maxActive", "10") == "10" && ClusterConfig.Normalize("drops.maxActive", "0") == "0",
 			"drops.maxActive takes a count, 0 = no cap");
 		bool refused = false;

@@ -356,6 +356,10 @@ public static class ClusterConfig
 		// unknown (none yet, or older than 60 s) every due drop is skipped. Read per sweep (5 s). SE-1146: default 5 (was 3), and
 		// the WA deletes the oldest drop GPS markers over it (ContainerGpsSweep).
 		["drops.maxActive"] = "5",
+		// SE-1146: seconds a NEW container drop stays in the world before vanilla removes it (and the World Authority's drop GPS
+		// markers last this long plus up to a minute); 0 = vanilla's (the drop system definition's 15 min). Read by the node at
+		// each spawn and by the WA's marker sweep (5 s). A bench sets a few seconds so drops come and go within a lane.
+		["drops.lifetimeSeconds"] = "0",
 		// T-0265: carry each client's inventory delta counters across a handover. "false" restores the
 		// old fresh-counter adopt, only so a live A/B can earn the red on the same build.
 		["handover.inventoryCounters"] = "true",
