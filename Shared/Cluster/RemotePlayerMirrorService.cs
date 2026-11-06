@@ -636,7 +636,8 @@ public static class RemotePlayerMirrorService
 			carriedPending = Carried.Keys.OrderBy(client => client).ToArray(),
 			memberMessagesTotal = m_memberMessages,
 			seededByArrivalTotal = m_seededByArrival,
-			moderationRefusedTotal = Shared.Patches.RemoteRowModerationPatch.Refused,
+			moderationForwardedTotal = Shared.Patches.GatewayModerationPatch.Forwarded,
+			moderationFailedTotal = Shared.Patches.GatewayModerationPatch.Failed,
 			selfAnnouncedTotal = m_selfAnnounced,
 			mirrored = Installed.OrderBy(key => key.SteamId).ThenBy(key => key.SerialId)
 				.Select(key => new { steamId = key.SteamId, serialId = key.SerialId }).ToArray()

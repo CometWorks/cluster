@@ -36,6 +36,9 @@ public static class ClusterNet
 	/// <summary>Identity headers a node adds to its registry and peer requests. For logs, never a credential.</summary>
 	public const string NodeHeader = "X-Cluster-Node", EpochHeader = "X-Cluster-Epoch", HostHeader = "X-Cluster-Host", PidHeader = "X-Cluster-Pid";
 
+	/// <summary>SE-1197: the Steam id of the admin a node acts for when it forwards an F3 kick or ban to the Gateway.</summary>
+	public const string ModeratorHeader = "X-Cluster-Moderator";
+
 	/// <summary>
 	/// The control endpoint a node registers, as <c>http://host:port</c>. <c>CLUSTER_NODE_CONTROL_ENDPOINT</c> (the
 	/// address peers on other hosts can reach) wins; without it, the bind address, and loopback without a bind -

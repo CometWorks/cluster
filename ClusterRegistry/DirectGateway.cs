@@ -4182,6 +4182,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // The admin contract has its own credential resolution: scoped tokens from the
                 // token file are valid here even though the legacy routes do not know them.
                 AdminActor? actor = ResolveAdminActor(context);
+                string? refusal = null;
+                if (actor == null)
+                    actor = NodeModerator(context, path, out refusal);
+                if (actor == null && refusal != null)
+                {
+                    WriteAdminError(context, 403, "moderator_refused", refusal);
+                    return;
+                }
                 if (actor == null)
                 {
                     context.Response.Headers["WWW-Authenticate"] = "Bearer";

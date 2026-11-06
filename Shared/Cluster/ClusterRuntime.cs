@@ -591,10 +591,13 @@ public static class ClusterRuntime
 		}
 	}
 
+	/// <summary>The join token this node presents to the registry.</summary>
+	internal static string RegistryToken => Environment.GetEnvironmentVariable("CLUSTER_JOIN_TOKEN_CURRENT")
+		?? Environment.GetEnvironmentVariable("CLUSTER_JOIN_TOKEN");
+
 	internal static void AuthorizeRegistryClient(HttpClient client)
 	{
-		string token = Environment.GetEnvironmentVariable("CLUSTER_JOIN_TOKEN_CURRENT")
-			?? Environment.GetEnvironmentVariable("CLUSTER_JOIN_TOKEN");
+		string token = RegistryToken;
 		if (!string.IsNullOrWhiteSpace(token))
 			client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
 	}

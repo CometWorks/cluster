@@ -33,8 +33,14 @@ bench client joins through Direct Transport, so ``P2-PRS-01`` turns their announ
 Transport login and logout say nothing.
 
 SE-1192: ``P2-PRS-04`` checks T-0178 where a player sees it, in each client's own F3 table rather than in the
-node's bookkeeping: a fresh login while a player is on the other node, F3 kick and ban of that remote row (refused
-on the admin's node, the row stays), and a handover with the F3 list left open (every player exactly once).
+node's bookkeeping: a fresh login while a player is on the other node, and a handover with the F3 list left open
+(every player exactly once).
+
+SE-1197: ``P2-PRS-05`` presses F3 Kick and Ban for a player on the admin's own node and for one on the other node.
+Each must reach the Gateway's cluster-wide books: the player is disconnected wherever they are, a kicked player is
+refused until the (shortened) cooldown runs out and then gets back in, and a banned player is refused through the
+other node too. A player without admin rights gets nothing done, neither through vanilla's disabled buttons nor as
+an admin of one node only.
 """
 
 from __future__ import annotations
@@ -44,7 +50,8 @@ import time
 
 from cluster import ClusterError, wait_until
 from scenarios_core import CLIENT_ID, _client_partition, _handover_url, _lines, _nodes, _partitions
-from scenarios_wa import CLIENT2_ID, CLIENT3_ID, CLIENT3_PORT, _session, start_second_client
+from scenarios_core import _owners, _wait_line
+from scenarios_wa import CLIENT2_ID, CLIENT2_PORT, CLIENT3_ID, CLIENT3_PORT, _session, start_second_client
 
 #: Waited out before concluding that a traversal announced nothing. Must exceed the announcer's
 #: CLUSTER_PRESENCE_GRACE (default 5 s), or the silence proves only that we asked too early.
@@ -55,6 +62,10 @@ MIN_DEPARTURE_DELAY_SECONDS = 3
 
 #: OnlinePlayersService.SeedingWindowMilliseconds (the 30 s report expiry), plus a margin.
 SEEDING_WINDOW_SECONDS = 35
+
+#: P2-PRS-05's admin kick cooldown (admission kickTimeoutSeconds; 300 s in production). Long enough for a client
+#: started right after the kick to be refused inside it, short enough to wait out for the return.
+KICK_TIMEOUT_SECONDS = 45
 
 
 def _chat(bench, node_id: str, cursor: int = 0) -> tuple[list[dict], int]:
@@ -471,7 +482,7 @@ def _f3_click(api, index: int, name: str, button: str) -> bool:
 
 
 def p2_prs_04(bench) -> None:
-    """SE-1192: F3 lists every cluster player on every client, and F3 kick/ban of a player on another node is refused."""
+    """SE-1192: F3 lists every cluster player on every client, and keeps them across a handover."""
     record = {}
     try:
         bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
@@ -513,62 +524,22 @@ def p2_prs_04(bench) -> None:
         bench.check("the F3 of the player already online lists the newcomer", sorted(rows1) == expected,
                     json.dumps(rows1))
 
-        # -- F3 kick and ban of a REMOTE row ---------------------------------------------------------
-        # Client 3 stays on node-2, unspawned. Client 1 is an admin on its node; vanilla would kick nobody, put
-        # client 3 on that node's own kick list and ban config, and take its row off that node's clients.
+        # Client 3 stays on node-2, unspawned: its medical screen previews the first respawn row at once, and the
+        # preview switches it to the kit's node, which is client 1's: that node refuses the switches (SE-1124's test
+        # knob), so client 3 stays put.
         first = player(CLIENT_ID)
         admin_node = first["node"]
-        # Its medical screen previews the first respawn row at once, and the preview switches it to the kit's node,
-        # which is client 1's: that node refuses the switches (SE-1124's test knob), so client 3 stays put.
         record["previewRefusal"] = bench.cluster.node(admin_node, "/respawn-execute-fault?mode=refuse&count=1000", "POST")
         start_second_client(bench, route_node="node-2", client_id=CLIENT3_ID, remote_port=CLIENT3_PORT)
         third = player(CLIENT3_ID)
         names[CLIENT3_ID] = third["name"]
         expected = sorted(names.values())
-        record["moderation"] = moderation = {"client1": first, "client3": third}
-        bench.check("the kicked player is on another node than the admin", third["node"] != admin_node,
-                    json.dumps(moderation))
+        record["remote"] = {"client1": first, "client3": third}
+        bench.check("the third player is on another node than client 1", third["node"] != admin_node,
+                    json.dumps(record["remote"]))
         rows1 = f3_lists(api1, expected, "client 1's F3 to list all three players")
-        moderation["client1Rows"] = rows1
-        bench.check("the admin's F3 lists the player on the other node", sorted(rows1) == expected, json.dumps(rows1))
-        bench.cluster.node(admin_node, f"/promote-test?userId={CLIENT_ID}&level=4", "POST")
-        wait_until(lambda: bench.cluster.node(admin_node, f"/promote-test?userId={CLIENT_ID}").get("promoted") == 4
-                   or None, 60, "client 1's admin level on its node")
-        for button, done in (("Kick", "kicked"), ("Ban", "banned")):
-            pattern = rf"{button.lower()} refused for player={CLIENT3_ID} "
-
-            def press():
-                # The client learns it is an admin a moment after the node does, and a click before that lands on
-                # a disabled button, so press until the node answers.
-                _, index = _f3(api1, keep_open=True)
-                try:
-                    _f3_click(api1, index, names[CLIENT3_ID], button)
-                    return wait_until(lambda: next(iter(_lines(bench, admin_node, pattern)), None), 5,
-                                      f"{admin_node} to refuse the {button.lower()}")
-                except ClusterError:
-                    return None
-                finally:
-                    api1.close_screen(index)
-                    wait_until(lambda: not any(screen.get("type") == "MyGuiScreenPlayers"
-                                               for screen in api1.list_screens()) or None, 30, "F3 to close")
-
-            try:
-                refused = wait_until(press, 60, f"{admin_node} to refuse an F3 {button.lower()}")
-            except ClusterError:
-                refused = None
-            time.sleep(2)  # a misfire's broadcast would take the row now
-            rows_after, _ = _f3(api1)
-            moderation[button] = {"refused": refused, "client1Rows": rows_after}
-            bench.check(f"F3 {button.lower()} of a player on another node is refused on the admin's node",
-                        refused is not None, json.dumps(moderation[button]))
-            bench.check(f"the {done} remote row stays on the admin's F3",
-                        names[CLIENT3_ID] in rows_after, json.dumps(rows_after))
-        misfires = _lines(bench, admin_node, rf"Player {names[CLIENT3_ID]} (kicked|banned)")
-        session = _session(bench, CLIENT3_ID) or {}
-        moderation["vanillaLines"] = misfires
-        moderation["client3Session"] = {key: session.get(key) for key in ("backend", "admissionState")}
-        bench.check("the admin's node neither kicked nor banned the remote player", not misfires, json.dumps(misfires))
-        bench.check("client 3 is still in the cluster", session.get("admissionState") == "Ready", json.dumps(session))
+        record["remote"]["client1Rows"] = rows1
+        bench.check("client 1's F3 lists the player on the other node", sorted(rows1) == expected, json.dumps(rows1))
 
         # -- a HANDOVER with the F3 list open --------------------------------------------------------
         # The client keeps its rows across a traversal. The target must send what it lacks and nothing it has:
@@ -594,19 +565,185 @@ def p2_prs_04(bench) -> None:
         bench.check("an F3 left open across the handover lists every player exactly once",
                     sorted(open_rows) == expected, json.dumps(open_rows))
         bench.check("the F3 after the handover lists every player", sorted(reopened) == expected, json.dumps(reopened))
-        bench.exercised(route=f"fresh login on node-2 -> {second['node']}, F3 kick/ban on {admin_node}, handover to {target}")
+        bench.exercised(route=f"fresh login on node-2 -> {second['node']}, remote row on node-2, handover to {target}")
     finally:
         bench.record("f3-cluster-players", record)
+
+
+def _moderation(bench) -> dict:
+    """The Gateway's cluster-wide books: kick cooldowns by Steam id, and the ban set."""
+    cooldowns = bench.cluster.get("/admin/v1/players/moderation")["data"].get("kickCooldowns") or []
+    banned = bench.cluster.get("/admin/v1/admission/bans")["data"].get("banned") or []
+    return {"kicked": {row["userId"]: row["expiresAt"] for row in cooldowns}, "banned": list(banned)}
+
+
+def p2_prs_05(bench) -> None:
+    """SE-1197: F3 kick and ban reach the Gateway's cluster-wide books, for a local and a remote row alike."""
+    record = {}
+    forwarded = r"(kick|ban) of player={} by={} (done by the Gateway|failed: .*) \(SE-1197\)"
+    try:
+        bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
+        bench.cluster.post("/automatic/pause")  # a co-location pass would put everyone on one node
+        api1 = bench.start_client(CLIENT_ID)  # the admin, on the Gateway's administrator list and every node's
+        bench.wait_spawned(CLIENT_ID)
+
+        def player(client: int, node: str | None = None) -> dict:
+            return wait_until(lambda: next((row for row in _cluster_players(bench, "wa-1") if row["steamId"] == client
+                                            and (node is None or row["node"] == node)), None),
+                              120, f"client {client} in the cluster player list" + (f" on {node}" if node else ""))
+
+        admin_node = player(CLIENT_ID)["node"]
+        other_node = "node-2" if admin_node == "node-1" else "node-1"
+        # The joiners stay unspawned where they are routed: their medical screens preview the first respawn row, and
+        # a preview switches them to the kit's node, which is the admin's; that node refuses the switches (SE-1124).
+        record["previewRefusal"] = bench.cluster.node(admin_node, "/respawn-execute-fault?mode=refuse&count=1000", "POST")
+        names = {CLIENT_ID: player(CLIENT_ID)["name"]}
+
+        def join(client: int, port: int, node: str) -> object:
+            api = start_second_client(bench, route_node=node, client_id=client, remote_port=port)
+            names[client] = player(client, node)["name"]
+            return api
+
+        def gone(client: int) -> bool:
+            return bool(wait_until(lambda: True if not _session(bench, client) else None, 60,
+                                   f"client {client}'s Gateway session to drop"))
+
+        def press(api, actor: int, target: int, button: str, node: str) -> str | None:
+            """Press ``button`` on ``target``'s F3 row until ``node`` logs the forward; that line, or None."""
+            pattern = forwarded.format(target, actor)
+
+            def attempt():
+                # A client learns it is an admin a moment after its node does, and a click before that lands on a
+                # disabled button, so press until the node answers.
+                _, index = _f3(api, keep_open=True)
+                try:
+                    _f3_click(api, index, names[target], button)
+                    return wait_until(lambda: next(iter(_lines(bench, node, pattern)), None), 10,
+                                      f"{node} to forward the {button.lower()}")
+                except ClusterError:
+                    return None
+                finally:
+                    api.close_screen(index)
+                    wait_until(lambda: not any(screen.get("type") == "MyGuiScreenPlayers"
+                                               for screen in api.list_screens()) or None, 30, "F3 to close")
+            try:
+                return wait_until(attempt, 90, f"an F3 {button.lower()} of client {target} to reach the Gateway")
+            except ClusterError:
+                return None
+
+        def refused(client: int, port: int, node: str, reason: str) -> str | None:
+            """Start ``client`` again, routed to ``node``; the Gateway's refusal line, or None if it got in."""
+            partition = next(row["Partition"] for row in _owners(bench) if row["Node"] == node)
+            bench.cluster.post(f"/registry/client-routes?client={client}&partition={partition}")
+            bench.apis.pop(client, None)
+            bench.launch_client(client, port, label=f"rejoin-{client}", render=False)
+            try:
+                return _wait_line(bench, "gateway", rf"Rejected Direct Transport client {client}: {reason}", 180)
+            except ClusterError:
+                return None
+            finally:
+                bench.kill_client(f"rejoin-{client}")
+
+        api2 = join(CLIENT2_ID, CLIENT2_PORT, admin_node)  # the LOCAL row: same node as the admin
+        join(CLIENT3_ID, CLIENT3_PORT, other_node)  # the REMOTE row
+        record["placement"] = {"admin": admin_node, "local": CLIENT2_ID, "remote": CLIENT3_ID, "names": names}
+
+        # -- a player without admin rights gets nothing done ------------------------------------------
+        # Client 2's own F3: vanilla greys Kick and Ban out for a non-admin.
+        _, index = _f3(api2, keep_open=True)
+        try:
+            enabled = {button: _f3_click(api2, index, names[CLIENT3_ID], button) for button in ("Kick", "Ban")}
+        finally:
+            api2.close_screen(index)
+        record["nonAdminButtons"] = enabled
+        bench.check("a player's F3 Kick and Ban are disabled", not any(enabled.values()), json.dumps(enabled))
+        # An admin of ONE node only (promoted there, not on the Gateway's list): the node forwards, the Gateway refuses.
+        bench.cluster.node(admin_node, f"/promote-test?userId={CLIENT2_ID}&level=4", "POST")
+        wait_until(lambda: bench.cluster.node(admin_node, f"/promote-test?userId={CLIENT2_ID}").get("promoted") == 4
+                   or None, 60, "client 2's admin level on its node")
+        line = press(api2, CLIENT2_ID, CLIENT3_ID, "Kick", admin_node)
+        record["nodeAdminOnly"] = {"line": line, "books": _moderation(bench), "session": _session(bench, CLIENT3_ID)}
+        bench.check("a node-only admin's F3 kick is refused by the Gateway",
+                    line is not None and "not on the cluster's administrator list" in line, json.dumps(record["nodeAdminOnly"]))
+        bench.check("the player that node-only admin tried to kick is still connected and not on a kick cooldown",
+                    _session(bench, CLIENT3_ID) is not None and CLIENT3_ID not in _moderation(bench)["kicked"],
+                    json.dumps(record["nodeAdminOnly"]))
+        bench.cluster.node(admin_node, f"/promote-test?userId={CLIENT2_ID}&level=0", "POST")
+
+        # -- KICK: remote row, then local row -------------------------------------------------------------
+        for target, port, where in ((CLIENT3_ID, CLIENT3_PORT, other_node), (CLIENT2_ID, CLIENT2_PORT, admin_node)):
+            row = "remote" if where != admin_node else "local"
+            line = press(api1, CLIENT_ID, target, "Kick", admin_node)
+            dropped = gone(target)
+            books = _moderation(bench)
+            record[f"kick-{row}"] = {"line": line, "dropped": dropped, "books": books}
+            bench.check(f"F3 kick of the {row} row is done by the Gateway",
+                        line is not None and "done by the Gateway" in line, json.dumps(record[f"kick-{row}"]))
+            bench.check(f"the {row} kicked player is disconnected", dropped, json.dumps(record[f"kick-{row}"]))
+            bench.check(f"the {row} kick arms the cluster-wide kick cooldown",
+                        target in books["kicked"], json.dumps(books))
+            bench.kill_client(target)
+            bench.apis.pop(target, None)
+        vanilla = _lines(bench, admin_node, r"Player .* (kicked|banned)$")
+        bench.check("the admin's node did not run vanilla's node-local kick", not vanilla, json.dumps(vanilla))
+        messages = [message.get("Text") or message.get("text") for message in
+                    (api1.get_chat_messages(0).get("messages") or [])]
+        record["adminChat"] = messages
+        bench.check("the admin is told each kick was done",
+                    sum(1 for text in messages if text and text.endswith("was kicked from the cluster.")) >= 2,
+                    json.dumps(messages))
+
+        # Inside the cooldown the kicked remote player is refused, through the ADMIN's node this time.
+        line = refused(CLIENT3_ID, CLIENT3_PORT, admin_node, "KickedRecently")
+        record["kickedRejoin"] = line
+        bench.check("a kicked player is refused inside the cooldown, through another node", line is not None, str(line))
+        # After it, both kicked players get back in: a kick is not a ban.
+        expires = max(_moderation(bench)["kicked"].values(), default=None)
+        wait_until(lambda: not _moderation(bench)["kicked"] or None, KICK_TIMEOUT_SECONDS + 30,
+                   "the kick cooldowns to run out")
+        join(CLIENT3_ID, CLIENT3_PORT, other_node)
+        join(CLIENT2_ID, CLIENT2_PORT, admin_node)
+        record["kickedReturn"] = {"cooldownEnd": expires, "client2": _session(bench, CLIENT2_ID),
+                                  "client3": _session(bench, CLIENT3_ID)}
+        bench.check("both kicked players reconnect once the cooldown is over",
+                    _session(bench, CLIENT2_ID) is not None and _session(bench, CLIENT3_ID) is not None,
+                    json.dumps(record["kickedReturn"]))
+
+        # -- BAN: local row, then remote row; each is refused through the OTHER node ----------------------
+        for target, port, where, rejoin in ((CLIENT2_ID, CLIENT2_PORT, admin_node, other_node),
+                                            (CLIENT3_ID, CLIENT3_PORT, other_node, admin_node)):
+            row = "remote" if where != admin_node else "local"
+            line = press(api1, CLIENT_ID, target, "Ban", admin_node)
+            dropped = gone(target)
+            books = _moderation(bench)
+            bench.kill_client(target)
+            bench.apis.pop(target, None)
+            back = refused(target, port, rejoin, "BannedByAdmins")
+            record[f"ban-{row}"] = {"line": line, "dropped": dropped, "books": books, "rejoin": back}
+            bench.check(f"F3 ban of the {row} row is done by the Gateway",
+                        line is not None and "done by the Gateway" in line, json.dumps(record[f"ban-{row}"]))
+            bench.check(f"the {row} banned player is disconnected", dropped, json.dumps(record[f"ban-{row}"]))
+            bench.check(f"the {row} ban is on the cluster-wide ban list", target in books["banned"], json.dumps(books))
+            bench.check(f"the {row} banned player is refused through {rejoin}", back is not None, str(back))
+        vanilla = _lines(bench, admin_node, r"Player .* (kicked|banned)$")
+        bench.check("the admin's node did not run vanilla's node-local ban", not vanilla, json.dumps(vanilla))
+        bench.exercised(route=f"F3 on {admin_node}: kick/ban of a row on {admin_node} and on {other_node}")
+    finally:
+        bench.record("f3-gateway-moderation", record)
 
 
 p2_prs_01.regular_nodes = 2
 p2_prs_02.regular_nodes = 1
 p2_prs_03.regular_nodes = 1
 p2_prs_04.regular_nodes = 2
+p2_prs_05.regular_nodes = 2
+p2_prs_05.administrators = [CLIENT_ID]
+p2_prs_05.kick_timeout_seconds = KICK_TIMEOUT_SECONDS
 
 SCENARIOS_PRESENCE = {
     "P2-PRS-01": (p2_prs_01, "cluster presence: one announcement per login, none per traversal", "3"),
     "P2-PRS-02": (p2_prs_02, "a login's own member message survives a mirror pass before the world request", "2"),
     "P2-PRS-03": (p2_prs_03, "a Direct Transport login and logout are not announced (SE-1081)", "2"),
-    "P2-PRS-04": (p2_prs_04, "F3 lists every cluster player; F3 kick/ban of a remote row is refused (SE-1192)", "3"),
+    "P2-PRS-04": (p2_prs_04, "F3 lists every cluster player, across a handover too (SE-1192)", "3"),
+    "P2-PRS-05": (p2_prs_05, "F3 kick and ban act on the whole cluster through the Gateway (SE-1197)", "3"),
 }
