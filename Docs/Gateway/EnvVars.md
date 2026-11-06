@@ -86,6 +86,7 @@ Environment-only:
 | `CLUSTER_SYNC_DISTANCE` | advertised sync distance |
 | `CLUSTER_DIRECT_TRANSPORT_VERSION` | DT wire version override |
 | `CLUSTER_HANDOVER_VALIDATION_ABORTS` | test hook: injected validation aborts |
+| `CLUSTER_HANDOVER_BLOCK_SWEEP_SECONDS` | SE-1185: how often the Gateway drops the handover blocks of partitions with no owner and no recovery running (default 30). A merge, split or archive that retires a blocked partition clears its block at once; the sweep catches the rest, such as a partition released by its node |
 | `CLUSTER_ROUTE_OVER_REPORT_GRACE_SECONDS` | how long a registry client route may outvote a node report that says the partition has no clients (default 120). Covers the switch-settling window; past it the node report wins, so a stale route can no longer pin a partition against every handover for the life of the cluster. Applies to both the automatic-handover scheduler and the clientless-handover guard. |
 | `CLUSTER_PERSIST_INTERVAL_SECONDS` | how long registry mutations may coalesce in memory before the changed rows are committed to `registry.db` (default 60; `0` = write-through, used by durability self-tests) — see `Docs/Gateway/StateDurability.md` |
 | `CLUSTER_STORE_AUDIT_EVERY` | audit the registry store every N writes (default 1; `0` = off): stored rows compared with the live state, drift logged and repaired |

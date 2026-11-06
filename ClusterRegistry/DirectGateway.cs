@@ -571,6 +571,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 if (_registry != null)
                     ReconcileHandovers().GetAwaiter().GetResult();
                 CollectSaveCatalog();
+                _registry?.SweepHandoverBlocks();
                 if (!_automaticSuspended)
                 {
                     ServedNode[] served = ServedNodes();

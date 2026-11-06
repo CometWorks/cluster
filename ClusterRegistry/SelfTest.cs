@@ -284,6 +284,7 @@ internal static partial class SelfTest
         ("replica-alarm", TestReplicaAlarm),
         ("diag-stopped-rows", TestDiagSkipsStoppedRows),
         ("handover-blocked", TestHandoverBlocked),
+        ("handover-block-dissolved", TestHandoverBlockDissolved),
         ("provenance", TestProvenance),
         ("character-homes", TestCharacterHomes),
         ("character-home-writer-fence", TestCharacterHomeWriterFence),
@@ -6158,6 +6159,59 @@ internal static partial class SelfTest
             registry.ApplyLineage("residual-leaves", LineageKind.Split, source.Node, source.Epoch, [docked.Outputs.Single()],
                 [9, carved[0]], new() { [9] = [101], [carved[0]] = [100] }, 3);
             Assert(!registry.HandoverScheduleBlocked(9));            // the residual's entity left: one prompt retry
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    /// <summary>
+    /// SE-1185: a HandoverBlocked entry goes with its partition. Only a committed handover and the admin trigger used
+    /// to clear one, so a blocked partition that a merge retired kept its block, and its row stayed in the summary
+    /// listing for good. The regression harness's cluster-monitor.sh cleared these from outside; under Quasar nothing did.
+    /// </summary>
+    private static void TestHandoverBlockDissolved()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "cluster-gateway-self-test-" + Guid.NewGuid());
+        try
+        {
+            DateTimeOffset now = DateTimeOffset.UnixEpoch.AddDays(20000);
+            using var registry = new GatewayRegistry(directory, Admission, () => now, TimeSpan.FromHours(1))
+            {
+                HandoverBlockSweepInterval = TimeSpan.FromSeconds(2),
+            };
+            NodeRegistration node = Register(registry, "n1", "127.0.0.1:27016", Guid.NewGuid());
+            bool Summarized(ulong partition) => registry.PartitionsReport(summary: true, only: partition).Length == 1;
+            void Block(ulong partition)
+            {
+                registry.RecordValidationAbort(partition, "aaaa", "gate");
+                registry.RecordValidationAbort(partition, "aaaa", "gate");
+                Assert(registry.HandoverScheduleBlocked(partition));
+            }
+
+            PartitionOwnership survivor = registry.ClaimPartition(20, node.Node, node.Epoch, 0);
+            PartitionOwnership absorbed = registry.ClaimPartition(21, node.Node, node.Epoch, 0);
+            Block(21);
+            registry.ApplyLineage("absorb", LineageKind.Merge, node.Node, node.Epoch,
+                [new(20, survivor.Generation), new(21, absorbed.Generation)], [20], null, 1);
+            Assert(registry.HandoverBlocks().Length == 0);           // the merge retired 21, and its block with it
+            Assert(!Summarized(21));                                 // a retired row without a block is settled history
+
+            // The sweep: a block whose partition has no owner and no recovery goes; an owned one stays.
+            registry.ClaimPartition(22, node.Node, node.Epoch, 0);
+            PartitionOwnership released = registry.ClaimPartition(23, node.Node, node.Epoch, 0);
+            Block(22);
+            Block(23);
+            registry.ReleasePartition(23, node.Node, node.Epoch, released.Generation);
+            Assert(registry.SweepHandoverBlocks() == 1);
+            Assert(registry.HandoverBlocks().Single().Partition == 22);
+            PartitionOwnership late = registry.ClaimPartition(24, node.Node, node.Epoch, 0);
+            Block(24);
+            registry.RegisterSave("late-save", node.Node, node.Epoch, late.Generation, [24], "late-save.zip", now);
+            registry.ReleasePartition(24, node.Node, node.Epoch, late.Generation);   // a saved row stays, unowned
+            Assert(registry.PartitionsReport(only: 24).Length == 1);
+            Assert(registry.SweepHandoverBlocks() == 0);             // within the interval: the sweep waits
+            now += TimeSpan.FromSeconds(2);
+            Assert(registry.SweepHandoverBlocks() == 1);
+            Assert(registry.HandoverBlocks().Single().Partition == 22 && registry.HandoverScheduleBlocked(22));
         }
         finally { Directory.Delete(directory, recursive: true); }
     }
