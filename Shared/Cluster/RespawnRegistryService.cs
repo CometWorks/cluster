@@ -46,6 +46,11 @@ public static class RespawnRegistryService
 	// Same-point re-arbitration stays free (idempotent retries); a different point for the same
 	// identity inside 10s is refused - two transactions racing toward two medbays. Game thread only.
 	private static readonly RespawnArbitrationWindow m_arbitrationWindow = new RespawnArbitrationWindow(10000);
+	// SE-1150: repaired or dropped points are logged once, not on every report. m_receivedProblems under Sync.
+	private static readonly RespawnProblemLog m_capturedProblems = new RespawnProblemLog();
+	private static readonly RespawnProblemLog m_receivedProblems = new RespawnProblemLog();
+	private static ClusterRespawnPoint[] m_testRawPoints = Array.Empty<ClusterRespawnPoint>();
+	private static double m_testRawPointsUntil;
 	private const double PendingRetryIntervalMilliseconds = 5000;
 	private const double PendingDeadlineMilliseconds = 300000;
 
@@ -510,7 +515,11 @@ public static class RespawnRegistryService
 			lock (Sync) Reports[Node] = new Report(ClusterRuntime.LocalMilliseconds, local);
 			PublishMerged();
 		}
-		else GlobalStateChannel.SendRequest(Subsystem, RespawnRegistryCodec.Write(local));
+		else
+		{
+			if (ClusterRuntime.LocalMilliseconds < m_testRawPointsUntil) local = local.Concat(Volatile.Read(ref m_testRawPoints)).ToArray();
+			GlobalStateChannel.SendRequest(Subsystem, RespawnRegistryCodec.Write(local));
+		}
 	}
 
 	public static void AuthorityChanged(long generation)
@@ -542,6 +551,20 @@ public static class RespawnRegistryService
 		return TestDelayStatus();
 	}
 
+	/// <summary>
+	/// SE-1150 test knob: for <paramref name="seconds"/>, every report this node sends to the World Authority also carries
+	/// <paramref name="points"/> as they are, past the capture's checks: what a node sent when one of its medbays
+	/// misreported. Dies with the process.
+	/// </summary>
+	public static object ConfigureTestRawPoints(ClusterRespawnPoint[] points, double seconds)
+	{
+		if (!ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority)
+			throw new InvalidOperationException("Only a regular cluster node reports respawn points to the World Authority");
+		Volatile.Write(ref m_testRawPoints, points ?? Array.Empty<ClusterRespawnPoint>());
+		m_testRawPointsUntil = ClusterRuntime.LocalMilliseconds + seconds * 1000;
+		return new { count = m_testRawPoints.Length, seconds };
+	}
+
 	public static object TestDelayStatus()
 		=> new { delayMs = Volatile.Read(ref m_testDelayMilliseconds), held = Volatile.Read(ref m_testHeldCount) };
 
@@ -557,6 +580,7 @@ public static class RespawnRegistryService
 	{
 		IReadOnlyDictionary<long, ulong> partitions = m_partitions.EntityPartitions();
 		var points = new List<ClusterRespawnPoint>();
+		var problems = new List<RespawnPointProblem>();
 		foreach (MyRespawnComponent respawn in MyRespawnComponent.GetAllRespawns())
 		{
 			var entity = respawn.Entity;
@@ -567,13 +591,19 @@ public static class RespawnRegistryService
 			entity.CubeGrid.GridSystems?.UpdatePower();
 			entity.UpdateIsWorking();
 			var position = entity.WorldMatrix.Translation;
-			points.Add(new ClusterRespawnPoint(Node, entity.EntityId, entity.CubeGrid.EntityId, partition, generation,
-				entity.CustomName?.ToString() ?? entity.Name ?? entity.ToString(), entity.IDModule?.Owner ?? 0,
+			// SE-1150: one misreporting block must not cost the node its whole list at the World Authority.
+			ClusterRespawnPoint point = RespawnRegistryCodec.Sanitize(new ClusterRespawnPoint(Node, entity.EntityId, entity.CubeGrid.EntityId,
+				partition, generation, entity.CustomName?.ToString() ?? entity.Name ?? entity.ToString(), entity.IDModule?.Owner ?? 0,
 				(int)(entity.IDModule?.ShareMode ?? VRage.Game.MyOwnershipShareModeEnum.None), entity.IsWorking,
 				respawn.SpawnWithoutOxygen, entity is MyMedicalRoom { SetFactionToSpawnee: not false },
-				respawn.GetOxygenLevel(), position.X, position.Y, position.Z));
+				respawn.GetOxygenLevel(), position.X, position.Y, position.Z), out RespawnPointProblem? problem);
+			if (problem.HasValue) problems.Add(problem.Value);
+			if (point != null) points.Add(point);
 		}
-		return points.OrderBy(x => x.RespawnEntityId).ToArray();
+		lock (m_capturedProblems)
+			foreach (RespawnPointProblem problem in m_capturedProblems.Fresh("capture", problems))
+				Console.WriteLine(RespawnProblemLog.Line("capture", Node, problem));
+		return points.GroupBy(x => x.RespawnEntityId).Select(x => x.First()).OrderBy(x => x.RespawnEntityId).ToArray();
 	}
 
 	/// <summary>T-0193: the respawn points of one partition as this node reports them now - what an offline
@@ -582,9 +612,15 @@ public static class RespawnRegistryService
 
 	private static void ReceiveReport(string origin, string payload)
 	{
-		ClusterRespawnSnapshot snapshot = RespawnRegistryCodec.Read(payload);
+		var problems = new List<RespawnPointProblem>();
+		ClusterRespawnSnapshot snapshot = RespawnRegistryCodec.Read(payload, problems);
 		ClusterRespawnPoint[] points = snapshot.Points.Select(x => x with { Origin = origin }).ToArray();
-		lock (Sync) Reports[origin] = new Report(ClusterRuntime.LocalMilliseconds, points);
+		lock (Sync)
+		{
+			Reports[origin] = new Report(ClusterRuntime.LocalMilliseconds, points);
+			foreach (RespawnPointProblem problem in m_receivedProblems.Fresh(origin, problems))
+				Console.WriteLine(RespawnProblemLog.Line("authority", origin, problem));
+		}
 		PublishMerged();
 	}
 
@@ -645,9 +681,12 @@ public static class RespawnRegistryService
 
 	private static void ApplySnapshot(string payload)
 	{
-		ClusterRespawnSnapshot snapshot = RespawnRegistryCodec.Read(payload);
+		var problems = new List<RespawnPointProblem>();
+		ClusterRespawnSnapshot snapshot = RespawnRegistryCodec.Read(payload, problems);
 		lock (Sync)
 		{
+			foreach (RespawnPointProblem problem in m_receivedProblems.Fresh("snapshot", problems))
+				Console.WriteLine(RespawnProblemLog.Line("replica", "world-authority", problem));
 			m_points = snapshot.Points;
 			m_snapshot = payload;
 		}

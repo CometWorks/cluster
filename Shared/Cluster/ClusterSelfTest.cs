@@ -75,6 +75,7 @@ internal static partial class ClusterSelfTest
 		("antenna-delta", AntennaDelta),
 		("antenna-parse-alloc", AntennaParseAllocation),
 		("identity-joined-name", IdentityJoinedName),
+		("respawn-registry", RespawnRegistryRules),
 		("antenna-fastpath", AntennaFastPath),
 		("stale-home-copy", StaleHomeCopy),
 		("close-attached-children", CloseAttachedChildren),
