@@ -48,6 +48,7 @@ Nothing here names a host, a user or a path outside the repository: everything h
 | `scenarios_contracts.py` | SE1-0247: accepted contracts on the World Authority's ledger, settled once across nodes, node restarts and a WA failover, mod API callbacks fired once; a settled contract not offered again after a partition rollback (#1272, P3-CON-ROLLBACK); an admitted settlement whose answers were lost is paid once (#1271, P3-CON-LOST); two clients accept on one node and deliver on another |
 | `scenarios_suite.py` | suite self-checks (the test plugin, the production route surface without it) |
 | `coverage.py` | which `TestPlan.md` ids are native, retired, a plan gap, or need a host capability this host lacks |
+| `soak_1149.py` | SE-1149, run by hand: a regular node's live heap and live grid count under handover churn, with a gcdump of both nodes every `SOAK_DUMP_EVERY` seconds. `SOAK_MODE` picks clientless ping-pong (default), client traversals or antenna proxies. `SOAK_TOOLCORE=on\|off` adds the ToolCore mod with `RespectPlayerMaxPCU` on (red: every grid a handover brought in stays alive) or off (green: the live grids stay at the spawned ones) |
 | `nas_smoke.py`, `probe_lab.py` | manual tools: connect+spawn against a deployed cluster; movement probe lab |
 
 The shell harness these scenarios replace (`run-cluster.sh` and its lanes) was removed on
