@@ -7,7 +7,7 @@ using VRageMath;
 namespace Shared.Patches;
 
 /// <summary>
-/// The twelve typed prefixes on GPS mutation requests plus
+/// The thirteen typed prefixes on GPS mutation requests plus
 /// the accepted postfix on each, mapped onto the boxed seam members with one operation string per request. The
 /// postfix (a WA-side "publish if changed") runs on every return of the target; only the completing returns
 /// change anything, so the extra calls publish nothing new.
@@ -50,6 +50,14 @@ public static class MyGpsCollectionPatch
 	private static class DeleteGpsOnServer
 	{
 		[HarmonyPrefix] private static bool Prefix(int gpsHash) => Request("DeleteServer", gpsHash, null, null, null);
+		[HarmonyPostfix] private static void Postfix() => Accepted();
+	}
+
+	// ClusterPlugin patch point: GpsAuthorityPatch.DeleteContainerPrefix (SE-1146)
+	[HarmonyPatch(typeof(MyGpsCollection), nameof(MyGpsCollection.SendDeleteContainerGpsRequest))]
+	private static class SendDeleteContainerGpsRequest
+	{
+		[HarmonyPrefix] private static bool Prefix(long entityId, long identityId) => Request("DeleteContainer", entityId, identityId, null, null);
 		[HarmonyPostfix] private static void Postfix() => Accepted();
 	}
 

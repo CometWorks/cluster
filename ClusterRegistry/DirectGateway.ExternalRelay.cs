@@ -367,7 +367,9 @@ internal sealed partial class DirectGateway
                 case "ticket":
                     var response = (Steamworks.EAuthSessionResponse)body.GetProperty("response").GetInt32();
                     ulong owner = body.TryGetProperty("owner", out JsonElement o) ? o.GetUInt64() : 0;
-                    OnSteamTicket(userId, SteamFrontend.Verdict(response), owner);
+                    uint[]? missingDlcs = body.TryGetProperty("missingDlcs", out JsonElement m)
+                        ? m.EnumerateArray().Select(app => app.GetUInt32()).ToArray() : null;
+                    OnSteamTicket(userId, SteamFrontend.Verdict(response), owner, missingDlcs);
                     return;
                 case "ticketRejected":
                     // SteamFrontend.DrainOutgoing: a BeginAuthSession failure is TicketInvalid.

@@ -62,6 +62,8 @@ internal static class TestRoutes
         VoxelCarryRoutes.Register();  // T-0368 asteroid carried across a handover
         StreamHoldRoutes.Register();  // T-0396 a grid held mid-stream to one client
         BroadcastChatRoutes.Register(); // SE-943 broadcast controller chat and the chat a node relays
+        PanelTestRoutes.Register();   // SE-1133 maintenance panels open across a handover
+        DriftTestRoutes.Register();   // SE-1152..1155 benign drift the round-trip gate rejected
         BlueprintTestRoutes.Register(); // T-0401 parked ship pastes (Visitor Ion) for the Add bench
         BlockCoverageHarness.Register(); // SE1-0163 one fixture per vanilla functional block type
         ContractTestRoutes.Register(); // SE1-0232 contract offers across handover and restart
@@ -73,7 +75,10 @@ internal static class TestRoutes
         NpcCensusRoutes.Register();   // #1354 the NPC census slot as mod-mes calls it, and a stand-in gap band
         MeteorRoutes.Register();      // #1381 a meteor probe and its carried lifetime
         OfflineTestRoutes.Register(); // SE-347 shared LoadRecovery apply/crash boundary and real production
+        RespawnFaultRoutes.Register(); // SE-1124 a split or a refusal at a respawn switch target
         AccountingInterlockObserver.Register();
+        GameThreadLoadRoutes.Register(); // SE-1134 real game-thread time: a busy node, a single hitch
+        EntitlementRoutes.Register(); // SE-1158 DLC and skin ownership as the game checks it
     }
 
     public static bool Dispatch(HttpListenerContext context, string path)

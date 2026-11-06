@@ -66,6 +66,8 @@ from scenarios_offline import SCENARIOS_OFFLINE  # noqa: E402
 from scenarios_rejoin import SCENARIOS_REJOIN  # noqa: E402
 from scenarios_fast import SCENARIOS_FAST  # noqa: E402
 from scenarios_orphan import SCENARIOS_ORPHAN  # noqa: E402
+from scenarios_panel import SCENARIOS_PANEL  # noqa: E402
+from scenarios_drift import SCENARIOS_DRIFT  # noqa: E402
 from scenarios_delete_fault import SCENARIOS_DELETE_FAULT  # noqa: E402
 from scenarios_grid_delete import SCENARIOS_GRID_DELETE  # noqa: E402
 from scenarios_stop_after_warm_start import SCENARIOS_STOP_AFTER_WARM_START  # noqa: E402
@@ -77,7 +79,7 @@ from scenarios_contracts import SCENARIOS_CONTRACTS  # noqa: E402
 
 SCENARIOS = {**SCENARIOS_CORE, **SCENARIOS_LIVE, **SCENARIOS_EXT, **SCENARIOS_ADMIN, **SCENARIOS_PLAYER, **SCENARIOS_RECOVERY, **SCENARIOS_RESTART,
              **SCENARIOS_SAVES, **SCENARIOS_TOPOLOGY, **SCENARIOS_WA, **SCENARIOS_WA_OPS, **SCENARIOS_AI, **SCENARIOS_OFFLINE, **SCENARIOS_REJOIN, **SCENARIOS_PLANET, **SCENARIOS_PRESENCE, **SCENARIOS_SUITE, **SCENARIOS_FAST, **SCENARIOS_ORPHAN, **SCENARIOS_DELETE_FAULT, **SCENARIOS_GRID_DELETE, **SCENARIOS_STOP_AFTER_WARM_START, **SCENARIOS_NPC, **SCENARIOS_MODS,
-             **SCENARIOS_REDELIVER, **SCENARIOS_PROPERTY_SYNC, **SCENARIOS_SPAWN_PREVIEW, **SCENARIOS_BLOCKS,
+             **SCENARIOS_REDELIVER, **SCENARIOS_PROPERTY_SYNC, **SCENARIOS_PANEL, **SCENARIOS_DRIFT, **SCENARIOS_SPAWN_PREVIEW, **SCENARIOS_BLOCKS,
              **SCENARIOS_CONTRACTS}
 #: The longest a single scenario may take; used for the network-window guard.
 SCENARIO_BUDGET = timedelta(minutes=float(os.environ.get("CLUSTER_TEST_SCENARIO_BUDGET_MINUTES", "30")))

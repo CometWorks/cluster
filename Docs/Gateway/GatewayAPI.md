@@ -99,6 +99,9 @@ State: `GET /registry/status` (lifecycle phase, nodes, node plan, executors).
   `GET|POST /registry/teleport-intents`, `GET|POST /registry/voxel-bases`,
   `GET|POST /registry/voxel-journals`, `GET|POST /registry/voxel-replicas`,
   `GET /registry/world-authority`
+- **Steam ownership** (SE-1158): `POST /registry/steam/skins` takes `{userId, data}`, the inventory blob a client sends its
+  node (base64), and answers `{skins}`, the armor and block skins Steam says are in it. Only for a player the Steam
+  frontend admitted; 503 without a Steam frontend, 422 when Steam refuses the blob.
 
 ## Self test
 
@@ -113,6 +116,12 @@ pass; a scenario can cite exactly the section it owns.
   `CLUSTER_INTERNAL_NETWORKS`.
 - `--steam HOST:PORT` — Steam transport (default deployment: `0.0.0.0:27016`), publishes
   the server row using `--admission` config (server name, member limit, admins, tags).
+  It is also the only process with the player's Steam auth session, so it answers what a vanilla DS asks its
+  own game server (SE-1158): which DLCs the player has a license for, checked at the ticket verdict, and which
+  skins their inventory blob holds (`/registry/steam/skins`). Both go to the nodes in the attach binding
+  (`PlayerReady.MissingDlcs`, `PlayerReady.Skins`); the DLCs also travel in the online list. A node's Direct
+  Transport game server would say yes to every DLC and no to every skin. With the external relay, gateway-rs checks
+  the DLCs and sends them with the `ticket` SteamEvent (`missingDlcs`); it doesn't check skins yet (503).
 - `--eos` — EOS P2P frontend.
 
 See `Docs/EnvVars.md` for every `--flag` ⇔ `CLUSTER_*` equivalence.

@@ -151,3 +151,34 @@ moves it 0 times and evacuates its 3 neighbours (1 client migration).
 
 This does not split the hub. A hub too big for one node's game thread stays at that node's
 knee. [DF-669](https://tasks.cometworks.se/tasks/1436) is the complementary fix, splitting an indivisible hub partition.
+
+## One-sample sim-ratio dips ([SE-1134](https://tasks.cometworks.se/tasks/2032), 2026-11-06)
+
+`EffectiveNodeLoad` charges a node at least 1e6 / `simulationRatio` once the ratio is under
+0.98. On octahedron-test (cluster 0.2.7) the nodes measured 5k-405k sim-us/s and ran at
+1.00-1.02, but a single hitch sample of 0.72-0.92 read as 1.03M-1.49M: over the 800k load
+floor and a 6x excess in one pass. The gateway pinned 36 balance migrations in 65 minutes,
+one every 1.8 minutes, Alpha Station's partition with 3 players among them (gain 0.042 for
+an estimated 15 s freeze). A migration's own freeze dips the next node, so the spikes moved
+from node to node.
+
+- **Sustained ratio** (`SimRatioSustainSeconds`, deployed 10). The automatic pass reads a
+  node's ratio as 1 until it has stayed under 0.98 for that long, then as the mildest
+  ratio of the window (`DirectGateway.SustainRatios`). A healthy sample, or a gap in the
+  samples longer than the window, starts over. Everything after the report collection reads
+  the sustained value: the balancer, scale-in, drains and the balance load in `/diag`.
+- **Client move gain** (`ClientMinGainPerLagSecond`, deployed 0.01). A paced client move
+  qualifies only if its gain (overload reduction over the mean node load, the pin log's
+  `gain=`) is at least this much per second of its estimated migration lag. Counted with
+  the min-gain skips.
+- **HandoverBlocked backoff.** A node that aborts an import on a residual names the
+  top-level entities the residual paths are in (`residual-entities=`), and the block keeps
+  them. A split, merge or transfer that leaves one of them in the partition keeps the
+  backoff (`handover backoff kept ... residual entity ... is still in it`); only one that
+  takes them out releases it. A block without entities (an older node) is released as
+  before.
+
+Both knobs are 0 in `new CostModel()` (every decision as before) and live-tunable through
+`POST /balance/cost-model`. `--balance-replay --decisions LOG` re-decides a gateway log's
+pins under a model: the SE-1130 log's 36 pins in 23:10Z-00:15Z all fall under the floor
+with the sustain, and fix 2 alone refuses 5 of them, Alpha's among them.

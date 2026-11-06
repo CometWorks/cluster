@@ -142,7 +142,7 @@ correlation.
 | Type | Name | Body |
 |---|---|---|
 | 20 | `SteamAuth` | `{op:"begin", clientId, ticket:base64}` (BeginAuthSession with the ticket from CLIENT_CONNECTED), `{op:"end", clientId}`, `{op:"group", clientId, groupId}` (RequestUserGroupStatus) |
-| 21 | `SteamEvent` (Rust→C#) | `{kind:"ticket", clientId, response, owner}`: ValidateAuthTicketResponse, `response` the raw EAuthSessionResponse (C# maps it with `SteamFrontend.Verdict`); also a later revocation. `{kind:"ticketRejected", clientId, response}`: BeginAuthSession failed (EBeginAuthSessionResult), C# treats it as TicketInvalid. `{kind:"group", clientId, member}`: GSClientGroupStatus (member or officer) |
+| 21 | `SteamEvent` (Rust→C#) | `{kind:"ticket", clientId, response, owner, missingDlcs?}`: ValidateAuthTicketResponse, `response` the raw EAuthSessionResponse (C# maps it with `SteamFrontend.Verdict`); also a later revocation. On an OK verdict `missingDlcs` lists the DLC app ids the player has no licence for (SE-1158). `{kind:"ticketRejected", clientId, response}`: BeginAuthSession failed (EBeginAuthSessionResult), C# treats it as TicketInvalid. `{kind:"group", clientId, member}`: GSClientGroupStatus (member or officer) |
 | 22 | `SteamPublish` | `{serverName, mapName, maxPlayers, passwordProtected, tags, players:[{userId,name}]}`: the browser row. C# sends it on connect, every 5 s and after an admission; gateway-rs re-applies the last one every 5 s (BUpdateUserData per player, the players Steam will not name counted as bots) |
 
 gateway-rs is then the whole Steam frontend of `SteamFrontend.cs`; C# keeps admission:

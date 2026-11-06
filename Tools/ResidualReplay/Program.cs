@@ -19,7 +19,7 @@ class Program
     {
         if (args.Length < 3)
         {
-            Console.Error.WriteLine("usage: residual-replay <ClusterNode.dll> <source.xml[.gz]> <target.xml[.gz]> [gameDir]");
+            Console.Error.WriteLine("usage: residual-replay <ClusterNode.dll> <source.xml[.gz]> <target.xml[.gz]> [gameDir]\n       residual-replay <ClusterNode.dll> --self-test <section> [gameDir]");
             return 2;
         }
         gameDir = args.Length > 3 ? args[3]
@@ -32,6 +32,9 @@ class Program
         };
 
         Assembly plugin = Assembly.LoadFrom(Path.GetFullPath(args[0]));
+        // --self-test SECTION runs one node self-test section that needs no game session (handover-drift,
+        // round-trip-normalize) the same way, so a gate rule is checked without starting a node.
+        if (args[1] == "--self-test") return SelfTest(plugin, args[2]);
         Type type = plugin.GetType("ClusterPlugin.ImportRoundTrip")
             ?? throw new InvalidOperationException("ImportRoundTrip not found in " + args[0]);
         MethodInfo method = type.GetMethod("ResidualsOfDocuments", BindingFlags.NonPublic | BindingFlags.Static)
@@ -69,6 +72,23 @@ class Program
         Console.WriteLine();
         foreach (string entry in residuals) Console.WriteLine("  " + entry);
         return 0;
+    }
+
+    static int SelfTest(Assembly plugin, string section)
+    {
+        MethodInfo run = plugin.GetType("ClusterPlugin.ClusterSelfTest")?.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)
+            ?? throw new InvalidOperationException("ClusterSelfTest.Run not found");
+        try
+        {
+            run.Invoke(null, new object[] { section });
+            Console.WriteLine($"PASS self-test {section}");
+            return 0;
+        }
+        catch (TargetInvocationException error)
+        {
+            Console.WriteLine($"FAIL self-test {section}: {error.InnerException?.Message}");
+            return 1;
+        }
     }
 
     // Nodes write the dumps gzipped since #1397 (*.xml.gz); older plain *.xml dumps load as they are.
