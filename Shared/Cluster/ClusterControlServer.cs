@@ -2910,10 +2910,10 @@ internal sealed partial class ClusterControlServer
 		return encoded;
 	}
 
-	internal static int AdoptClientView(ulong client, string state)
+	internal static int AdoptClientView(ulong client, string state, bool ownBindings = false)
 	{
 		ClientHandoverState snapshot = ClientHandoverCodec.Read(state);
-		int count = ReplicationServerPatch.Adopt(client, snapshot);
+		int count = ReplicationServerPatch.Adopt(client, snapshot, ownBindings);
 		RemotePlayerMirrorService.NoteArrival(client, snapshot.MirrorHeld); // SE-1192
 		Log("client-view attach client=" + client + " replicables=" + count);
 		return count;

@@ -52,7 +52,9 @@ public static class ReplicationServerPatch
 	public static void FinalizeNetworkIds(HashSet<long> entityIds) => ReplicationNetworkIdPatch.FinalizeEntities(Server(), entityIds);
 	public static void DiscardNetworkIds() => ReplicationNetworkIdPatch.Discard(Server());
 
-	public static int Adopt(ulong clientId, ClientHandoverState state)
+	/// <param name="ownBindings">Take the controlled and character bindings the client has here instead of the exported
+	/// ones: a client a node takes back after a failed switch (SE-1189).</param>
+	public static int Adopt(ulong clientId, ClientHandoverState state, bool ownBindings = false)
 	{
 		MyReplicationServer replication = Server();
 		Endpoint endpoint = Endpoint(clientId);
@@ -60,6 +62,7 @@ public static class ReplicationServerPatch
 		if (clientState == null) throw new InvalidOperationException("Cannot create target client state");
 		if (clientState.KnownSectors.Count != 0) throw new InvalidOperationException("Target client known-sector view is already populated");
 		foreach ((long planet, HashSet<long> sectors) in state.KnownSectors) clientState.KnownSectors.Add(planet, new HashSet<long>(sectors));
+		if (ownBindings) ReplicationClientViewPatch.TakeBindings(replication, clientState, state);
 		SeedPosition(clientState, state);
 		return ReplicationClientViewPatch.Adopt(replication, endpoint, clientState, state);
 	}

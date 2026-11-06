@@ -703,12 +703,25 @@ public static class ReplicationClientViewPatch
 		return count;
 	}
 
+	private static (uint Controlled, uint Character, long ControlledEntity, long CharacterEntity) Bindings(MyReplicationServer server,
+		MyClientStateBase clientState) =>
+		(clientState.ControlledReplicable == null ? 0 : server.GetNetworkIdByObject(clientState.ControlledReplicable).Value,
+			clientState.CharacterReplicable == null ? 0 : server.GetNetworkIdByObject(clientState.CharacterReplicable).Value,
+			(clientState.ControlledReplicable as IMyEntityReplicable)?.EntityId ?? 0,
+			(clientState.CharacterReplicable as IMyEntityReplicable)?.EntityId ?? 0);
+
+	/// <summary>
+	/// SE-1189: the state a node takes a client back with after a failed switch names the bindings the client has on
+	/// that node. A detached export carries none, which matches a player the Gateway's rollback re-attach created anew,
+	/// but not one that never left: its player is still there, its body (dead, on the respawn screen) its character.
+	/// </summary>
+	public static void TakeBindings(MyReplicationServer server, MyClientStateBase clientState, ClientHandoverState state) =>
+		(state.ControlledReplicableId, state.CharacterReplicableId, state.ControlledEntityId, state.CharacterEntityId) =
+			Bindings(server, clientState);
+
 	public static void ValidateBindings(MyReplicationServer server, MyClientStateBase clientState, ClientHandoverState state)
 	{
-		uint controlled = clientState.ControlledReplicable == null ? 0 : server.GetNetworkIdByObject(clientState.ControlledReplicable).Value;
-		uint character = clientState.CharacterReplicable == null ? 0 : server.GetNetworkIdByObject(clientState.CharacterReplicable).Value;
-		long controlledEntity = (clientState.ControlledReplicable as IMyEntityReplicable)?.EntityId ?? 0;
-		long characterEntity = (clientState.CharacterReplicable as IMyEntityReplicable)?.EntityId ?? 0;
+		(uint controlled, uint character, long controlledEntity, long characterEntity) = Bindings(server, clientState);
 		if (controlled != state.ControlledReplicableId || character != state.CharacterReplicableId || controlledEntity != state.ControlledEntityId || characterEntity != state.CharacterEntityId)
 			throw new InvalidOperationException("Target controlled or character binding does not match source: controlled " + controlled + "/" + controlledEntity
 				+ " vs " + state.ControlledReplicableId + "/" + state.ControlledEntityId + ", character " + character + "/" + characterEntity
