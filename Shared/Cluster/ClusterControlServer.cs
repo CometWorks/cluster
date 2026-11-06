@@ -2765,6 +2765,7 @@ internal sealed partial class ClusterControlServer
 	private static string ExportClientState(ulong client, HashSet<long> members)
 	{
 		ClientHandoverState snapshot = ReplicationServerPatch.Export(client, members);
+		snapshot.MirrorHeld = RemotePlayerMirrorService.HeldBy(client); // SE-1192
 		string encoded = ClientHandoverCodec.Write(snapshot);
 		Log("client-view export client=" + client + " replicables=" + snapshot.Replicables.Count + " pending=" + snapshot.Replicables.Count(x => x.IsPending) + " streaming=" + snapshot.Replicables.Count(x => x.IsStreaming) + " permanent=" + snapshot.Replicables.Count(x => x.PermanentLayer.HasValue) + " cachedVoxels=" + snapshot.CachedVoxelNames.Count + " knownPlanets=" + snapshot.KnownSectors.Count);
 		// A pending replicable is what keeps MyGuiScreenMedicals' batch confirmation - and with it
@@ -2826,6 +2827,7 @@ internal sealed partial class ClusterControlServer
 		}
 		ClientHandoverState snapshot = ClientHandoverCodec.Read(state);
 		int count = ReplicationServerPatch.Adopt(client, snapshot);
+		RemotePlayerMirrorService.NoteArrival(client, snapshot.MirrorHeld); // SE-1192
 		if (snapshot.ControlledEntityId != 0)
 		{
 			if (!MyEntities.TryGetEntityById(snapshot.ControlledEntityId, out MyEntity controlled)
@@ -2900,6 +2902,7 @@ internal sealed partial class ClusterControlServer
 	{
 		// KnownSectors are deliberately left empty so the destination node re-streams its own planet sectors.
 		ClientHandoverState snapshot = ReplicationServerPatch.ExportDetached(client);
+		snapshot.MirrorHeld = RemotePlayerMirrorService.HeldBy(client); // SE-1192
 		string encoded = ClientHandoverCodec.Write(snapshot);
 		int destroyed = ReplicationServerPatch.Prune(client, snapshot);
 		ReplicationServerPatch.Finish(client);
@@ -2909,7 +2912,9 @@ internal sealed partial class ClusterControlServer
 
 	internal static int AdoptClientView(ulong client, string state)
 	{
-		int count = ReplicationServerPatch.Adopt(client, ClientHandoverCodec.Read(state));
+		ClientHandoverState snapshot = ClientHandoverCodec.Read(state);
+		int count = ReplicationServerPatch.Adopt(client, snapshot);
+		RemotePlayerMirrorService.NoteArrival(client, snapshot.MirrorHeld); // SE-1192
 		Log("client-view attach client=" + client + " replicables=" + count);
 		return count;
 	}

@@ -48,13 +48,14 @@ public static class TraversalAnnouncementPatch
 	public static class SendClientConnected
 	{
 		[HarmonyPrefix]
-		private static void Prefix(ref ConnectedClientDataMsg msg)
+		private static void Prefix(ref ConnectedClientDataMsg msg, ulong sendTo)
 		{
-			if (!ClusterRuntime.IsClustered || !msg.Join) return;
+			if (!ClusterRuntime.IsClustered) return;
+			RemotePlayerMirrorService.NoteMemberSent(sendTo, msg.ClientId.Value);   // SE-1192
+			if (!msg.Join) return;
 			ulong client = msg.ClientId.Value;
 			if (!ClusterControlServer.IsArrivingByHandover(client)) return;
 			msg.Join = false;
-			RemotePlayerMirrorService.NoteHandoverArrival(client);
 			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] traversal join toast suppressed client="
 				+ client + " (T-0179)");
 		}
@@ -87,9 +88,14 @@ public static class TraversalAnnouncementPatch
 		private static void Prefix(ulong user, ref MyChatMemberStateChangeEnum arg2)
 		{
 			if (!ClusterRuntime.IsClustered) return;
-			// Already suppressed by vanilla; leave the reason vanilla was given intact.
-			if (arg2 == MyChatMemberStateChangeEnum.Kicked || arg2 == MyChatMemberStateChangeEnum.Banned) return;
-			if (!ClusterControlServer.IsLeavingByHandover(user)) return;
+			// Already suppressed by vanilla; leave the reason vanilla was given intact. A kick or ban removes the
+			// member on every client here by its own broadcast, like a disconnect does (SE-1192).
+			if (arg2 == MyChatMemberStateChangeEnum.Kicked || arg2 == MyChatMemberStateChangeEnum.Banned
+				|| !ClusterControlServer.IsLeavingByHandover(user))
+			{
+				RemotePlayerMirrorService.NoteMemberGone(user);
+				return;
+			}
 			arg2 = MyChatMemberStateChangeEnum.Kicked;
 			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] traversal leave toast suppressed client="
 				+ user + " (T-0179)");
