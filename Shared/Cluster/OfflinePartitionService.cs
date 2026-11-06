@@ -148,7 +148,11 @@ public static class OfflinePartitionService
 				{
 					if (row.TryGetProperty("RespawnPoints", out JsonElement respawnJson) && respawnJson.ValueKind == JsonValueKind.String)
 						foreach (ClusterRespawnPoint point in JsonSerializer.Deserialize<ClusterRespawnPoint[]>(respawnJson.GetString()) ?? Array.Empty<ClusterRespawnPoint>())
-							respawns.Add(point with { Origin = origin });
+						{
+							// SE-1150: a row stored before capture checked its points can hold one every replica would repair or drop.
+							ClusterRespawnPoint sane = RespawnRegistryCodec.Sanitize(point with { Origin = origin }, out _);
+							if (sane != null) respawns.Add(sane);
+						}
 				}
 				catch (Exception exception)
 				{
