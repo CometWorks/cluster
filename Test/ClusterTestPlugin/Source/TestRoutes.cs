@@ -78,6 +78,7 @@ internal static class TestRoutes
         RespawnFaultRoutes.Register(); // SE-1124 a split or a refusal at a respawn switch target
         AccountingInterlockObserver.Register();
         GameThreadLoadRoutes.Register(); // SE-1134 real game-thread time: a busy node, a single hitch
+        EntitlementRoutes.Register(); // SE-1158 DLC and skin ownership as the game checks it
     }
 
     public static bool Dispatch(HttpListenerContext context, string path)

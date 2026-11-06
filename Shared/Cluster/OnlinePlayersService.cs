@@ -71,9 +71,13 @@ public static class OnlinePlayersService
 	/// Direct Transport (bots and headless clients) rather than Steam. <paramref name="ServiceName"/>
 	/// cannot say it: that is what the client asserted in its join message, and the SE-988 trader
 	/// bots assert "Steam". The flag comes from the Gateway's credential in the attach binding.
+	///
+	/// SE-1158: <paramref name="MissingDlcs"/> are the DLC app ids the player doesn't own, as the Gateway's Steam
+	/// frontend found them; null when it didn't say. Other nodes answer the game's DLC checks for this player's
+	/// blocks and welders from it (<see cref="PlayerEntitlements"/>).
 	/// </summary>
 	public sealed record OnlinePlayerEntry(string Node, ulong SteamId, int SerialId, long IdentityId, string Name,
-		string ServiceName = "", bool IsAdmin = false, bool DirectTransport = false);
+		string ServiceName = "", bool IsAdmin = false, bool DirectTransport = false, uint[] MissingDlcs = null);
 	public sealed record OnlineReport(string Origin, OnlinePlayerEntry[] Players);
 	public sealed record OnlineSnapshot(OnlinePlayerEntry[] Players);
 
@@ -171,7 +175,7 @@ public static class OnlinePlayersService
 			.Select(player => new OnlinePlayerEntry(Node, player.Id.SteamId, player.Id.SerialId,
 				player.Identity?.IdentityId ?? 0, player.DisplayName ?? string.Empty,
 				ServiceNameOf(player.Id.SteamId), IsAdminOf(player.Id.SteamId),
-				MyPlayerCollectionPatch.IsDirectTransport(player.Id.SteamId)))
+				MyPlayerCollectionPatch.IsDirectTransport(player.Id.SteamId), PlayerEntitlements.MissingDlcs(player.Id.SteamId)))
 			.OrderBy(entry => entry.SteamId).ThenBy(entry => entry.SerialId)
 			.Take(MaxPlayersPerReport)
 			.ToArray();
@@ -275,10 +279,11 @@ public static class OnlinePlayersService
 			node = Node,
 			local = CaptureLocal().Select(entry => new { steamId = entry.SteamId, serialId = entry.SerialId,
 				identityId = entry.IdentityId, name = entry.Name, serviceName = entry.ServiceName,
-				isAdmin = entry.IsAdmin, directTransport = entry.DirectTransport }),
+				isAdmin = entry.IsAdmin, directTransport = entry.DirectTransport, missingDlcs = entry.MissingDlcs }),
 			cluster = cluster.Select(entry => new { node = entry.Node, steamId = entry.SteamId,
 				serialId = entry.SerialId, identityId = entry.IdentityId, name = entry.Name,
-				serviceName = entry.ServiceName, isAdmin = entry.IsAdmin, directTransport = entry.DirectTransport })
+				serviceName = entry.ServiceName, isAdmin = entry.IsAdmin, directTransport = entry.DirectTransport,
+				missingDlcs = entry.MissingDlcs })
 		};
 	}
 

@@ -30,6 +30,7 @@ internal static partial class ClusterSelfTest
 		("offline-solar-pivots", OfflineSolarPivots),
 		("drain-clock-fallback", DrainClockFallback),
 		("presence-transport", PresenceTransport),
+		("entitlements", Entitlements),
 		("membership-hysteresis", MembershipHysteresis),
 		("membership-atomicity", MembershipAtomicity),
 		("membership-conga", MembershipConga),
