@@ -530,23 +530,34 @@ def p2_prs_04(bench) -> None:
         bench.cluster.node(admin_node, f"/promote-test?userId={CLIENT_ID}&level=4", "POST")
         wait_until(lambda: bench.cluster.node(admin_node, f"/promote-test?userId={CLIENT_ID}").get("promoted") == 4
                    or None, 60, "client 1's admin level on its node")
-        for button in ("Kick", "Ban"):
-            _, index = _f3(api1, keep_open=True)
-            wait_until(lambda: _f3_click(api1, index, names[CLIENT3_ID], button) or None, 30,
-                       f"client 1's F3 {button} button to be enabled on client 3's row")
+        for button, done in (("Kick", "kicked"), ("Ban", "banned")):
             pattern = rf"{button.lower()} refused for player={CLIENT3_ID} "
+
+            def press():
+                # The client learns it is an admin a moment after the node does, and a click before that lands on
+                # a disabled button, so press until the node answers.
+                _, index = _f3(api1, keep_open=True)
+                try:
+                    _f3_click(api1, index, names[CLIENT3_ID], button)
+                    return wait_until(lambda: next(iter(_lines(bench, admin_node, pattern)), None), 5,
+                                      f"{admin_node} to refuse the {button.lower()}")
+                except ClusterError:
+                    return None
+                finally:
+                    api1.close_screen(index)
+                    wait_until(lambda: not any(screen.get("type") == "MyGuiScreenPlayers"
+                                               for screen in api1.list_screens()) or None, 30, "F3 to close")
+
             try:
-                refused = wait_until(lambda: next(iter(_lines(bench, admin_node, pattern)), None), 30,
-                                     f"{admin_node} to refuse the {button.lower()}")
+                refused = wait_until(press, 60, f"{admin_node} to refuse an F3 {button.lower()}")
             except ClusterError:
                 refused = None
-            api1.close_screen(index)
             time.sleep(2)  # a misfire's broadcast would take the row now
             rows_after, _ = _f3(api1)
             moderation[button] = {"refused": refused, "client1Rows": rows_after}
             bench.check(f"F3 {button.lower()} of a player on another node is refused on the admin's node",
                         refused is not None, json.dumps(moderation[button]))
-            bench.check(f"the {button.lower()}ed remote row stays on the admin's F3",
+            bench.check(f"the {done} remote row stays on the admin's F3",
                         names[CLIENT3_ID] in rows_after, json.dumps(rows_after))
         misfires = _lines(bench, admin_node, rf"Player {names[CLIENT3_ID]} (kicked|banned)")
         session = _session(bench, CLIENT3_ID) or {}
