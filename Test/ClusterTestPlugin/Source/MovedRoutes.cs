@@ -61,8 +61,8 @@ internal static class MovedRoutes
         // past the capture's checks, for `seconds`; an empty array clears them.
         TestRoutes.Add("POST", "/respawn-test-raw-points", (context, path) =>
 		{
-					ClusterRespawnPoint[] points = JsonSerializer.Deserialize<ClusterRespawnPoint[]>(Query(context, "points"));
-					double seconds = Double(context, "seconds");
+					ClusterRespawnPoint[] points = JsonSerializer.Deserialize<ClusterRespawnPoint[]>(TestRoutes.Query(context, "points"));
+					double seconds = TestRoutes.Double(context, "seconds");
 					Write(context, 200, "application/json", Encoding.UTF8.GetBytes(JsonSerializer.Serialize(
 						RespawnRegistryService.ConfigureTestRawPoints(points, seconds))));
 					return;
