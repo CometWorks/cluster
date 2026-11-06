@@ -126,7 +126,9 @@ internal sealed class PluginServices : IPluginClusterProvider, IPluginClusterBro
             return new PluginEntityPlacement { EntityId = entityId, Residence = PluginEntityResidence.Absent };
         long top = entity.GetTopMostParent()?.EntityId ?? entity.EntityId;
         var (partition, owned) = ClusterRuntime.PluginEntityPartition(top);
-        var residence = ClusterRuntime.IsFrozen(top) ? PluginEntityResidence.Frozen
+        // SE-1155: an import whose sliced activation is still open counts as frozen too. A plugin that writes an
+        // entity it holds as Local between the slices changes what the round-trip gate collects (T-0392).
+        var residence = ClusterRuntime.IsFrozen(top) || ImportActivationGuard.IsOpen(top) ? PluginEntityResidence.Frozen
             : owned ? PluginEntityResidence.Local : PluginEntityResidence.Unowned;
         return new PluginEntityPlacement { EntityId = top, Residence = residence, Partition = partition, Node = node };
     }
