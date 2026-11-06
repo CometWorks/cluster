@@ -284,6 +284,9 @@ public static class ClusterConfig
 		["offline.unknownBlocks"] = "Freeze",
 		["offline.longObservation"] = "Skip",
 		["offline.compensateMaxHours"] = "72",
+		// SE-1096: a group's model stops at this many events; the rest of its interval is forfeited like past compensateMaxHours.
+		// About 13 s of worker-thread time for the heaviest recorded base; 2,000,000 events still fail the group.
+		["offline.compensateMaxEvents"] = "500000",
 		["offline.callUp"] = "true",
 		["offline.callUpSeconds"] = "120",
 		["offline.callUpPerMinute"] = "6",
