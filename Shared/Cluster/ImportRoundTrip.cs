@@ -628,6 +628,14 @@ internal static class ImportRoundTrip
 		// warhead) keeps IsCountingDown with CountdownMs at -1 or another value under 1000, so its import restarts
 		// from 1000, as a world reload does (octahedron-test 2026-11-06, partition 4494: six NPC drone warheads,
 		// "-1 != 984"). Model the clamp on both sides; the import's own ticks are WarheadClockEpsilon.
+		// SE-1153. A block group with no blocks does not survive a load: MyCubeGrid.AddGroup skips a group builder
+		// whose Blocks list is empty, and GetObjectBuilder writes only the groups the grid holds, so the target
+		// re-emits the grid without it (octahedron-test 2026-11-06, partition 4925: an empty "Railguns" group on two
+		// grids, four failed handovers to three nodes). Drop the empty groups, then a BlockGroups left with none.
+		// A group that names blocks stays compared.
+		document.Descendants("BlockGroups").Elements("MyObjectBuilder_BlockGroup")
+			.Where(group => group.Element("Blocks")?.HasElements != true).Remove();
+		document.Descendants("BlockGroups").Where(groups => !groups.HasElements).Remove();
 		foreach (XElement countdown in document.Descendants("CountdownMs")
 			.Where(element => (string)element.Parent?.Attribute(XsiType) == "MyObjectBuilder_Warhead"))
 			if (int.TryParse(countdown.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int milliseconds))

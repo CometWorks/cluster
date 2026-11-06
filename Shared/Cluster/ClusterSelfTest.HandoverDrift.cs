@@ -14,6 +14,24 @@ internal static partial class ClusterSelfTest
 	private static void HandoverDrift()
 	{
 		HandoverDriftWarhead();
+		HandoverDriftBlockGroups();
+	}
+
+	/// <summary>SE-1153: a block group without blocks is dropped by the load; one with blocks stays compared.</summary>
+	private static void HandoverDriftBlockGroups()
+	{
+		const string empty = "<MyObjectBuilder_BlockGroup><Name>Railguns</Name><Blocks /></MyObjectBuilder_BlockGroup>";
+		const string guns = "<MyObjectBuilder_BlockGroup><Name>Guns</Name><Blocks><Vector3I><X>1</X><Y>2</Y><Z>3</Z></Vector3I></Blocks></MyObjectBuilder_BlockGroup>";
+		string Grid(string groups) => DriftHead + "<MyObjectBuilder_EntityBase xsi:type=\"MyObjectBuilder_CubeGrid\"><EntityId>1</EntityId><GridSizeEnum>Small</GridSizeEnum>"
+			+ (groups == null ? "" : "<BlockGroups>" + groups + "</BlockGroups>") + "<DisplayName>Small Grid 766</DisplayName></MyObjectBuilder_EntityBase>" + DriftTail;
+		List<string> residuals = ImportRoundTrip.ResidualsOfXml(Grid(empty), Grid(null));
+		Assert(residuals.Count == 0, "an empty block group the load drops was reported: " + DriftReport(residuals));
+		residuals = ImportRoundTrip.ResidualsOfXml(Grid(empty + guns), Grid(guns));
+		Assert(residuals.Count == 0, "an empty block group next to a real one was reported: " + DriftReport(residuals));
+		residuals = ImportRoundTrip.ResidualsOfXml(Grid(guns), Grid(null));
+		Assert(residuals.Exists(entry => entry.Contains("BlockGroups")), "a LOST block group must stay a residual, got: " + DriftReport(residuals));
+		residuals = ImportRoundTrip.ResidualsOfXml(Grid(guns), Grid(guns.Replace("<X>1</X>", "<X>4</X>")));
+		Assert(residuals.Count == 1 && residuals[0].Contains("/Blocks/"), "a group's blocks must stay compared, got: " + DriftReport(residuals));
 	}
 
 	private static string DriftReport(List<string> found) => string.Join("; ", found);
