@@ -481,13 +481,17 @@ def p2_prs_04(bench) -> None:
         # -- a FRESH LOGIN while a player is online on another node --------------------------------
         # The live bug: the mirror sent client 2 its remote rows while client 2 was still loading its world, the
         # world request flushed them, and they were booked as delivered - client 2's F3 never listed client 1.
-        api2 = start_second_client(bench, route_node="node-2", spawn=True)
+        # Not spawned: a respawn may well put it on node-1. Its player exists from the join; the medical screen
+        # only has to go so that F3 reaches the game screen.
+        api2 = start_second_client(bench, route_node="node-2")
+        for screen in sorted((listed["index"] for listed in api2.list_screens() if listed.get("type") == "MyGuiScreenMedicals"),
+                             reverse=True):
+            api2.close_screen(screen)
         second = wait_until(lambda: next((row for row in _cluster_players(bench, "wa-1")
                                           if row["steamId"] == CLIENT2_ID), None),
                             60, "client 2 in the cluster player list")
         record["players"] = {"client1": first, "client2": second}
-        if second["node"] == "node-1":
-            raise ClusterError("client 2 spawned onto node-1: no player on another node to list")
+        bench.check("client 2 is attached to node-2", second["node"] == "node-2", json.dumps(second))
         names = {CLIENT_ID: first["name"], CLIENT2_ID: second["name"]}
         expected = sorted(names.values())
 
