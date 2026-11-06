@@ -24,11 +24,14 @@ public sealed class ClientHandoverState
 	public readonly List<ClientReplicableState> Replicables = new List<ClientReplicableState>();
 	public readonly List<string> CachedVoxelNames = new List<string>();
 	public readonly Dictionary<long, HashSet<long>> KnownSectors = new Dictionary<long, HashSet<long>>();
-	/// <summary>SE-1192: the cluster players (SteamId, SerialId) the source node knows this client already has a
-	/// member entry and a MyPlayer for, so the target's player mirror sends it exactly the rest. Null when the
-	/// source did not say; the target then treats the client as holding nothing it can vouch for.</summary>
-	public List<(ulong SteamId, int SerialId)> MirrorHeld;
+	/// <summary>SE-1192: the cluster players the source node knows this client already has a member entry or a
+	/// MyPlayer for, so the target's player mirror sends it exactly the rest. Null when the source did not say;
+	/// the target then treats the client as holding nothing it can vouch for.</summary>
+	public List<MirrorHolding> MirrorHeld;
 }
+
+/// <summary>SE-1192: one cluster player as a client holds it: its member entry, its MyPlayer, or both.</summary>
+public readonly record struct MirrorHolding(ulong SteamId, int SerialId, bool Member, bool Player);
 
 public sealed class ClientReplicableState
 {

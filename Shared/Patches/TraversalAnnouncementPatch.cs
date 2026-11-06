@@ -86,9 +86,14 @@ public static class TraversalAnnouncementPatch
 		private static void Prefix(ulong user, ref MyChatMemberStateChangeEnum arg2)
 		{
 			if (!ClusterRuntime.IsClustered) return;
-			// Already suppressed by vanilla; leave the reason vanilla was given intact.
-			if (arg2 == MyChatMemberStateChangeEnum.Kicked || arg2 == MyChatMemberStateChangeEnum.Banned) return;
-			if (!ClusterControlServer.IsLeavingByHandover(user)) return;
+			// Already suppressed by vanilla; leave the reason vanilla was given intact. A kick or ban removes the
+			// member on every client here by its own broadcast, like a disconnect does (SE-1192).
+			if (arg2 == MyChatMemberStateChangeEnum.Kicked || arg2 == MyChatMemberStateChangeEnum.Banned
+				|| !ClusterControlServer.IsLeavingByHandover(user))
+			{
+				RemotePlayerMirrorService.NoteMemberGone(user);
+				return;
+			}
 			arg2 = MyChatMemberStateChangeEnum.Kicked;
 			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] traversal leave toast suppressed client="
 				+ user + " (T-0179)");

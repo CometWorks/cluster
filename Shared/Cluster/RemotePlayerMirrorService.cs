@@ -102,10 +102,28 @@ public static class RemotePlayerMirrorService
 	private static readonly HashSet<ulong> Served = new();
 
 	/// <summary>
-	/// PER CLIENT: the cluster players each attached client already has a member entry AND a MyPlayer for -
-	/// because this node sent them, because vanilla did (the checkpoint at login, SetUserAccepted and the
-	/// OnPlayerCreated broadcast for a player arriving here later), or because its previous node did
-	/// (<see cref="NoteArrival"/>).
+	/// What one client holds of each cluster player, by the (SteamId, SerialId) the merged list is keyed by. The
+	/// member entry and the MyPlayer travel separately: when a player leaves this node, vanilla's RemovePlayer
+	/// broadcasts OnPlayerRemoved to every client here, while a handover keeps the member (T-0179).
+	/// </summary>
+	private sealed class Holdings
+	{
+		public readonly HashSet<(ulong SteamId, int SerialId)> Members = new();
+		public readonly HashSet<(ulong SteamId, int SerialId)> Players = new();
+
+		public Holdings() { }
+
+		public Holdings(IEnumerable<(ulong, int)> both)
+		{
+			Members.UnionWith(both);
+			Players.UnionWith(Members);
+		}
+	}
+
+	/// <summary>
+	/// PER CLIENT: what each attached client already has - because this node sent it, because vanilla did (the
+	/// checkpoint at login, SetUserAccepted and the OnPlayerCreated broadcast for a player arriving here later),
+	/// or because its previous node did (<see cref="NoteArrival"/>).
 	///
 	/// WHY PER CLIENT (w33 2026-09-26 00:2x, Viktor's F3 showed 620 players for 124 - every pilot five
 	/// times). The member message is not idempotent on the client the way the player events are:
@@ -115,30 +133,37 @@ public static class RemotePlayerMirrorService
 	/// Kept while the client is attached, ready or not: a client whose view is detached for a switch that is
 	/// then thawed comes back holding what it held.
 	/// </summary>
-	private static readonly Dictionary<ulong, HashSet<(ulong SteamId, int SerialId)>> Held = new();
+	private static readonly Dictionary<ulong, Holdings> Held = new();
 
 	/// <summary>
 	/// SE-1192: what a client arriving by handover, switch or cross-node respawn holds, as its previous node said
 	/// in the client handover state. Noted at the adopt, taken over into <see cref="Held"/> on the first pass the
 	/// client is ready. A client with no note is a fresh login: it holds what the checkpoint gave it.
 	/// </summary>
-	private static readonly Dictionary<ulong, HashSet<(ulong SteamId, int SerialId)>> Carried = new();
+	private static readonly Dictionary<ulong, Holdings> Carried = new();
 
 	/// <summary>
-	/// The players vanilla has already given every client here: hosted here (merged list) or attached here.
-	/// A key new to this set since the last pass reached every client by vanilla's own messages.
+	/// The players vanilla gives every client here: hosted here (merged list) or attached here. A key new to this
+	/// set since the last pass reached every client by vanilla's own messages; a key gone from it lost its
+	/// MyPlayer on every client here (RemovePlayer's broadcast).
 	/// </summary>
 	private static HashSet<(ulong SteamId, int SerialId)> m_present = new();
 
 	/// <summary>
-	/// SE-1192, target side, at the adopt (game thread): <paramref name="held"/> is the set the client's previous
+	/// SE-1192, target side, at the adopt (game thread): <paramref name="held"/> is what the client's previous
 	/// node vouched for, or null when it said nothing - then the client holds nothing this node can vouch for.
 	/// </summary>
-	internal static void NoteArrival(ulong client, List<(ulong SteamId, int SerialId)> held)
+	internal static void NoteArrival(ulong client, List<MirrorHolding> held)
 	{
 		if (!Enabled) return;
 		Held.Remove(client);
-		Carried[client] = held == null ? new HashSet<(ulong, int)>() : new HashSet<(ulong, int)>(held);
+		var holdings = new Holdings();
+		foreach (MirrorHolding holding in held ?? new List<MirrorHolding>())
+		{
+			if (holding.Member) holdings.Members.Add((holding.SteamId, holding.SerialId));
+			if (holding.Player) holdings.Players.Add((holding.SteamId, holding.SerialId));
+		}
+		Carried[client] = holdings;
 	}
 
 	/// <summary>
@@ -146,11 +171,25 @@ public static class RemotePlayerMirrorService
 	/// client this node has not tracked yet (it moved before its first pass here) holds what a fresh login holds.
 	/// Null when the mirror is off, so the target falls back to sending everything.
 	/// </summary>
-	internal static List<(ulong SteamId, int SerialId)> HeldBy(ulong client)
+	internal static List<MirrorHolding> HeldBy(ulong client)
 	{
 		if (!Enabled || !ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority) return null;
-		if (Held.TryGetValue(client, out var held) || Carried.TryGetValue(client, out held)) return held.ToList();
-		return Present(OnlinePlayersService.Cluster, AttachedClients()).ToList();
+		if (!Held.TryGetValue(client, out Holdings holdings) && !Carried.TryGetValue(client, out holdings))
+			holdings = new Holdings(Present(OnlinePlayersService.Cluster, AttachedClients()));
+		return holdings.Members.Union(holdings.Players)
+			.Select(key => new MirrorHolding(key.SteamId, key.SerialId, holdings.Members.Contains(key), holdings.Players.Contains(key)))
+			.ToList();
+	}
+
+	/// <summary>
+	/// A player that left this node for real - a logout, a kick, a ban, not a handover - had its member removed on
+	/// every client here by vanilla's own disconnect message (TraversalAnnouncementPatch suppresses only the
+	/// handover's). Game thread.
+	/// </summary>
+	internal static void NoteMemberGone(ulong steamId)
+	{
+		foreach (Holdings holdings in Held.Values.Concat(Carried.Values))
+			holdings.Members.RemoveWhere(key => key.SteamId == steamId);
 	}
 
 	/// <summary>
@@ -256,16 +295,24 @@ public static class RemotePlayerMirrorService
 		foreach (ulong gone in Carried.Keys.Where(client => !attached.Contains(client)).ToArray()) Carried.Remove(gone);
 
 		// A player that became local or attached here since the last pass reached every client here by vanilla's own
-		// messages (SetUserAccepted's member message to every member, the OnPlayerCreated broadcast).
+		// messages (SetUserAccepted's member message to every member, the OnPlayerCreated broadcast); one that left
+		// took its MyPlayer off every client here (RemovePlayer's OnPlayerRemoved broadcast).
 		var arrived = new HashSet<(ulong, int)>(present);
 		arrived.ExceptWith(m_present);
+		var departed = new HashSet<(ulong, int)>(m_present);
+		departed.ExceptWith(present);
 		m_present = present;
-		foreach (HashSet<(ulong, int)> held in Held.Values.Concat(Carried.Values)) held.UnionWith(arrived);
+		foreach (Holdings holdings in Held.Values.Concat(Carried.Values))
+		{
+			holdings.Members.UnionWith(arrived);
+			holdings.Players.UnionWith(arrived);
+			holdings.Players.ExceptWith(departed);
+		}
 
 		foreach (ulong target in targets)
 		{
 			if (Held.ContainsKey(target)) continue;
-			if (Carried.Remove(target, out HashSet<(ulong, int)> carried))
+			if (Carried.Remove(target, out Holdings carried))
 			{
 				// Came from another node with its own list: it holds what that node vouched for, and nothing of
 				// this node's checkpoint, which it never downloaded.
@@ -276,7 +323,7 @@ public static class RemotePlayerMirrorService
 			// Ready before its adopt noted what it carries: wait for the note rather than guess.
 			if (ClusterControlServer.IsArrivingByHandover(target)) continue;
 			// A FRESH LOGIN, its world loaded: it holds this node's checkpoint, and needs its own member message.
-			Held[target] = new HashSet<(ulong, int)>(present);
+			Held[target] = new Holdings(present);
 			AnnounceSelf(target);
 		}
 		Served.Clear();
@@ -305,13 +352,20 @@ public static class RemotePlayerMirrorService
 			if (budget <= 0) break;          // resume on the next tick; nothing is lost
 			(ulong, int) key = (entry.SteamId, entry.SerialId);
 			lacking.Clear();
+			bool playerNeeded = false;
 			foreach (ulong target in targets)
-				if (target != entry.SteamId && !Held[target].Contains(key)) lacking.Add(target);
-			if (lacking.Count == 0) continue;
+			{
+				if (target == entry.SteamId) continue;   // its own row it always has
+				if (!Held[target].Members.Contains(key)) lacking.Add(target);
+				playerNeeded |= !Held[target].Players.Contains(key);
+			}
+			if (lacking.Count == 0 && !playerNeeded) continue;
 			budget--;
-			if (!Add(replication, lacking, entry, isLocal)) continue;  // not delivered: next tick
+			if (!Add(replication, lacking, playerNeeded, entry, isLocal)) continue;  // not delivered: next tick
 			if (!isLocal) Installed.Add(key);
-			foreach (ulong target in lacking) Held[target].Add(key);
+			foreach (ulong target in lacking) Held[target].Members.Add(key);
+			if (playerNeeded)
+				foreach (ulong target in targets) Held[target].Players.Add(key);   // a broadcast reached them all
 			m_memberMessages += lacking.Count;
 		}
 
@@ -350,7 +404,11 @@ public static class RemotePlayerMirrorService
 			Remove(key);
 			Installed.Remove(key);
 			Pending.Remove(key);
-			foreach (HashSet<(ulong, int)> held in Held.Values.Concat(Carried.Values)) held.Remove(key);
+			foreach (Holdings holdings in Held.Values.Concat(Carried.Values))
+			{
+				holdings.Members.Remove(key);
+				holdings.Players.Remove(key);
+			}
 		}
 
 		foreach (var pair in desired)
@@ -425,13 +483,13 @@ public static class RemotePlayerMirrorService
 	/// would (CreateNewPlayer): the real player's builder with its promote level, creative tools and remote admin
 	/// settings. A phantom's defaults there would switch the player's creative tools off (T-0378).
 	/// </summary>
-	private static bool Add(MyReplicationServer replication, List<ulong> memberTargets,
+	private static bool Add(MyReplicationServer replication, List<ulong> memberTargets, bool announcePlayer,
 		OnlinePlayersService.OnlinePlayerEntry entry, bool isLocal)
 	{
 		MyIdentity identity = MySession.Static?.Players.TryGetIdentity(entry.IdentityId);
 		if (identity == null) return false;   // not replicated here yet; next tick
-		MyObjectBuilder_Player builder = isLocal ? LocalBuilder(entry) : Builder(entry, identity);
-		if (builder == null) return false;
+		MyObjectBuilder_Player builder = !announcePlayer ? null : isLocal ? LocalBuilder(entry) : Builder(entry, identity);
+		if (announcePlayer && builder == null) return false;
 
 		var msg = new ConnectedClientDataMsg
 		{
@@ -447,6 +505,7 @@ public static class RemotePlayerMirrorService
 		};
 		foreach (ulong target in memberTargets)
 			replication.SendClientConnected(ref msg, target);
+		if (!announcePlayer) return true;
 
 		// A broadcast, and idempotent on every client that already has the player.
 		MySession.Static.Players.ClusterAnnounceIdentity(entry.IdentityId);
@@ -564,8 +623,10 @@ public static class RemotePlayerMirrorService
 			membersHeld = Held.OrderBy(pair => pair.Key).Select(pair => new
 			{
 				client = pair.Key,
-				count = pair.Value.Count,
-				keys = pair.Value.OrderBy(key => key.SteamId).ThenBy(key => key.SerialId)
+				count = pair.Value.Members.Count,
+				members = pair.Value.Members.OrderBy(key => key.SteamId).ThenBy(key => key.SerialId)
+					.Select(key => new { steamId = key.SteamId, serialId = key.SerialId }).ToArray(),
+				players = pair.Value.Players.OrderBy(key => key.SteamId).ThenBy(key => key.SerialId)
 					.Select(key => new { steamId = key.SteamId, serialId = key.SerialId }).ToArray()
 			}).ToArray(),
 			carriedPending = Carried.Keys.OrderBy(client => client).ToArray(),

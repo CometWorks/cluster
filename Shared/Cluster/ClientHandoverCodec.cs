@@ -87,10 +87,11 @@ public static class ClientHandoverCodec
 		if (mirror)
 		{
 			WriteCount(writer, state.MirrorHeld.Count, MaxStrings);
-			foreach ((ulong steamId, int serialId) in state.MirrorHeld)
+			foreach (MirrorHolding holding in state.MirrorHeld)
 			{
-				writer.Write(steamId);
-				writer.Write(serialId);
+				writer.Write(holding.SteamId);
+				writer.Write(holding.SerialId);
+				writer.Write((byte)((holding.Member ? 1 : 0) | (holding.Player ? 2 : 0)));
 			}
 		}
 		if (stream.Length > MaxPayloadBytes) throw new InvalidDataException("Client handover state exceeds limit");
@@ -165,8 +166,14 @@ public static class ClientHandoverCodec
 					}
 				if (stream.Position != stream.Length)
 				{
-					state.MirrorHeld = new List<(ulong SteamId, int SerialId)>();
-					for (int i = ReadCount(reader, MaxStrings); i > 0; i--) state.MirrorHeld.Add((reader.ReadUInt64(), reader.ReadInt32()));
+					state.MirrorHeld = new List<MirrorHolding>();
+					for (int i = ReadCount(reader, MaxStrings); i > 0; i--)
+					{
+						ulong steamId = reader.ReadUInt64();
+						int serialId = reader.ReadInt32();
+						byte held = reader.ReadByte();
+						state.MirrorHeld.Add(new MirrorHolding(steamId, serialId, (held & 1) != 0, (held & 2) != 0));
+					}
 				}
 			}
 			if (stream.Position != stream.Length) throw new InvalidDataException("Trailing bytes in client handover state");

@@ -1129,11 +1129,11 @@ internal static partial class ClusterSelfTest
 		Assert(read.Replicables[0].InventoryMessageIds.SequenceEqual(new uint[] { 5 }) && read.Replicables[1].VoxelGroupIds.SequenceEqual(new uint[] { 13 }),
 			"and beside them");
 		// SE-1192: the player mirror's delivered set rides after both, and on its own forces the empty sections before it.
-		state.MirrorHeld = new List<(ulong SteamId, int SerialId)> { (76561198223054696UL, 0), (1234567890UL, 2) };
+		state.MirrorHeld = new List<MirrorHolding> { new(76561198223054696UL, 0, true, true), new(1234567890UL, 2, true, false), new(7UL, 0, false, true) };
 		read = ClientHandoverCodec.Read(ClientHandoverCodec.Write(state));
 		Assert(read.MirrorHeld.SequenceEqual(state.MirrorHeld) && read.Replicables[1].VoxelGroupIds.SequenceEqual(new uint[] { 13 }),
 			"the mirror's delivered set survives the codec beside a carried voxel");
-		ClientHandoverState mirrorOnly = new ClientHandoverState { MirrorHeld = new List<(ulong SteamId, int SerialId)>() };
+		ClientHandoverState mirrorOnly = new ClientHandoverState { MirrorHeld = new List<MirrorHolding>() };
 		mirrorOnly.Replicables.Add(new ClientReplicableState { NetworkId = 11 });
 		read = ClientHandoverCodec.Read(ClientHandoverCodec.Write(mirrorOnly));
 		Assert(read.MirrorHeld != null && read.MirrorHeld.Count == 0 && read.Replicables.Single().VoxelEntityId == 0,
