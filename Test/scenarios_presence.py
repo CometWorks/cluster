@@ -514,6 +514,9 @@ def p2_prs_04(bench) -> None:
         # client 3 on that node's own kick list and ban config, and take its row off that node's clients.
         first = player(CLIENT_ID)
         admin_node = first["node"]
+        # Its medical screen previews the first respawn row at once, and the preview switches it to the kit's node,
+        # which is client 1's: that node refuses the switches (SE-1124's test knob), so client 3 stays put.
+        record["previewRefusal"] = bench.cluster.node(admin_node, "/respawn-execute-fault?mode=refuse&count=1000", "POST")
         start_second_client(bench, route_node="node-2", client_id=CLIENT3_ID, remote_port=CLIENT3_PORT)
         third = player(CLIENT3_ID)
         names[CLIENT3_ID] = third["name"]
