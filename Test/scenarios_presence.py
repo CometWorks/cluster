@@ -39,8 +39,8 @@ node's bookkeeping: a fresh login while a player is on the other node, and a han
 SE-1197: ``P2-PRS-05`` presses F3 Kick and Ban for a player on the admin's own node and for one on the other node.
 Each must reach the Gateway's cluster-wide books: the player is disconnected wherever they are, a kicked player is
 refused until the (shortened) cooldown runs out and then gets back in, and a banned player is refused through the
-other node too. A player without admin rights gets nothing done, neither through vanilla's disabled buttons nor as
-an admin of one node only.
+other node too. A player who is not on the Gateway's administrator list gets nothing done, even where a node
+rates them an admin.
 """
 
 from __future__ import annotations
@@ -659,33 +659,20 @@ def p2_prs_05(bench) -> None:
                     player(CLIENT2_ID)["node"] == admin_node and player(CLIENT3_ID)["node"] == other_node,
                     json.dumps(record["placement"]))
 
-        # -- a player without admin rights gets nothing done ------------------------------------------
-        # Client 2's own F3: vanilla greys Kick and Ban out for a non-admin. Its level is set to none first, so the
-        # check does not depend on what the world seeded.
-        record["client2Level"] = bench.cluster.node(admin_node, f"/promote-test?userId={CLIENT2_ID}")
-        bench.cluster.node(admin_node, f"/promote-test?userId={CLIENT2_ID}&level=0", "POST")
-        wait_until(lambda: bench.cluster.node(admin_node, f"/promote-test?userId={CLIENT2_ID}").get("promoted") == 0
-                   or None, 60, "client 2 without admin rights on its node")
-        time.sleep(2)  # the client learns its level a moment after its node
-        _, index = _f3(api2, keep_open=True)
-        try:
-            enabled = {button: _f3_click(api2, index, names[CLIENT3_ID], button) for button in ("Kick", "Ban")}
-        finally:
-            api2.close_screen(index)
-        record["nonAdminButtons"] = enabled
-        bench.check("a player's F3 Kick and Ban are disabled", not any(enabled.values()), json.dumps(enabled))
-        # An admin of ONE node only (promoted there, not on the Gateway's list): the node forwards, the Gateway refuses.
-        bench.cluster.node(admin_node, f"/promote-test?userId={CLIENT2_ID}&level=4", "POST")
-        wait_until(lambda: bench.cluster.node(admin_node, f"/promote-test?userId={CLIENT2_ID}").get("promoted") == 4
-                   or None, 60, "client 2's admin level on its node")
-        line = press(api2, CLIENT2_ID, CLIENT3_ID, "Kick", admin_node)
-        record["nodeAdminOnly"] = {"line": line, "books": _moderation(bench), "session": _session(bench, CLIENT3_ID)}
-        bench.check("a node-only admin's F3 kick is refused by the Gateway",
-                    line is not None and "not on the cluster's administrator list" in line, json.dumps(record["nodeAdminOnly"]))
-        bench.check("the player that node-only admin tried to kick is still connected and not on a kick cooldown",
-                    _session(bench, CLIENT3_ID) is not None and CLIENT3_ID not in _moderation(bench)["kicked"],
-                    json.dumps(record["nodeAdminOnly"]))
-        bench.cluster.node(admin_node, f"/promote-test?userId={CLIENT2_ID}&level=0", "POST")
+        # -- a player who is not a cluster admin gets nothing done ------------------------------------
+        # The bench worlds are OnlineMode OFFLINE, so every node rates every player Owner (MySession.
+        # GetUserPromoteLevel) and vanilla's admin check passes for anyone: the node forwards client 2's presses and
+        # the Gateway, which checks its own administrator list, is the guard. On a real server vanilla's check comes
+        # first and a player's Kick and Ban are greyed out.
+        refusals = {button: press(api2, CLIENT2_ID, CLIENT3_ID, button, admin_node) for button in ("Kick", "Ban")}
+        record["notClusterAdmin"] = {"lines": refusals, "books": _moderation(bench), "session": _session(bench, CLIENT3_ID)}
+        bench.check("F3 kick and ban by a player who is not a cluster admin are refused by the Gateway",
+                    all(line is not None and "not on the cluster's administrator list" in line
+                        for line in refusals.values()), json.dumps(record["notClusterAdmin"]))
+        books = _moderation(bench)
+        bench.check("the player a non-admin tried to kick and ban is still connected, not kicked, not banned",
+                    _session(bench, CLIENT3_ID) is not None and CLIENT3_ID not in books["kicked"]
+                    and CLIENT3_ID not in books["banned"], json.dumps(record["notClusterAdmin"]))
 
         # -- KICK: remote row, then local row -------------------------------------------------------------
         for target, port, where in ((CLIENT3_ID, CLIENT3_PORT, other_node), (CLIENT2_ID, CLIENT2_PORT, admin_node)):
