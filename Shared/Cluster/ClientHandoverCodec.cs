@@ -60,7 +60,9 @@ public static class ClientHandoverCodec
 		List<ClientReplicableState> withInventory = state.Replicables.FindAll(x => x.InventoryMessageIds.Count != 0);
 		// T-0368: carried asteroids, a second optional trailing section; the inventory section precedes it even when empty.
 		List<ClientReplicableState> withVoxel = state.Replicables.FindAll(x => x.VoxelEntityId != 0);
-		if (withInventory.Count != 0 || withVoxel.Count != 0)
+		// SE-1192: the player mirror's delivered set, a third optional trailing section after the other two.
+		bool mirror = state.MirrorHeld != null;
+		if (withInventory.Count != 0 || withVoxel.Count != 0 || mirror)
 		{
 			WriteCount(writer, withInventory.Count, MaxReplicables);
 			foreach (ClientReplicableState replicable in withInventory)
@@ -70,7 +72,7 @@ public static class ClientHandoverCodec
 				foreach (uint id in replicable.InventoryMessageIds) writer.Write(id);
 			}
 		}
-		if (withVoxel.Count != 0)
+		if (withVoxel.Count != 0 || mirror)
 		{
 			WriteCount(writer, withVoxel.Count, MaxReplicables);
 			foreach (ClientReplicableState replicable in withVoxel)
@@ -80,6 +82,15 @@ public static class ClientHandoverCodec
 				writer.Write(replicable.VoxelApplied);
 				WriteCount(writer, replicable.VoxelGroupIds.Count, MaxVoxelGroups);
 				foreach (uint id in replicable.VoxelGroupIds) writer.Write(id);
+			}
+		}
+		if (mirror)
+		{
+			WriteCount(writer, state.MirrorHeld.Count, MaxStrings);
+			foreach ((ulong steamId, int serialId) in state.MirrorHeld)
+			{
+				writer.Write(steamId);
+				writer.Write(serialId);
 			}
 		}
 		if (stream.Length > MaxPayloadBytes) throw new InvalidDataException("Client handover state exceeds limit");
@@ -152,6 +163,11 @@ public static class ClientHandoverCodec
 						if (owner.VoxelEntityId == 0) throw new InvalidDataException("Carried voxel without an entity id " + networkId);
 						for (int j = ReadCount(reader, MaxVoxelGroups); j > 0; j--) owner.VoxelGroupIds.Add(reader.ReadUInt32());
 					}
+				if (stream.Position != stream.Length)
+				{
+					state.MirrorHeld = new List<(ulong SteamId, int SerialId)>();
+					for (int i = ReadCount(reader, MaxStrings); i > 0; i--) state.MirrorHeld.Add((reader.ReadUInt64(), reader.ReadInt32()));
+				}
 			}
 			if (stream.Position != stream.Length) throw new InvalidDataException("Trailing bytes in client handover state");
 			return state;

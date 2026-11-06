@@ -54,7 +54,6 @@ public static class TraversalAnnouncementPatch
 			ulong client = msg.ClientId.Value;
 			if (!ClusterControlServer.IsArrivingByHandover(client)) return;
 			msg.Join = false;
-			RemotePlayerMirrorService.NoteHandoverArrival(client);
 			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] traversal join toast suppressed client="
 				+ client + " (T-0179)");
 		}
