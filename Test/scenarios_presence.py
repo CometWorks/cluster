@@ -594,14 +594,11 @@ def p2_prs_05(bench) -> None:
 
         admin_node = player(CLIENT_ID)["node"]
         other_node = "node-2" if admin_node == "node-1" else "node-1"
-        # The joiners stay unspawned where they are routed: their medical screens preview the first respawn row, and
-        # a preview switches them to the kit's node, which is the admin's; that node refuses the switches (SE-1124).
-        record["previewRefusal"] = bench.cluster.node(admin_node, "/respawn-execute-fault?mode=refuse&count=1000", "POST")
         names = {CLIENT_ID: player(CLIENT_ID)["name"]}
 
-        def join(client: int, port: int, node: str) -> object:
-            api = start_second_client(bench, route_node=node, client_id=client, remote_port=port)
-            names[client] = player(client, node)["name"]
+        def join(client: int, port: int, node: str, spawn: bool = False) -> object:
+            api = start_second_client(bench, route_node=node, client_id=client, remote_port=port, spawn=spawn)
+            names[client] = player(client, None if spawn else node)["name"]
             return api
 
         def gone(client: int) -> bool:
@@ -644,9 +641,18 @@ def p2_prs_05(bench) -> None:
             finally:
                 bench.kill_client(f"rejoin-{client}")
 
-        api2 = join(CLIENT2_ID, CLIENT2_PORT, admin_node)  # the LOCAL row: same node as the admin
+        # The LOCAL row: spawned, so its own F3 opens for the non-admin checks (a medical screen holds the keys), and
+        # its spawn puts it at the kit, on the admin's node.
+        api2 = join(CLIENT2_ID, CLIENT2_PORT, admin_node, spawn=True)
+        # Later joiners stay unspawned where they are routed: their medical screens preview the first respawn row,
+        # and a preview switches them to the kit's node, which is the admin's; that node refuses the switches (SE-1124).
+        record["previewRefusal"] = bench.cluster.node(admin_node, "/respawn-execute-fault?mode=refuse&count=1000", "POST")
         join(CLIENT3_ID, CLIENT3_PORT, other_node)  # the REMOTE row
-        record["placement"] = {"admin": admin_node, "local": CLIENT2_ID, "remote": CLIENT3_ID, "names": names}
+        record["placement"] = {"admin": admin_node, "local": player(CLIENT2_ID), "remote": player(CLIENT3_ID),
+                               "names": names}
+        bench.check("the local row is on the admin's node and the remote row on the other",
+                    player(CLIENT2_ID)["node"] == admin_node and player(CLIENT3_ID)["node"] == other_node,
+                    json.dumps(record["placement"]))
 
         # -- a player without admin rights gets nothing done ------------------------------------------
         # Client 2's own F3: vanilla greys Kick and Ban out for a non-admin.
