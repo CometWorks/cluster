@@ -748,13 +748,18 @@ internal static class ImportRoundTrip
 					|| (string)element.Attribute(XsiType) == "MyObjectBuilder_Character")))
 		{
 			character.Elements("PositionAndOrientation").Remove();
-			// Same class for the air a seated character reports: MyCharacterOxygenComponent.UpdateOxygen
-			// copies the pressurized seat's fill level into EnvironmentOxygenLevel every 100 frames
-			// (MyCharacterOxygenComponent.cs:351). The seat's own OxygenLevel stays compared (SeatOxygenEpsilon).
-			character.Elements("EnvironmentOxygenLevel").Remove();
 			foreach (XElement flags in character.Elements("PersistentFlags"))
 				flags.Value = string.Join(" ", flags.Value.Split(' ').Where(token => token != "InScene"));
 		}
+		// Same class for the air any character reports, seated or free. MyCharacterOxygenComponent.UpdateOxygen
+		// overwrites EnvironmentOxygenLevel every 100 frames from where the character is: the pressurized seat's fill
+		// level (MyCharacterOxygenComponent.cs:351), else GetOxygenInPoint and the airtight room of a grid around it.
+		// A just-imported grid has no rooms yet (see OxygenRooms above), so a free character in a pressurized room
+		// re-emitted 0 against 0.99324 (SE-1154, octahedron-test 2026-11-06, partition 5774). The seat's own
+		// OxygenLevel and the character's suit stay compared (SeatOxygenEpsilon, SuitGasEpsilon).
+		document.Descendants().Where(element => element.Name.LocalName == "Pilot"
+				|| (string)element.Attribute(XsiType) == "MyObjectBuilder_Character")
+			.Elements("EnvironmentOxygenLevel").Remove();
 		// A grid's deformation skeleton is a map keyed by bone position, so the same dents come back in
 		// whatever order the imported grid's hash map enumerates - identical bones, different sequence,
 		// and the comparison is positional. Sorting is what makes the comparison about the bones rather
@@ -946,6 +951,25 @@ internal static class ImportRoundTrip
 	/// </summary>
 	private const double WarheadClockEpsilon = 2000;
 
+	/// <summary>
+	/// SE-1154: a character's suit gases (OxygenLevel and each StoredGas FillLevel), by up to two breaths of the
+	/// 30 L oxygen suit. In breathable air MyCharacterOxygenComponent.UpdateGassesFillLevelsAndAmounts refills the
+	/// suit every 100 frames, and the character draws OxygenConsumptionRate (0.063 L) between refills, so the suit
+	/// saws between full and one breath under, and which side each node captured is the phase of its own updates:
+	/// five seated pilots came back at 1 against exactly 1 - 0.063 / 30 = 0.9979 (octahedron-test 2026-11-06).
+	/// 0.005 is 0.15 L of oxygen; a lost or reset suit differs by far more.
+	/// </summary>
+	private const double SuitGasEpsilon = 0.005;
+
+	private static bool IsCharacterSuitGas(string path)
+	{
+		if (path.EndsWith("/FillLevel", StringComparison.Ordinal)) return path.Contains("/StoredGases/StoredGas", StringComparison.Ordinal);
+		if (!path.EndsWith("/OxygenLevel", StringComparison.Ordinal)) return false;
+		int parent = path.LastIndexOf('/', path.Length - "/OxygenLevel".Length - 1);
+		return string.CompareOrdinal(path, parent + 1, "Pilot#", 0, "Pilot#".Length) == 0
+			|| string.CompareOrdinal(path, parent + 1, "MyObjectBuilder_EntityBase#", 0, "MyObjectBuilder_EntityBase#".Length) == 0;
+	}
+
 	private static bool IsBlockField(string path, string field)
 	{
 		if (path.Length < field.Length + 2 || !path.EndsWith("/" + field, StringComparison.Ordinal)) return false;
@@ -965,7 +989,8 @@ internal static class ImportRoundTrip
 				|| path.EndsWith("/Component/ActivationTime", StringComparison.Ordinal)
 				? SafeZoneClockEpsilon
 			: IsBlockField(path, "OxygenLevel") ? SeatOxygenEpsilon
-			: IsBlockField(path, "CountdownMs") ? WarheadClockEpsilon : 2e-5;
+			: IsBlockField(path, "CountdownMs") ? WarheadClockEpsilon
+			: IsCharacterSuitGas(path) ? SuitGasEpsilon : 2e-5;
 
 	/// <summary>T-0363: the value MyFueledPowerProducer.Init restores from a saved capacity (MathHelper.Clamp to [0, max]).</summary>
 	internal static float ClampCapacity(float capacity, float maximum)
