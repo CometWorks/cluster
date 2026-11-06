@@ -120,8 +120,8 @@ pass; a scenario can cite exactly the section it owns.
   own game server (SE-1158): which DLCs the player has a license for, checked at the ticket verdict, and which
   skins their inventory blob holds (`/registry/steam/skins`). Both go to the nodes in the attach binding
   (`PlayerReady.MissingDlcs`, `PlayerReady.Skins`); the DLCs also travel in the online list. A node's Direct
-  Transport game server would say yes to every DLC and no to every skin. The external relay (gateway-rs) doesn't
-  check either yet, and its nodes leave both to the game.
+  Transport game server would say yes to every DLC and no to every skin. With the external relay, gateway-rs checks
+  the DLCs and sends them with the `ticket` SteamEvent (`missingDlcs`); it doesn't check skins yet (503).
 - `--eos` — EOS P2P frontend.
 
 See `Docs/EnvVars.md` for every `--flag` ⇔ `CLUSTER_*` equivalence.
