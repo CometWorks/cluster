@@ -335,6 +335,7 @@ internal sealed partial class GatewayRegistry : IDisposable
                 archived++;
             }
             _archivedPartitions[partition] = located;
+            ClearHandoverBlockLocked(partition, "archived");
             // T-0400: archive retention counts its age from here; same write as the move.
             _store.Stamp(partition, _clock().ToUnixTimeMilliseconds());
             ArchivedPartitionsTotal++;
@@ -1032,7 +1033,8 @@ internal sealed partial class GatewayRegistry : IDisposable
 
     /// <param name="memberless">The owner holds no member of the partition (a drain's member-less release, T-0048):
     /// see <see cref="ReapIfMemberlessUnsaved"/>.</param>
-    public PartitionOwnership ReleasePartition(ulong partition, string node, long epoch, long generation, bool memberless = false)
+    public PartitionOwnership ReleasePartition(ulong partition, string node, long epoch, long generation, bool memberless = false,
+        bool failedRecovery = false)
     {
         lock (_lock)
         {
@@ -1048,6 +1050,7 @@ internal sealed partial class GatewayRegistry : IDisposable
             owner.LeaseExpires = DateTimeOffset.MinValue;
             Touch(owner);
             EmitPartition("released", partition, null, 0, owner.Generation, "release");
+            if (failedRecovery) NoteFailedRecovery(partition, node);   // SE-1161 (FailedRecoveries.cs)
             if (!ReapIfStillborn(owner) && !(memberless && ReapIfMemberlessUnsaved(owner))) ReapIfEmpty(owner);
             Persist();
             return owner;
@@ -1688,6 +1691,7 @@ internal sealed partial class GatewayRegistry : IDisposable
                     if (IsRetired(candidate.Partition)) continue;
                     if (_state.OfflinePartitions.ContainsKey(candidate.Partition)) continue;
                     if (reservedElsewhere.Contains(candidate.Partition)) continue;
+                    if (RecoveryHeldBack(candidate.Partition, _clock())) continue;   // SE-1161: failed loads back off, quarantined stay out
                     // T-0347: before the empty-row reap below - the unreported Final may be the save that holds the content.
                     if (HeldForLateSave(candidate.Partition, _clock())) continue;
                     if (PartitionWeight(candidate.Partition) > headroom) continue;
@@ -1708,6 +1712,8 @@ internal sealed partial class GatewayRegistry : IDisposable
                     best = null;
                 requested = best == null ? [] : [best.Partition];
             }
+            // SE-1161: directed loads, spare reservations and a warm node's own list wait out a failure backoff too.
+            requested = requested.Where(partition => !RecoveryHeldBack(partition, _clock())).ToArray();
             foreach (ulong partition in requested)
                 if (_state.Partitions.TryGetValue(partition, out PartitionOwnership? row) && EmptyAndUnclaimed(row, out _))
                     reapedEmpty.Add(partition);
@@ -2635,6 +2641,7 @@ internal sealed partial class GatewayRegistry : IDisposable
                 throw new RegistryConflictException($"Save {id} is fenced by partition ownership");
             if (id.Sequence < 1 || sizeBytes < 0 || string.IsNullOrWhiteSpace(checksum) || string.IsNullOrWhiteSpace(location))
                 throw new ArgumentException("A save requires a positive sequence, non-negative size, checksum, and location");
+            _failedRecoveries.Remove(id.Partition);   // SE-1161: a node holds it and saves it, so its load worked
 
             string key = Key(id);
             if (TryGetSave(key, out SaveRegistration? old))
@@ -3323,7 +3330,7 @@ internal sealed partial class GatewayRegistry : IDisposable
     /// the threshold: the partition is HandoverBlocked, scheduling backs off 1 min doubling to 1 h, and the
     /// policy layer moves the counterpart of any pending co-location instead.
     /// </summary>
-    public void RecordValidationAbort(ulong partition, string signature, string reason)
+    public void RecordValidationAbort(ulong partition, string signature, string reason, long[]? entities = null)
     {
         lock (_lock)
         {
@@ -3344,6 +3351,8 @@ internal sealed partial class GatewayRegistry : IDisposable
             block.Attempts++;
             block.Reason = reason;
             block.LastAbort = _clock();
+            // SE-1134: from a node that names them; an older node leaves the last known set.
+            if (entities is { Length: > 0 }) block.Entities = entities;
             Console.WriteLine($"handover validation abort partition={partition} signature={signature} attempts={block.Attempts} reason={reason}");
             if (block.Attempts >= HandoverValidationAborts)
             {
@@ -3395,6 +3404,41 @@ internal sealed partial class GatewayRegistry : IDisposable
             Console.WriteLine($"handover block cleared partition={partition} by={cause}");
     }
 
+    /// <summary>SE-1185: a lineage that retires a blocked input ends the block, which otherwise kept the retired row
+    /// in the summary listing for good.</summary>
+    private void ClearRetiredHandoverBlocksLocked(PartitionVersion[] inputs)
+    {
+        foreach (PartitionVersion input in inputs)
+            if (IsRetired(input.Partition))
+                ClearHandoverBlockLocked(input.Partition, "retired");
+    }
+
+    /// <summary>How often <see cref="SweepHandoverBlocks"/> runs. A test sets it to seconds.</summary>
+    internal TimeSpan HandoverBlockSweepInterval { get; set; } = TimeSpan.FromSeconds(EnvInt("CLUSTER_HANDOVER_BLOCK_SWEEP_SECONDS", 30));
+    private DateTimeOffset _lastHandoverBlockSweep = DateTimeOffset.MinValue;
+
+    /// <summary>
+    /// SE-1185: drops the blocks of partitions that have no owner and are not being recovered, at most once per
+    /// <see cref="HandoverBlockSweepInterval"/>. It is the rule cluster-monitor.sh of the regression harness applied
+    /// from outside, which a cluster under Quasar never ran. Returns how many blocks it dropped.
+    /// </summary>
+    public int SweepHandoverBlocks()
+    {
+        lock (_lock)
+        {
+            DateTimeOffset now = _clock();
+            if (now - _lastHandoverBlockSweep < HandoverBlockSweepInterval) return 0;
+            _lastHandoverBlockSweep = now;
+            ulong[] dissolved = _state.HandoverBlocks.Keys
+                .Where(x => !_state.Partitions.TryGetValue(x, out PartitionOwnership? row) || row.Node == null && !row.Recovering)
+                .ToArray();
+            foreach (ulong partition in dissolved)
+                ClearHandoverBlockLocked(partition, "dissolved");
+            if (dissolved.Length != 0) Persist();
+            return dissolved.Length;
+        }
+    }
+
     /// <summary>One prompt retry for a partition whose content changed: the backoff gate opens, the
     /// attempt count stays, so a repeat abort re-blocks immediately at the escalated backoff.</summary>
     public void ReleaseHandoverBackoff(ulong partition, string cause)
@@ -3404,6 +3448,21 @@ internal sealed partial class GatewayRegistry : IDisposable
             ReleaseHandoverBackoffLocked(partition, cause);
             Persist();
         }
+    }
+
+    /// <summary>
+    /// SE-1134: a residual entity of the partition's handover block that a lineage op leaves in it, or null when the op
+    /// may have taken the residual out (or the block names no entities). A merge survivor keeps all it had; a split or
+    /// transfer output keeps the members its list names. A retired input keeps nothing.
+    /// </summary>
+    private long? ResidualStays(ulong partition, LineageKind kind, ulong[] outputIds, Dictionary<ulong, long[]>? members)
+    {
+        if (!_state.HandoverBlocks.TryGetValue(partition, out HandoverBlockRecord? block) || block.Entities is not { Length: > 0 } entities
+            || !outputIds.Contains(partition))
+            return null;
+        if (kind == LineageKind.Merge) return entities[0];
+        return members != null && members.TryGetValue(partition, out long[]? kept) && kept.Intersect(entities).FirstOrDefault() is var e and not 0
+            ? e : null;
     }
 
     private void ReleaseHandoverBackoffLocked(ulong partition, string cause)
@@ -3569,6 +3628,7 @@ internal sealed partial class GatewayRegistry : IDisposable
             }
             _state.Lineage.Add(record);
             IndexLineage(record);
+            ClearRetiredHandoverBlocksLocked(inputs);
             // A recorded lineage retires its inputs just as surely as ApplyLineage does, so it
             // must repair client state the same way - this path (the rotator's retire-empty
             // merge) used to leave any placement naming an input pointing at a partition that
@@ -3648,8 +3708,14 @@ internal sealed partial class GatewayRegistry : IDisposable
             // busy partition had its block wiped every few minutes and the doomed retry churn never
             // ended. The changed member set does deserve exactly one prompt retry: release the backoff,
             // keep the attempt count, and a repeat abort re-blocks immediately at the escalated backoff.
+            // SE-1134: only if the residual's entity has left the partition. Alpha Station (partition 4728, an open
+            // maintenance panel) had its backoff released by a trader shuttle's split, and the next pin froze Alpha again.
+            ClearRetiredHandoverBlocksLocked(inputs);
             foreach (ulong changed in inputs.Select(x => x.Partition).Concat(outputIds).Distinct())
-                ReleaseHandoverBackoffLocked(changed, "membership-change");
+                if (ResidualStays(changed, kind, outputIds, members) is { } entity)
+                    Console.WriteLine($"handover backoff kept partition={changed} on membership-change: residual entity {entity} is still in it");
+                else
+                    ReleaseHandoverBackoffLocked(changed, "membership-change");
             RepointClientState(kind, inputs, outputIds, members ?? [], seated);
             // #1304: only a split re-IDs content that landed. A merge survivor and both sides of a transfer keep their own
             // arrival: octahedron-1191's lane partitions absorbed a just-woken parked grid every 1-2 min, took its arrival
@@ -5919,6 +5985,9 @@ internal sealed partial class GatewayRegistry : IDisposable
         public Dictionary<string, string> HostStoreAliases { get; set; } = [];
         /// <summary>T-0400: archived save locations whose file archive retention deleted (acknowledged), ever.</summary>
         public long ArchiveFilesDeleted { get; set; }
+        /// <summary>SE-1168: the managed lifetime recycle in flight, if any, and when the last one started (ManagedRotation.cs).</summary>
+        public ManagedRecycle? ManagedRotation { get; set; }
+        public DateTimeOffset? LastManagedRotationAt { get; set; }
     }
 }
 
@@ -6037,6 +6106,10 @@ internal sealed record HandoverBlockRecord(ulong Partition, string Signature, st
     public DateTimeOffset FirstAbort { get; set; }
     public DateTimeOffset LastAbort { get; set; }
     public DateTimeOffset? BackoffUntil { get; set; }
+    /// <summary>SE-1134: the top-level entities the residuals are in, as the importing node named them. Null from an
+    /// older node or a row persisted before it: a membership change then releases the backoff as before.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public long[]? Entities { get; set; }
 }
 internal sealed record PartitionVersion(ulong Partition, long Generation, long Members = 0);
 internal sealed record SaveRegistration(SaveId SaveId, string Node, long Epoch, SaveKind Kind, long SizeBytes, string Checksum, long ClusterTime, HashSet<string> Locations, DateTimeOffset Created)

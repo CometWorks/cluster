@@ -92,7 +92,17 @@ pub trait SteamApi {
     fn update_user_data(&mut self, user: u64, name: &str) -> bool;
     fn apply_settings(&mut self, publish: &SteamPublish, bots: i32);
     fn identity(&self) -> Identity;
+    /// SE-1158: the `apps` the user has no licence for (UserHasLicenseForApp, during their auth session).
+    fn missing_dlcs(&self, _user: u64, _apps: &[u32]) -> Vec<u32> {
+        Vec::new()
+    }
 }
+
+/// SE-1158: the game's DLC app ids (DLCs.sbc), as `SteamFrontend.DlcAppIds` in C#.
+pub const DLC_APP_IDS: &[u32] = &[
+    573160, 999999990, 999999991, 1049790, 1084680, 1135960, 1167910, 1241550, 1307680, 1374610, 1475830, 1676100, 1783760,
+    1958640, 2504720, 2569770, 2914120, 3066290, 3601770, 3858380, 4116960, 4502100, 4835530,
+];
 
 // ------------------------------------------------------------------ the real Steam
 
@@ -246,6 +256,17 @@ impl SteamApi for RealSteam {
             self.server.set_key_value(&rule.key, &rule.value);
         }
         self.server.set_bot_player_count(bots);
+    }
+
+    fn missing_dlcs(&self, user: u64, apps: &[u32]) -> Vec<u32> {
+        apps.iter()
+            .copied()
+            .filter(|&app| {
+                // SAFETY: the live interface from Init; Steamworks game-server calls are thread-safe.
+                let answer = unsafe { steamworks_sys::SteamAPI_ISteamGameServer_UserHasLicenseForApp(self.raw, user, app) };
+                answer != steamworks_sys::EUserHasLicenseForAppResult::k_EUserHasLicenseResultHasLicense
+            })
+            .collect()
     }
 
     fn identity(&self) -> Identity {
@@ -576,11 +597,20 @@ impl<A: SteamApi> SteamWorker<A> {
                 if response != 0 {
                     self.counters.auth_rejections += 1;
                 }
-                eprintln!("Steam ticket verdict for {user}: {response} owner {owner}");
-                self.steam_event(SteamEvent { kind: "ticket", client_id: user, response: Some(response), owner: Some(owner), member: None });
+                // SE-1158: the nodes' Direct Transport game server says yes to every DLC, so ask Steam here.
+                let missing_dlcs = (response == 0).then(|| self.api.missing_dlcs(user, DLC_APP_IDS));
+                match &missing_dlcs {
+                    Some(missing) => eprintln!(
+                        "Steam ticket verdict for {user}: {response} owner {owner} DLCs {}/{}",
+                        DLC_APP_IDS.len() - missing.len(),
+                        DLC_APP_IDS.len()
+                    ),
+                    None => eprintln!("Steam ticket verdict for {user}: {response} owner {owner}"),
+                }
+                self.steam_event(SteamEvent { kind: "ticket", client_id: user, response: Some(response), owner: Some(owner), member: None, missing_dlcs });
             }
             SteamCallback::Group { user, member } => {
-                self.steam_event(SteamEvent { kind: "group", client_id: user, response: None, owner: None, member: Some(member) });
+                self.steam_event(SteamEvent { kind: "group", client_id: user, response: None, owner: None, member: Some(member), missing_dlcs: None });
             }
             SteamCallback::Log(line) => eprintln!("{line}"),
         }
@@ -929,7 +959,7 @@ impl<A: SteamApi> SteamWorker<A> {
                 if result != 0 {
                     self.counters.auth_rejections += 1;
                     eprintln!("Steam BeginAuthSession for {user} failed: {result}");
-                    self.steam_event(SteamEvent { kind: "ticketRejected", client_id: user, response: Some(result), owner: None, member: None });
+                    self.steam_event(SteamEvent { kind: "ticketRejected", client_id: user, response: Some(result), owner: None, member: None, missing_dlcs: None });
                 }
             }
             "end" => self.api.end_auth(user),

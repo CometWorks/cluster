@@ -254,6 +254,145 @@ internal static partial class SelfTest
         finally { Directory.Delete(root, true); }
     }
     /// <summary>
+    /// SE-1168: a managed deployment rotates its regular nodes on rotation.lifetimeSeconds (400 s here: one recycle per
+    /// 100 s over four serving nodes). Each recycle activates the spare, drains the oldest node into it (scale-in retiring,
+    /// the spare as its drain receiver), and restarts the drained slot as the new spare: Empty plans the kill, Gone lets
+    /// the still-wanted slot respawn, and the new incarnation registers holding nothing. Every regular node is recycled in
+    /// turn, the counts never change, one recycle runs at a time, a stuck drain is closed after the drain timeout, 0
+    /// switches it off, and a gateway restart keeps the recycle in flight. Red before SE-1168: nothing ever recycles.
+    /// </summary>
+    private static void TestManagedRotation()
+    {
+        static void Check(bool value, string what) { if (!value) throw new InvalidOperationException("managed-rotation: " + what); }
+        string root = Path.Combine(Path.GetTempPath(), "cluster-managed-rotation-" + Guid.NewGuid());
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+        string[] regulars = ["r1", "r2", "r3", "r4", "s1"];
+        var deployment = new ManagedDeployment("deployment-1", Guid.NewGuid(),
+            [.. regulars.Select((node, i) => new ManagedSlot(node, "host-1", node, "127.0.0.1:" + (28430 + i), NodeRole.Regular, Spare: node == "s1")),
+             new("wa", "host-1", "wa", "127.0.0.1:28439", NodeRole.WA)]);
+        GatewayRegistry? registry = null;
+        try
+        {
+            registry = new GatewayRegistry(root, Admission, () => now, TimeSpan.FromSeconds(10), managedDeployment: deployment);
+            var request = new Admin.ExecutorPollRequest("host-1", "executor-1", Guid.NewGuid(), null, 1, []) { DeploymentRevision = deployment.Revision };
+            request = request with { Lease = registry.PollExecutor(request).Lease };
+            foreach (string node in regulars) Register(registry, node, "127.0.0.1:" + (28430 + Array.IndexOf(regulars, node)), Guid.NewGuid());
+            registry.RegisterNode(Join("wa", "127.0.0.1:28439", Guid.NewGuid()) with { Role = NodeRole.WA });
+            NodeRegistration Live(string node) => registry!.Nodes().Single(x => x.Node == node);
+            void Beat()
+            {
+                foreach (NodeRegistration node in registry!.Nodes().Where(x => x.State is NodeState.Active or NodeState.Closed))
+                    registry.Heartbeat(node.Node, node.Epoch, [], serving: true, deploymentRevision: deployment.Revision, configurationVerified: true);
+            }
+            // One second at a time, as the lease thread runs the pass; stops at the second a recycle starts.
+            string? Tick(int seconds)
+            {
+                for (int second = 0; second < seconds; second++)
+                {
+                    now = now.AddSeconds(1);
+                    Beat();
+                    if (second % 5 == 0)
+                    {
+                        request = request with { Sequence = request.Sequence + 1, Reports = [] };
+                        registry!.PollExecutor(request);
+                    }
+                    bool idle = registry!.RetiringNodes().Length == 0;
+                    registry.NodeControlPass();
+                    if (idle && registry.RetiringNodes() is [string started]) return started;
+                }
+                return null;
+            }
+            void Own(ulong partition, string node)
+            {
+                NodeRegistration owner = Live(node);
+                PartitionOwnership owned = registry!.ClaimPartition(partition, node, owner.Epoch,
+                    registry.Partitions().FirstOrDefault(x => x.Partition == partition)?.Generation ?? 0);
+                registry.RegisterSave(new SaveId(partition, owned.Generation, 1), node, owner.Epoch, SaveKind.Periodic, 1,
+                    "c" + partition, 1, node + "/" + partition, entities: 3);
+            }
+            (int Serving, int Spares) Counts() => (registry!.Nodes().Count(x => x.Role == NodeRole.Regular && x.State == NodeState.Active && !x.Spare),
+                registry.Nodes().Count(x => x.Role == NodeRole.Regular && x.State == NodeState.Active && x.Spare));
+            // The drain of a recycled node as ScaleInPass and the node carry it out: its partitions move to the receiver,
+            // it is closed and reports Empty; Host kills it, reports Gone, and the respawned slot registers.
+            void Drain(string node, string receiver, bool closed = false)
+            {
+                NodeRegistration from = Live(node), to = Live(receiver);
+                foreach (ulong partition in registry!.Partitions().Where(x => x.Node == node).Select(x => x.Partition).ToArray())
+                {
+                    registry.ReleasePartition(partition, node, from.Epoch, registry.GetPartitionOwner(partition).Generation);
+                    Own(partition, receiver);
+                }
+                if (!closed) registry.CloseNode(node, from.Epoch, TimeSpan.FromSeconds(60));
+                registry.MarkEmpty(node, from.Epoch);
+                Check(registry.AdminNodePlan().Single(x => x.SlotKey == node).IncumbentAction == Admin.IncumbentAction.Kill, node + ": Empty plans the kill");
+                Check(Tick(1) == null && Live(node).Spare, node + ": the drained slot is the spare now");
+                request = request with { Sequence = request.Sequence + 1,
+                    Reports = [new(node, "attempt-" + node + from.Epoch, Admin.NodeObservation.Gone, node, from.Epoch, null)] };
+                Admin.NodePlan slot = registry.PollExecutor(request).Plan.Single(x => x.SlotKey == node);
+                Check(slot.IncumbentAction == Admin.IncumbentAction.None && slot.SpawnAllowed, node + ": Gone lets the slot respawn");
+                NodeRegistration reborn = Register(registry, node, from.Endpoint, Guid.NewGuid());
+                Check(reborn.Spare && reborn.Epoch == from.Epoch + 1, node + ": the new incarnation registers as the spare");
+                Check(Tick(1) == null && registry.RetiringNodes().Length == 0, node + ": the recycle is done");
+            }
+
+            Beat();
+            Check(registry.Lifecycle().Phase == ClusterPhase.Serving, "the cluster serves");
+            foreach ((ulong partition, string node) in new[] { (1UL, "r1"), (2UL, "r1"), (3UL, "r2"), (4UL, "r3"), (5UL, "r4") })
+                Own(partition, node);
+            registry.SetHandoverConfig(new Dictionary<string, string?> { [GatewayRegistry.RotationLifetimeKey] = "0" });
+            Check(Tick(500) == null, "lifetime 0 never recycles");
+            registry.SetHandoverConfig(new Dictionary<string, string?>
+                { [GatewayRegistry.RotationLifetimeKey] = "400", [GatewayRegistry.RotationDrainTimeoutKey] = "120" });
+
+            List<(string Node, DateTimeOffset At)> recycled = [];
+            string spare = "s1";
+            for (int round = 0; round < 5; round++)
+            {
+                string? node = Tick(200);
+                Check(node != null, $"round {round}: a node is recycled within 200 s");
+                recycled.Add((node!, now));
+                Check(!Live(spare).Spare && Live(spare).Activated == now, $"{node}: the spare {spare} is activated");
+                Check(registry.PreferredDrainReceiver(node!) == spare, $"{node}: drains into {spare}");
+                Check(Counts() == (5, 0) && registry.AdminNodePlan().Single(x => x.SlotKey == node).IncumbentAction == Admin.IncumbentAction.Draining,
+                    $"{node}: the spare serves beside the draining node, whose slot drains its incumbent");
+                Check(Tick(110) == null && registry.RetiringNodes().SequenceEqual([node!]) && Live(node!).State == NodeState.Active,
+                    $"{node}: one recycle at a time, still draining before the timeout");
+                if (round == 3)
+                {
+                    // Past the 120 s drain timeout: closed, its own drain hands out the rest.
+                    Check(Tick(10) == null && Live(node!).State == NodeState.Closed && Live(node!).ForceDrainAt == now, $"{node}: a stuck drain is closed");
+                }
+                else if (round == 4)
+                {
+                    // A gateway restart in the middle of a recycle keeps it.
+                    registry.Flush();
+                    registry.Dispose();
+                    registry = new GatewayRegistry(root, Admission, () => now, TimeSpan.FromSeconds(10), managedDeployment: deployment);
+                    request = request with { Lease = null, Sequence = request.Sequence + 1, Reports = [] };
+                    request = request with { Lease = registry.PollExecutor(request).Lease };
+                    Check(registry.RetiringNodes().SequenceEqual([node!]) && registry.PreferredDrainReceiver(node!) == spare,
+                        "a gateway restart keeps the recycle in flight");
+                }
+                Drain(node!, spare, closed: round == 3);
+                Check(Counts() == (4, 1), $"{node}: four serve and one spare after the recycle");
+                spare = node!;
+            }
+            Check(recycled.Select(x => x.Node).SequenceEqual(["r1", "r2", "r3", "r4", "s1"]),
+                "every node is recycled in turn, oldest first: " + string.Join(",", recycled.Select(x => x.Node)));
+            Check(recycled[0].At == DateTimeOffset.UnixEpoch.AddSeconds(501), "the first as soon as rotation is on (r1 has served 500 s): " + recycled[0].At);
+            Check(recycled.Zip(recycled.Skip(1)).All(x => x.Second.At - x.First.At >= TimeSpan.FromSeconds(100)),
+                "at most one recycle per lifetime / 4");
+            Check(registry.Partitions().Count(x => x.Node != null) == 5, "no partition is lost");
+            registry.Flush();
+        }
+        finally
+        {
+            registry?.Dispose();
+            Directory.Delete(root, true);
+        }
+    }
+
+    /// <summary>
     /// SE-214: a managed node the Registry declares Dead while its host still reports the process running (hung, not
     /// crashed) gets a fenced Kill of exactly that incarnation; Gone clears it and the slot respawns after the backoff.
     /// A crash, a node the host knows no epoch of, and a held lease plan no kill, and a second hang backs off longer.

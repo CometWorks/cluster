@@ -65,7 +65,6 @@ internal sealed partial class PartitionPersistence
 	// fence killed the recovering node on every boot before this (node-3, 2026-08-11).
 	private int m_recoveryLoadInFlight;
 	private readonly Dictionary<ulong, int> m_recoveryFailureCounts = new Dictionary<ulong, int>();
-	private const int RecoveryFailureQuarantineThreshold = 3;
 	// T-0388: recoveries that loaded 0 members out of saves that held content (all of it screened as live elsewhere or
 	// stale), at their recovered generation. The game thread adds; RegistryLoop releases them once their empty Final
 	// is catalogued (ReleaseEmptyRecoveries).
@@ -355,7 +354,8 @@ internal sealed partial class PartitionPersistence
 		}
 		// A readiness-deferred claim stays pending until a later update. Bound this
 		// pass to its original queue so requeueing cannot spin on the game thread.
-		for (int pending = m_recoveries.Count; pending > 0 && m_recoveries.TryDequeue(out RecoveryClaim recovery); pending--)
+		bool loadedThisUpdate = false;
+		for (int pending = m_recoveries.Count; pending > 0 && !loadedThisUpdate && m_recoveries.TryDequeue(out RecoveryClaim recovery); pending--)
 		{
 			// T-0297: the heartbeat dropped this claim (the registry no longer holds it for this node at this
 			// generation) while it waited in the queue. Loading it would duplicate the new claimant's load.
@@ -366,12 +366,15 @@ internal sealed partial class PartitionPersistence
 					+ recovery.Generation + " was lost before its load (T-0297)");
 				continue;
 			}
-			if (recovery.WaitForOfflineReadiness && !OfflineLoadReady)
+			if (recovery.WaitForOfflineReadiness && !OfflineLoadReady || recovery.OfflineWake != null && !OfflineCompensation.WakeReady(recovery.OfflineWake))
 			{
 				m_recoveries.Enqueue(recovery);
 				continue;
 			}
 			Volatile.Write(ref m_recoveryLoadInFlight, 1);
+			// SE-1096: one load per update. A recovery start claims many partitions at once, and each load reads,
+			// deserializes and creates its grids on the game thread: all of them in one frame held it for seconds.
+			loadedThisUpdate = true;
 			try
 			{
 				int saved = LoadRecovery(recovery);
@@ -387,7 +390,7 @@ internal sealed partial class PartitionPersistence
 				PartitionManager.Partition loadedPartition = m_partitions.Peek(recovery.Partition);
 				MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] recovery loaded partition " + recovery.Partition
 					+ " generation " + recovery.Generation + " with " + loadedPartition.Members.Count + " members ["
-					+ string.Join(",", loadedPartition.Members) + "]");
+					+ string.Join(",", loadedPartition.Members) + "] (" + m_lastLoadTimes + ")");
 				// T-0388: an empty layout is dropped by the next sweep, so this partition is never reported again; the
 				// registry kept its row on this node until the drain's memberless release (321894 on node-282, 01:11 to
 				// 03:16 on 2026-10-03). Release it as soon as its empty Final is catalogued instead.
@@ -410,16 +413,19 @@ internal sealed partial class PartitionPersistence
 				lock (m_recoveryFailureCounts)
 					failures = m_recoveryFailureCounts[recovery.Partition]
 						= m_recoveryFailureCounts.GetValueOrDefault(recovery.Partition) + 1;
-				if (m_warmRecovery && failures >= RecoveryFailureQuarantineThreshold)
+				int quarantineAfter = ClusterConfig.GetInt("recovery.quarantineAfter");
+				if (quarantineAfter > 0 && failures >= quarantineAfter)
 				{
-					// P2-REC-03 warm branch: content that keeps failing to load is poison, not a
-					// transient - a warm candidate re-added forever would reclaim and fail in a loop
-					// with the partition never becoming repairable. Quarantine it like the cold path:
-					// visible on /cluster/quarantine, repairable in place; the claim is still released
-					// so another holder can serve the partition if one exists.
+					// P2-REC-03: content that keeps failing to load is poison, not a transient - a warm
+					// candidate re-added forever would reclaim and fail in a loop with the partition never
+					// becoming repairable. SE-1161: the cold path looped the same way (the registry offered
+					// the released row straight back: node-1 claimed 3432 71 times in 3 minutes, 2026-11-06).
+					// Quarantine it: visible on /cluster/quarantine, repairable in place, and the registry
+					// hands it to nobody while this node reports it. The claim is still released.
 					string staged = m_assignedRecoveries.TryGetValue(recovery.Partition, out var assigned)
 						? assigned.Path : "<recovery claim " + recovery.Partition + ">";
 					Quarantine(staged, exception, recovery.Partition);
+					lock (m_recoveryFailureCounts) m_recoveryFailureCounts.Remove(recovery.Partition);
 					m_failedRecoveries.Enqueue(recovery);
 					continue;
 				}
@@ -2472,6 +2478,8 @@ internal sealed partial class PartitionPersistence
 		int.TryParse(Environment.GetEnvironmentVariable("CLUSTER_TEST_DISCARD_DELAY_MS"), out int discardDelay) && discardDelay > 0 ? discardDelay : 0;
 	// A load requeued for offline readiness or handed to the replication thread for census checks.
 	private const int DeferredLoad = -1;
+	// SE-1096: where the game thread spent the last completed recovery load, for its "recovery loaded" line.
+	private string m_lastLoadTimes;
 	private static bool OfflineLoadReady => !ClusterConfig.GetBool("offline.compensate") || ClusterRuntime.HasAuthorityClock && AccountingClock.Ready && OfflineCompensation.ContentReady
 		&& SessionClockPatch.AppliedOffsetMilliseconds == TimeOfDayService.OffsetMilliseconds;
 
@@ -2512,7 +2520,7 @@ internal sealed partial class PartitionPersistence
 			{
 				Post(client, "/registry/partitions/release?partition=" + failed.Partition.ToString(CultureInfo.InvariantCulture)
 					+ "&node=" + Uri.EscapeDataString(m_node) + "&epoch=" + m_nodeEpoch.ToString(CultureInfo.InvariantCulture)
-					+ "&generation=" + failed.Generation.ToString(CultureInfo.InvariantCulture)).Dispose();
+					+ "&generation=" + failed.Generation.ToString(CultureInfo.InvariantCulture) + "&failed=true").Dispose();
 			}
 			catch (HttpRequestException exception) when (exception.StatusCode == HttpStatusCode.Conflict)
 			{
@@ -3740,6 +3748,8 @@ internal sealed partial class PartitionPersistence
 		Dictionary<long, MyObjectBuilder_EntityBase> entities = new Dictionary<long, MyObjectBuilder_EntityBase>();
 		HashSet<long> created = new HashSet<long>();
 		var offlineProfiles = new List<(byte[] Profiles, HashSet<long> Members)>();
+		var saves = new List<(RecoveryFile File, PartitionSaveFile.Parsed Save)>();
+		var phase = Stopwatch.StartNew();
 		// T-0207: every location this claim offered and what happened to it. The failure below used
 		// to name only the partition, and ReadRecoveryFile logs a line only for a location it
 		// actually OPENED - so a claim whose locations are all absent produced no explanation at
@@ -3766,13 +3776,10 @@ internal sealed partial class PartitionPersistence
 					+ " to " + fallback.Generation + "/" + fallback.Sequence + " for partition " + file.Partition);
 			}
 			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] recovery read save " + loaded.Partition + "/" + loaded.Generation + "/" + loaded.Sequence);
-			var selected = Deserialize(save).Where(e => (file.EntityIds == null || file.EntityIds.Contains(e.EntityId)) && !entities.ContainsKey(e.EntityId)).ToArray();
-			PartitionSaveFile.MergeEntities(entities, selected, null);
-			if (save.Profiles != null)
-				offlineProfiles.Add((save.Profiles, selected.Select(e => e.EntityId).ToHashSet()));
+			saves.Add((file, save));
 		}
 		// Never permanently drop a profile by applying against a boot-local or not-yet-offset clock.
-		if (offlineProfiles.Count != 0 && !OfflineLoadReady)
+		if (saves.Any(x => x.Save.Profiles != null) && !OfflineLoadReady)
 		{
 			// Content hashing is asynchronous on a fresh modded node. No census worker
 			// owns this deferral: retain the claim ourselves, without repeatedly reading
@@ -3780,6 +3787,26 @@ internal sealed partial class PartitionPersistence
 			m_recoveries.Enqueue(recovery with { WaitForOfflineReadiness = true });
 			return DeferredLoad;
 		}
+		// SE-1096: the offline model of a long-offline group ran on the game thread for minutes (237 s on nas), and the
+		// registry fenced the node. The wake needs only the profile sections, so it starts on a worker thread before any
+		// entity is deserialized, and the claim waits in the queue until the models are ready. Its next load reads the
+		// saves again, screens and commits. The models' wake frame is this one.
+		if (recovery.OfflineWake == null && saves.Any(x => x.Save.Profiles != null)
+			&& OfflineCompensation.BeginWake(saves.Where(x => x.Save.Profiles != null).Select(x => x.Save.Profiles)) is { } wake)
+		{
+			m_recoveries.Enqueue(recovery with { OfflineWake = wake });
+			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] recovery of partition " + recovery.Partition + " generation " + recovery.Generation
+				+ " waits for its offline compensation, computed off the game thread (SE-1096); game thread " + phase.ElapsedMilliseconds + " ms");
+			return DeferredLoad;
+		}
+		foreach (var (file, save) in saves)
+		{
+			var selected = Deserialize(save).Where(e => (file.EntityIds == null || file.EntityIds.Contains(e.EntityId)) && !entities.ContainsKey(e.EntityId)).ToArray();
+			PartitionSaveFile.MergeEntities(entities, selected, null);
+			if (save.Profiles != null)
+				offlineProfiles.Add((save.Profiles, selected.Select(e => e.EntityId).ToHashSet()));
+		}
+		long readMs = phase.ElapsedMilliseconds;
 		int saved = entities.Count;
 		if (StaleCopyCheck && recovery.Census != null && DeferForCensusCheck(recovery, entities)) return DeferredLoad;
 		if (recovery.LiveElsewhere is { Count: > 0 })
@@ -3816,7 +3843,9 @@ internal sealed partial class PartitionPersistence
 		}
 		// Stale-member filtering must precede compensation: a partial logical group cannot spend
 		// stocks carried by a grid that was removed as live elsewhere.
-		OfflineCompensation.Apply(entities, offlineProfiles);
+		long screenMs = phase.ElapsedMilliseconds;
+		OfflineCompensation.Apply(entities, offlineProfiles, recovery.OfflineWake);
+		long compensationMs = phase.ElapsedMilliseconds;
 		// T-0237: a FENCE-TAINTED local copy of a recovered entity is stale by construction - an assigned seed
 		// save loaded at boot whose claim never confirmed - and the create-if-absent loop below used to keep it
 		// and adopt it into the recovered partition, discarding the save's newer state. w32 2026-09-25 00:07:48:
@@ -3888,6 +3917,8 @@ internal sealed partial class PartitionPersistence
 			CloseWithHierarchy(MyEntities.GetEntities().Where(entity => created.Contains(entity.EntityId)));
 			throw;
 		}
+		m_lastLoadTimes = "game thread " + phase.ElapsedMilliseconds + " ms: read " + readMs + ", screen " + (screenMs - readMs)
+			+ ", compensation " + (compensationMs - screenMs) + ", create " + (phase.ElapsedMilliseconds - compensationMs);
 		return saved;
 
 		// T-0207: `attempts` records one line per LOCATION, including the ones this loop used to
@@ -5191,6 +5222,8 @@ internal sealed partial class PartitionPersistence
 	internal sealed record RecoveryClaim(ulong Partition, uint Generation, RecoveryFile[] Files, RecoveryFile[] Fallbacks)
 	{
 		public bool WaitForOfflineReadiness { get; init; }
+		/// <summary>SE-1096: this claim's offline compensation wake, running or ready (Concealment's handle).</summary>
+		public object OfflineWake { get; init; }
 		/// <summary>
 		/// Entity ids live on OTHER nodes at claim time. A recovered save may carry an entity whose
 		/// newer incarnation rides a different partition id on another node - the per-partition-id

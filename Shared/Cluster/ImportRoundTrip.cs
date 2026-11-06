@@ -622,6 +622,24 @@ internal static class ImportRoundTrip
 		// live validation pass (Siren frigate pulls, 2026-08-11: every spawn-point pull of an
 		// encounter frigate aborted on this residual). Re-derived on both sides, nothing to restore.
 		document.Descendants("IsCorrect").Remove();
+		// SE-1152. A warhead's countdown is clamped on load: MyWarhead.Init restores CountdownMs through
+		// MathHelper.Clamp(builder.CountdownMs, 1000, 3600000). A countdown that ran out without an explosion
+		// (MyWarhead.Explode does nothing in a safe zone or with weapons off, and MyWarheads has already dropped the
+		// warhead) keeps IsCountingDown with CountdownMs at -1 or another value under 1000, so its import restarts
+		// from 1000, as a world reload does (octahedron-test 2026-11-06, partition 4494: six NPC drone warheads,
+		// "-1 != 984"). Model the clamp on both sides; the import's own ticks are WarheadClockEpsilon.
+		// SE-1153. A block group with no blocks does not survive a load: MyCubeGrid.AddGroup skips a group builder
+		// whose Blocks list is empty, and GetObjectBuilder writes only the groups the grid holds, so the target
+		// re-emits the grid without it (octahedron-test 2026-11-06, partition 4925: an empty "Railguns" group on two
+		// grids, four failed handovers to three nodes). Drop the empty groups, then a BlockGroups left with none.
+		// A group that names blocks stays compared.
+		document.Descendants("BlockGroups").Elements("MyObjectBuilder_BlockGroup")
+			.Where(group => group.Element("Blocks")?.HasElements != true).Remove();
+		document.Descendants("BlockGroups").Where(groups => !groups.HasElements).Remove();
+		foreach (XElement countdown in document.Descendants("CountdownMs")
+			.Where(element => (string)element.Parent?.Attribute(XsiType) == "MyObjectBuilder_Warhead"))
+			if (int.TryParse(countdown.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int milliseconds))
+				countdown.Value = Math.Clamp(milliseconds, 1000, 3600000).ToString(CultureInfo.InvariantCulture);
 		// An inventory's item ids are per-load bookkeeping, not content: MyInventory hands out
 		// m_nextItemID sequentially as stacks load, so a source whose earlier stacks were consumed
 		// in play carries gapped ids (1,2,3 / next 4) that the import legitimately compacts
@@ -730,13 +748,18 @@ internal static class ImportRoundTrip
 					|| (string)element.Attribute(XsiType) == "MyObjectBuilder_Character")))
 		{
 			character.Elements("PositionAndOrientation").Remove();
-			// Same class for the air a seated character reports: MyCharacterOxygenComponent.UpdateOxygen
-			// copies the pressurized seat's fill level into EnvironmentOxygenLevel every 100 frames
-			// (MyCharacterOxygenComponent.cs:351). The seat's own OxygenLevel stays compared (SeatOxygenEpsilon).
-			character.Elements("EnvironmentOxygenLevel").Remove();
 			foreach (XElement flags in character.Elements("PersistentFlags"))
 				flags.Value = string.Join(" ", flags.Value.Split(' ').Where(token => token != "InScene"));
 		}
+		// Same class for the air any character reports, seated or free. MyCharacterOxygenComponent.UpdateOxygen
+		// overwrites EnvironmentOxygenLevel every 100 frames from where the character is: the pressurized seat's fill
+		// level (MyCharacterOxygenComponent.cs:351), else GetOxygenInPoint and the airtight room of a grid around it.
+		// A just-imported grid has no rooms yet (see OxygenRooms above), so a free character in a pressurized room
+		// re-emitted 0 against 0.99324 (SE-1154, octahedron-test 2026-11-06, partition 5774). The seat's own
+		// OxygenLevel and the character's suit stay compared (SeatOxygenEpsilon, SuitGasEpsilon).
+		document.Descendants().Where(element => element.Name.LocalName == "Pilot"
+				|| (string)element.Attribute(XsiType) == "MyObjectBuilder_Character")
+			.Elements("EnvironmentOxygenLevel").Remove();
 		// A grid's deformation skeleton is a map keyed by bone position, so the same dents come back in
 		// whatever order the imported grid's hash map enumerates - identical bones, different sequence,
 		// and the comparison is positional. Sorting is what makes the comparison about the bones rather
@@ -920,6 +943,33 @@ internal static class ImportRoundTrip
 	/// </summary>
 	private const double SeatOxygenEpsilon = 0.0025;
 
+	/// <summary>
+	/// SE-1152: a counting-down warhead, in milliseconds. MyWarheads.UpdateBeforeSimulation takes 16 ms from every
+	/// counting-down warhead each frame, and it is a session component, so the freeze does not hold it: the import
+	/// re-emits the restored countdown less the frames between its OnAddedToScene and the validation (one frame on
+	/// octahedron-test: 1000 against 984). 2 s is 125 frames; a lost countdown differs by the whole value.
+	/// </summary>
+	private const double WarheadClockEpsilon = 2000;
+
+	/// <summary>
+	/// SE-1154: a character's suit gases (OxygenLevel and each StoredGas FillLevel), by up to two breaths of the
+	/// 30 L oxygen suit. In breathable air MyCharacterOxygenComponent.UpdateGassesFillLevelsAndAmounts refills the
+	/// suit every 100 frames, and the character draws OxygenConsumptionRate (0.063 L) between refills, so the suit
+	/// saws between full and one breath under, and which side each node captured is the phase of its own updates:
+	/// five seated pilots came back at 1 against exactly 1 - 0.063 / 30 = 0.9979 (octahedron-test 2026-11-06).
+	/// 0.005 is 0.15 L of oxygen; a lost or reset suit differs by far more.
+	/// </summary>
+	private const double SuitGasEpsilon = 0.005;
+
+	private static bool IsCharacterSuitGas(string path)
+	{
+		if (path.EndsWith("/FillLevel", StringComparison.Ordinal)) return path.Contains("/StoredGases/StoredGas", StringComparison.Ordinal);
+		if (!path.EndsWith("/OxygenLevel", StringComparison.Ordinal)) return false;
+		int parent = path.LastIndexOf('/', path.Length - "/OxygenLevel".Length - 1);
+		return string.CompareOrdinal(path, parent + 1, "Pilot#", 0, "Pilot#".Length) == 0
+			|| string.CompareOrdinal(path, parent + 1, "MyObjectBuilder_EntityBase#", 0, "MyObjectBuilder_EntityBase#".Length) == 0;
+	}
+
 	private static bool IsBlockField(string path, string field)
 	{
 		if (path.Length < field.Length + 2 || !path.EndsWith("/" + field, StringComparison.Ordinal)) return false;
@@ -938,11 +988,28 @@ internal static class ImportRoundTrip
 			: path.EndsWith("/Component/UpkeepTime", StringComparison.Ordinal)
 				|| path.EndsWith("/Component/ActivationTime", StringComparison.Ordinal)
 				? SafeZoneClockEpsilon
-			: IsBlockField(path, "OxygenLevel") ? SeatOxygenEpsilon : 2e-5;
+			: IsBlockField(path, "OxygenLevel") ? SeatOxygenEpsilon
+			: IsBlockField(path, "CountdownMs") ? WarheadClockEpsilon
+			: IsCharacterSuitGas(path) ? SuitGasEpsilon : 2e-5;
 
 	/// <summary>T-0363: the value MyFueledPowerProducer.Init restores from a saved capacity (MathHelper.Clamp to [0, max]).</summary>
 	internal static float ClampCapacity(float capacity, float maximum)
 		=> capacity < 0f ? 0f : capacity > maximum ? maximum : capacity;
+
+	/// <summary>
+	/// SE-1155: the amount MyInventory.InitItems restores from a saved stack: at most what ComputeAmountThatFits gives
+	/// for an EMPTY inventory (the load adds with simplifiedMassAndVolumeCalculation, so the volume and mass it compares
+	/// against stay 0 until the end), in the same double arithmetic over the item's float volume and mass. The slot
+	/// limit of an inventory with a MaxItemCount is not modelled.
+	/// </summary>
+	internal static MyFixedPoint LoadedAmount(MyFixedPoint amount, MyFixedPoint maxVolume, MyFixedPoint maxMass, float volume, float mass, bool integral)
+	{
+		MyFixedPoint byVolume = MyFixedPoint.Max((MyFixedPoint)((double)maxVolume * (1.0 / (double)volume)), 0);
+		MyFixedPoint byMass = MyFixedPoint.Max((MyFixedPoint)((double)maxMass * (1.0 / (double)mass)), 0);
+		MyFixedPoint fits = MyFixedPoint.Min(byVolume, byMass);
+		if (integral) fits = MyFixedPoint.Floor((MyFixedPoint)(Math.Round((double)fits * 1000.0) / 1000.0));
+		return MyFixedPoint.Min(fits, amount);
+	}
 
 	private static bool ValuesEqual(string left, string right, double absolute = 2e-5)
 	{

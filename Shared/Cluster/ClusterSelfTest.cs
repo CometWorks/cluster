@@ -30,6 +30,7 @@ internal static partial class ClusterSelfTest
 		("offline-solar-pivots", OfflineSolarPivots),
 		("drain-clock-fallback", DrainClockFallback),
 		("presence-transport", PresenceTransport),
+		("entitlements", Entitlements),
 		("membership-hysteresis", MembershipHysteresis),
 		("membership-atomicity", MembershipAtomicity),
 		("membership-conga", MembershipConga),
@@ -69,10 +70,13 @@ internal static partial class ClusterSelfTest
 		("global-scrub", GlobalScrub),
 		("time-of-day", TimeOfDay),
 		("round-trip-normalize", RoundTripNormalize),
+		("maintenance-panel-pending", MaintenancePanelPending),
+		("handover-drift", HandoverDrift),
 		("havok-disposed-world", HavokDisposedWorld),
 		("antenna-delta", AntennaDelta),
 		("antenna-parse-alloc", AntennaParseAllocation),
 		("identity-joined-name", IdentityJoinedName),
+		("respawn-registry", RespawnRegistryRules),
 		("antenna-fastpath", AntennaFastPath),
 		("stale-home-copy", StaleHomeCopy),
 		("close-attached-children", CloseAttachedChildren),
@@ -1842,8 +1846,9 @@ internal static partial class ClusterSelfTest
 		Assert(residuals.Count == 0, "a seat's one-breath oxygen step was reported: " + Report(residuals));
 		residuals = ImportRoundTrip.ResidualsOfXml(Seat("1", "1", "1"), Seat("0.5", "0.5", "1"));
 		Assert(residuals.Count == 1 && residuals[0].Contains("/OxygenLevel"), "a seat's LOST oxygen must stay validated, got: " + Report(residuals));
-		residuals = ImportRoundTrip.ResidualsOfXml(Seat("1", "1", "1"), Seat("1", "1", "0.99895"));
-		Assert(residuals.Count == 1 && residuals[0].Contains("EnvironmentOxygenLevel"), "a FREE character's oxygen reading must stay validated, got: " + Report(residuals));
+		// SE-1154: a free character's reading is re-derived from its surroundings as well (handover-drift checks its suit).
+		residuals = ImportRoundTrip.ResidualsOfXml(Seat("1", "1", "1"), Seat("1", "1", "0"));
+		Assert(residuals.Count == 0, "a FREE character's reading of the air around it was reported: " + Report(residuals));
 
 		// MES's NpcData: only the LastChangeToData stamp (field 25) leaves the comparison.
 		string Record(string name, byte stamp) => Convert.ToBase64String(new byte[] { 0x22, 0x01, (byte)name[0], 0xCA, 0x01, 0x04, 0x08, stamp, 0x10, 0x05 });

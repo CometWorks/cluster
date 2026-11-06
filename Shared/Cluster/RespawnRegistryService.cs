@@ -46,8 +46,18 @@ public static class RespawnRegistryService
 	// Same-point re-arbitration stays free (idempotent retries); a different point for the same
 	// identity inside 10s is refused - two transactions racing toward two medbays. Game thread only.
 	private static readonly RespawnArbitrationWindow m_arbitrationWindow = new RespawnArbitrationWindow(10000);
+	// SE-1150: repaired or dropped points are logged once, not on every report. m_receivedProblems under Sync.
+	private static readonly RespawnProblemLog m_capturedProblems = new RespawnProblemLog();
+	private static readonly RespawnProblemLog m_receivedProblems = new RespawnProblemLog();
+	private static ClusterRespawnPoint[] m_testRawPoints = Array.Empty<ClusterRespawnPoint>();
+	private static double m_testRawPointsUntil;
 	private const double PendingRetryIntervalMilliseconds = 5000;
 	private const double PendingDeadlineMilliseconds = 300000;
+	// SE-1124: clients whose switch failed after this node emptied their view, waiting to be taken in again.
+	private static readonly List<Restore> m_restores = new();
+	private const double RestoreDeadlineMilliseconds = 20000;
+	// A medbay respawn whose switch failed this often is answered as refused instead of retried.
+	private const int MaxSwitchFailures = 3;
 
 	public static IReadOnlyList<ClusterRespawnPoint> Points
 	{
@@ -195,16 +205,15 @@ public static class RespawnRegistryService
 
 	private static void FinishRemoteRespawn(Guid operationId, ulong userId, int serialId, long identityId,
 		ClusterRespawnDecision decision, bool joinGame, string modelName, uint packedColor, string respawnShipId = null,
-		bool newIdentity = false)
+		bool newIdentity = false, int failures = 0)
 	{
-		bool detached = false;
+		string clientState = null;
 		try
 		{
 			// The client keeps its loaded world across the backend switch, so the destination node has to adopt its
 			// replication view instead of replaying a join. Everything this node streamed belongs to this node, so the
 			// view is emptied here and the destination re-streams its own copy plus the newly respawned character.
-			string clientState = ClusterControlServer.DetachClientView(userId);
-			detached = true;
+			clientState = ClusterControlServer.DetachClientView(userId);
 			var request = new ClusterRespawnExecution(operationId, userId, serialId, identityId,
 				decision.RespawnEntityId, decision.GridEntityId, decision.Origin, decision.PartitionId, decision.Generation,
 				joinGame, modelName, packedColor, clientState, respawnShipId, newIdentity);
@@ -214,8 +223,14 @@ public static class RespawnRegistryService
 		catch (Exception exception)
 		{
 			Console.WriteLine("[ClusterPlugin] remote respawn failed: " + SecretRedactor.Redact(exception.Message));
-			// The client's view was already destroyed here, so it cannot stay on this node. Drop it and let it rejoin.
-			if (detached) MyMultiplayer.Static?.DisconnectClient(userId);
+			// The client's view was already emptied here. It comes back here (the Gateway rolls the switch back), so
+			// this node takes it in again; a medbay respawn is then retried from the pending queue.
+			if (clientState != null)
+				RestoreClient(new Restore(operationId, userId, serialId, identityId, clientState,
+					ClusterRuntime.LocalMilliseconds + RestoreDeadlineMilliseconds,
+					string.IsNullOrEmpty(respawnShipId) ? new PendingRespawn(operationId, userId, serialId, decision.RespawnEntityId,
+						joinGame, modelName, packedColor, ClusterRuntime.LocalMilliseconds + PendingDeadlineMilliseconds, failures + 1) : null,
+					!string.IsNullOrEmpty(respawnShipId)));
 			throw;
 		}
 	}
@@ -232,7 +247,8 @@ public static class RespawnRegistryService
 		MySandboxGame.Static?.Invoke(() =>
 		{
 			Guid operationId = Guid.NewGuid();
-			bool detached = false;
+			string clientState = null;
+			long identityId = 0;
 			ClusterRespawnExecution request;
 			try
 			{
@@ -252,9 +268,9 @@ public static class RespawnRegistryService
 					Console.WriteLine($"[ClusterPlugin] spawn preview switch operation={operationId:D} user={userId} skipped={refusal}");
 					return;
 				}
-				string clientState = ClusterControlServer.DetachClientView(userId);
-				detached = true;
-				request = new ClusterRespawnExecution(operationId, userId, 0, player.Identity.IdentityId, medicalRoomId,
+				identityId = player.Identity.IdentityId;
+				clientState = ClusterControlServer.DetachClientView(userId);
+				request = new ClusterRespawnExecution(operationId, userId, 0, identityId, medicalRoomId,
 					point.GridEntityId, point.Origin, point.PartitionId, point.Generation, false, null, 0, clientState, Preview: true);
 			}
 			catch (Exception exception)
@@ -262,7 +278,7 @@ public static class RespawnRegistryService
 				// #1287: an exception out of a game-thread Invoke ends the game loop, and the node quit with every client on it.
 				Console.WriteLine($"[ClusterPlugin] spawn preview switch operation={operationId:D} user={userId} failed before the switch: "
 					+ SecretRedactor.Redact(exception.Message));
-				if (detached) MyMultiplayer.Static?.DisconnectClient(userId);
+				if (clientState != null) RestoreClient(PreviewRestore(operationId, userId, identityId, clientState));
 				return;
 			}
 			Console.WriteLine($"[ClusterPlugin] spawn preview switch operation={operationId:D} user={userId} target={point.Origin} partition={point.PartitionId}");
@@ -275,12 +291,83 @@ public static class RespawnRegistryService
 				}
 				catch (Exception exception)
 				{
-					// The view was detached, so the client cannot stay here; it rejoins (the cross-node respawn does the same).
+					// SE-1124: the Gateway rolled the client back here. It is still in its world on the medical screen, so
+					// this node takes it in again; disconnecting it stranded a Steam client "Paused".
 					Console.WriteLine($"[ClusterPlugin] spawn preview switch operation={operationId:D} failed: " + SecretRedactor.Redact(exception.Message));
-					MySandboxGame.Static?.Invoke(() => MyMultiplayer.Static?.DisconnectClient(userId), "ClusterPlugin spawn preview rollback");
+					RestoreClient(PreviewRestore(operationId, userId, identityId, clientState));
 				}
 			});
 		}, "ClusterPlugin spawn preview switch");
+	}
+
+	private static Restore PreviewRestore(Guid operationId, ulong userId, long identityId, string clientState) =>
+		new Restore(operationId, userId, 0, identityId, clientState, ClusterRuntime.LocalMilliseconds + RestoreDeadlineMilliseconds,
+			null, false);
+
+	private static void RestoreClient(Restore restore)
+	{
+		lock (Sync) m_restores.Add(restore);
+		Console.WriteLine($"[ClusterPlugin] spawn switch restore queued operation={restore.OperationId:D} user={restore.UserId}");
+	}
+
+	/// <summary>
+	/// SE-1124: takes a client back whose switch failed after this node emptied its view. The client never left its world
+	/// and sends no join, so the DisconnectClient this replaced stranded a Steam client: the Gateway re-opened its session
+	/// to this node, which then waited for a join forever, and the client paused itself after 5 s without server time
+	/// (octahedron-test 2026-11-05). The client comes back on the link it never left (a refusal before the Gateway switched
+	/// the backend) or on the Gateway's rollback attach; either way its view here is empty and not ready, and it gets the
+	/// same adoption a switch target gives it. Game thread.
+	/// </summary>
+	private static void RestoreClients()
+	{
+		Restore[] due;
+		lock (Sync)
+		{
+			if (m_restores.Count == 0) return;
+			due = m_restores.ToArray();
+		}
+		foreach (Restore restore in due)
+		{
+			string notReady;
+			try
+			{
+				bool ready = ReplicationServerPatch.IsClientReady(restore.UserId);
+				// The planet sectors went with the view; adoption needs an empty sector set.
+				if (!ready) ReplicationServerPatch.StateFor(restore.UserId)?.KnownSectors.Clear();
+				notReady = AdoptSwitchedClient(restore.OperationId, restore.UserId, restore.SerialId, restore.IdentityId,
+					ready ? null : restore.ClientState, out _);
+			}
+			catch (Exception exception)
+			{
+				notReady = "failed: " + SecretRedactor.Redact(exception.Message);
+			}
+			if (notReady != null && !notReady.StartsWith("failed", StringComparison.Ordinal)
+				&& ClusterRuntime.LocalMilliseconds < restore.Deadline) continue;
+			lock (Sync) m_restores.Remove(restore);
+			if (notReady != null)
+			{
+				// Last resort, the old behaviour: a client this node cannot take in rejoins.
+				Console.WriteLine($"[ClusterPlugin] spawn switch restore abandoned operation={restore.OperationId:D} user={restore.UserId} reason={notReady}");
+				if (ReplicationServerPatch.HasClient(restore.UserId)) MyMultiplayer.Static?.DisconnectClient(restore.UserId);
+				continue;
+			}
+			RemotePullService.ForgetDemands(restore.UserId);
+			Console.WriteLine($"[ClusterPlugin] spawn switch restored operation={restore.OperationId:D} user={restore.UserId}"
+				+ (restore.Retry != null ? $" failures={restore.Retry.Failures}" : restore.Pod ? " pod" : " preview"));
+			if (restore.Retry != null && restore.Retry.Failures < MaxSwitchFailures)
+			{
+				lock (Sync)
+				{
+					m_pendingRespawns.RemoveAll(x => x.UserId == restore.UserId && x.SerialId == restore.SerialId);
+					m_pendingRespawns.Add(restore.Retry);
+				}
+				Console.WriteLine($"[ClusterPlugin] respawn pending queued operation={restore.OperationId:D} user={restore.UserId}"
+					+ $" respawn={restore.Retry.RespawnEntityId} after failed switch");
+			}
+			else if (restore.Retry != null || restore.Pod)
+				MyMultiplayer.RaiseStaticEvent((IMyEventOwner s) => MyPlayerCollection.OnRespawnRequestFailure, restore.SerialId,
+					new EndpointId(restore.UserId));
+		}
 	}
 
 	private static bool HasPendingRespawn(ulong userId)
@@ -380,7 +467,7 @@ public static class RespawnRegistryService
 						else
 						{
 							FinishRemoteRespawn(pending.OperationId, pending.UserId, pending.SerialId, identityId,
-								decision, pending.JoinGame, pending.ModelName, pending.PackedColor);
+								decision, pending.JoinGame, pending.ModelName, pending.PackedColor, failures: pending.Failures);
 							Console.WriteLine($"[ClusterPlugin] respawn pending completed operation={pending.OperationId:D} target={decision.Origin}");
 						}
 					}
@@ -418,40 +505,24 @@ public static class RespawnRegistryService
 		}
 		// A pod has no medbay anchor: it creates its own fresh partition here, claimed by the ordinary
 		// ownership protocol after the spawn - there is no pre-existing ownership to validate.
-		if (!pod && (!m_partitions.EntityPartitions().TryGetValue(request.GridEntityId, out ulong partition)
-			|| partition != request.PartitionId || m_persistence.OwnedGeneration(partition) != request.Generation))
-			throw new InvalidOperationException("Respawn partition ownership changed");
+		if (!pod)
+		{
+			string refusal = MedbayRefusal(request);
+			if (refusal == "partition-moving")
+			{
+				Console.WriteLine($"[ClusterPlugin] respawn execute operation={request.OperationId:D} ready=false reason={refusal}");
+				return new ClusterRespawnExecutionResult(false, false, 0);
+			}
+			if (refusal != null) throw new InvalidOperationException("Respawn partition ownership changed");
+		}
 		var playerId = new MyPlayer.PlayerId(request.UserId, request.SerialId);
-		MyPlayer player = MySession.Static?.Players.GetPlayerById(playerId);
-		if (!MyPlayerCollectionPatch.IsCanonicalBinding(request.UserId, request.SerialId, request.IdentityId))
-			throw new InvalidOperationException("Respawn player binding changed");
-		// The Gateway switched the client's backend to this node without a join handshake, so its replication view
-		// has to be adopted here before the character exists; otherwise nothing is ever streamed to it.
-		if (!string.IsNullOrEmpty(request.ClientState) && !AdoptedOperations.Contains(request.OperationId))
+		string notReady = AdoptSwitchedClient(request.OperationId, request.UserId, request.SerialId, request.IdentityId,
+			request.ClientState, out MyPlayer player);
+		if (notReady != null)
 		{
-			if (!ReplicationServerPatch.HasClient(request.UserId))
-			{
-				Console.WriteLine($"[ClusterPlugin] respawn execute operation={request.OperationId:D} ready=false reason=client-view-absent");
-				return new ClusterRespawnExecutionResult(false, false, 0);
-			}
-			int adopted = ClusterControlServer.AdoptClientView(request.UserId, request.ClientState);
-			AdoptedOperations.Add(request.OperationId);
-			Console.WriteLine($"[ClusterPlugin] respawn execute operation={request.OperationId:D} adopted={adopted}");
+			Console.WriteLine($"[ClusterPlugin] respawn execute operation={request.OperationId:D} ready=false reason={notReady}");
+			return new ClusterRespawnExecutionResult(false, false, 0);
 		}
-		if (player == null)
-		{
-			MyIdentity identity = MySession.Static?.Players.TryGetIdentity(request.IdentityId);
-			if (identity == null)
-			{
-				Console.WriteLine($"[ClusterPlugin] respawn execute operation={request.OperationId:D} ready=false reason=identity-missing");
-				return new ClusterRespawnExecutionResult(false, false, 0);
-			}
-			player = MySession.Static.Players.CreateNewPlayer(identity, playerId, identity.DisplayPlatformName,
-				realPlayer: true, initialPlayer: false, newIdentity: false);
-			Console.WriteLine($"[ClusterPlugin] respawn execute operation={request.OperationId:D} player-created={player != null}");
-		}
-		if (player.Identity?.IdentityId != request.IdentityId)
-			throw new InvalidOperationException("Respawn player binding changed");
 		if (request.Preview)
 		{
 			// SE1-0122: the client is here to watch the medbay, not to respawn yet. Replay the preview request its
@@ -489,6 +560,59 @@ public static class RespawnRegistryService
 		return result;
 	}
 
+	/// <summary>
+	/// SE-1124: why this node will not execute at the medbay's grid, or null when it holds the grid. The Gateway resolved
+	/// the request's partition a moment ago, but a split or merge on this node renumbers that partition without moving the
+	/// grid: a ship leaving the station splits it off (4448 into 4475/4476, octahedron-test 2026-11-05). Any partition
+	/// this node owns will do. "partition-moving" while the grid is here but its new partition is not owned yet, so the
+	/// Gateway's ready loop asks again instead of failing the switch.
+	/// </summary>
+	private static string MedbayRefusal(ClusterRespawnExecution request)
+	{
+		if (m_partitions.EntityPartitions().TryGetValue(request.GridEntityId, out ulong partition)
+			&& m_persistence.OwnedGeneration(partition) != 0)
+		{
+			if (partition != request.PartitionId)
+				Console.WriteLine($"[ClusterPlugin] respawn execute operation={request.OperationId:D} grid={request.GridEntityId}"
+					+ $" partition-moved from={request.PartitionId} to={partition}");
+			return null;
+		}
+		return MyEntities.EntityExists(request.GridEntityId) ? "partition-moving" : "grid-absent";
+	}
+
+	/// <summary>
+	/// Gives a client that the Gateway switched to this node without a join handshake its replication view and its
+	/// player here. Null when both are in place, else why not yet. Game thread. Used by the node a switch goes to,
+	/// and since SE-1124 by the node a failed switch comes back to.
+	/// </summary>
+	private static string AdoptSwitchedClient(Guid operationId, ulong userId, int serialId, long identityId, string clientState,
+		out MyPlayer player)
+	{
+		var playerId = new MyPlayer.PlayerId(userId, serialId);
+		player = MySession.Static?.Players.GetPlayerById(playerId);
+		if (!MyPlayerCollectionPatch.IsCanonicalBinding(userId, serialId, identityId))
+			throw new InvalidOperationException("Respawn player binding changed");
+		// Adopted before the character exists; otherwise nothing is ever streamed to the client.
+		if (!string.IsNullOrEmpty(clientState) && !AdoptedOperations.Contains(operationId))
+		{
+			if (!ReplicationServerPatch.HasClient(userId)) return "client-view-absent";
+			int adopted = ClusterControlServer.AdoptClientView(userId, clientState);
+			AdoptedOperations.Add(operationId);
+			Console.WriteLine($"[ClusterPlugin] respawn execute operation={operationId:D} adopted={adopted}");
+		}
+		if (player == null)
+		{
+			MyIdentity identity = MySession.Static?.Players.TryGetIdentity(identityId);
+			if (identity == null) return "identity-missing";
+			player = MySession.Static.Players.CreateNewPlayer(identity, playerId, identity.DisplayPlatformName,
+				realPlayer: true, initialPlayer: false, newIdentity: false);
+			Console.WriteLine($"[ClusterPlugin] respawn execute operation={operationId:D} player-created={player != null}");
+		}
+		if (player.Identity?.IdentityId != identityId)
+			throw new InvalidOperationException("Respawn player binding changed");
+		return null;
+	}
+
 	private static void Remember(ClusterRespawnExecution request, ClusterRespawnExecutionResult result)
 	{
 		Executions.Add(request.OperationId, (request, result));
@@ -501,7 +625,11 @@ public static class RespawnRegistryService
 	public static void Update()
 	{
 		if (!ClusterRuntime.IsClustered || MySession.Static?.Ready != true) return;
-		if (!ClusterRuntime.IsWorldAuthority) RetryPendingRespawns();
+		if (!ClusterRuntime.IsWorldAuthority)
+		{
+			RestoreClients();
+			RetryPendingRespawns();
+		}
 		if (ClusterRuntime.LocalMilliseconds < m_nextReport) return;
 		m_nextReport = ClusterRuntime.LocalMilliseconds + 1000;
 		ClusterRespawnPoint[] local = CaptureLocal();
@@ -510,7 +638,11 @@ public static class RespawnRegistryService
 			lock (Sync) Reports[Node] = new Report(ClusterRuntime.LocalMilliseconds, local);
 			PublishMerged();
 		}
-		else GlobalStateChannel.SendRequest(Subsystem, RespawnRegistryCodec.Write(local));
+		else
+		{
+			if (ClusterRuntime.LocalMilliseconds < m_testRawPointsUntil) local = local.Concat(Volatile.Read(ref m_testRawPoints)).ToArray();
+			GlobalStateChannel.SendRequest(Subsystem, RespawnRegistryCodec.Write(local));
+		}
 	}
 
 	public static void AuthorityChanged(long generation)
@@ -542,6 +674,20 @@ public static class RespawnRegistryService
 		return TestDelayStatus();
 	}
 
+	/// <summary>
+	/// SE-1150 test knob: for <paramref name="seconds"/>, every report this node sends to the World Authority also carries
+	/// <paramref name="points"/> as they are, past the capture's checks: what a node sent when one of its medbays
+	/// misreported. Dies with the process.
+	/// </summary>
+	public static object ConfigureTestRawPoints(ClusterRespawnPoint[] points, double seconds)
+	{
+		if (!ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority)
+			throw new InvalidOperationException("Only a regular cluster node reports respawn points to the World Authority");
+		Volatile.Write(ref m_testRawPoints, points ?? Array.Empty<ClusterRespawnPoint>());
+		m_testRawPointsUntil = ClusterRuntime.LocalMilliseconds + seconds * 1000;
+		return new { count = m_testRawPoints.Length, seconds };
+	}
+
 	public static object TestDelayStatus()
 		=> new { delayMs = Volatile.Read(ref m_testDelayMilliseconds), held = Volatile.Read(ref m_testHeldCount) };
 
@@ -557,6 +703,7 @@ public static class RespawnRegistryService
 	{
 		IReadOnlyDictionary<long, ulong> partitions = m_partitions.EntityPartitions();
 		var points = new List<ClusterRespawnPoint>();
+		var problems = new List<RespawnPointProblem>();
 		foreach (MyRespawnComponent respawn in MyRespawnComponent.GetAllRespawns())
 		{
 			var entity = respawn.Entity;
@@ -567,13 +714,19 @@ public static class RespawnRegistryService
 			entity.CubeGrid.GridSystems?.UpdatePower();
 			entity.UpdateIsWorking();
 			var position = entity.WorldMatrix.Translation;
-			points.Add(new ClusterRespawnPoint(Node, entity.EntityId, entity.CubeGrid.EntityId, partition, generation,
-				entity.CustomName?.ToString() ?? entity.Name ?? entity.ToString(), entity.IDModule?.Owner ?? 0,
+			// SE-1150: one misreporting block must not cost the node its whole list at the World Authority.
+			ClusterRespawnPoint point = RespawnRegistryCodec.Sanitize(new ClusterRespawnPoint(Node, entity.EntityId, entity.CubeGrid.EntityId,
+				partition, generation, entity.CustomName?.ToString() ?? entity.Name ?? entity.ToString(), entity.IDModule?.Owner ?? 0,
 				(int)(entity.IDModule?.ShareMode ?? VRage.Game.MyOwnershipShareModeEnum.None), entity.IsWorking,
 				respawn.SpawnWithoutOxygen, entity is MyMedicalRoom { SetFactionToSpawnee: not false },
-				respawn.GetOxygenLevel(), position.X, position.Y, position.Z));
+				respawn.GetOxygenLevel(), position.X, position.Y, position.Z), out RespawnPointProblem? problem);
+			if (problem.HasValue) problems.Add(problem.Value);
+			if (point != null) points.Add(point);
 		}
-		return points.OrderBy(x => x.RespawnEntityId).ToArray();
+		lock (m_capturedProblems)
+			foreach (RespawnPointProblem problem in m_capturedProblems.Fresh("capture", problems))
+				Console.WriteLine(RespawnProblemLog.Line("capture", Node, problem));
+		return points.GroupBy(x => x.RespawnEntityId).Select(x => x.First()).OrderBy(x => x.RespawnEntityId).ToArray();
 	}
 
 	/// <summary>T-0193: the respawn points of one partition as this node reports them now - what an offline
@@ -582,9 +735,15 @@ public static class RespawnRegistryService
 
 	private static void ReceiveReport(string origin, string payload)
 	{
-		ClusterRespawnSnapshot snapshot = RespawnRegistryCodec.Read(payload);
+		var problems = new List<RespawnPointProblem>();
+		ClusterRespawnSnapshot snapshot = RespawnRegistryCodec.Read(payload, problems);
 		ClusterRespawnPoint[] points = snapshot.Points.Select(x => x with { Origin = origin }).ToArray();
-		lock (Sync) Reports[origin] = new Report(ClusterRuntime.LocalMilliseconds, points);
+		lock (Sync)
+		{
+			Reports[origin] = new Report(ClusterRuntime.LocalMilliseconds, points);
+			foreach (RespawnPointProblem problem in m_receivedProblems.Fresh(origin, problems))
+				Console.WriteLine(RespawnProblemLog.Line("authority", origin, problem));
+		}
 		PublishMerged();
 	}
 
@@ -645,9 +804,12 @@ public static class RespawnRegistryService
 
 	private static void ApplySnapshot(string payload)
 	{
-		ClusterRespawnSnapshot snapshot = RespawnRegistryCodec.Read(payload);
+		var problems = new List<RespawnPointProblem>();
+		ClusterRespawnSnapshot snapshot = RespawnRegistryCodec.Read(payload, problems);
 		lock (Sync)
 		{
+			foreach (RespawnPointProblem problem in m_receivedProblems.Fresh("snapshot", problems))
+				Console.WriteLine(RespawnProblemLog.Line("replica", "world-authority", problem));
 			m_points = snapshot.Points;
 			m_snapshot = payload;
 		}
@@ -656,5 +818,9 @@ public static class RespawnRegistryService
 	private static string Snapshot() { lock (Sync) return m_snapshot; }
 	private sealed record Report(double Received, ClusterRespawnPoint[] Points);
 	private sealed record PendingRespawn(Guid OperationId, ulong UserId, int SerialId, long RespawnEntityId,
-		bool JoinGame, string ModelName, uint PackedColor, double Deadline);
+		bool JoinGame, string ModelName, uint PackedColor, double Deadline, int Failures = 0);
+	/// <summary>A client to take in again after a failed switch: <see cref="Retry"/> requeues a medbay respawn, a pod's
+	/// failure is answered as a refused respawn, and a preview needs nothing more.</summary>
+	private sealed record Restore(Guid OperationId, ulong UserId, int SerialId, long IdentityId, string ClientState,
+		double Deadline, PendingRespawn Retry, bool Pod);
 }

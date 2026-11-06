@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Xml.Linq;
 using ClusterPlugin;
+using Sandbox;
 using Sandbox.Game.Entities;
 using Sandbox.Game.World;
 using VRage.Game;
@@ -83,6 +85,36 @@ internal static class TestSeams
         XElement victim = target.Root?.Descendants(field).FirstOrDefault(element => !element.HasElements);
         if (victim == null) residuals.Add("corrupt-import: field is absent: " + field);
         else victim.Value += "~corrupt";
+        HoldImport();
+    }
+
+    /// <summary>Milliseconds /debug/hold-import keeps a corrupted import's entities before its discard, 0 = none.</summary>
+    internal static volatile int m_holdImportMs;
+
+    /// <summary>How many imports the hold has held, for the route's answer.</summary>
+    internal static int m_heldImports;
+
+    /// <summary>
+    /// SE-1167: a failed import's entities exist on the target only between its activate frame and the
+    /// discard, about 0.1 s on a bench, so a plugin that reacts to new grids (Impostors reports them) rarely
+    /// gets to act. Sleeping here, inside the gate that is about to fail, keeps them in the world for the
+    /// armed time, as a big partition's slow import does live (37 s, SE-1133). The staged import runs the
+    /// gate on the control server's handler thread while the game goes on; the legacy import runs it on the
+    /// game thread, where a sleep would only freeze the world, so it is not held there.
+    /// </summary>
+    private static void HoldImport()
+    {
+        int ms = m_holdImportMs;
+        if (ms <= 0) return;
+        if (MySandboxGame.Static?.UpdateThread == Thread.CurrentThread)
+        {
+            Plugin.Log("hold-import: not held, the gate runs on the game thread (import.mode=legacy)");
+            return;
+        }
+        Interlocked.Increment(ref m_heldImports);
+        Plugin.Log("hold-import: holding the failing import for " + ms + " ms before its discard");
+        Thread.Sleep(ms);
+        Plugin.Log("hold-import: released the failing import to its discard");
     }
 
     private static ulong m_breakClient;

@@ -610,6 +610,22 @@ def _poison_warm_repair(bench, poison_partition: int, pristine: Path) -> dict:
     bench.record("poison-warm-registry-quarantine", seen)
     bench.check("the quarantined partition became visible at the registry", registry_seen)
 
+    # SE-1161: the quarantine ends the claims. A released failed claim used to be handed straight back to the
+    # next claim loop (node-1 claimed one partition 71 times in 3 minutes on octahedron-test, a new generation
+    # each time). Now the registry backs a failed recovery off and hands a partition a live node quarantined to
+    # nobody: no claim after the quarantine, and no more than recovery.quarantineAfter (3) per node before it
+    # (each node counts its own failed loads).
+    claim = rf"recovery claimed partition {poison_partition} generation"
+    claims_at_quarantine = len(_any_log(bench, claim, REGULAR))
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline and len(_any_log(bench, claim, REGULAR)) == claims_at_quarantine:
+        time.sleep(1)
+    claims = len(_any_log(bench, claim, REGULAR))
+    bench.record("poison-warm-claims", {"atQuarantine": claims_at_quarantine, "after20s": claims})
+    bench.check("the poisoned partition is claimed at most 3 times per node and never after its quarantine (SE-1161)",
+                claims_at_quarantine <= 3 * len(REGULAR) and claims == claims_at_quarantine,
+                f"{claims_at_quarantine} claims by the quarantine, {claims} 20 s later")
+
     # Cross-host repair: the replacement save is UPLOADED (request body), not a node-local path - the
     # form an operator on another host must use.
     control = _nodes(bench)["node-1"].control

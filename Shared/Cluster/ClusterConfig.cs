@@ -284,6 +284,9 @@ public static class ClusterConfig
 		["offline.unknownBlocks"] = "Freeze",
 		["offline.longObservation"] = "Skip",
 		["offline.compensateMaxHours"] = "72",
+		// SE-1096: a group's model stops at this many events; the rest of its interval is forfeited like past compensateMaxHours.
+		// About 13 s of worker-thread time for the heaviest recorded base; 2,000,000 events still fail the group.
+		["offline.compensateMaxEvents"] = "500000",
 		["offline.callUp"] = "true",
 		["offline.callUpSeconds"] = "120",
 		["offline.callUpPerMinute"] = "6",
@@ -305,6 +308,11 @@ public static class ClusterConfig
 		// (Relative Top Speed at 360 m/s: 360), or a fast pair gets less warning than the relocation lead. Listed here so
 		// the fan-out of the gateway's document is not refused by the nodes; they never read it.
 		["lookahead.maxSpeed"] = "100",
+		// GATEWAY only, managed (Quasar) deployments (SE-1168): every lifetimeSeconds / n (n serving regular nodes) the
+		// oldest serving node is recycled onto the hot spare, so each node serves about lifetimeSeconds; 0 = never.
+		// A recycle still draining after drainTimeoutSeconds closes the node: its own drain hands out or offlines the rest.
+		["rotation.lifetimeSeconds"] = "7200",
+		["rotation.drainTimeoutSeconds"] = "600",
 		// GATEWAY only (T-0269): a wake whose demander's node is above this multiple of the mean node load
 		// loads on the least-loaded node instead; 0 = always the demander's node.
 		["offline.wakeOverloadRatio"] = "1.5",
@@ -353,8 +361,13 @@ public static class ClusterConfig
 		// keeps the one it had at the freeze and leaves the world at it when its partition loads), plus the drops the WA has
 		// dispatched that the census does not show yet. A player whose drop falls due while the cluster is at the cap gets
 		// none: the drop is skipped, not queued, and the player's next one is due an interval later. While the census is
-		// unknown (none yet, or older than 60 s) every due drop is skipped. Read per sweep (5 s).
-		["drops.maxActive"] = "3",
+		// unknown (none yet, or older than 60 s) every due drop is skipped. Read per sweep (5 s). SE-1146: default 5 (was 3), and
+		// the WA deletes the oldest drop GPS markers over it (ContainerGpsSweep).
+		["drops.maxActive"] = "5",
+		// SE-1146: seconds a NEW container drop stays in the world before vanilla removes it (and the World Authority's drop GPS
+		// markers last this long plus up to a minute); 0 = vanilla's (the drop system definition's 15 min). Read by the node at
+		// each spawn and by the WA's marker sweep (5 s). A bench sets a few seconds so drops come and go within a lane.
+		["drops.lifetimeSeconds"] = "0",
 		// T-0265: carry each client's inventory delta counters across a handover. "false" restores the
 		// old fresh-counter adopt, only so a live A/B can earn the red on the same build.
 		["handover.inventoryCounters"] = "true",
@@ -369,6 +382,14 @@ public static class ClusterConfig
 		// partition unowned once its empty Final is catalogued, and the registry reaps the row. "false" restores
 		// holding it, unreported, until the node's drain releases it.
 		["recovery.releaseEmpty"] = "true",
+		// SE-1161: a recovery load that keeps failing. quarantineAfter (NODE): after this many failed loads in a row of one
+		// partition, cold or warm recovery alike, the node quarantines it (/cluster/quarantine, repairable in place) and
+		// the registry hands it to nobody while the node reports it; 0 = never. failedBackoffSeconds and
+		// failedBackoffMaxSeconds (GATEWAY): after each failed load the registry holds the partition back from every claim
+		// for failedBackoffSeconds, doubled per failure in a row up to failedBackoffMaxSeconds; 0 = no backoff.
+		["recovery.quarantineAfter"] = "3",
+		["recovery.failedBackoffSeconds"] = "5",
+		["recovery.failedBackoffMaxSeconds"] = "300",
 		// T-0400, GATEWAY only (the registry's retention pass): the files of the saves of a partition ARCHIVED more than
 		// this many days ago are deleted from the per-host stores (the registry rows stay). 0 = off. Listed here so the
 		// fan-out of the gateway's document is not refused by the nodes; they never read it.

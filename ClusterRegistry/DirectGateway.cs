@@ -571,6 +571,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 if (_registry != null)
                     ReconcileHandovers().GetAwaiter().GetResult();
                 CollectSaveCatalog();
+                _registry?.SweepHandoverBlocks();
                 if (!_automaticSuspended)
                 {
                     ServedNode[] served = ServedNodes();
@@ -580,6 +581,9 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     // planner, the route-contradiction clock and the published snapshot (offline admission).
                     List<(ServedNode Node, string Error)> silent = [];
                     (ServedNode Node, PartitionReport Report)[] reports = CollectReports(served, node => GetPartitions(node.Control), silent);
+                    // SE-1134: everything below - the balancer, scale-in, drains, /diag's balance load - reads a node's
+                    // sim ratio only once a dip has lasted (CostModel.SimRatioSustainSeconds).
+                    reports = SustainRatios(reports, node => node.Node, _lowRatioRuns, _costModel.SimRatioSustainSeconds, DateTime.UtcNow);
                     string? missingReports = MissingReportPause([.. silent.Select(x => x.Node.Node)]);
                     if (missingReports != _missingReports)
                     {
@@ -1191,10 +1195,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             Signature = System.Text.RegularExpressions.Regex.Match(body, "residual-signature=([0-9a-f]+)") is { Success: true } match
                 ? match.Groups[1].Value : null;
             Reason = FirstLine(body);
+            Entities = System.Text.RegularExpressions.Regex.Match(body, "residual-entities=([0-9,]+)") is { Success: true } entities
+                ? [.. entities.Groups[1].Value.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(long.Parse)] : null;
         }
 
         public ulong Partition { get; }
         public string? Signature { get; }
+        /// <summary>SE-1134: the top-level entities holding the residuals, from a node that names them.</summary>
+        public long[]? Entities { get; }
         public string Reason { get; }
 
         internal static string FirstLine(string body)
@@ -1703,6 +1711,54 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             return measured;
         long elapsed = (long)Math.Min(1_000_000.0 / speed, 1_000_000_000_000.0);
         return Math.Max(measured, elapsed);
+    }
+
+    /// <summary>SE-1134: each node's simulation ratios since its current run below 0.98 began, oldest first. Only the
+    /// automatic pass reads and writes it.</summary>
+    private readonly Dictionary<string, List<(DateTime At, double Ratio)>> _lowRatioRuns = new();
+
+    /// <summary>
+    /// SE-1134: the reports with each node's SimulationRatio as the planners should read it. A ratio below 0.98 that
+    /// has lasted less than <paramref name="sustainSeconds"/> reads 1, so EffectiveNodeLoad charges the measured sum
+    /// only; once it has lasted that long it reads as the highest (mildest) ratio of the last sustainSeconds, a lower
+    /// bound the node really ran under for the whole window. One hitch is one or two low samples at a pass a second,
+    /// a saturated node stays low. A healthy or unusable sample ends the run. 0 seconds returns the reports unchanged.
+    /// </summary>
+    internal static (T Node, PartitionReport Report)[] SustainRatios<T>((T Node, PartitionReport Report)[] reports,
+        Func<T, string> name, Dictionary<string, List<(DateTime At, double Ratio)>> runs, double sustainSeconds, DateTime now)
+    {
+        if (sustainSeconds <= 0)
+        {
+            runs.Clear();
+            return reports;
+        }
+        var sustained = new (T Node, PartitionReport Report)[reports.Length];
+        for (int i = 0; i < reports.Length; i++)
+        {
+            (T node, PartitionReport report) = reports[i];
+            double ratio = report.SimulationRatio;
+            string key = name(node);
+            if (!double.IsFinite(ratio) || ratio <= 0 || ratio >= 0.98)
+            {
+                runs.Remove(key);
+                sustained[i] = reports[i];
+                continue;
+            }
+            if (!runs.TryGetValue(key, out var run)) runs[key] = run = [];
+            // A gap in the samples (a silent node, suspended passes) is no evidence the node stayed slow.
+            if (run.Count != 0 && (now - run[^1].At).TotalSeconds > sustainSeconds) run.Clear();
+            run.Add((now, ratio));
+            double effective = 1;
+            if ((now - run[0].At).TotalSeconds >= sustainSeconds)
+            {
+                // The window keeps the sample at or just before its start, so it always spans sustainSeconds.
+                int first = run.FindLastIndex(x => (now - x.At).TotalSeconds >= sustainSeconds);
+                run.RemoveRange(0, first);
+                effective = run.Max(x => x.Ratio);
+            }
+            sustained[i] = (node, report with { SimulationRatio = effective });
+        }
+        return sustained;
     }
 
     /// <summary>
@@ -2218,6 +2274,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 long clientReduction = oldClientOverload - ClientOverload(adjustedCl);
                 if (clientReduction <= 0) { if (belowGain) minGainSkipped++; continue; }
                 if (clientReduction < minClientGain) { minGainSkipped++; continue; }
+                // SE-1134: its players sit through the whole estimated lag, so the load picture has to gain in proportion.
+                if (model.ClientMinGainPerLagSecond > 0
+                    && reduction / Math.Max(meanLoad, 1.0) < model.ClientMinGainPerLagSecond * components[i].CostMs / 1000)
+                { minGainSkipped++; continue; }
                 double adjMeanOthers = (adjusted.Sum() - newPeak) / (double)(nodes.Length - 1);
                 if (newPeak > oldPeak
                     && (newPeak - adjMeanOthers) / Math.Max(adjMeanOthers, 1.0)
@@ -3069,7 +3129,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 target.RegistryRouteValidated = true;
 							if (target.AttachedBindingRevision != target.BindingRevision)
 							{
-								byte[] binding = target.PlayerReady == null ? [] : JsonSerializer.SerializeToUtf8Bytes(target.PlayerReady);
+								byte[] binding = AttachBinding(target);
 								target.AttachingAdmissionGeneration = target.PlayerReady?.AuthorityGeneration ?? 0;
 								target.AttachingIdentityId = target.PlayerReady?.Identity.IdentityId ?? 0;
 								target.AttachingBindingRevision = target.BindingRevision;
@@ -3374,7 +3434,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         }
     }
 
-    private void OnSteamTicket(ulong userId, JoinResult result, ulong ownerId)
+    private void OnSteamTicket(ulong userId, JoinResult result, ulong ownerId, uint[]? missingDlcs = null)
     {
         if (!_clients.TryGetValue(userId, out ClientSession? session))
             return;
@@ -3409,6 +3469,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             return;
         }
         session.TicketOwnerId = ownerId == 0 ? userId : ownerId;
+        session.MissingDlcs = missingDlcs;
         if (_admission.Settings.GroupId != 0)
         {
             session.AdmissionState = "GroupPending";
@@ -4115,6 +4176,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 return;
             }
             if (path == "/registry/plugins/v1") { HandlePluginOperation(context, path); return; }
+            if (path.Equals(SkinCheckRoute, StringComparison.OrdinalIgnoreCase)) { HandleSkinCheck(context, path); return; }
             if (IsAdminRequestPath(path))
             {
                 // The admin contract has its own credential resolution: scoped tokens from the
@@ -4789,7 +4851,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                                 $"Partition {releasePartition} is routed to connected client {releaseClient}; refusing release");
                     }
                 WriteJson(context, 200, _registry.ReleasePartition(releasePartition, Required(context, "node"), long.Parse(Required(context, "epoch")),
-                    long.Parse(Required(context, "generation")), memberless: context.Request.QueryString["memberless"] == "true"));
+                    long.Parse(Required(context, "generation")), memberless: context.Request.QueryString["memberless"] == "true",
+                    failedRecovery: context.Request.QueryString["failed"] == "true"));
                 return;
             }
             if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/recoveries/claim", StringComparison.OrdinalIgnoreCase))
@@ -6448,7 +6511,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                             aborted = true;
                             LogTransfer(transferId, partition, "aborted");
                             if (failure is HandoverImportException { Signature: { } signature } rejected)
-                                registry.RecordValidationAbort(partition, signature, rejected.Reason);
+                                registry.RecordValidationAbort(partition, signature, rejected.Reason, rejected.Entities);
                         }
                     }
                     catch (Exception e) { cleanupFailures.Add(e); }
@@ -6735,7 +6798,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                             registry.Abort(transferId);
                             LogTransfer(transferId, partition, "aborted");
                             if (failure is HandoverImportException { Signature: { } signature } rejected)
-                                registry.RecordValidationAbort(partition, signature, rejected.Reason);
+                                registry.RecordValidationAbort(partition, signature, rejected.Reason, rejected.Entities);
                         }
                     }
                     catch (Exception e) { cleanupFailures.Add(e); }
@@ -7946,7 +8009,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
 					}
 					session.AttachSkipped = null;
 					session.AttachCompleted.Reset();
-					byte[] binding = session.PlayerReady == null ? [] : JsonSerializer.SerializeToUtf8Bytes(session.PlayerReady);
+					byte[] binding = AttachBinding(session);
 					SendNodeLink(link, new(NodeLinkMessage.Attach, session.ClientId, 0, binding, DeliveryMethod.ReliableOrdered));
 					session.AttachingAdmissionGeneration = admissionGeneration;
 					session.AttachingIdentityId = identityId;
@@ -8315,6 +8378,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         public string? AssertedServiceName;
         public volatile bool IsProfiling;
         public ulong TicketOwnerId;
+        /// <summary>SE-1158: the DLC app ids Steam says the player has no license for; null without a Steam ticket.</summary>
+        public uint[]? MissingDlcs;
+        /// <summary>SE-1158: the skins the player's last inventory blob proved; null until a node asked.</summary>
+        public volatile string[]? Skins;
         public readonly CancellationTokenSource AdmissionCancellation = new();
         public int AdmissionStarted;
 		public int AttachRetryStarted;
@@ -8507,6 +8574,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         float ColorX, float ColorY, float ColorZ, bool IsNpc);
 	private sealed record PlayerBindingEntry(ulong UserId, int SerialId, long IdentityId);
 	private sealed record IdentityAuthoritySnapshot(IdentityAuthorityEntry[] Identities, PlayerBindingEntry[] Bindings);
+    /// <summary>The World Authority's player binding. The Gateway adds what Steam says the player owns (SE-1158) when it attaches them.</summary>
     private sealed record PlayerReady(long AuthorityGeneration, string ServiceName, ulong UserId, ulong OwnerId, int SerialId,
-        bool IsAdmin, IdentityAuthorityEntry Identity);
+        bool IsAdmin, IdentityAuthorityEntry Identity, uint[]? MissingDlcs = null, string[]? Skins = null);
+
+    /// <summary>The attach binding a node gets: the player binding with the Steam ownership of SE-1158.</summary>
+    private static byte[] AttachBinding(ClientSession session) => session.PlayerReady == null ? []
+        : JsonSerializer.SerializeToUtf8Bytes(session.PlayerReady with { MissingDlcs = session.MissingDlcs, Skins = session.Skins });
 }

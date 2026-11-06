@@ -30,6 +30,22 @@ public static class MySessionComponentContainerDropSystemSeams
 			playerData = new MySessionComponentContainerDropSystem.MyPlayerContainerData(identityId, 0, active: true, competitive, 0L);
 			self.m_playerData.Add(playerData);
 		}
+		ApplyLifetime(self.m_definition);
 		return self.SpawnContainerDropInternal(playerData, competitive, out _, !competitive);
+	}
+
+	private static (int Personal, int Competitive)? s_vanillaLifetime;
+
+	/// <summary>
+	/// SE-1146: drops.lifetimeSeconds replaces the definition's drop lifetime before a spawn, which vanilla reads when the
+	/// prefab is in (both kinds); 0 puts vanilla's back.
+	/// </summary>
+	private static void ApplyLifetime(VRage.Game.Definitions.SessionComponents.MyContainerDropSystemDefinition definition)
+	{
+		if (definition == null) return;
+		s_vanillaLifetime ??= (definition.PersonalContainerGridTimeOut, definition.CompetetiveContainerGridTimeOut);
+		int seconds = ClusterConfig.GetInt("drops.lifetimeSeconds");
+		definition.PersonalContainerGridTimeOut = seconds > 0 ? seconds : s_vanillaLifetime.Value.Personal;
+		definition.CompetetiveContainerGridTimeOut = seconds > 0 ? seconds : s_vanillaLifetime.Value.Competitive;
 	}
 }

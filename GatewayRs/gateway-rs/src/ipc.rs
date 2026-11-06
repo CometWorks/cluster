@@ -539,6 +539,9 @@ pub struct SteamEvent {
     pub owner: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member: Option<bool>,
+    /// SE-1158: on an OK `ticket`, the DLC app ids the player has no licence for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub missing_dlcs: Option<Vec<u32>>,
 }
 
 // ------------------------------------------------------------------ the connection
