@@ -105,6 +105,13 @@ public static class GpsAuthorityPatch
 	public static bool DeletePrefix(long identityId, int hash)
 		=> Forward(new GpsAuthorityRequest("Delete", Empty(identityId), hash, false, 0));
 
+	/// <summary>
+	/// SE-1146: vanilla deletes a drop container's GPS (identity 0 = every identity) only on the node holding the drop, so the
+	/// World Authority kept it and its next table put the marker back everywhere: a Strong Unknown Signal outlived its drop.
+	/// </summary>
+	public static bool DeleteContainerPrefix(long entityId, long identityId)
+		=> Forward(new GpsAuthorityRequest("DeleteContainer", Empty(identityId) with { EntityId = entityId }, 0, false, 0));
+
 	public static bool ModifyPrefix(long identityId, MyGps gps)
 		=> Forward(new GpsAuthorityRequest("Modify", From(gps, identityId, gps.EntityId), gps.Hash, false, 0));
 
@@ -146,6 +153,7 @@ public static class GpsAuthorityPatch
 			case "AddServer": return AddServerPrefix((MyGpsCollection.AddMsg)first);
 			case "Delete": return DeletePrefix((long)first, (int)second);
 			case "DeleteServer": return DeleteServerPrefix((int)first);
+			case "DeleteContainer": return DeleteContainerPrefix((long)first, (long)second);
 			case "Modify": return ModifyPrefix((long)first, (MyGps)second);
 			case "ModifyServer": return ModifyServerPrefix((MyGpsCollection.ModifyMsg)first);
 			case "ShowOnHud": return ShowOnHudPrefix((long)first, (int)second, (bool)third);
@@ -191,6 +199,7 @@ public static class GpsAuthorityPatch
 				gpss.SendAddGpsRequest(request.Entry.IdentityId, ref added, request.Entry.EntityId, request.Value);
 				break;
 			case "Delete": gpss.SendDeleteGpsRequest(request.Entry.IdentityId, request.Hash); break;
+			case "DeleteContainer": gpss.SendDeleteContainerGpsRequest(request.Entry.EntityId, request.Entry.IdentityId); break;
 			case "Modify":
 				MyGps existing = gpss.GetGps(request.Entry.IdentityId, request.Hash);
 				if (existing == null || existing.IsLocal) { m_dirty = true; break; }

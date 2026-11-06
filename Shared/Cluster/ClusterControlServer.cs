@@ -25,9 +25,11 @@ using Sandbox.Game.Multiplayer;
 using Sandbox.Game.Replication;
 using Sandbox.Game.Weapons;
 using Sandbox.Game.World;
+using VRage;
 using VRage.Game;
 using VRage.Game.ModAPI;
 using VRage.Game.Entity;
+using VRage.Game.ObjectBuilders.ComponentSystem;
 using VRage.ModAPI;
 using VRage.Network;
 using VRage.ObjectBuilders;
@@ -560,6 +562,7 @@ internal sealed partial class ClusterControlServer
 				ClusterRespawnExecution request = JsonSerializer.Deserialize<ClusterRespawnExecution>(context.Request.InputStream,
 					new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
 					?? throw new ArgumentException("Request body is required");
+				ClusterSeams.BeforeRespawnExecute?.Invoke(request);
 				string result = Invoke(() => JsonSerializer.Serialize(RespawnRegistryService.ExecuteExactRespawn(request)));
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 				return;
@@ -853,6 +856,12 @@ internal sealed partial class ClusterControlServer
 			if (context.Request.HttpMethod == "GET" && path.EndsWith("/drop-container-removals", StringComparison.OrdinalIgnoreCase))
 			{
 				string result = Invoke(() => JsonSerializer.Serialize(DropContainerRemovalService.Removals()));
+				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
+				return;
+			}
+			if (context.Request.HttpMethod == "GET" && path.EndsWith("/drop-container-gps", StringComparison.OrdinalIgnoreCase))
+			{
+				string result = Invoke(() => JsonSerializer.Serialize(ContainerGpsSweep.Status()));
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 				return;
 			}
@@ -1698,6 +1707,48 @@ internal sealed partial class ClusterControlServer
 				fueled.Capacity = ImportRoundTrip.ClampCapacity(fueled.Capacity, max);
 	}
 
+	/// <summary>
+	/// SE-1155: a block inventory can hold a stack larger than the inventory loads back. MyInventory.InitItems clamps
+	/// each saved stack to what fits an empty inventory, in float arithmetic (ImportRoundTrip.LoadedAmount), while a
+	/// refill that sizes its stack as (int)((float)free / volume), as a station refuel does, overshoots it: a station
+	/// reactor held 461538.469939 kg of uranium where 461538.46674 load, and every handover of its partition failed on
+	/// that one Amount (octahedron-test 2026-11-05, partition 4519). The capture writes what the load restores, as
+	/// <see cref="ClampFuelCapacity"/> does. Only nearly full inventories are looked at: no other stack can be over.
+	/// </summary>
+	internal static void ClampInventoryAmounts(MyEntity entity, MyObjectBuilder_EntityBase builder)
+	{
+		if (entity is not MyCubeGrid grid || builder is not MyObjectBuilder_CubeGrid gridBuilder || gridBuilder.CubeBlocks == null) return;
+		foreach (MyCubeBlock block in grid.GetFatBlocks())
+			for (int index = 0; index < block.InventoryCount; index++)
+			{
+				if (block.GetInventory(index) is not MyInventory inventory || !inventory.IsConstrained
+					|| (double)inventory.CurrentVolume < 0.999 * (double)inventory.MaxVolume && (double)inventory.CurrentMass < 0.999 * (double)inventory.MaxMass) continue;
+				foreach (MyPhysicalInventoryItem item in inventory.GetItems())
+				{
+					Sandbox.Game.Entities.Inventory.MyInventoryItemAdapter adapter = Sandbox.Game.Entities.Inventory.MyInventoryItemAdapter.Static;
+					if (item.Content == null || !adapter.TryAdapt(item.Content.GetObjectId())) continue;
+					MyFixedPoint loaded = ImportRoundTrip.LoadedAmount(item.Amount, inventory.MaxVolume, inventory.MaxMass, adapter.Volume, adapter.Mass, adapter.HasIntegralAmounts);
+					if (loaded >= item.Amount) continue;
+					MyObjectBuilder_CubeBlock saved = gridBuilder.CubeBlocks.FirstOrDefault(candidate => candidate.EntityId == block.EntityId);
+					foreach (MyObjectBuilder_InventoryItem stack in SavedInventories(saved?.ComponentContainer)
+						.SelectMany(savedInventory => savedInventory.Items ?? new List<MyObjectBuilder_InventoryItem>())
+						.Where(stack => stack.ItemId == item.ItemId && stack.Amount == item.Amount && stack.PhysicalContent?.GetObjectId() == item.Content.GetObjectId()))
+						stack.Amount = loaded;
+				}
+			}
+	}
+
+	private static IEnumerable<MyObjectBuilder_Inventory> SavedInventories(MyObjectBuilder_ComponentContainer container)
+	{
+		static IEnumerable<MyObjectBuilder_Inventory> Of(MyObjectBuilder_ComponentBase component) => component switch
+		{
+			MyObjectBuilder_Inventory inventory => new[] { inventory },
+			MyObjectBuilder_InventoryAggregate aggregate => (aggregate.Inventories ?? new List<MyObjectBuilder_InventoryBase>()).SelectMany(Of),
+			_ => Enumerable.Empty<MyObjectBuilder_Inventory>(),
+		};
+		return (container?.Components ?? new List<MyObjectBuilder_ComponentContainer.ComponentData>()).SelectMany(data => Of(data.Component));
+	}
+
 	private static string VoxelTestCutout(string storage, Vector3I center, float radius)
 	{
 		if (!float.IsFinite(radius) || radius <= 0) throw new ArgumentOutOfRangeException(nameof(radius));
@@ -1840,6 +1891,7 @@ internal sealed partial class ClusterControlServer
 				entity.BeforeSave();
 				MyObjectBuilder_EntityBase builder = entity.GetObjectBuilder();
 				ClampFuelCapacity(entity, builder);
+				ClampInventoryAmounts(entity, builder);
 				if (transfer != null && transfer.Frozen.TryGetValue(entity.EntityId, out FrozenState frozen)) ApplyVelocity(builder, frozen);
 				return builder;
 			}).ToArray();
@@ -2209,7 +2261,7 @@ internal sealed partial class ClusterControlServer
 	{
 		int removed = 0;
 		if (entity.ComponentContainer?.Components == null) return removed;
-		foreach (VRage.Game.ObjectBuilders.ComponentSystem.MyObjectBuilder_ComponentContainer.ComponentData data in entity.ComponentContainer.Components)
+		foreach (MyObjectBuilder_ComponentContainer.ComponentData data in entity.ComponentContainer.Components)
 			if (data.Component is VRage.Game.ObjectBuilders.Components.MyObjectBuilder_HierarchyComponentBase hierarchy && hierarchy.Children != null)
 				removed += hierarchy.Children.RemoveAll(child => child != null && child.EntityId == childId);
 		return removed;
@@ -2354,7 +2406,8 @@ internal sealed partial class ClusterControlServer
 				throw new InvalidDataException("Duplicate incarnation: entity " + entity.EntityId
 					+ " arriving with partition " + partitionId + " is already held by partition " + holder
 					+ " on this node; residual-signature="
-					+ ImportRoundTrip.Signature(new List<string> { "duplicate/" + entity.EntityId + "@" + holder }));
+					+ ImportRoundTrip.Signature(new List<string> { "duplicate/" + entity.EntityId + "@" + holder })
+					+ " residual-entities=" + entity.EntityId);
 			PartitionPersistence.CloseWithHierarchy(new[] { existingEntity });
 			ClusterRuntime.ClearFrozen(entity.EntityId);
 			Log("purged fenced duplicate: entity " + entity.EntityId + " held by unowned partition "
@@ -2570,7 +2623,7 @@ internal sealed partial class ClusterControlServer
 				if (evicted > 0) Log("handover-diff budget: deleted the " + evicted + " oldest dump files in " + directory);
 			}
 			string message = "Frozen source and imported target object builders differ; residuals=" + residuals.Count
-				+ " residual-signature=" + signature + "; " + retained;
+				+ " residual-signature=" + signature + ResidualEntities(residuals) + "; " + retained;
 			// Partitioning.md 6.10: abort (default) keeps a lossy import out of the world; warn is the
 			// production-only escape hatch and still logs, dumps and alarms exactly like the abort.
 			if (!m_importCheckWarn) throw new InvalidDataException(message);
@@ -2587,6 +2640,19 @@ internal sealed partial class ClusterControlServer
 	/// node in a day of octahedron-1191 (71 partitions), and every cluster backup copied them.
 	/// </summary>
 	internal const long HandoverDiffBudgetBytes = 256L << 20;
+
+	/// <summary>
+	/// SE-1134: " residual-entities=ID,ID" for the top-level entities the residual paths start in
+	/// (MyObjectBuilder_Sector/SectorObjects/MyObjectBuilder_EntityBase#ID/...), or "" when none does. The gateway keeps
+	/// a HandoverBlocked partition's backoff through a membership change that leaves these entities in it.
+	/// </summary>
+	internal static string ResidualEntities(IEnumerable<string> residuals)
+	{
+		string[] ids = residuals
+			.Select(residual => System.Text.RegularExpressions.Regex.Match(residual, "^[^/]+/SectorObjects/[^/#]+#([0-9]+)"))
+			.Where(match => match.Success).Select(match => match.Groups[1].Value).Distinct().ToArray();
+		return ids.Length == 0 ? "" : " residual-entities=" + string.Join(",", ids);
+	}
 
 	/// <summary>
 	/// Deletes the oldest files in <paramref name="directory"/> until it holds at most <paramref name="budget"/>

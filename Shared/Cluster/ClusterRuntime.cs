@@ -1053,6 +1053,7 @@ public static class ClusterRuntime
 		AsteroidStorageWarmup.Update();   // once per node process: procedural asteroid storages cached off the game thread
 		SpawnDirectorService.Update();
 		DropContainerDirectorService.Update();
+		ContainerGpsSweep.Update();   // SE-1146: the WA deletes drop markers past vanilla's drop lifetime or over drops.maxActive
 		EncounterDirectorService.Update();
 		VoxelJournalService.Instance?.Update();
 		ReplicationClientViewPatch.UpdateWaitingVoxels();   // T-0368: carried asteroids a target adopts once it has generated and caught them up

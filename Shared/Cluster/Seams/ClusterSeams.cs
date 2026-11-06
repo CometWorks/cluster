@@ -43,6 +43,13 @@ public static class ClusterSeams
 	/// </summary>
 	public static volatile Action<uint, uint> BeforeGlobalSaveRegister;
 
+	/// <summary>
+	/// SE-1124: runs on the control server's request thread before a switch target executes a respawn or a spawn preview
+	/// (/cluster/respawn-execute), outside the game thread. A bench can split the medbay's partition here, between the
+	/// Gateway's ownership check and the target's, or throw to have the target refuse the switch.
+	/// </summary>
+	public static volatile Action<ClusterRespawnExecution> BeforeRespawnExecute;
+
 	private static volatile Action m_servicesInstalled;
 	private static volatile bool m_servicesWereInstalled;
 

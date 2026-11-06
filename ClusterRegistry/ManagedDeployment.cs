@@ -124,6 +124,7 @@ internal sealed partial class GatewayRegistry
     private void SeedManagedSpares(ManagedDeployment deployment)
     {
         _state.SpareNodes.Clear();
+        _state.ManagedRotation = null; // SE-1168: a new generation starts from the approved spares, so no recycle carries over
         foreach (var slot in deployment.Slots.Where(slot => slot.Spare)) _state.SpareNodes.Add(slot.Node);
         foreach (var node in _state.Nodes.Values) node.Spare = _state.SpareNodes.Contains(node.Node);
     }
