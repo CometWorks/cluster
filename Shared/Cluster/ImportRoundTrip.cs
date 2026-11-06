@@ -622,6 +622,16 @@ internal static class ImportRoundTrip
 		// live validation pass (Siren frigate pulls, 2026-08-11: every spawn-point pull of an
 		// encounter frigate aborted on this residual). Re-derived on both sides, nothing to restore.
 		document.Descendants("IsCorrect").Remove();
+		// SE-1152. A warhead's countdown is clamped on load: MyWarhead.Init restores CountdownMs through
+		// MathHelper.Clamp(builder.CountdownMs, 1000, 3600000). A countdown that ran out without an explosion
+		// (MyWarhead.Explode does nothing in a safe zone or with weapons off, and MyWarheads has already dropped the
+		// warhead) keeps IsCountingDown with CountdownMs at -1 or another value under 1000, so its import restarts
+		// from 1000, as a world reload does (octahedron-test 2026-11-06, partition 4494: six NPC drone warheads,
+		// "-1 != 984"). Model the clamp on both sides; the import's own ticks are WarheadClockEpsilon.
+		foreach (XElement countdown in document.Descendants("CountdownMs")
+			.Where(element => (string)element.Parent?.Attribute(XsiType) == "MyObjectBuilder_Warhead"))
+			if (int.TryParse(countdown.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int milliseconds))
+				countdown.Value = Math.Clamp(milliseconds, 1000, 3600000).ToString(CultureInfo.InvariantCulture);
 		// An inventory's item ids are per-load bookkeeping, not content: MyInventory hands out
 		// m_nextItemID sequentially as stacks load, so a source whose earlier stacks were consumed
 		// in play carries gapped ids (1,2,3 / next 4) that the import legitimately compacts
@@ -920,6 +930,14 @@ internal static class ImportRoundTrip
 	/// </summary>
 	private const double SeatOxygenEpsilon = 0.0025;
 
+	/// <summary>
+	/// SE-1152: a counting-down warhead, in milliseconds. MyWarheads.UpdateBeforeSimulation takes 16 ms from every
+	/// counting-down warhead each frame, and it is a session component, so the freeze does not hold it: the import
+	/// re-emits the restored countdown less the frames between its OnAddedToScene and the validation (one frame on
+	/// octahedron-test: 1000 against 984). 2 s is 125 frames; a lost countdown differs by the whole value.
+	/// </summary>
+	private const double WarheadClockEpsilon = 2000;
+
 	private static bool IsBlockField(string path, string field)
 	{
 		if (path.Length < field.Length + 2 || !path.EndsWith("/" + field, StringComparison.Ordinal)) return false;
@@ -938,7 +956,8 @@ internal static class ImportRoundTrip
 			: path.EndsWith("/Component/UpkeepTime", StringComparison.Ordinal)
 				|| path.EndsWith("/Component/ActivationTime", StringComparison.Ordinal)
 				? SafeZoneClockEpsilon
-			: IsBlockField(path, "OxygenLevel") ? SeatOxygenEpsilon : 2e-5;
+			: IsBlockField(path, "OxygenLevel") ? SeatOxygenEpsilon
+			: IsBlockField(path, "CountdownMs") ? WarheadClockEpsilon : 2e-5;
 
 	/// <summary>T-0363: the value MyFueledPowerProducer.Init restores from a saved capacity (MathHelper.Clamp to [0, max]).</summary>
 	internal static float ClampCapacity(float capacity, float maximum)
