@@ -285,6 +285,8 @@ def _reselect(bench, api) -> None:
     bench.record("reselect-screens", _try(api.list_screens))
     for index in sorted(found)[:-1][::-1]:
         _try(api.close_screen, index)
+    # A closing screen stays listed until its close animation ends, and _medical_click takes the first one listed.
+    _poll(lambda: (lambda left: left is not None and len(left) <= 1)(screens()), 30)
 
 
 def _kit_on_node1(bench):
