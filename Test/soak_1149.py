@@ -5,11 +5,17 @@ each), then hands every clientless partition back and forth between node-1 and n
 Every SOAK_DUMP_EVERY seconds it takes a dotnet-gcdump of both nodes (a gcdump forces a full GC, so its total
 is the live heap) and writes the top types of each to the evidence dir.
 
+SOAK_TOOLCORE=on|off adds the ToolCore mod (3040438530, staged from SOAK_TOOLCORE_DIR) to the world with
+RespectPlayerMaxPCU on or off. With it on, ToolCore queues every block a node loads and never applies the queue, so
+every grid a handover brings in stays reachable: the live heap and the MyCubeGrid count climb with the handovers.
+
 Invocation: cd <tree>/Test && CLUSTER_PACKAGE=<pkg> PYTHONPATH=$PWD uv run python soak_1149.py <label>
 """
 
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import time
@@ -27,6 +33,69 @@ MINUTES = float(os.environ.get("SOAK_MINUTES", "30"))
 DUMP_EVERY = float(os.environ.get("SOAK_DUMP_EVERY", "300"))
 GCDUMP = os.environ.get("GCDUMP", str(Path.home() / ".dotnet/tools/dotnet-gcdump"))
 NODES = ("node-1", "node-2")
+TOOLCORE = os.environ.get("SOAK_TOOLCORE", "")
+TOOLCORE_ID = 3040438530
+TOOLCORE_DIR = Path(
+    os.environ.get(
+        "SOAK_TOOLCORE_DIR", str(Path.home() / f".steam/steam/steamapps/workshop/content/244850/{TOOLCORE_ID}")
+    )
+)
+TOOLCORE_CFG = """<?xml version="1.0" encoding="utf-16"?>
+<ToolCoreSettings xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Version>0</Version>
+  <RespectPlayerMaxPCU>{flag}</RespectPlayerMaxPCU>
+</ToolCoreSettings>
+"""
+
+
+def start_with_toolcore(bench) -> None:
+    """Cluster-Simple listing ToolCore, its world config set by SOAK_TOOLCORE, the mod staged per process."""
+    import bench as benchmod
+
+    source = Path(bench.cluster.config.world_template or benchmod.HOST.package / "examples/Cluster-Simple")
+    template = bench.run_root.parent / f"{bench.run_root.name}-templates" / "Cluster-Simple-toolcore"
+    if template.exists():
+        shutil.rmtree(template)
+    shutil.copytree(source, template)
+    item = (
+        f'<Mods>\n    <ModItem FriendlyName="ToolCore">\n      <Name>{TOOLCORE_ID}.sbm</Name>\n'
+        f"      <PublishedFileId>{TOOLCORE_ID}</PublishedFileId>\n"
+        "      <PublishedServiceName>Steam</PublishedServiceName>\n    </ModItem>\n  </Mods>"
+    )
+    for name in ("Sandbox.sbc", "Sandbox_config.sbc"):
+        path = template / name
+        text, n = re.subn(r"<Mods\s*/>", item, path.read_text(), count=1)
+        if n != 1:
+            raise AssertionError(f"{name}: no empty <Mods /> to replace")
+        path.write_text(text)
+    cfg = template / f"Storage/{TOOLCORE_ID}.sbm_ToolCore/ToolCore.cfg"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(TOOLCORE_CFG.format(flag="true" if TOOLCORE == "on" else "false"))
+    bench.cluster.config.world_template = template
+    bench.cluster.kill()
+    bench.cluster.prepare(wipe=True)
+    for process in ("wa-1", *NODES):
+        data = bench.run_root / f"{process}-data"
+        shutil.copytree(TOOLCORE_DIR, data / f"Mods/{TOOLCORE_ID}.sbm", dirs_exist_ok=True)
+        # The DS saves the premade world to Saves/<WorldName> and the mod reads its config from there; the bench
+        # copies no Storage into that save, which a managed node gets from the deployment
+        target = data / f"Saves/{template.name}/Storage/{TOOLCORE_ID}.sbm_ToolCore/ToolCore.cfg"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(cfg, target)
+    bench.cluster.start()
+    bench.cluster.wait_ready()
+    for process in NODES:
+        log = sorted((bench.run_root / f"{process}-data").glob("SpaceEngineersDedicated_*.log"))[-1].read_text(
+            errors="replace"
+        )
+        if "cluster_local_world_mods ok: 1 mod(s)" not in log:
+            raise AssertionError(f"{process}: ToolCore not loaded from the staged folder")
+        if "Found up to date config file" not in (
+            data_log := (
+                bench.run_root / f"{process}-data/Storage/{TOOLCORE_ID}.sbm_ToolCore/ToolCore0.log"
+            ).read_text()
+        ):
+            raise AssertionError(f"{process}: ToolCore did not read the staged config: {data_log[-300:]}")
 
 
 def node_pid(bench, name: str) -> int | None:
@@ -53,6 +122,10 @@ def gcdump(bench, name: str, tag: str) -> dict:
     pause = time.time() - started
     report = subprocess.run([GCDUMP, "report", str(path)], capture_output=True, text=True, timeout=600).stdout
     (OUT / f"{name}-{tag}.txt").write_text(report)
+    heap = re.search(r"([\d,]+)\s+GC Heap bytes", report)
+    grids = re.findall(
+        r"^\s*[\d,]+\s+([\d,]+)\s+Sandbox\.Game\.Entities\.MyCubeGrid(?: \(Bytes[^)]*\))?\s+\[", report, re.M
+    )
     rss = (
         int(
             next(
@@ -63,11 +136,21 @@ def gcdump(bench, name: str, tag: str) -> dict:
         )
         // 1024
     )
-    return {"node": name, "tag": tag, "seconds": round(pause, 1), "rssMB": rss, "head": report.splitlines()[:3]}
+    return {
+        "node": name,
+        "tag": tag,
+        "seconds": round(pause, 1),
+        "rssMB": rss,
+        "heapMB": int(heap.group(1).replace(",", "")) // 2**20 if heap else None,
+        "grids": sum(int(g.replace(",", "")) for g in grids),
+    }
 
 
 def soak(bench) -> None:
-    bench.start_cluster()
+    if TOOLCORE:
+        start_with_toolcore(bench)
+    else:
+        bench.start_cluster()
     bench.quiesce()
     for index in range(GRIDS):
         x = 600_000.0 + index * 20_000.0
@@ -105,6 +188,8 @@ def soak(bench) -> None:
     summary = {"handovers": handovers, "failures": failures, "dumps": dumps}
     bench.record("soak", summary)
     (OUT / "soak.json").write_text(json.dumps(summary, indent=2))
+    if TOOLCORE:
+        check_toolcore(bench, dumps, handovers)
     bench.exercised(handovers=handovers, failures=failures)
 
 
@@ -221,6 +306,20 @@ def soak_antenna(bench) -> None:
     bench.record("soak", summary)
     (OUT / "soak.json").write_text(json.dumps(summary, indent=2))
     bench.exercised(handovers=handovers, failures=failures)
+
+
+def check_toolcore(bench, dumps: list[dict], handovers: int) -> None:
+    """Live grids on the two nodes after the soak: GRIDS plus a few in flight with the PCU queue off, one more
+    per handover arrival with it on."""
+    start = sum(d.get("grids") or 0 for d in dumps if d.get("tag") == "t0000")
+    end = sum(d.get("grids") or 0 for d in dumps if d.get("tag") == "end")
+    bench.check(f"{handovers} handovers ran", handovers >= 50, str(handovers))
+    if TOOLCORE == "on":
+        bench.check(
+            f"red: closed grids pile up with the PCU queue on ({start} -> {end})", end - start >= handovers // 4
+        )
+    else:
+        bench.check(f"live grids stay at the grids spawned ({start} -> {end}, {GRIDS} spawned)", end <= 2 * GRIDS + 2)
 
 
 if __name__ == "__main__" and os.environ.get("SOAK_MODE") == "antenna":
