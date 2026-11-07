@@ -262,6 +262,7 @@ public static class RespawnRegistryService
 					: MyEntities.EntityExists(point.GridEntityId) ? "grid-local"
 					: HasPendingRespawn(userId) ? "respawn-pending"
 					: ClusterRuntime.RegistryUnreachable ? "registry-unreachable"
+					: ClusterSeams.HoldPreviewSwitch?.Invoke(userId) == true ? "bench"
 					: null;
 				if (refusal != null)
 				{

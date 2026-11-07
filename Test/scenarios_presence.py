@@ -48,7 +48,7 @@ from __future__ import annotations
 import json
 import time
 
-from cluster import ClusterError, wait_until
+from cluster import ClusterError, ClusterHttpError, wait_until
 from scenarios_core import CLIENT_ID, _client_partition, _handover_url, _lines, _nodes, _partitions
 from scenarios_core import _owners, _wait_line
 from scenarios_wa import CLIENT2_ID, CLIENT2_PORT, CLIENT3_ID, CLIENT3_PORT, _session, start_second_client
@@ -181,6 +181,11 @@ def p2_prs_01(bench) -> None:
         # (RemotePlayerMirrorService.Targets = Sync.Clients with replication data), so on a node
         # with no clients Mirrored stays empty by construction and this wait could never succeed.
         # Without this the leg timed out after 60 s on every run it has ever had (2026-09-19).
+        # SE-1201: the unspawned client's medical screen previews the first respawn row at once, and the
+        # preview switches it to that row's node, client 1's (SE-1124). That left node-2 clientless.
+        # node-2 holds client 2's switches (a test seam), so it stays put. Refusing them on node-1
+        # instead takes the client through the switch's rollback, which drops or strands it (SE-1215).
+        record["previewHold"] = bench.cluster.node("node-2", f"/preview-switch-hold?clients={CLIENT2_ID}", "POST")
         start_second_client(bench, route_node="node-2")
         # Chat-ready is NOT the same as mirror-ready: the mirror's targets are the node's clients
         # that already carry replication data, which arrives a moment after admission. Sampled
@@ -217,6 +222,9 @@ def p2_prs_01(bench) -> None:
         local_partition = _client_partition(_partitions(bench, "node-1"))
         if local_partition is None:
             raise ClusterError("the client's partition was not reported before the third client")
+        session2 = _session(bench, CLIENT2_ID) or {}
+        bench.check("the second client is still on node-2 before the third client joins",
+                    session2.get("backend") == _nodes(bench)["node-2"].backend, json.dumps(session2))
         start_second_client(bench, route_node="node-1", partition=local_partition,
                             client_id=CLIENT3_ID, remote_port=CLIENT3_PORT)
         key3 = wait_until(lambda: next(((row["steamId"], row["serialId"])
@@ -299,8 +307,16 @@ def p2_prs_01(bench) -> None:
         if partition is None:
             raise ClusterError("the client's partition was not reported before the traversal")
         suppressed_before = len(_lines(bench, "node-2", r"traversal (join|leave) toast suppressed"))
-        record["handover"] = bench.cluster.post(
-            _handover_url(bench, partition, client=CLIENT_ID), timeout=300)
+        # The Gateway refuses the handover while client 3, placed in this partition, joined under 10 s ago
+        # (PostReadySettle, T-0296): asked again until it settles.
+        def handover():
+            try:
+                return bench.cluster.post(_handover_url(bench, partition, client=CLIENT_ID), timeout=300)
+            except ClusterHttpError as error:
+                if error.status == 409 and "still joining" in str(error):
+                    return None
+                raise
+        record["handover"] = wait_until(handover, 60, "the Gateway to accept the traversal handover")
         moved = wait_until(
             lambda: next((row for row in _cluster_players(bench, "wa-1")
                           if (row["steamId"], row["serialId"]) == key and row["node"] == "node-2"), None),

@@ -49,6 +49,18 @@ internal static class RespawnFaultRoutes
             TestRoutes.Json(context, 200, Status());
         });
         TestRoutes.Add("GET", "/respawn-execute-fault", context => TestRoutes.Json(context, 200, Status()));
+
+        // POST /preview-switch-hold?clients=ID,ID - SE-1201: on a switch SOURCE, the listed clients' spawn previews never
+        // switch them away (skipped=bench). An empty list releases them. {clients}.
+        TestRoutes.Add("POST", "/preview-switch-hold", context =>
+        {
+            ulong[] clients = TestRoutes.Query(context, "clients", "").Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => ulong.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+            var held = new HashSet<ulong>(clients);
+            ClusterSeams.HoldPreviewSwitch = held.Count == 0 ? null : held.Contains;
+            Plugin.Log($"preview-switch-hold clients={string.Join(",", clients)} (SE-1201)");
+            TestRoutes.Json(context, 200, new { clients });
+        });
     }
 
     private static object Status()
