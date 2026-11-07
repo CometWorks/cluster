@@ -2099,6 +2099,23 @@ internal sealed partial class GatewayRegistry : IDisposable
     }
 
     /// <summary>
+    /// SE-1241: where a client is now, for the operator view: its placement (or, before a node reports one,
+    /// <paramref name="routedPartition"/>, the partition its route was resolved to) and that partition's current
+    /// owner, null while it has none. A handover moves the owner, not the Gateway's cached route, so the cached
+    /// route kept naming the node a player had left - an idle hot spare showed 8 routed players. Read only,
+    /// unlike ResolveClientRoute, which requests offline loads and records joins.
+    /// </summary>
+    public (ulong Partition, string? Node)? CurrentPlacement(ulong client, ulong? routedPartition)
+    {
+        lock (_lock)
+        {
+            ulong? partition = _state.ClientPartitions.TryGetValue(client, out ClientPartition? placed) ? placed.Partition : routedPartition;
+            if (partition is not ulong id) return null;
+            return (id, _state.Partitions.TryGetValue(id, out PartitionOwnership? owner) ? owner.Node : null);
+        }
+    }
+
+    /// <summary>
     /// T-0234: where a client that joined by its character home is headed, until a node reports it. The node
     /// reports a client's partition only once the client controls something, so for the whole join window the
     /// gateway's "routed to connected client" offline and release guards had nothing to match: w32 2026-09-24
@@ -4200,8 +4217,10 @@ internal sealed partial class GatewayRegistry : IDisposable
     private Admin.NodeStatus[] MapNodes()
     {
         DateTimeOffset now = _clock();
+        Dictionary<string, DateTimeOffset> rotation = RotationSchedule(now);
         return _state.Nodes.Values.OrderBy(x => x.Node).Select(node =>
         {
+            bool spare = node.Spare || _state.SpareNodes.Contains(node.Node);
             NodeSlotPlan? slot = _state.NodePlan.Values.FirstOrDefault(x => x.ObservedNode == node.Node)
                 ?? (_state.NodeControl.Live.ContainsKey(node.Node) ? _state.NodePlan.GetValueOrDefault(node.Node) : null);
             return new Admin.NodeStatus(
@@ -4218,7 +4237,9 @@ internal sealed partial class GatewayRegistry : IDisposable
                 node.Quarantined.Length,
                 slot?.Host ?? node.Host,
                 node.LeaseExpires > now,
-                node.Spare || _state.SpareNodes.Contains(node.Node));
+                spare,
+                node is { Role: NodeRole.Regular, State: NodeState.Active, Serving: true } && !spare ? node.Activated ?? node.Registered : null,
+                rotation.TryGetValue(node.Node, out DateTimeOffset due) ? due : null);
         }).ToArray();
     }
 

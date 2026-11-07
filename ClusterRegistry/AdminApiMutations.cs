@@ -565,18 +565,26 @@ internal sealed partial class DirectGateway
     }
 
     /// <summary>One stable operator view of every connected session, with the authoritative
-    /// registry route (node/partition) when known. Registry values win over transport guesses.</summary>
+    /// registry placement (node/partition) when known. Registry values win over transport guesses.
+    /// SE-1241: the node is the partition's current owner, not the session's cached route, which
+    /// only joins and respawns set and handovers leave behind.</summary>
     private Admin.ClientSummary[] AdminClients() =>
-        _clients.Values.OrderBy(x => x.ClientId).Select(session => new Admin.ClientSummary(
-            session.ClientId,
-            session.Credential?.Name,
-            session.PlayerReady?.Identity.IdentityId,
-            session.AdmissionState,
-            session.Credential?.IsAdmin,
-            session.RegistryRoute?.Node,
-            session.RegistryRoute?.Partition,
-            session.ConnectedAt,
-            session.LastClientActivity)).ToArray();
+        _clients.Values.OrderBy(x => x.ClientId).Select(session =>
+        {
+            ClientRoute? route = session.RegistryRoute;
+            (ulong Partition, string? Node)? placement = _registry == null ? (route == null ? null : (route.Partition, route.Node))
+                : _registry.CurrentPlacement(session.ClientId, route?.Partition);
+            return new Admin.ClientSummary(
+                session.ClientId,
+                session.Credential?.Name,
+                session.PlayerReady?.Identity.IdentityId,
+                session.AdmissionState,
+                session.Credential?.IsAdmin,
+                placement?.Node,
+                placement?.Partition,
+                session.ConnectedAt,
+                session.LastClientActivity);
+        }).ToArray();
 
     private void AdminKickClient(HttpListenerContext context, AdminActor actor, ulong clientId)
     {

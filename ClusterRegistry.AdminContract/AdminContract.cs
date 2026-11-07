@@ -287,7 +287,9 @@ public sealed record ClusterCounts(
 
 public sealed record WorldAuthorityStatus(string? Node, long Epoch, long Generation, DateTimeOffset LeaseExpires);
 
-/// <summary>A registered node incarnation. <c>Spare</c>: a warm hot spare that holds nothing until it replaces a dead node.</summary>
+/// <summary>A registered node incarnation. <c>Spare</c>: a warm hot spare that holds nothing until it replaces a dead node.
+/// <c>ServingSince</c>: when a serving regular node started serving (the age rotation measures); <c>RotationDue</c>: when a
+/// managed deployment's rotation is expected to recycle it, an estimate that waits push back.</summary>
 public sealed record NodeStatus(
     string Node,
     string? SlotKey,
@@ -302,7 +304,9 @@ public sealed record NodeStatus(
     int QuarantinedPartitions,
     string? Host,
     bool LeaseFresh,
-    bool Spare = false);
+    bool Spare = false,
+    DateTimeOffset? ServingSince = null,
+    DateTimeOffset? RotationDue = null);
 
 public sealed record PartitionSummary(
     ulong Partition,
