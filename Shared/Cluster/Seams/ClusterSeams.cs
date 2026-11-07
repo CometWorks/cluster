@@ -63,6 +63,13 @@ public static class ClusterSeams
 	/// </summary>
 	public static volatile Func<Guid, string> RestoreFault;
 
+	/// <summary>
+	/// SE-1201: answers true for a client whose spawn preview switch the source skips (logged skipped=bench), so a lane
+	/// can keep an unspawned client on the node it routed it to without taking it through the switch at all. Read on
+	/// the game thread each time the client's medical screen previews a remote spawn point.
+	/// </summary>
+	public static volatile Func<ulong, bool> HoldPreviewSwitch;
+
 	private static volatile Action m_servicesInstalled;
 	private static volatile bool m_servicesWereInstalled;
 

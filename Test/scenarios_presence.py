@@ -182,10 +182,10 @@ def p2_prs_01(bench) -> None:
         # with no clients Mirrored stays empty by construction and this wait could never succeed.
         # Without this the leg timed out after 60 s on every run it has ever had (2026-09-19).
         # SE-1201: the unspawned client's medical screen previews the first respawn row at once, and the
-        # preview switches it to that row's node, client 1's (SE-1124). That left node-2 clientless, and
-        # node-1 with two clients refused the third one as ServerFull (the bench world's MaxPlayers is 2).
-        # node-1 refuses the switches (SE-1124's test knob), so client 2 stays put, as in P2-PRS-04.
-        record["previewRefusal"] = bench.cluster.node("node-1", "/respawn-execute-fault?mode=refuse&count=1000", "POST")
+        # preview switches it to that row's node, client 1's (SE-1124). That left node-2 clientless.
+        # node-2 holds client 2's switches (a test seam), so it stays put. Refusing them on node-1
+        # instead takes the client through the switch's rollback, which drops or strands it (SE-1215).
+        record["previewHold"] = bench.cluster.node("node-2", f"/preview-switch-hold?clients={CLIENT2_ID}", "POST")
         start_second_client(bench, route_node="node-2")
         # Chat-ready is NOT the same as mirror-ready: the mirror's targets are the node's clients
         # that already carry replication data, which arrives a moment after admission. Sampled
@@ -222,16 +222,9 @@ def p2_prs_01(bench) -> None:
         local_partition = _client_partition(_partitions(bench, "node-1"))
         if local_partition is None:
             raise ClusterError("the client's partition was not reported before the third client")
-        # Waited for, not sampled: the refused switch restores client 2 on node-2, and the restore can still
-        # drop it for a few seconds before Direct Transport rejoins (SE-1215).
-        backend2 = _nodes(bench)["node-2"].backend
-        try:
-            session2 = wait_until(lambda: (lambda s: s if s.get("backend") == backend2 else None)(_session(bench, CLIENT2_ID) or {}),
-                                  60, "the second client to be on node-2")
-        except ClusterError:
-            session2 = _session(bench, CLIENT2_ID) or {}
+        session2 = _session(bench, CLIENT2_ID) or {}
         bench.check("the second client is still on node-2 before the third client joins",
-                    session2.get("backend") == backend2, json.dumps(session2))
+                    session2.get("backend") == _nodes(bench)["node-2"].backend, json.dumps(session2))
         start_second_client(bench, route_node="node-1", partition=local_partition,
                             client_id=CLIENT3_ID, remote_port=CLIENT3_PORT)
         key3 = wait_until(lambda: next(((row["steamId"], row["serialId"])
