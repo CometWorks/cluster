@@ -348,9 +348,9 @@ public static class RespawnRegistryService
 			lock (Sync) m_restores.Remove(restore);
 			if (notReady != null)
 			{
-				// Last resort, the old behaviour: a client this node cannot take in rejoins.
+				// Last resort: a client this node cannot take in rejoins.
 				Console.WriteLine($"[ClusterPlugin] spawn switch restore abandoned operation={restore.OperationId:D} user={restore.UserId} reason={notReady}");
-				if (ReplicationServerPatch.HasClient(restore.UserId)) MyMultiplayer.Static?.DisconnectClient(restore.UserId);
+				if (ReplicationServerPatch.HasClient(restore.UserId)) ReconnectThroughGateway(restore.UserId, "spawn-switch-restore-failed");
 				continue;
 			}
 			RemotePullService.ForgetDemands(restore.UserId);
@@ -370,6 +370,35 @@ public static class RespawnRegistryService
 				MyMultiplayer.RaiseStaticEvent((IMyEventOwner s) => MyPlayerCollection.OnRespawnRequestFailure, restore.SerialId,
 					new EndpointId(restore.UserId));
 		}
+	}
+
+	/// <summary>
+	/// SE-1199: sends a client this node has to give up back to the main menu through the Gateway, with vanilla's "server
+	/// left" message, and the client's reconnector joins again. A plain DisconnectClient only detaches the client at the
+	/// Gateway: a Steam client never learns its session ended, its next packet re-opens one to this node, which waits for a
+	/// join that never comes, and the player sits "Game paused" with an empty spawn list until the rejoin grace closes it
+	/// (octahedron-test 2026-11-06 19:07:21-19:09:57Z, SE-1189). The same non-punitive reconnect the control-liveness rescue
+	/// uses (ControlReassertService); DisconnectClient stays the fallback while the Gateway does not answer.
+	/// </summary>
+	private static void ReconnectThroughGateway(ulong userId, string cause)
+	{
+		Task.Run(() =>
+		{
+			try
+			{
+				using HttpResponseMessage response = Gateway.PostAsync(
+					Environment.GetEnvironmentVariable("CLUSTER_GATEWAY_REGISTRY")?.TrimEnd('/')
+					+ $"/admission/kick?reason=reconnect&cause={cause}&user={userId}", null).GetAwaiter().GetResult();
+				response.EnsureSuccessStatusCode();
+				Console.WriteLine($"[ClusterPlugin] client {userId} sent back to the menu through the Gateway: {cause}");
+			}
+			catch (Exception exception)
+			{
+				Console.WriteLine($"[ClusterPlugin] Gateway reconnect of client {userId} failed, disconnecting it here: "
+					+ SecretRedactor.Redact(exception.Message));
+				MySandboxGame.Static?.Invoke(() => MyMultiplayer.Static?.DisconnectClient(userId), "ClusterPlugin restore disconnect");
+			}
+		});
 	}
 
 	private static bool HasPendingRespawn(ulong userId)
