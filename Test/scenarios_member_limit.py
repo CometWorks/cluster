@@ -52,7 +52,7 @@ def _handover(bench, partition: int, source: str, target: str):
 
     def answered():
         answers.append(_try(bench.cluster.post, url, timeout=300))
-        return None if "still joining" in str(answers[-1]) else answers[-1]
+        return None if "still joining" in str(answers[-1]) else (answers[-1] or "answered")
 
     return _poll(answered, 60, 2) or answers[-1]
 
