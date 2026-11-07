@@ -2420,6 +2420,9 @@ def p2_wa_store_timeout(bench) -> None:
     thread, then the payer's reserve. Each time the money of both parties must add up to what they had, the trade
     either happening once (credit) or not at all (reserve), and the node's game thread must not wait for a credit."""
     _wa_cluster(bench)
+    selftest = _try(bench, "node-1", "/self-test?section=store-payment-settle") or {}
+    bench.check("node self-test store-payment-settle (late credit, reserve and refund answers, refused legs)",
+                selftest.get("ok") is True and selftest.get("ran") == ["store-payment-settle"], json.dumps(selftest)[:300])
 
     def accounts(tag: int) -> tuple[int, int]:
         payer, payee = 912260000000000000 + tag * 1000 + random.randrange(1000), 922260000000000000 + tag * 1000 + random.randrange(1000)

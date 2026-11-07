@@ -74,6 +74,12 @@ internal static class StorePaymentJournal
 		Enqueue(new Work(change, new Entry("reserve", reserveId, refundId, payer, amount), commit, true, "settled"));
 	}
 
+	/// <summary>Self-test: settles one payment on the calling thread, as the background worker would.</summary>
+	internal static void SettleNow(Func<long, long, Guid, bool> change, Guid reserveId, Guid refundId, long payer, long amount, bool reserved,
+		Guid creditId = default, long payee = 0, long credit = 0)
+		=> Settle(new Work(change, new Entry("reserve", reserveId, refundId, payer, amount),
+			creditId == Guid.Empty ? null : new Entry("commit", reserveId, refundId, payer, amount, creditId, payee, credit), reserved, "self-test"));
+
 	private static void Append(Entry entry)
 	{
 		if (!m_ready) return;
