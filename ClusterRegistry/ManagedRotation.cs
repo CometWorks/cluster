@@ -42,11 +42,10 @@ internal sealed partial class GatewayRegistry
         double lifetime = RotationSeconds(RotationLifetimeKey, 7200);
         if (lifetime <= 0 || _state.Phase != ClusterPhase.Serving) return false;
         NodeRegistration[] regulars = [.. _state.Nodes.Values.Where(x => x.Role == NodeRole.Regular && x.State == NodeState.Active)];
-        NodeRegistration[] serving = [.. regulars.Where(x => x.Serving && !x.Spare && !_state.SpareNodes.Contains(x.Node)
-            && !_state.Scale.Retiring.Contains(x.Node) && NodeLeaseLive(x, now))];
+        NodeRegistration[] serving = RotationOrder(regulars, now);
         if (serving.Length == 0) return false;
         TimeSpan spacing = TimeSpan.FromSeconds(lifetime / serving.Length);
-        NodeRegistration oldest = serving.OrderBy(x => x.Activated ?? x.Registered).ThenBy(x => x.Node, StringComparer.Ordinal).First();
+        NodeRegistration oldest = serving[0];
         TimeSpan age = now - (oldest.Activated ?? oldest.Registered);
         if (age < spacing || _state.LastManagedRotationAt is { } last && now - last < spacing) return false;
         string? wait = _state.Scale.Retiring.Count != 0 ? "a node is retiring"
@@ -89,6 +88,35 @@ internal sealed partial class GatewayRegistry
         Console.WriteLine($"Rotation: recycling {oldest.Node} epoch={oldest.Epoch} after {Duration(age)} of serving "
             + $"({OwnedPartitions(oldest.Node)} partition(s)); hot spare {spare.Node} takes its place, its slot restarts as the spare");
         return true;
+    }
+
+    /// <summary>The serving regular nodes rotation may recycle, oldest serving first: the order it recycles them in.</summary>
+    private NodeRegistration[] RotationOrder(IEnumerable<NodeRegistration> regulars, DateTimeOffset now) =>
+        [.. regulars.Where(x => x.Serving && !x.Spare && !_state.SpareNodes.Contains(x.Node) && !_state.Scale.Retiring.Contains(x.Node)
+            && NodeLeaseLive(x, now)).OrderBy(x => x.Activated ?? x.Registered).ThenBy(x => x.Node, StringComparer.Ordinal)];
+
+    /// <summary>
+    /// SE-1241: when each serving regular node is expected to be recycled, for the operator view. The same rule as
+    /// <see cref="ManagedRotationStep"/>: oldest first, each once it has served one spacing (lifetime / n) and one
+    /// spacing after the rotation before it. An estimate: a wait (a recovery, no live spare) pushes them all back.
+    /// Empty when the deployment is not managed or rotation is off.
+    /// </summary>
+    private Dictionary<string, DateTimeOffset> RotationSchedule(DateTimeOffset now)
+    {
+        Dictionary<string, DateTimeOffset> due = new(StringComparer.Ordinal);
+        double lifetime = RotationSeconds(RotationLifetimeKey, 7200);
+        if (_state.ManagedDeployment is null || lifetime <= 0) return due;
+        NodeRegistration[] serving = RotationOrder(_state.Nodes.Values.Where(x => x.Role == NodeRole.Regular && x.State == NodeState.Active), now);
+        if (serving.Length == 0) return due;
+        TimeSpan spacing = TimeSpan.FromSeconds(lifetime / serving.Length);
+        DateTimeOffset next = _state.LastManagedRotationAt is { } last ? last + spacing : now;
+        foreach (NodeRegistration node in serving)
+        {
+            DateTimeOffset at = new[] { next, (node.Activated ?? node.Registered) + spacing, now }.Max();
+            due[node.Node] = at;
+            next = at + spacing;
+        }
+        return due;
     }
 
     private bool AdvanceManagedRecycle(ManagedRecycle recycle, DateTimeOffset now)

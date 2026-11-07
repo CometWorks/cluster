@@ -341,6 +341,7 @@ internal static partial class SelfTest
                 Own(partition, node);
             registry.SetHandoverConfig(new Dictionary<string, string?> { [GatewayRegistry.RotationLifetimeKey] = "0" });
             Check(Tick(500) == null, "lifetime 0 never recycles");
+            Check(registry.AdminNodes().All(x => x.RotationDue == null), "lifetime 0 estimates no rotation");
             registry.SetHandoverConfig(new Dictionary<string, string?>
                 { [GatewayRegistry.RotationLifetimeKey] = "400", [GatewayRegistry.RotationDrainTimeoutKey] = "120" });
 
@@ -348,8 +349,16 @@ internal static partial class SelfTest
             string spare = "s1";
             for (int round = 0; round < 5; round++)
             {
+                // SE-1241: the operator view's estimate is when the recycle happens, oldest first; the spare has no age.
+                Admin.NodeStatus[] estimate = registry.AdminNodes();
+                Admin.NodeStatus first = estimate.Where(x => x.RotationDue != null).MinBy(x => x.RotationDue)!;
+                Check(estimate.Count(x => x.RotationDue != null && x.ServingSince != null) == 4
+                    && estimate.Single(x => x.Node == spare) is { ServingSince: null, RotationDue: null },
+                    $"round {round}: the four serving nodes have an age and a rotation estimate, the spare neither");
                 string? node = Tick(200);
                 Check(node != null, $"round {round}: a node is recycled within 200 s");
+                Check(node == first.Node && now >= first.RotationDue && now - first.RotationDue <= TimeSpan.FromSeconds(1),
+                    $"round {round}: {node} recycled at {now}, estimated {first.Node} at {first.RotationDue}");
                 recycled.Add((node!, now));
                 Check(!Live(spare).Spare && Live(spare).Activated == now, $"{node}: the spare {spare} is activated");
                 Check(registry.PreferredDrainReceiver(node!) == spare, $"{node}: drains into {spare}");
