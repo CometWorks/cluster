@@ -48,7 +48,7 @@ from __future__ import annotations
 import json
 import time
 
-from cluster import ClusterError, wait_until
+from cluster import ClusterError, ClusterHttpError, wait_until
 from scenarios_core import CLIENT_ID, _client_partition, _handover_url, _lines, _nodes, _partitions
 from scenarios_core import _owners, _wait_line
 from scenarios_wa import CLIENT2_ID, CLIENT2_PORT, CLIENT3_ID, CLIENT3_PORT, _session, start_second_client
@@ -222,9 +222,16 @@ def p2_prs_01(bench) -> None:
         local_partition = _client_partition(_partitions(bench, "node-1"))
         if local_partition is None:
             raise ClusterError("the client's partition was not reported before the third client")
-        session2 = _session(bench, CLIENT2_ID) or {}
+        # Waited for, not sampled: the refused switch restores client 2 on node-2, and the restore can still
+        # drop it for a few seconds before Direct Transport rejoins (SE-1215).
+        backend2 = _nodes(bench)["node-2"].backend
+        try:
+            session2 = wait_until(lambda: (lambda s: s if s.get("backend") == backend2 else None)(_session(bench, CLIENT2_ID) or {}),
+                                  60, "the second client to be on node-2")
+        except ClusterError:
+            session2 = _session(bench, CLIENT2_ID) or {}
         bench.check("the second client is still on node-2 before the third client joins",
-                    session2.get("backend") == _nodes(bench)["node-2"].backend, json.dumps(session2))
+                    session2.get("backend") == backend2, json.dumps(session2))
         start_second_client(bench, route_node="node-1", partition=local_partition,
                             client_id=CLIENT3_ID, remote_port=CLIENT3_PORT)
         key3 = wait_until(lambda: next(((row["steamId"], row["serialId"])
@@ -307,8 +314,16 @@ def p2_prs_01(bench) -> None:
         if partition is None:
             raise ClusterError("the client's partition was not reported before the traversal")
         suppressed_before = len(_lines(bench, "node-2", r"traversal (join|leave) toast suppressed"))
-        record["handover"] = bench.cluster.post(
-            _handover_url(bench, partition, client=CLIENT_ID), timeout=300)
+        # The Gateway refuses the handover while client 3, placed in this partition, joined under 10 s ago
+        # (PostReadySettle, T-0296): asked again until it settles.
+        def handover():
+            try:
+                return bench.cluster.post(_handover_url(bench, partition, client=CLIENT_ID), timeout=300)
+            except ClusterHttpError as error:
+                if error.status == 409 and "still joining" in str(error):
+                    return None
+                raise
+        record["handover"] = wait_until(handover, 60, "the Gateway to accept the traversal handover")
         moved = wait_until(
             lambda: next((row for row in _cluster_players(bench, "wa-1")
                           if (row["steamId"], row["serialId"]) == key and row["node"] == "node-2"), None),
