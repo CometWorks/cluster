@@ -16,6 +16,11 @@
   client back unpaused. Then a fast flight splits the kit's partition after the click and before the Gateway's switch,
   which retires the partition the request names (Viktor at Alpha on octahedron-test, 2026-11-06 19:07Z): the preview
   must follow the kit to its new partition.
+* ``P2-WA-06h`` - SE-1199, the last resort after a failed switch: the bench refuses the switch and also fails the
+  node's restore, so the node has to give the client up. The Gateway must send it back to the main menu with vanilla's
+  "server left" message (a forced reconnect named spawn-switch-restore-failed), not just detach it: a Steam client
+  never notices a detach, re-opens its session to the node and sits "Game paused" with an empty spawn list
+  (octahedron-test 2026-11-06 19:07Z). The client must then rejoin on its own and respawn at the kit.
 
 The Respawn button is checked through ``respawnButtonEnabled`` before it is clicked: the Remote API's click raises
 the button's event even when the button is disabled, which is how the older respawn scenarios passed while players
@@ -445,10 +450,44 @@ def p2_wa_06g(bench) -> None:
     bench.exercised(kit=entity, grid=grid, refused=refused["switchFailed"], retired=partition, mover=mover)
 
 
+def p2_wa_06h(bench) -> None:
+    """A node that cannot take back a client after a failed preview switch has the Gateway send it to the main menu,
+    and the client rejoins and respawns (SE-1199)."""
+    api, entity, grid, name = _kit_on_node1(bench)
+    _own_partition_on(bench, grid, "node-2")
+    _kill(bench, CLIENT_ID)
+    before = _session_of(bench, CLIENT_ID) or {}
+    bench.record("refuse-armed", bench.cluster.node("node-2", "/respawn-switch-fault?mode=refuse&count=1", "POST"))
+    bench.record("restore-fault-armed", bench.cluster.node("node-2", "/respawn-restore-fault?count=1", "POST"))
+    _medical_click(bench, api, name)
+    abandoned = _poll(lambda: _lines(bench, "node-2", r"spawn switch restore abandoned"), 60)
+    bench.record("abandoned", abandoned)
+    _require(bench, "the bench failed node-2's restore and node-2 gave the client up", bool(abandoned))
+    # The Gateway logs a forced reconnect, the vanilla "server left" control message ahead of the transport disconnect.
+    # A bare node-side disconnect shows up as "disconnected: DisconnectPeerCalled" instead.
+    forced = _poll(lambda: _lines(bench, "gateway", rf"Force reconnect client {CLIENT_ID}: spawn-switch-restore-failed"), 30)
+    bench.record("gateway-lines", _lines(bench, "gateway", rf"client {CLIENT_ID}\b|Client {CLIENT_ID}\b|user {CLIENT_ID}\b"))
+    bench.check("the Gateway sent the client to the main menu with the reason spawn-switch-restore-failed", bool(forced))
+    rejoined = _poll(lambda: (lambda s: s if s.get("connectedAt") not in (None, before.get("connectedAt")) else None)(
+        _session_of(bench, CLIENT_ID) or {}), 90)
+    bench.record("rejoined", rejoined)
+    _require(bench, "the client rejoined with a new session", rejoined is not None)
+    medical = _poll(lambda: _medical_screen(api) is not None or None, 120)
+    bench.screenshot(CLIENT_ID, "after-rejoin")
+    _require(bench, "after the rejoin the client is on the medical screen", bool(medical))
+    _reselect(bench, api)
+    respawned = _preview_and_respawn(bench, api, "after-rejoin", name, grid)
+    bench.check("after the rejoin the client respawned on node-1, where the kit is", respawned["node"] == "node-1",
+                str(respawned["node"]))
+    bench.exercised(kit=entity, grid=grid, abandoned=abandoned[-1:], forced=forced[-1:] if forced else None)
+
+
 SCENARIOS_SPAWN_PREVIEW = {
     "P2-WA-06d": (p2_wa_06d, "the respawn screen previews a spawn point on another node or offline (SE1-0122)", "3"),
     "P2-WA-06e": (p2_wa_06e, "a refused spawn preview switch keeps the client on its node, unpaused (SE-1124)", "3"),
     "P2-WA-06f": (p2_wa_06f, "a split of the kit's partition during a spawn preview switch does not fail it (SE-1124)", "3"),
     "P2-WA-06g": (p2_wa_06g, "a preview switch failing before the Gateway moves the client keeps it, and one whose kit "
                   "partition was split away follows the kit (SE-1189)", "3"),
+    "P2-WA-06h": (p2_wa_06h, "a node that cannot take back a client after a failed preview switch has the Gateway send "
+                  "it to the main menu, and the client rejoins and respawns (SE-1199)", "3"),
 }

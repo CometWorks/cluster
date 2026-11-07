@@ -57,6 +57,12 @@ public static class ClusterSeams
 	/// </summary>
 	public static volatile Action<ClusterRespawnExecution> BeforeSwitchPost;
 
+	/// <summary>
+	/// SE-1199: asked on the game thread before a node takes back a client whose switch failed, with the switch's operation
+	/// id. A reason returned here fails that restore, so a bench can reach the last resort that ends the client's session.
+	/// </summary>
+	public static volatile Func<Guid, string> RestoreFault;
+
 	private static volatile Action m_servicesInstalled;
 	private static volatile bool m_servicesWereInstalled;
 

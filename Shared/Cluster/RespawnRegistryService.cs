@@ -332,6 +332,7 @@ public static class RespawnRegistryService
 			string notReady;
 			try
 			{
+				if (ClusterSeams.RestoreFault?.Invoke(restore.OperationId) is { } fault) throw new InvalidOperationException(fault);
 				bool ready = ReplicationServerPatch.IsClientReady(restore.UserId);
 				// The planet sectors went with the view; adoption needs an empty sector set.
 				if (!ready) ReplicationServerPatch.StateFor(restore.UserId)?.KnownSectors.Clear();
