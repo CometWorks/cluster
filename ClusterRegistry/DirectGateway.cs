@@ -5898,11 +5898,20 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             NodeRegistration targetNode;
             if (pod)
             {
-                targetNode = registry.Nodes().Single(node => node.Node == request.Origin
-                    && node.Role == NodeRole.Regular && node.State == NodeState.Active);
+                targetNode = registry.Nodes().SingleOrDefault(node => node.Node == request.Origin
+                    && node.Role == NodeRole.Regular && node.State == NodeState.Active)
+                    ?? throw new RegistryConflictException("Respawn target node is not active");
             }
             else
             {
+                // SE-1189: the client's list names the medbay's partition as it was when the list loaded, and a trader
+                // leaving the station splits that partition every few minutes. A preview follows it to the partition
+                // that holds the grid now; the retired row has no node, and the switch used to fail on it.
+                if (preview)
+                {
+                    ulong live = registry.LivePartitionOf(request.PartitionId, request.GridEntityId);
+                    if (live != request.PartitionId) request = request with { PartitionId = live };
+                }
                 PartitionOwnership owner = registry.GetPartitionOwner(request.PartitionId);
                 // The source node detached the client's view before asking, so a failed switch costs the client a
                 // reconnect. A preview just follows a medbay that moved in the meantime; the target checks it holds it.
@@ -5910,8 +5919,9 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     request = request with { Origin = owner.Node, Generation = owner.Generation };
                 if (owner.Node != request.Origin || owner.Generation != request.Generation)
                     throw new RegistryConflictException("Respawn partition ownership changed");
-                targetNode = registry.Nodes().Single(node => node.Node == owner.Node && node.Epoch == owner.Epoch
-                    && node.Role == NodeRole.Regular && node.State == NodeState.Active);
+                targetNode = registry.Nodes().SingleOrDefault(node => node.Node == owner.Node && node.Epoch == owner.Epoch
+                    && node.Role == NodeRole.Regular && node.State == NodeState.Active)
+                    ?? throw new RegistryConflictException("Respawn partition has no active owner");
             }
             if (string.IsNullOrWhiteSpace(targetNode.ControlEndpoint))
                 throw new RegistryConflictException("Respawn target has no control endpoint");

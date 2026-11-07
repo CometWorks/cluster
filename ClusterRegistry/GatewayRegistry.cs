@@ -3807,9 +3807,19 @@ internal sealed partial class GatewayRegistry : IDisposable
     /// <see cref="RepointClientState"/> covered homes still names a retired id in the persisted
     /// state, and the join must land on the body, not on the default backend.
     /// </summary>
-    private ulong LiveHomePartition(CharacterHome home)
+    private ulong LiveHomePartition(CharacterHome home) => LivePartition(home.Partition, home.Entity);
+
+    /// <summary>
+    /// SE-1189: the partition that holds <paramref name="entity"/> today, from one that may have been split or merged
+    /// away since: a respawn screen's list names the medbay's partition as it was when the list loaded.
+    /// </summary>
+    public ulong LivePartitionOf(ulong partition, long entity)
     {
-        ulong partition = home.Partition;
+        lock (_lock) return LivePartition(partition, entity);
+    }
+
+    private ulong LivePartition(ulong partition, long entity)
+    {
         // Every hop is one index lookup, and there is no small hop budget: a pilot away for three
         // days came back to a home 146-351 merges and splits behind the live partition (w29
         // 2026-09-08 06:16, Pilot-011/012/014/016/018/019/022), and a 64-hop cap left every one of
@@ -3823,7 +3833,7 @@ internal sealed partial class GatewayRegistry : IDisposable
             if (retiring == null) break;
             ulong[] outputIds = retiring.Outputs.Select(x => x.Partition).ToArray();
             ulong next = retiring.Kind == LineageKind.Merge ? outputIds[0]
-                : outputIds.FirstOrDefault(id => retiring.Members.TryGetValue(id, out long[]? held) && held.Contains(home.Entity));
+                : outputIds.FirstOrDefault(id => retiring.Members.TryGetValue(id, out long[]? held) && held.Contains(entity));
             if (next == 0) next = outputIds.MaxBy(id => retiring.Members.TryGetValue(id, out long[]? held) ? held.Length : 0);
             if (next == 0 || next == partition) break;
             partition = next;

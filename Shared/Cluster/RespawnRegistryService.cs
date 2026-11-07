@@ -286,6 +286,7 @@ public static class RespawnRegistryService
 			{
 				try
 				{
+					ClusterSeams.BeforeSwitchPost?.Invoke(request);
 					ClusterRespawnExecutionResult result = PostSwitch(request);
 					Console.WriteLine($"[ClusterPlugin] spawn preview switch operation={operationId:D} success={result.Success}");
 				}
@@ -335,7 +336,7 @@ public static class RespawnRegistryService
 				// The planet sectors went with the view; adoption needs an empty sector set.
 				if (!ready) ReplicationServerPatch.StateFor(restore.UserId)?.KnownSectors.Clear();
 				notReady = AdoptSwitchedClient(restore.OperationId, restore.UserId, restore.SerialId, restore.IdentityId,
-					ready ? null : restore.ClientState, out _);
+					ready ? null : restore.ClientState, out _, ownBindings: true);
 			}
 			catch (Exception exception)
 			{
@@ -585,8 +586,12 @@ public static class RespawnRegistryService
 	/// player here. Null when both are in place, else why not yet. Game thread. Used by the node a switch goes to,
 	/// and since SE-1124 by the node a failed switch comes back to.
 	/// </summary>
+	/// <param name="ownBindings">SE-1189: the node a failed switch comes back to adopts the client with the bindings it has
+	/// here. A switch that failed before the Gateway moved the backend leaves the player in place, its body still its
+	/// character, and the detached state's empty bindings refused the restore: the client was disconnected and a Steam
+	/// client sat "Paused" (octahedron-test 2026-11-06 19:07Z).</param>
 	private static string AdoptSwitchedClient(Guid operationId, ulong userId, int serialId, long identityId, string clientState,
-		out MyPlayer player)
+		out MyPlayer player, bool ownBindings = false)
 	{
 		var playerId = new MyPlayer.PlayerId(userId, serialId);
 		player = MySession.Static?.Players.GetPlayerById(playerId);
@@ -596,7 +601,7 @@ public static class RespawnRegistryService
 		if (!string.IsNullOrEmpty(clientState) && !AdoptedOperations.Contains(operationId))
 		{
 			if (!ReplicationServerPatch.HasClient(userId)) return "client-view-absent";
-			int adopted = ClusterControlServer.AdoptClientView(userId, clientState);
+			int adopted = ClusterControlServer.AdoptClientView(userId, clientState, ownBindings);
 			AdoptedOperations.Add(operationId);
 			Console.WriteLine($"[ClusterPlugin] respawn execute operation={operationId:D} adopted={adopted}");
 		}
