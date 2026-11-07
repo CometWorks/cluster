@@ -346,6 +346,9 @@ public static class RespawnRegistryService
 			if (notReady != null && !notReady.StartsWith("failed", StringComparison.Ordinal)
 				&& ClusterRuntime.LocalMilliseconds < restore.Deadline) continue;
 			lock (Sync) m_restores.Remove(restore);
+			// SE-1199: either way the client asks for the preview again, back here or after its rejoin, and the 10 s demand
+			// cooldown of the failed request silently dropped the rejoined client's first one, which its screen never repeats.
+			RemotePullService.ForgetDemands(restore.UserId);
 			if (notReady != null)
 			{
 				// Last resort: a client this node cannot take in rejoins.
@@ -353,7 +356,6 @@ public static class RespawnRegistryService
 				if (ReplicationServerPatch.HasClient(restore.UserId)) ReconnectThroughGateway(restore.UserId, "spawn-switch-restore-failed");
 				continue;
 			}
-			RemotePullService.ForgetDemands(restore.UserId);
 			Console.WriteLine($"[ClusterPlugin] spawn switch restored operation={restore.OperationId:D} user={restore.UserId}"
 				+ (restore.Retry != null ? $" failures={restore.Retry.Failures}" : restore.Pod ? " pod" : " preview"));
 			if (restore.Retry != null && restore.Retry.Failures < MaxSwitchFailures)
