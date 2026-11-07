@@ -25,6 +25,8 @@ public static class MyBankingSystemPatch
 	private static volatile MySession m_readySession;
 	[ThreadStatic] private static bool m_applying;
 	private static double m_nextRefresh;
+	private static long m_testDelayOwner;
+	private static int m_testDelayMilliseconds;
 
 	public static void Install()
 	{
@@ -147,7 +149,10 @@ public static class MyBankingSystemPatch
 			{
 				// Chaos-test knob: hold the mutation in flight on the authority's game thread so a
 				// lane can kill the WA mid-execution deterministically. Zero in production traffic.
-				if (request.DelayMilliseconds > 0) Thread.Sleep(request.DelayMilliseconds);
+				int delay = request.DelayMilliseconds;
+				if (request.Kind == "Change" && Interlocked.CompareExchange(ref m_testDelayOwner, 0, request.OwnerId) == request.OwnerId)
+					delay = Math.Max(delay, Volatile.Read(ref m_testDelayMilliseconds));
+				if (delay > 0) Thread.Sleep(delay);
 				bool success;
 				switch (request.Kind)
 				{
@@ -190,6 +195,17 @@ public static class MyBankingSystemPatch
 		if (Thread.CurrentThread == game.UpdateThread) execute();
 		else game.Invoke(execute, "ClusterPlugin banking command");
 		return completion.Task.GetAwaiter().GetResult();
+	}
+
+	/// <summary>
+	/// SE-1226 chaos-test knob: the next balance change of <paramref name="ownerId"/> waits this long on the authority's
+	/// game thread before it applies, as the live World Authority stalled while a node waited for its answer. Zero in
+	/// production traffic.
+	/// </summary>
+	internal static void DelayNextChange(long ownerId, int milliseconds)
+	{
+		Volatile.Write(ref m_testDelayMilliseconds, milliseconds);
+		Interlocked.Exchange(ref m_testDelayOwner, ownerId);
 	}
 
 	private static void ApplySnapshot(string payload)
