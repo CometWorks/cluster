@@ -44,6 +44,19 @@ def _ready_on(bench, client: int, node: str):
     ) or None
 
 
+def _handover(bench, partition: int, source: str, target: str):
+    """The handover's answer. The Gateway refuses one while a client placed in the partition joined under 10 s ago
+    (PostReadySettle), and the lane asks right after its clients joined: asked again until it settles."""
+    url = _handover_url(bench, partition, source=source, target=target, client=CLIENT_ID)
+    answers = []
+
+    def answered():
+        answers.append(_try(bench.cluster.post, url, timeout=300))
+        return None if "still joining" in str(answers[-1]) else answers[-1]
+
+    return _poll(answered, 60, 2) or answers[-1]
+
+
 def p2_member_limit(bench) -> None:
     """Three clients on one node of a world with MaxPlayers=2: a third login and a third arrival by handover."""
     _join(bench)
@@ -88,9 +101,7 @@ def p2_member_limit(bench) -> None:
     # -- leg 2: the third member arrives by handover --
     # Client 1's partition goes away and comes back; whichever clients travel with it arrive as vanilla joins, and
     # node-1 holds three clients once they are all back.
-    away = _try(
-        bench.cluster.post, _handover_url(bench, home, source=node, target=other, client=CLIENT_ID), timeout=300
-    )
+    away = _handover(bench, home, node, other)
     moved = _poll(lambda: _ready_on(bench, CLIENT_ID, other), 60)
     bench.record(
         "handover-away",
@@ -100,9 +111,7 @@ def p2_member_limit(bench) -> None:
         bench, f"SETUP: client 1 moved to {other}", moved is not None, json.dumps(_session(bench, CLIENT_ID))[:300]
     )
     before = {c: len(_refused(bench, node, c)) for c in clients}
-    back = _try(
-        bench.cluster.post, _handover_url(bench, home, source=other, target=node, client=CLIENT_ID), timeout=300
-    )
+    back = _handover(bench, home, other, node)
     returned = _poll(lambda: all(_ready_on(bench, c, node) for c in clients) or None, CLIENT_TIMEOUT)
     members = _members(bench, node)
     refused = {c: _refused(bench, node, c)[before[c] :] for c in clients}
