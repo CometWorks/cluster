@@ -4312,11 +4312,15 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // undoing the very promise it exists to keep.
                 bool reconnect = string.Equals(context.Request.QueryString["reason"], "reconnect",
                     StringComparison.OrdinalIgnoreCase);
+                // SE-1199: a node names why it gives a client up (cause=spawn-switch-restore-failed); the
+                // control-liveness rescue sends none. Logged and listed in recentDisconnects only.
+                string cause = context.Request.QueryString["cause"] is { Length: > 0 and <= 64 } named
+                    && named.All(c => char.IsAsciiLetterOrDigit(c) || c == '-') ? named : "control-liveness-reconnect";
                 if (!reconnect) _admission.Kick(user);
                 if (_clients.TryGetValue(user, out ClientSession? kicked))
-                    ForceReconnect(kicked, reconnect ? "control-liveness-reconnect" : "kicked-by-admins");
+                    ForceReconnect(kicked, reconnect ? cause : "kicked-by-admins");
                 Console.WriteLine(reconnect
-                    ? $"Forced reconnect for user {user} (control liveness); admission cooldown not armed"
+                    ? $"Forced reconnect for user {user} ({cause}); admission cooldown not armed"
                     : $"Admin kicked user {user}");
                 WriteJson(context, 200, new { user, kicked = true, cooldown = !reconnect });
                 return;

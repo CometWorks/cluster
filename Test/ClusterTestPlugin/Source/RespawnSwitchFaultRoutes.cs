@@ -50,6 +50,41 @@ internal static class RespawnSwitchFaultRoutes
             TestRoutes.Json(context, 200, Status());
         });
         TestRoutes.Add("GET", "/respawn-switch-fault", context => TestRoutes.Json(context, 200, Status()));
+        // POST /respawn-restore-fault?count=N - SE-1199: fail the next N restores of a client whose switch failed, so the
+        // node gives the client up (the last resort). {remaining, failed}.
+        TestRoutes.Add("POST", "/respawn-restore-fault", context =>
+        {
+            int count = (int)TestRoutes.Long(context, "count");
+            lock (Sync)
+            {
+                m_restoreFaults = count;
+                RestoreFailed.Clear();
+            }
+            ClusterSeams.RestoreFault = count > 0 ? FailRestore : null;
+            Plugin.Log($"respawn-restore-fault count={count} (SE-1199)");
+            TestRoutes.Json(context, 200, RestoreStatus());
+        });
+        TestRoutes.Add("GET", "/respawn-restore-fault", context => TestRoutes.Json(context, 200, RestoreStatus()));
+    }
+
+    private static int m_restoreFaults;
+    private static readonly List<Guid> RestoreFailed = new List<Guid>();
+
+    private static object RestoreStatus()
+    {
+        lock (Sync) return new { remaining = m_restoreFaults, failed = RestoreFailed.ToArray() };
+    }
+
+    private static string FailRestore(Guid operationId)
+    {
+        lock (Sync)
+        {
+            if (m_restoreFaults <= 0) return null;
+            m_restoreFaults--;
+            RestoreFailed.Add(operationId);
+        }
+        Plugin.Log($"spawn switch restore operation={operationId:D} failed by the bench (SE-1199)");
+        return "restore failed by the SE-1199 bench";
     }
 
     private static object Status()
