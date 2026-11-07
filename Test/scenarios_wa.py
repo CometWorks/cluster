@@ -2409,6 +2409,69 @@ def _broadcast_chat(bench, ctx, node_id: str, identity: int, author: str) -> str
     return text
 
 
+STORE_WA_DELAY_MS = 7000  # past the node's 5 s World Authority command timeout
+
+
+def p2_wa_store_timeout(bench) -> None:
+    """SE-1226: a store payment leg the World Authority answers after the node's 5 s command timeout. On
+    octahedron-test the WA's game thread stalled for 10 s while trader ships sold at station stores; the credit
+    timed out on the node, the payment scope refunded the payer, and the WA applied the late credit as well, so the
+    amount existed twice (about 453,000 SC on 2026-11-07). Here the WA holds the payee's credit for 7 s on its game
+    thread, then the payer's reserve. Each time the money of both parties must add up to what they had, the trade
+    either happening once (credit) or not at all (reserve), and the node's game thread must not wait for a credit."""
+    _wa_cluster(bench)
+
+    def accounts(tag: int) -> tuple[int, int]:
+        payer, payee = 912260000000000000 + tag * 1000 + random.randrange(1000), 922260000000000000 + tag * 1000 + random.randrange(1000)
+        for owner, balance in ((payer, 1000), (payee, 0)):
+            _post(bench, "node-1", f"/banking-test-create?ownerId={owner}&balance={balance}")
+        _require(bench, f"the leg {tag} accounts exist at the WA",
+                 _poll(lambda: _wa_balance(bench, payer) == 1000 and _wa_balance(bench, payee) == 0, HANDOVER_TIMEOUT))
+        return payer, payee
+
+    def pay(payer: int, payee: int) -> tuple[dict | None, float]:
+        started = time.monotonic()
+        answer = _try(bench, "node-1", f"/banking-test-store-payment?payerId={payer}&payeeId={payee}&amount=300&commit=true",
+                      method="POST")
+        return answer, time.monotonic() - started
+
+    def settle(payer: int, payee: int, expected: tuple[int, int]) -> dict:
+        # Past the WA's hold and one more answer, whatever the node does; then the balances must stay put.
+        reached = _poll(lambda: (_wa_balance(bench, payer), _wa_balance(bench, payee)) == expected, STORE_WA_DELAY_MS / 1000 + 15)
+        first = (_wa_balance(bench, payer), _wa_balance(bench, payee))
+        time.sleep(3)
+        return {"reached": bool(reached), "balances": first, "later": (_wa_balance(bench, payer), _wa_balance(bench, payee))}
+
+    # Credit leg: the reserve applies at once, the credit only after the node gave up waiting for it.
+    payer, payee = accounts(1)
+    _post(bench, "wa-1", f"/banking-test-delay?ownerId={payee}&ms={STORE_WA_DELAY_MS}")
+    answer, seconds = pay(payer, payee)
+    credit = {"answer": answer, "seconds": round(seconds, 2), **settle(payer, payee, (700, 300))}
+    bench.record("store-timeout-credit", credit)
+    bench.check("a late credit does not hold the node's game thread (store payment answered within 2 s)",
+                answer is not None and answer.get("approved") and seconds < 2, json.dumps(credit))
+    bench.check("a late credit is paid once and not refunded: payer 700, payee 300, 1000 SC in all",
+                credit["balances"] == (700, 300) and credit["later"] == (700, 300), json.dumps(credit))
+    bench.check("the node settled the credit through its journal (credited=True, refunded=False)",
+                bool(_lines(bench, "node-1", rf"store payment settled reserve=.* payer={payer} amount=300 "
+                                             rf"reserved=True refunded=False credited=True")))
+
+    # Reserve leg: the node gives up on the reserve, which the WA applies later; it must come back to the payer.
+    payer, payee = accounts(2)
+    _post(bench, "wa-1", f"/banking-test-delay?ownerId={payer}&ms={STORE_WA_DELAY_MS}")
+    answer, seconds = pay(payer, payee)
+    reserve = {"answer": answer, "seconds": round(seconds, 2), **settle(payer, payee, (1000, 0))}
+    bench.record("store-timeout-reserve", reserve)
+    bench.check("an unanswered reserve refuses the purchase without an error",
+                answer is not None and answer.get("approved") is False, json.dumps(reserve))
+    bench.check("a late reserve is refunded and nothing is paid: payer 1000, payee 0",
+                reserve["balances"] == (1000, 0) and reserve["later"] == (1000, 0), json.dumps(reserve))
+    bench.check("the node settled the reserve through its journal (reserved=True, refunded=True)",
+                bool(_lines(bench, "node-1", rf"store payment settled reserve=.* payer={payer} amount=300 "
+                                             rf"reserved=True refunded=True credited=False")))
+    bench.exercised(credit=credit, reserve=reserve, delayMs=STORE_WA_DELAY_MS)
+
+
 def p2_wa_respawn_points(bench) -> None:
     """SE-1150: one bad respawn point no longer costs a node its whole list at the World Authority. On
     octahedron-test a medbay in an overfilled room reported an oxygen level just above 1 for 12 minutes; the WA
@@ -3142,6 +3205,8 @@ SCENARIOS_WA = {
                                                    "the node's points kept, each logged once", "3"),
     "P2-WA-BCAST": (p2_wa_bcast, "SE-943: a broadcast controller message names its block, not Good.bot, after the WA's chat path", "3"),
     "P2-WA-ECON": (p2_wa_econ, "WA-2 economy: store, trade, contracts, PCU ledger, grid transfer", "3"),
+    "P2-WA-STORE-TIMEOUT": (p2_wa_store_timeout, "SE-1226: a store payment leg the WA answers after the node's timeout is "
+                                                 "settled once, never paid and refunded both", "3"),
     "P2-MOD-LASER-GPS": (p2_mod_laser_gps, "SE1-0226, SE1-0235: a laser links by GPS to a laser on another node, which points back", "3"),
     "P2-MOD-01": (p2_mod_01, "cross-node IGC unicast and broadcast, no leak to other nodes", "3"),
     "P2-MOD-02": (p2_mod_02, "IGC in flight across a handover: WA buffering, order preserved", "3"),
