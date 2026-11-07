@@ -766,6 +766,8 @@ class Config:
     server_name: str = "Magnetar Cluster Test"
     member_limit: int = 16  # advertised and admission-enforced player cap
     administrators: list[int] = field(default_factory=list)  # Steam ids admitted as admins (§3.4)
+    # The Gateway's admin kick cooldown (admission kickTimeoutSeconds); None keeps its 300 s default. Tests set seconds.
+    kick_timeout_seconds: int | None = None
     regular_nodes: int = 2  # node-i at ports 28416+i/29416+i, wa-1 right after them
     spare_nodes: int = 0  # HotSpareNodes.md: extra regular slots initially designated hot spares
     node_env: dict[str, str] = field(default_factory=dict)  # extra env for every node process
@@ -1450,7 +1452,9 @@ class Cluster:
             "serverName": self.config.server_name, "worldName": self.config.world_template.name,
             "gameMode": "C", "syncDistance": self.config.sync_distance,
             "memberLimit": self.config.member_limit, "familySharing": True,
-            "administrators": self.config.administrators}))
+            "administrators": self.config.administrators,
+            **({"kickTimeoutSeconds": self.config.kick_timeout_seconds}
+               if self.config.kick_timeout_seconds is not None else {})}))
         gateway += ["--admission", str(admission)]
         if self.config.steam_listen:
             gateway += ["--steam", self.config.steam_listen]

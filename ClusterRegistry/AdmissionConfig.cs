@@ -26,7 +26,10 @@ internal sealed record AdmissionSettings(
     ulong[]? Reserved = null,
     // The world's Workshop mod ids (#1529): the Steam frontend sums their Workshop sizes into ModsTotalSize,
     // as MyDedicatedServerBase.Mods does, when the deployment did not give the total.
-    ulong[]? ModIds = null)
+    ulong[]? ModIds = null,
+    // How long an admin kick keeps the player out (vanilla MyDedicatedServerBase.KICK_TIMEOUT_MS, 5 min). Tests
+    // shorten it to seconds so a kicked player's return is checked without waiting out the production timer.
+    int KickTimeoutSeconds = 300)
 {
     public static AdmissionSettings Load(string? path)
     {
@@ -37,14 +40,15 @@ internal sealed record AdmissionSettings(
             ?? throw new ArgumentException("Empty admission configuration " + path);
         if (settings.MemberLimit < 2)
             throw new ArgumentException("Admission memberLimit must be at least 2 (vanilla SetMemberLimit floor)");
+        if (settings.KickTimeoutSeconds < 0)
+            throw new ArgumentException("Admission kickTimeoutSeconds must not be negative");
         return settings;
     }
 }
 
 internal sealed class AdmissionBook
 {
-    // MyDedicatedServerBase.KICK_TIMEOUT_MS
-    private static readonly TimeSpan KickTimeout = TimeSpan.FromMinutes(5);
+    private TimeSpan KickTimeout => TimeSpan.FromSeconds(Settings.KickTimeoutSeconds);
     private readonly HashSet<ulong> _banned;
     private readonly HashSet<ulong> _administrators;
     private readonly HashSet<ulong> _reserved;

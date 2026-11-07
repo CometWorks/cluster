@@ -118,7 +118,8 @@ reconcile that WA ledger GUID. The revision check prevents an undelivered old re
 from overwriting a newer decision. Quasar retains this outcome as in progress and
 reconciles the original request after reconnect or restart.
 
-Punitive kicks still impose five minutes in `AdmissionBook`. Clearing a cooldown removes
+Punitive kicks impose five minutes in `AdmissionBook` (`kickTimeoutSeconds` in the admission
+config, default 300; tests set a few seconds). Clearing a cooldown removes
 only that user's deadline; it does not unban, change reserved slots or affect other users.
 A replay of a completed clear does not remove a subsequent kick. These deadlines remain
 in memory and disappear on Gateway restart, matching existing behavior. An interrupted
@@ -254,6 +255,18 @@ Beyond loopback, two credential kinds open `/admin/v1`:
   audit actor on every mutation event.
 
 Legacy routes outside `/admin/v1` keep accepting only `CLUSTER_ADMIN_TOKEN`.
+
+A node's F3 kick and ban (SE-1197) use a third credential on exactly two routes,
+`POST /admin/v1/clients/{id}/kick` and `POST /admin/v1/admission/bans`: the cluster join
+token the node already presents to the registry, plus an `X-Cluster-Moderator` header with
+the Steam id of the admin who pressed the button. The Gateway accepts it only when that
+admin is on its own `administrators` list, is connected, and is attached to the node named
+in `X-Cluster-Node`; otherwise it answers `403 moderator_refused` and records
+`admin.denied`. The audit actor is `node:<node>/admin:<steamId>`. Every other route still
+answers the join token with 401. A request that names a moderator is held to these rules
+on a loopback Gateway too, where the admin contract is otherwise open. A node holding the
+join token can therefore kick or ban only while a Gateway-listed admin is online, and the
+action is recorded under that admin.
 
 ## Events
 
