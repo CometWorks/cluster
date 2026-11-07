@@ -3,10 +3,10 @@
 * ``P2-MEMBER-LIMIT`` - the bench world's MaxPlayers is 2 and the Gateway's memberLimit is 16. Three clients on one
   node, two ways:
 
-  1. login: clients 2 and 3 are routed to client 1's node. Before the fix vanilla SetUserConnectionResult refused
+  1. login: clients 2 and 3 are routed into client 1's partition. Before the fix vanilla SetUserConnectionResult refused
      client 3 as ServerFull ('User left' 50 ms after its auth answer) and Direct Transport rejoined every 5 s.
-  2. handover: client 1's partition goes to the other node and back while clients 2 and 3 stay. Its arrival is a
-     vanilla join on the node too, the third member again.
+  2. handover: client 1's partition goes to the other node and back. Each client it brings back arrives by a
+     vanilla join, so the node's third member is an arrival this time.
 
 The other node refuses spawn preview switches (SE-1124's test knob), so the unspawned clients 2 and 3 stay put.
 No timers: the waits end on the Gateway's session state and the node's member list.
@@ -60,72 +60,64 @@ def p2_member_limit(bench) -> None:
         json.dumps(start),
     )
     bench.record("preview-refusal", bench.cluster.node(other, "/respawn-execute-fault?mode=refuse&count=1000", "POST"))
+    # node-1 starts with one partition, client 1's: the other clients are routed into it, as P2-PRS-01 does.
     home = next((p["id"] for p in _partitions(bench, node) if CLIENT_ID in (p.get("clients") or [])), None)
-    spare = next((p["id"] for p in _partitions(bench, node) if not p.get("clients")), None)
-    _require(
-        bench,
-        "SETUP: the node has client 1's partition and a clientless one",
-        None not in (home, spare),
-        json.dumps(_partitions(bench, node)),
-    )
+    _require(bench, "SETUP: client 1's partition is known", home is not None, json.dumps(_partitions(bench, node)))
+    clients = (CLIENT_ID, CLIENT2_ID, CLIENT3_ID)
 
     # -- leg 1: the third login --
-    start_second_client(bench, route_node=node, partition=spare)
+    start_second_client(bench, route_node=node, partition=home)
     third = _try(
-        start_second_client, bench, route_node=node, partition=spare, client_id=CLIENT3_ID, remote_port=CLIENT3_PORT
+        start_second_client, bench, route_node=node, partition=home, client_id=CLIENT3_ID, remote_port=CLIENT3_PORT
     )
     members = _members(bench, node)
+    refused = _refused(bench, node, CLIENT3_ID)
     bench.record(
         "login",
         {
             "node": node,
             "third": third if isinstance(third, dict) else "chat-ready",
-            "refused": _refused(bench, node, CLIENT3_ID),
+            "refused": refused,
             "members": members,
         },
     )
     bench.check("a third client logs in to the node and becomes chat-ready", not isinstance(third, dict), str(third))
-    bench.check("the node never refused the third client", not _refused(bench, node, CLIENT3_ID))
+    bench.check("the node never refused the third client", not refused, json.dumps(refused))
     bench.check("the node lists three clients", len(members["members"]) - 1 == 3, json.dumps(members))
 
     # -- leg 2: the third member arrives by handover --
+    # Client 1's partition goes away and comes back; whichever clients travel with it arrive as vanilla joins, and
+    # node-1 holds three clients once they are all back.
     away = _try(
         bench.cluster.post, _handover_url(bench, home, source=node, target=other, client=CLIENT_ID), timeout=300
     )
-    bench.record("handover-away", away)
-    _require(
-        bench,
-        f"SETUP: client 1 moved to {other}",
-        _poll(lambda: _ready_on(bench, CLIENT_ID, other), 60) is not None,
-        json.dumps(_session(bench, CLIENT_ID))[:300],
+    moved = _poll(lambda: _ready_on(bench, CLIENT_ID, other), 60)
+    bench.record(
+        "handover-away",
+        {"answer": away, "nodes": {c: _node_of(bench, c) for c in clients}, "members": _members(bench, node)},
     )
-    # Before the fix client 3 got in only now, on a retry, as the node's second client.
-    held = _poll(lambda: len(_members(bench, node)["members"]) - 1 >= 2 or None, CLIENT_TIMEOUT)
     _require(
-        bench,
-        f"SETUP: {node} holds two clients before client 1 comes back",
-        held is not None,
-        json.dumps(_members(bench, node)),
+        bench, f"SETUP: client 1 moved to {other}", moved is not None, json.dumps(_session(bench, CLIENT_ID))[:300]
     )
-    refused_before = len(_refused(bench, node, CLIENT_ID))
+    before = {c: len(_refused(bench, node, c)) for c in clients}
     back = _try(
         bench.cluster.post, _handover_url(bench, home, source=other, target=node, client=CLIENT_ID), timeout=300
     )
-    returned = _poll(lambda: _ready_on(bench, CLIENT_ID, node), 60)
+    returned = _poll(lambda: all(_ready_on(bench, c, node) for c in clients) or None, CLIENT_TIMEOUT)
     members = _members(bench, node)
-    refused = _refused(bench, node, CLIENT_ID)[refused_before:]
+    refused = {c: _refused(bench, node, c)[before[c] :] for c in clients}
     bench.record(
-        "handover-back", {"answer": back, "session": _session(bench, CLIENT_ID), "refused": refused, "members": members}
+        "handover-back",
+        {"answer": back, "nodes": {c: _node_of(bench, c) for c in clients}, "refused": refused, "members": members},
     )
     bench.check(
-        f"client 1 arrives on {node} by handover as its third client",
+        f"client 1 comes back to {node} by handover, and all three clients are ready there",
         returned is not None,
-        json.dumps(_session(bench, CLIENT_ID))[:300],
+        json.dumps({c: _node_of(bench, c) for c in clients}),
     )
-    bench.check("the node never refused the arriving client", not refused, json.dumps(refused))
+    bench.check("the node refused no client during the handover", not any(refused.values()), json.dumps(refused))
     bench.check("the node lists three clients again", len(members["members"]) - 1 == 3, json.dumps(members))
     bench.check("client 1 still has a living character", bench.living_character(CLIENT_ID) is not None)
-    bench.check("clients 2 and 3 stayed on the node", all(_node_of(bench, c) == node for c in (CLIENT2_ID, CLIENT3_ID)))
     bench.exercised(route=f"3 clients on {node} (MaxPlayers=2): login; handover {node} -> {other} -> {node}")
 
 
