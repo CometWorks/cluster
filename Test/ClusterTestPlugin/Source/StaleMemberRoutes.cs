@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using HarmonyLib;
 using Sandbox.Engine.Multiplayer;
+using Sandbox.Game.World;
 using VRage;
 using VRage.GameServices;
 
@@ -19,9 +20,15 @@ internal static class StaleMemberRoutes
 
     public static void Register()
     {
-        // GET /members - the node's vanilla member list (MyDedicatedServerBase.m_members), the server's own id included.
+        // GET /members - the node's vanilla member list (MyDedicatedServerBase.m_members), the server's own id included,
+        // its vanilla member limit and the world's MaxPlayers (SE-1203).
         TestRoutes.Add("GET", "/members", context =>
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => (object)new { members = Server().m_members.ToArray() })));
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => (object)new
+            {
+                members = Server().m_members.ToArray(),
+                memberLimit = Server().MemberLimit,
+                maxPlayers = MySession.Static?.MaxPlayers ?? 0,
+            })));
 
         // POST /stale-member-inject?client= - list the client as a member, with no session: the leaked entry itself.
         TestRoutes.Add("POST", "/stale-member-inject", context =>
