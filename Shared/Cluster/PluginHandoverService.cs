@@ -62,14 +62,26 @@ internal static class PluginHandoverService
 	/// </summary>
 	public const string FastKey = "cluster.fast";
 
+	/// <summary>
+	/// SE-1272: the source's grids whose rigid body Havok had put to sleep (one byte, no value). The commit's thaw
+	/// enables every imported body, and Havok adds a body awake, so without this the target simulates a resting pile
+	/// (Moon Station's 207 leftover shuttles, 122 of them touching) until it settles again: 5-8 s at 0.08-0.3 sim speed.
+	/// </summary>
+	public const string AsleepKey = "cluster.asleep";
+
 	/// <summary>Source, at capture: every plugin's state per grid as JSON {grid: {plugin: base64}}, or null.
-	/// FAST adds the cluster's fast-member entries (<see cref="FastKey"/>).</summary>
-	public static string Leaving(HashSet<long> grids, IReadOnlyDictionary<long, double> fast = null)
+	/// FAST adds the cluster's fast-member entries (<see cref="FastKey"/>), ASLEEP the sleeping grids (<see cref="AsleepKey"/>).</summary>
+	public static string Leaving(HashSet<long> grids, IReadOnlyDictionary<long, double> fast = null, IEnumerable<long> asleep = null)
 	{
 		var handlers = Snapshot();
 		var states = new Dictionary<string, Dictionary<string, byte[]>>();
 		foreach ((long id, double speed) in fast ?? new Dictionary<long, double>())
 			states[id.ToString()] = new Dictionary<string, byte[]> { [FastKey] = BitConverter.GetBytes(speed) };
+		foreach (long id in asleep ?? Enumerable.Empty<long>())
+		{
+			if (!states.TryGetValue(id.ToString(), out var own)) states[id.ToString()] = own = new Dictionary<string, byte[]>();
+			own[AsleepKey] = new byte[] { 1 };
+		}
 		if (handlers.Length == 0 || grids.Count == 0) return states.Count == 0 ? null : JsonSerializer.Serialize(states);
 		long total = 0;
 		foreach (long grid in grids.OrderBy(id => id))
@@ -106,6 +118,22 @@ internal static class PluginHandoverService
 		}
 		catch (Exception error) { Console.WriteLine("[ClusterPlugin] fast arrivals unreadable: " + error.Message); }
 		return fast;
+	}
+
+	/// <summary>Target: the grids the source had asleep (<see cref="AsleepKey"/>).</summary>
+	public static HashSet<long> AsleepArrivals(string pluginStates)
+	{
+		var asleep = new HashSet<long>();
+		if (string.IsNullOrEmpty(pluginStates)) return asleep;
+		try
+		{
+			var states = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, byte[]>>>(pluginStates);
+			foreach (var (id, perPlugin) in states ?? new Dictionary<string, Dictionary<string, byte[]>>())
+				if (perPlugin != null && perPlugin.ContainsKey(AsleepKey) && long.TryParse(id, out long entity))
+					asleep.Add(entity);
+		}
+		catch (Exception error) { Console.WriteLine("[ClusterPlugin] asleep arrivals unreadable: " + error.Message); }
+		return asleep;
 	}
 
 	/// <summary>The network-state string with the plugin states appended (unchanged when there are none).</summary>

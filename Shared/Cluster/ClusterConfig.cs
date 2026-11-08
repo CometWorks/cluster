@@ -427,6 +427,12 @@ public static class ClusterConfig
 		// Default true since the r140 OFF/ON/OFF read (2026-10-09, prereg t0404b, with thawEnsureGroups): thaw reorders
 		// per class commit 3.1 -> 2.1, commit frames > 100 ms 0.44x, 0 aborts/residuals, no client harm (CH 01:24).
 		["import.thawEnsureSpace"] = "true",
+		// SE-1272: the commit's thaw enables every imported body awake (Havok adds a body active), so a resting pile woke
+		// on each handover and the target solved all of it until it settled again: live 2026-11-08, Moon Station's 207
+		// leftover trader shuttles (122 touching) took every rotation's target to 0.08-0.15 sim speed for 4.5-7.8 s.
+		// "true": the source names the grids Havok had asleep (PluginHandoverService.AsleepKey) and the thaw puts them back
+		// to sleep before the next physics step. "false" = as before. Read per commit.
+		["import.keepAsleep"] = "true",
 		// t0404b, with import.thawEnsureSpace: one EnsurePhysicsSpace per spatial GROUP of the bodies (each group's box
 		// below MyClusterTree.MaximumForSplit), each group's bodies enabled right after its ensure. The single union box
 		// cannot be applied once it reaches MaximumForSplit (r139 ON: 54 of 133 eligible commits, 4.89 reorders each).
