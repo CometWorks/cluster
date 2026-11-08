@@ -34,6 +34,8 @@ public static class DropContainerDirectorService
 	private static readonly List<object> Dispatches = new();
 	private static readonly string Node = Environment.GetEnvironmentVariable("CLUSTER_NODE_ID") ?? string.Empty;
 	private static double m_nextSweep;
+	/// <summary>SE-1228: the dispatches wait on the owning nodes' game threads, so they run off the WA's.</summary>
+	private static readonly NodeDispatchLane Lane = new();
 
 	/// <summary>
 	/// Interval between drops for one player. Vanilla randomises this between the drop system definition's min and
@@ -95,6 +97,8 @@ public static class DropContainerDirectorService
 		if (MySession.Static == null || !MySession.Static.EnableContainerDrops) return;
 		double now = ClusterRuntime.LocalMilliseconds;
 		if (now < m_nextSweep) return;
+		// SE-1228: while the last sweep's dispatches still wait on a node, no new drop is decided and no deadline moves.
+		if (Lane.Busy) return;
 		m_nextSweep = now + SweepIntervalMilliseconds;
 
 		IReadOnlyList<ClusterPlayerPosition> players = PositionRegistryService.Players;
@@ -120,8 +124,12 @@ public static class DropContainerDirectorService
 		}
 		// #1443: a drop due while the cluster is at drops.maxActive is skipped; the player was rescheduled above, so nothing queues.
 		int cap = ClusterConfig.GetInt("drops.maxActive");
-		foreach (ClusterPlayerPosition player in due)
-			if (DropContainerCap.Allow(cap, now)) TryDispatch(player);
+		if (due.Count > 0)
+			Lane.Run(() =>
+			{
+				foreach (ClusterPlayerPosition player in due)
+					if (DropContainerCap.Allow(cap, ClusterRuntime.LocalMilliseconds)) TryDispatch(player);
+			});
 		DropContainerCap.Report(cap, now);
 	}
 

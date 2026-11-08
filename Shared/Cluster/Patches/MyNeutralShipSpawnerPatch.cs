@@ -25,18 +25,19 @@ public static class MyNeutralShipSpawnerPatch
 			Reschedule(senderEvent);
 			return true;
 		}
-		try
+		var request = new ClusterEncounterRequest(Guid.NewGuid(), null, spawnGroup.Id.SubtypeName, target.ClientId, ClusterEncounterKinds.Cargo);
+		// SE-1228: the dispatch waits on the target's node, so it runs off the WA's game thread.
+		EncounterDirectorService.Lane.Run(() =>
 		{
-			EncounterDirectorService.Dispatch(new ClusterEncounterRequest(Guid.NewGuid(), null,
-				spawnGroup.Id.SubtypeName, target.ClientId, ClusterEncounterKinds.Cargo));
-		}
-		catch (Exception exception)
-		{
-			// A player between partitions has no route yet; vanilla's own retry cadence covers it.
-			Console.WriteLine("[ClusterPlugin] cargo dispatch failed client=" + target.ClientId
-				+ " error=" + SecretRedactor.Redact(exception.Message));
-			Reschedule(senderEvent);
-		}
+			try { EncounterDirectorService.Dispatch(request); }
+			catch (Exception exception)
+			{
+				// A player between partitions has no route yet; vanilla's own retry cadence covers it.
+				Console.WriteLine("[ClusterPlugin] cargo dispatch failed client=" + target.ClientId
+					+ " error=" + SecretRedactor.Redact(exception.Message));
+				Sandbox.MySandboxGame.Static?.Invoke(() => Reschedule(senderEvent), "ClusterPlugin cargo reschedule");
+			}
+		});
 		return true;
 	}
 

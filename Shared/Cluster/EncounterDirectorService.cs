@@ -36,6 +36,8 @@ public static class EncounterDirectorService
 	private static double m_nextSweep;
 	private static double m_nextMeteorCheck;
 	private static readonly Dictionary<long, double> m_meteorDue = new();
+	/// <summary>SE-1228: global, cargo and meteor dispatches wait on the target's node, so they run off the WA's game thread.</summary>
+	internal static readonly NodeDispatchLane Lane = new();
 
 	/// <summary>
 	/// Interval between cluster encounter decisions. Vanilla derives its own from
@@ -114,13 +116,17 @@ public static class EncounterDirectorService
 		if (target == null) return;
 		string spawnGroup = PickSpawnGroup();
 		if (spawnGroup == null) return;
-		try { Dispatch(new ClusterEncounterRequest(Guid.NewGuid(), null, spawnGroup, target.ClientId)); }
-		catch (Exception exception)
+		var request = new ClusterEncounterRequest(Guid.NewGuid(), null, spawnGroup, target.ClientId);
+		Lane.Run(() =>
 		{
-			// A player between partitions has no route yet. The next sweep retries; failing the WA tick would not.
-			Console.WriteLine("[ClusterPlugin] encounter dispatch failed client=" + target.ClientId
-				+ " error=" + SecretRedactor.Redact(exception.Message));
-		}
+			try { Dispatch(request); }
+			catch (Exception exception)
+			{
+				// A player between partitions has no route yet. The next sweep retries.
+				Console.WriteLine("[ClusterPlugin] encounter dispatch failed client=" + target.ClientId
+					+ " error=" + SecretRedactor.Redact(exception.Message));
+			}
+		});
 	}
 
 	/// <summary>
@@ -387,6 +393,8 @@ public static class EncounterDirectorService
 	{
 		if (now < m_nextMeteorCheck) return;
 		m_nextMeteorCheck = now + 1000;
+		// SE-1228: one wave in flight at a time; the timers move when its answer is back on the game thread.
+		if (Lane.Busy) return;
 		if (MySession.Static.EnvironmentHostility == MyEnvironmentHostilityEnum.SAFE
 			|| !Sandbox.Engine.Utils.MyFakes.ENABLE_METEOR_SHOWERS) return;
 		ClusterPlayerPosition[] players = PositionRegistryService.Players
@@ -401,28 +409,35 @@ public static class EncounterDirectorService
 				continue;
 			}
 			if (now < due) continue;
-			ClusterEncounterResult result;
-			try { result = Dispatch(new ClusterEncounterRequest(Guid.NewGuid(), null, null, player.ClientId, ClusterEncounterKinds.Meteor)); }
-			catch (Exception exception)
+			// Asked again in 10 s unless the wave spawns: a player between partitions has no route yet.
+			m_meteorDue[player.IdentityId] = now + 10000;
+			Lane.Run(() =>
 			{
-				// A player between partitions has no route yet; retry shortly rather than fail the WA tick.
-				Console.WriteLine("[ClusterPlugin] meteor dispatch failed client=" + player.ClientId
-					+ " error=" + SecretRedactor.Redact(exception.Message));
-				m_meteorDue[player.IdentityId] = now + 10000;
-				continue;
-			}
-			if (!result.Spawned)
-			{
-				m_meteorDue[player.IdentityId] = now + 10000;
-				continue;
-			}
-			double disableRadius = MyDefinitionManager.Static.GetMeteorEventDisableRadius() ?? 3000f;
-			foreach (ClusterPlayerPosition nearby in players)
-			{
-				double dx = nearby.X - player.X, dy = nearby.Y - player.Y, dz = nearby.Z - player.Z;
-				if (Math.Sqrt(dx * dx + dy * dy + dz * dz) <= disableRadius)
-					m_meteorDue[nearby.IdentityId] = now + NextWaveDelay();
-			}
+				ClusterEncounterResult result;
+				try { result = Dispatch(new ClusterEncounterRequest(Guid.NewGuid(), null, null, player.ClientId, ClusterEncounterKinds.Meteor)); }
+				catch (Exception exception)
+				{
+					Console.WriteLine("[ClusterPlugin] meteor dispatch failed client=" + player.ClientId
+						+ " error=" + SecretRedactor.Redact(exception.Message));
+					return;
+				}
+				if (result.Spawned) Sandbox.MySandboxGame.Static?.Invoke(() => WaveSpawned(player, players), "ClusterPlugin meteor wave");
+			});
+			// One wave per check: the next due player may be within this one's disable radius.
+			return;
+		}
+	}
+
+	/// <summary>A wave resets the timers of every player inside the disable radius of its target. Game thread.</summary>
+	private static void WaveSpawned(ClusterPlayerPosition target, ClusterPlayerPosition[] players)
+	{
+		double now = ClusterRuntime.LocalMilliseconds;
+		double disableRadius = MyDefinitionManager.Static.GetMeteorEventDisableRadius() ?? 3000f;
+		foreach (ClusterPlayerPosition nearby in players)
+		{
+			double dx = nearby.X - target.X, dy = nearby.Y - target.Y, dz = nearby.Z - target.Z;
+			if (Math.Sqrt(dx * dx + dy * dy + dz * dz) <= disableRadius)
+				m_meteorDue[nearby.IdentityId] = now + NextWaveDelay();
 		}
 	}
 

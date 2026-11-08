@@ -23,20 +23,23 @@ internal static class GameThreadStacks
 	private static readonly TimeSpan Limit = TimeSpan.FromSeconds(10);
 	private const int MaxLogChars = 64 * 1024;
 
-	/// <summary>Never throws, and returns within <see cref="Limit"/> whatever the tool or the disk does: the process has to exit either way.</summary>
-	internal static void Log(string why, int gameThreadId)
+	/// <summary>
+	/// Never throws, and returns within <see cref="Limit"/> whatever the tool or the disk does: the process has to exit either way.
+	/// <paramref name="source"/> starts the log line: "exit watchdog", or "long frame" (SE-1228).
+	/// </summary>
+	internal static void Log(string why, int gameThreadId, string source = "exit watchdog")
 	{
 		var capture = new Thread(() =>
 		{
 			string text;
 			try { text = Capture(gameThreadId); }
 			catch (Exception exception) { text = "stacks unavailable (" + exception.GetType().Name + "): " + exception.Message; }
-			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] exit watchdog: " + why + "; " + text);
+			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] " + source + ": " + why + "; " + text);
 		})
-		{ IsBackground = true, Name = "ClusterExitWatchdogStacks" };
+		{ IsBackground = true, Name = "ClusterGameThreadStacks" };
 		capture.Start();
 		if (!capture.Join(Limit))
-			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] exit watchdog: " + why + "; stacks unavailable: no answer in " + Limit.TotalSeconds + " s");
+			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] " + source + ": " + why + "; stacks unavailable: no answer in " + Limit.TotalSeconds + " s");
 	}
 
 	private static string Capture(int gameThreadId)

@@ -1617,6 +1617,77 @@ def p2_drop_cap(bench) -> None:
     bench.exercised(replaced=old, parked=parked, partition=partition, finalStatus=_cap_status(bench))
 
 
+# -- P2-WA-NODE-WAIT the WA's game thread never waits on a node (SE-1228) --------------------------
+
+
+NODE_WAIT_BURST_MS = 12000  # the node's frames wait on WA commands this long: two or more WA drop sweeps (5 s)
+
+
+def _long_frame_stacks(bench, name: str) -> list[list[str]]:
+    """SE-1228: each "long frame" stack capture in the process's logs, its line and then the game thread's frames."""
+    stacks = []
+    for path in _log_files(bench, name):
+        lines = path.read_text(errors="replace").splitlines()
+        for index, line in enumerate(lines):
+            if "[ClusterPlugin] long frame: " not in line:
+                continue
+            frames = [line.strip()]
+            for follow in lines[index + 1:]:
+                if not follow.startswith(("thread ", "  ")) or follow.startswith("thread ") and len(frames) > 1:
+                    break
+                frames.append(follow.strip())
+            stacks.append(frames)
+    return stacks
+
+
+def p2_wa_node_wait(bench) -> None:
+    """SE-1228: the World Authority's game thread never waits on a node. On octahedron-test (cluster 0.3.2) the WA's drop
+    sweep POSTed a due drop to the player's node and waited for the answer on its game thread. The node runs a drop on its
+    game thread, which was waiting on the WA for a trader's store payment leg, and the WA answers those on its game thread.
+    Neither moved until the node's 5 s command timeout, once per leg: 5-10 s stalls of the WA and the node, payment legs
+    timed out. Here the WA dispatches a drop every 5 s (a 1 s drop interval) to the client's node while, for 12 s, that
+    node's game thread spends 250 ms of every frame sending balance changes to the WA back to back. Every answer must come
+    in under 1 s and the WA must have no frame over 1 s, while drop dispatches reached the node during the burst."""
+    bench.cluster.config.world_template = _pod_world(bench)
+    _join(bench)
+    node = _poll(lambda: _try(bench.cluster.get, f"/registry/client-routes?client={CLIENT_ID}").get("Node"), HANDOVER_TIMEOUT)
+    _require(bench, "the registry mapped the client to a node", bool(node), str(node))
+    bench.record("config-setup", bench.cluster.handover_config({"npc.sweepSeconds": "0", "offline.enabled": "false",
+                                                                 "drops.maxActive": "0"}))
+    owner = 912280000000000000 + random.randrange(1_000_000)
+    bench.cluster.node(node, f"/banking-test-create?ownerId={owner}&balance=1000", "POST")
+    _require(bench, "the burst's account exists at the WA", bool(_poll(
+        lambda: _try(bench.cluster.node, "wa-1", f"/banking-test-status?ownerId={owner}").get("balance") == 1000, 30)))
+    dispatched = rf"drop_container dispatch .* node={node} "
+    armed = bench.cluster.node("wa-1", "/drop-test-interval?ms=1000", "POST")
+    _require(bench, "the WA's drop sweep dispatches to the client's node", bool(_poll(lambda: _lines(bench, "wa-1", dispatched), 30)),
+             json.dumps(armed))
+
+    hitch = re.compile(r"\[ClusterPlugin\] hitch ms=([0-9.]+)")
+    before = {"dispatches": len(_lines(bench, "wa-1", dispatched)), "hitches": len(_lines(bench, "wa-1", hitch.pattern)),
+              "stacks": len(_long_frame_stacks(bench, "wa-1"))}
+    started = time.monotonic()
+    bench.cluster.node(node, f"/test-wa-command-burst?ownerId={owner}&ms={NODE_WAIT_BURST_MS}", "POST")
+    burst = _poll(lambda: (lambda answer: answer if answer.get("done") else None)(
+        _try(bench.cluster.node, node, "/test-wa-command-burst")), NODE_WAIT_BURST_MS / 1000 + 30)
+    # A dispatch the node answered at the end of the burst is logged right after it; the 8 s cover one more sweep.
+    time.sleep(8)
+    bench.cluster.node("wa-1", "/drop-test-interval?ms=0", "POST")
+    hitches = [float(hitch.search(line).group(1)) for line in _lines(bench, "wa-1", hitch.pattern)[before["hitches"]:]]
+    result = {"node": node, "burst": burst, "seconds": round(time.monotonic() - started, 1),
+              "dispatches": len(_lines(bench, "wa-1", dispatched)) - before["dispatches"], "waHitchesMs": hitches,
+              "waLongFrameStacks": [frames[:40] for frames in _long_frame_stacks(bench, "wa-1")[before["stacks"]:]]}
+    bench.record("node-wait", result)
+    _require(bench, "the node's burst finished", bool(burst), json.dumps(result)[:600])
+    bench.check("the WA's drop sweep dispatched to the node during the burst (the WA asked the waiting node)",
+                result["dispatches"] >= 2, json.dumps(result)[:600])
+    bench.check("no WA command of the node timed out while the WA dispatched to it",
+                burst.get("timedOut") == 0 and burst.get("failed") == 0 and burst.get("sent", 0) > 20, json.dumps(burst))
+    bench.check("every WA answer came in under 1 s", burst.get("maxMs", 1e9) < 1000, json.dumps(burst))
+    bench.check("the WA had no frame over 1 s", max(hitches, default=0) < 1000, json.dumps(hitches))
+    bench.exercised(**result)
+
+
 SCENARIOS_WA_OPS = {
     "P2-WA-04": (p2_wa_04, "antenna relay chain, remote terminal, on-demand pull", "3"),
     "P2-WA-06b": (p2_wa_06b, "cross-node pod respawn with least-loaded placement", "3"),
@@ -1625,6 +1696,7 @@ SCENARIOS_WA_OPS = {
     "P2-DROP-REMOVAL-RED": (p2_drop_removal_red, "#1391: the same with CLUSTER_DROP_REMOVAL_HANDOVER=0 outlives it", "3"),
     "P2-DROP-GPS": (p2_drop_gps, "SE-1146: a drop's GPS marker leaves the WA and every node with the drop; drops.maxActive caps markers", "3"),
     "P2-DROP-CAP": (p2_drop_cap, "#1443: at most drops.maxActive container drops active cluster-wide, offline ones included", "3"),
+    "P2-WA-NODE-WAIT": (p2_wa_node_wait, "SE-1228: the WA's game thread never waits on a node whose game thread waits on the WA", "3"),
     # P2-WA-02 (concurrent cross-node mutations never overdraw; balances converge) is asserted here.
     "P2-REC-01": (p2_rec_01, "WA killed inside a held mutation; queue replay conserves", "4"),
     "P2-CHR-04": (p2_chr_04, "stale duplicate character arriving at the live body's node (T-0169)", "3"),

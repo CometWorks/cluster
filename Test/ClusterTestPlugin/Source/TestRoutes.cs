@@ -80,6 +80,7 @@ internal static class TestRoutes
         StaleMemberRoutes.Register(); // SE-1156 a member with no session, injected or through the leave-before-login race
         AccountingInterlockObserver.Register();
         GameThreadLoadRoutes.Register(); // SE-1134 real game-thread time: a busy node, a single hitch
+        WaCommandBurstRoutes.Register(); // SE-1228 a node game thread waiting on WA commands back to back
         EntitlementRoutes.Register(); // SE-1158 DLC and skin ownership as the game checks it
     }
 
