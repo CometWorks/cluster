@@ -3164,6 +3164,7 @@ internal sealed partial class ClusterControlServer
 	{
 		if (!ClusterConfig.GetBool("import.keepAsleep")) return 0;
 		int count = 0;
+		List<MyCubeGrid> kept = new List<MyCubeGrid>();
 		foreach (long id in PluginHandoverService.AsleepArrivals(transfer.PluginStates))
 		{
 			if (!transfer.Members.Contains(id) || !MyEntities.TryGetEntityById(id, out MyEntity entity) || entity is not MyCubeGrid grid
@@ -3172,7 +3173,20 @@ internal sealed partial class ClusterControlServer
 			Havok.HkWorld world = grid.Physics.HavokWorld;
 			if (world != null) world.DeactivateSimulationIslandRigidBodies(grid.Physics.RigidBody);
 			else grid.Physics.RigidBody.Deactivate();
+			kept.Add(grid);
 			count++;
+		}
+		if (kept.Count > 0)
+		{
+			// SE-1272 diag: awake right after the island call, and two frames (at least one physics step) later.
+			int awakeNow = kept.Count(grid => grid.Physics.RigidBody.IsActive);
+			Guid transferId = transfer.Id;
+			MySandboxGame.Static.Invoke(() => MySandboxGame.Static.Invoke(() =>
+			{
+				List<MyCubeGrid> live = kept.Where(grid => !grid.MarkedForClose && grid.Physics?.RigidBody != null).ToList();
+				Log("keep_asleep_check transferId=" + transferId + " kept=" + kept.Count + " awakeNow=" + awakeNow
+					+ " awakeAfter=" + live.Count(grid => grid.Physics.RigidBody.IsActive) + " live=" + live.Count);
+			}, "SE-1272 keep asleep check"), "SE-1272 keep asleep check");
 		}
 		return count;
 	}

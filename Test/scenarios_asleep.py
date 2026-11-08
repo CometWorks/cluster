@@ -56,8 +56,6 @@ class _Sampler(threading.Thread):
 def _asleep(bench, red: bool) -> None:
     bench.start_cluster()
     bench.cluster.post("/automatic/pause")
-    if red:
-        _put_config(bench, "node-2", {"import.keepAsleep": "false"})
     grids = []
     for index in range(CUBES):
         x = ORIGIN[0] + index * EDGE_M
@@ -73,6 +71,8 @@ def _asleep(bench, red: bool) -> None:
     _require(bench, "SETUP: the cubes are one partition on node-1", partition is not None,
              json.dumps(_partitions(bench, "node-1"))[:300])
 
+    if red:  # here, not at start: the Gateway's first config push resets a node's overrides
+        _put_config(bench, "node-2", {"import.keepAsleep": "false"})
     sampler = _Sampler(bench, "node-2", grids)
     sampler.start()
     time.sleep(1)
@@ -85,7 +85,9 @@ def _asleep(bench, red: bool) -> None:
     awake = max((row[3] for row in arrived), default=0)
     thaw = _lines(bench, "node-2", rf"handover_thaw .*partition={partition} ")
     kept = int(m.group(1)) if thaw and (m := re.search(r"keptAsleep=(\d+)", thaw[-1])) else None
-    bench.exercised(samples=len(sampler.rows), arrivedSamples=len(arrived), maxAwake=awake, keptAsleep=kept)
+    check = _lines(bench, "node-2", r"keep_asleep_check ")
+    bench.exercised(samples=len(sampler.rows), arrivedSamples=len(arrived), maxAwake=awake, keptAsleep=kept,
+                    keepAsleepCheck=check[-1][-160:] if check else None)
     _require(bench, "the target was sampled with every cube enabled", len(arrived) >= 5, f"{len(arrived)} samples")
     if red:
         bench.check("RED: with import.keepAsleep off the cubes wake on the target", awake > 0,
