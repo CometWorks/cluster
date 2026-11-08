@@ -65,7 +65,8 @@ internal static class PluginHandoverService
 	/// <summary>
 	/// SE-1272: the source's grids whose rigid body Havok had put to sleep (one byte, no value). The commit's thaw
 	/// enables every imported body, and Havok adds a body awake, so without this the target simulates a resting pile
-	/// (Moon Station's 207 leftover shuttles, 122 of them touching) until it settles again: 5-8 s at 0.08-0.3 sim speed.
+	/// (Moon Station's 207 leftover shuttles, 122 of them touching) until it settles again. The target's
+	/// ClusterControlServer.KeepAsleep puts them back to sleep. A handler of another plugin never sees this key.
 	/// </summary>
 	public const string AsleepKey = "cluster.asleep";
 
