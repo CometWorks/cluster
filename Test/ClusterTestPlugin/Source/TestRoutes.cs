@@ -82,6 +82,7 @@ internal static class TestRoutes
         GameThreadLoadRoutes.Register(); // SE-1134 real game-thread time: a busy node, a single hitch
         WaCommandBurstRoutes.Register(); // SE-1228 a node game thread waiting on WA commands back to back
         EntitlementRoutes.Register(); // SE-1158 DLC and skin ownership as the game checks it
+        AsleepTestRoutes.Register(); // SE-1272 Havok sleep state of grids across a handover
     }
 
     public static bool Dispatch(HttpListenerContext context, string path)
