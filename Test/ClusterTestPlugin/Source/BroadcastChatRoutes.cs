@@ -71,7 +71,7 @@ internal static class BroadcastChatRoutes
                 {
                     // Through reflection: the publicized game assembly shows the event and its backing field under one name.
                     Action<ulong, string, ChatChannel, long, ChatMessageCustomData?> received = (sender, text, channel, _, _) => AddEvent("plugin", sender, text, channel);
-                    typeof(MyMultiplayerBase).GetEvent(nameof(MyMultiplayerBase.ChatMessageReceived)).AddEventHandler(MyMultiplayer.Static, received);
+                    typeof(MyMultiplayerBase).GetEvent("ChatMessageReceived").AddEventHandler(MyMultiplayer.Static, received);
                     MyAPIGateway.Utilities.MessageRecieved += (sender, text) => AddEvent("mod", sender, text, null);
                     var request = AccessTools.Method(typeof(MyMultiplayerBase), "OnChatMessageReceived_Server", new[] { typeof(ChatMsg) })
                         ?? throw new MissingMethodException("MyMultiplayerBase.OnChatMessageReceived_Server");
