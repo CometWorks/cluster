@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Threading;
 using ClusterPlugin;
 using HarmonyLib;
+using Sandbox;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Blocks;
 using Sandbox.Game.Gui;
@@ -95,7 +97,12 @@ public static class EntityIdProjectorPatch
         RemapConsistently(projectedGrids);
     }
 
-    /// <summary>Source 3, the welding projector's remap: vanilla Remap() with one helper for all grids.</summary>
+    /// <summary>Source 3, the welding projector's remap: vanilla Remap() with one helper for all grids.
+    /// SE-1231: Remap runs from OnRegisteredToGridSystems, which the staged handover import calls on its
+    /// worker threads. OnRemap and SetNewBlueprint write MyBlueprintIdTracker's static Dictionary, which
+    /// the game thread writes too and GroupPoolScrubber walks, so off the game thread only the ids are
+    /// remapped and the tracker part is queued to the game thread. The import activates the projector
+    /// in a later game-thread call, so the queued part has run by then.</summary>
     [HarmonyPrefix]
     [HarmonyPatch("Remap")]
     private static bool RemapPrefix(MyProjectorBase __instance)
@@ -105,9 +112,18 @@ public static class EntityIdProjectorPatch
         List<MyObjectBuilder_CubeGrid> grids = __instance.m_originalGridBuilders;
         if (grids == null || grids.Count <= 0 || !Sync.IsServer)
             return false;
-        MyBlueprintIdTracker.OnRemap(__instance, RemapConsistently(grids));
-        __instance.SetNewBlueprint(grids);
+        MyEntityIdRemapHelper helper = RemapConsistently(grids);
+        if (VRage.Utils.MyUtils.MainThread == Thread.CurrentThread)
+            Track(__instance, helper, grids);
+        else
+            MySandboxGame.Static.Invoke(() => Track(__instance, helper, grids), "Cluster projector remap");
         return false;
+    }
+
+    private static void Track(MyProjectorBase projector, MyEntityIdRemapHelper helper, List<MyObjectBuilder_CubeGrid> grids)
+    {
+        MyBlueprintIdTracker.OnRemap(projector, helper);
+        projector.SetNewBlueprint(grids);
     }
 }
 

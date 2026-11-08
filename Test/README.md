@@ -8,6 +8,12 @@ uses real loopback HTTP auth and UDP WA command routing, plus admission state an
 durable operation recovery. Build plugins with `-p:RunPostBuildEvent=Never` for
 verification so the normal post-build target does not deploy to a local Magnetar.
 
+The projector remap of a staged handover import (SE-1231) is checked the same way:
+`dotnet run -c Release -p:RunPostBuildEvent=Never --project Test/ProjectorRemap/ProjectorRemapChecks.csproj`
+calls `EntityIdProjectorPatch.RemapPrefix` from 16 threads at once and prints PASS when every
+remapped id ends up in `MyBlueprintIdTracker` for its projector, written on the game thread only.
+It needs the dedicated server's assemblies, no game process, and takes about a second.
+
 The suite deploys a cluster from an unpacked **release package** (the `ClusterForLinux-<version>`
 that `Build/release.sh` produces), joins headless clients to it, and asserts against structured
 state: the Gateway's `diag` snapshot, the Ownership Registry, node control routes, process logs and
