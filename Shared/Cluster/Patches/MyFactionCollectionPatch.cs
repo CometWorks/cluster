@@ -163,64 +163,143 @@ public static class MyFactionCollectionPatch
 	private static long m_damageCommandsSent;
 	private static int m_damageFlushInFlight;
 
-	/// <summary>Game thread: turn the queued hits into WA commands and send them on a pool thread.</summary>
+	/// <summary>
+	/// SE-1280: an absolute reputation write (SetReputationBetweenPlayerAndFaction or SetReputationBetweenFactions),
+	/// keyed by its pair. Player writes and faction writes are told apart by <see cref="Faction"/>.
+	/// </summary>
+	private readonly record struct SetKey(bool Faction, long First, long Second);
+
+	/// <summary>SE-1280: queued absolute writes, the last value per pair; sent with the damage queue.</summary>
+	private static readonly Dictionary<SetKey, (int Reputation, ReputationChangeReason Reason)> PendingSets = new();
+	/// <summary>SE-1280: the writes the pool thread is sending; replicas from the WA must not undo them locally either.</summary>
+	private static Dictionary<SetKey, (int Reputation, ReputationChangeReason Reason)> m_setsInFlight = new();
+	private static long m_setCallsQueued;
+	private static long m_setCommandsSent;
+
+	/// <summary>Game thread: turn the queued hits and writes into WA commands and send them on a pool thread.</summary>
 	private static void FlushDamageReputation()
 	{
 		if (ClusterRuntime.IsWorldAuthority || ClusterRuntime.LocalMilliseconds < m_nextDamageFlush) return;
 		m_nextDamageFlush = ClusterRuntime.LocalMilliseconds + DamageReputationFlushMs;
 		// One flush at a time: a slow WA backs the queue up here instead of piling up pool threads.
 		if (Volatile.Read(ref m_damageFlushInFlight) != 0) return;
-		List<string> payloads;
-		long queued;
+		List<(string Operation, string Payload)> payloads;
+		long queued, setsQueued;
 		lock (PendingDamageSync)
 		{
-			if (PendingDamage.Count == 0) return;
-			payloads = new List<string>(PendingDamage.Count);
+			if (PendingDamage.Count == 0 && PendingSets.Count == 0) return;
+			payloads = new List<(string, string)>(PendingDamage.Count + PendingSets.Count);
+			// The absolute writes go first: before SE-1280 they reached the WA at once and the hits up to a second later.
+			foreach (var entry in PendingSets)
+				payloads.Add((entry.Key.Faction ? "SetFactionReputation" : "SetPlayerReputation", FactionAuthorityCodec.Write(entry.Key.Faction
+					? new FactionAuthorityMessage { Operation = "SetFactionReputation", First = entry.Key.First, Second = entry.Key.Second, Number = entry.Value.Reputation }
+					: new FactionAuthorityMessage
+					{
+						Operation = "SetPlayerReputation", First = entry.Key.First, Second = entry.Key.Second,
+						Number = entry.Value.Reputation, Reason = entry.Value.Reason
+					})));
+			m_setsInFlight = new Dictionary<SetKey, (int, ReputationChangeReason)>(PendingSets);
+			PendingSets.Clear();
 			foreach (var entry in PendingDamage)
 			{
 				bool summable = entry.Key.Type is MyReputationDamageType.Damaging or MyReputationDamageType.GrindingWelding;
 				for (int call = 0; call < (summable ? 1 : entry.Value.Calls); call++)
-					payloads.Add(FactionAuthorityCodec.Write(new FactionAuthorityMessage
+					payloads.Add(("DamageReputation", FactionAuthorityCodec.Write(new FactionAuthorityMessage
 					{
 						Operation = "DamageReputation", First = entry.Key.Player, Second = entry.Key.Attacked,
 						Number = (int)entry.Key.Type, Amount = summable ? entry.Value.Amount : 0f
-					}));
+					})));
 			}
 			PendingDamage.Clear();
 			queued = m_damageCallsQueued;
+			setsQueued = m_setCallsQueued;
 		}
 		if (ClusterRuntime.LocalMilliseconds >= m_nextDamageLog)
 		{
 			m_nextDamageLog = ClusterRuntime.LocalMilliseconds + 10000;
 			Console.WriteLine("[ClusterPlugin] factions damage_reputation flush commands=" + payloads.Count
-				+ " hits_queued_total=" + queued + " commands_sent_total=" + Interlocked.Read(ref m_damageCommandsSent));
+				+ " hits_queued_total=" + queued + " commands_sent_total=" + Interlocked.Read(ref m_damageCommandsSent)
+				+ " sets_queued_total=" + setsQueued + " set_commands_sent_total=" + Interlocked.Read(ref m_setCommandsSent));
 		}
 		Interlocked.Exchange(ref m_damageFlushInFlight, 1);
 		Task.Run(() =>
 		{
+			string operation = null;
 			try
 			{
-				foreach (string payload in payloads)
+				foreach (var (op, payload) in payloads)
 				{
+					operation = op;
 					GlobalStateChannel.SendCommand(Subsystem, payload);
-					Interlocked.Increment(ref m_damageCommandsSent);
+					if (op == "DamageReputation") Interlocked.Increment(ref m_damageCommandsSent);
+					else Interlocked.Increment(ref m_setCommandsSent);
 				}
 			}
-			catch (Exception exception) { CommandFailed("DamageReputation", exception); }
-			finally { Interlocked.Exchange(ref m_damageFlushInFlight, 0); }
+			catch (Exception exception) { CommandFailed(operation, exception); }
+			finally
+			{
+				lock (PendingDamageSync) m_setsInFlight = new Dictionary<SetKey, (int, ReputationChangeReason)>();
+				Interlocked.Exchange(ref m_damageFlushInFlight, 0);
+			}
 		});
 	}
-	public static bool SetFactionReputationPrefix(long fromFactionId, long toFactionId, int reputation)
-		=> ForwardVoid("SetFactionReputation", new object[] { fromFactionId, toFactionId, reputation });
-	public static bool SetPlayerReputationPrefix(long identityId, long factionId, int reputation, ReputationChangeReason reason)
-		=> ForwardVoid("SetPlayerReputation", new object[] { identityId, factionId, reputation, reason });
 
-	private static bool ForwardVoid(string operation, object[] arguments)
+	public static bool SetFactionReputationPrefix(long fromFactionId, long toFactionId, int reputation)
+		=> QueueSet(new SetKey(true, fromFactionId, toFactionId), reputation, default);
+	public static bool SetPlayerReputationPrefix(long identityId, long factionId, int reputation, ReputationChangeReason reason)
+		=> QueueSet(new SetKey(false, identityId, factionId), reputation, reason);
+
+	/// <summary>
+	/// SE-1280: an absolute reputation write on a regular node is applied here at once and queued for the WA, which gets
+	/// only the pair's last value with the next flush; the game thread never waits for it. On octahedron-test
+	/// (2026-11-08 16:48Z) a MES damage trigger set the damage owner's reputation with a list of factions on every hit
+	/// (read, add, set), each a blocking WA round trip: over a thousand of them in one frame of node-4, 68 s, until the
+	/// Registry declared the node dead. Mods and scripts reach these through IMyFactionCollection.SetReputation and
+	/// SetReputationBetweenPlayerAndFaction, so any of them can do the same. The local apply keeps read-modify-write
+	/// callers like MES correct: the next read sees the value just written, not the WA's older one.
+	/// </summary>
+	private static bool QueueSet(SetKey key, int reputation, ReputationChangeReason reason)
 	{
 		if (RunOriginal()) return true;
-		try { GlobalStateChannel.SendCommand(Subsystem, FactionAuthorityCodec.Write(Request(operation, arguments))); }
-		catch (Exception exception) { CommandFailed(operation, exception); }
+		ApplySetLocally(key, reputation, reason);
+		lock (PendingDamageSync)
+		{
+			PendingSets[key] = (reputation, reason);
+			m_setCallsQueued++;
+		}
 		return false;
+	}
+
+	private static void ApplySetLocally(SetKey key, int reputation, ReputationChangeReason reason, bool skipUnchanged = false)
+	{
+		MyFactionCollection factions = MySession.Static?.Factions;
+		if (factions == null) return;
+		if (skipUnchanged && reputation == (key.Faction ? factions.GetRelationBetweenFactions(key.First, key.Second).Item2
+			: factions.GetRelationBetweenPlayerAndFaction(key.First, key.Second).Item2)) return;
+		bool applying = m_applying;
+		m_applying = true;
+		try
+		{
+			if (key.Faction) factions.SetReputationBetweenFactions(key.First, key.Second, reputation);
+			else factions.SetReputationBetweenPlayerAndFaction(key.First, key.Second, reputation, reason);
+		}
+		finally { m_applying = applying; }
+	}
+
+	/// <summary>
+	/// SE-1280: a replica or snapshot from the WA predates the writes still queued or in flight here; put them back so
+	/// this node keeps reading its own last write until the WA's answer to it arrives.
+	/// </summary>
+	private static void ReapplyQueuedSets()
+	{
+		List<KeyValuePair<SetKey, (int Reputation, ReputationChangeReason Reason)>> sets;
+		lock (PendingDamageSync)
+		{
+			if (PendingSets.Count == 0 && m_setsInFlight.Count == 0) return;
+			sets = m_setsInFlight.Where(entry => !PendingSets.ContainsKey(entry.Key)).Concat(PendingSets).ToList();
+		}
+		// Unchanged pairs are skipped: each write fires the collection's reputation event again.
+		foreach (var entry in sets) ApplySetLocally(entry.Key, entry.Value.Reputation, entry.Value.Reason, skipUnchanged: true);
 	}
 
 	public static void AcceptedPostfix(string operation, object[] arguments)
@@ -417,6 +496,7 @@ public static class MyFactionCollectionPatch
 		if (message.Operation == "Snapshot")
 		{
 			ApplySnapshot(message.Snapshot);
+			ReapplyQueuedSets();
 			return;
 		}
 		if (!message.Operation.EndsWith("Success", StringComparison.Ordinal))
@@ -424,6 +504,7 @@ public static class MyFactionCollectionPatch
 		m_applying = true;
 		try { MyFactionCollectionSeams.ClusterApplyFactionSuccess(message.Operation, SuccessArguments(message)); }
 		finally { m_applying = false; }
+		ReapplyQueuedSets();
 	}
 
 	private static void ApplySnapshot(string payload)
