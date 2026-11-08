@@ -335,6 +335,16 @@ internal static class MovedRoutes
 					Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 					return;
 		});
+        TestRoutes.Add("POST", "/banking-test-delay", (context, path) =>
+		{
+					if (!long.TryParse(context.Request.QueryString["ownerId"], NumberStyles.Integer, CultureInfo.InvariantCulture, out long delayOwner) || delayOwner <= 0
+						|| !int.TryParse(context.Request.QueryString["ms"], NumberStyles.Integer, CultureInfo.InvariantCulture, out int delayMs) || delayMs < 0 || delayMs > 60000)
+						throw new ArgumentException("Invalid banking delay query parameters");
+					// SE-1226, on the World Authority: the next balance change of this owner waits on its game thread.
+					MyBankingSystemPatch.DelayNextChange(delayOwner, delayMs);
+					Write(context, 200, "application/json", Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { ownerId = delayOwner, ms = delayMs })));
+					return;
+		});
         TestRoutes.Add("POST", "/banking-test-transfer", (context, path) =>
 		{
 					if (!long.TryParse(context.Request.QueryString["from"], NumberStyles.Integer, CultureInfo.InvariantCulture, out long transferFrom) || transferFrom <= 0

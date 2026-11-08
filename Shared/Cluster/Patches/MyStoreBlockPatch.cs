@@ -88,7 +88,19 @@ public static class MyStoreBlockPatch
 				// Journal BEFORE reserving: a crash between the reservation and its commit/refund must
 				// leave a record a restarting node can replay to net zero (see StorePaymentJournal).
 				StorePaymentJournal.Reserve(m_reserveOperation, m_refundOperation, payerId, amount);
-				Approved = change(payerId, -amount, m_reserveOperation);
+				try
+				{
+					Approved = change(payerId, -amount, m_reserveOperation);
+				}
+				catch (Exception exception)
+				{
+					// SE-1226: no answer is not a refusal. The reserve may still apply, so the journal asks again with the
+					// same id and refunds it if it did. The purchase itself is refused.
+					Console.WriteLine("[ClusterPlugin] store payment reserve unanswered reserve=" + m_reserveOperation
+						+ " payer=" + payerId + " amount=" + amount + " error=" + SecretRedactor.Redact(exception.Message));
+					StorePaymentJournal.Abandon(change, m_reserveOperation, m_refundOperation, payerId, amount, reserved: false);
+					return;
+				}
 				if (!Approved) StorePaymentJournal.Close(m_reserveOperation);
 			}
 		}
@@ -138,10 +150,13 @@ public static class MyStoreBlockPatch
 		{
 			if (!Approved || m_committed || m_change == null) return;
 			if (!m_debitObserved) throw new InvalidOperationException("Store payment did not apply its prepared debit");
-			if (m_payeeId != 0 && m_credit != 0 && !m_change(m_payeeId, m_credit, m_creditOperation))
-				throw new InvalidOperationException("Store payment credit was rejected");
 			m_committed = true;
-			StorePaymentJournal.Close(m_reserveOperation);
+			// SE-1226: the credit leg settles in the background. The game thread does not wait for the World Authority, and
+			// a credit it does not answer in time is asked again with the same id instead of being refunded.
+			if (m_payeeId != 0 && m_credit != 0)
+				StorePaymentJournal.Commit(m_change, m_reserveOperation, m_refundOperation, m_payerId, m_amount, m_creditOperation, m_payeeId, m_credit);
+			else
+				StorePaymentJournal.Close(m_reserveOperation);
 		}
 
 		public void Dispose()
@@ -150,11 +165,7 @@ public static class MyStoreBlockPatch
 			m_disposed = true;
 			if (ReferenceEquals(m_payment, this)) m_payment = null;
 			if (Approved && !m_committed && m_change != null)
-			{
-				if (!m_change(m_payerId, m_amount, m_refundOperation))
-					throw new InvalidOperationException("Store payment refund was rejected");
-				StorePaymentJournal.Close(m_reserveOperation);
-			}
+				StorePaymentJournal.Abandon(m_change, m_reserveOperation, m_refundOperation, m_payerId, m_amount, reserved: true);
 		}
 	}
 }
