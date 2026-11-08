@@ -3156,40 +3156,63 @@ internal sealed partial class ClusterControlServer
 	/// SE-1272 (import.keepAsleep), target, right after the thaw: puts back to sleep the arrived grids the source had
 	/// asleep. Havok adds every enabled body awake, so a resting pile woke on each handover and the target solved all of
 	/// it until it settled again (live 2026-11-08, Moon Station's 207 leftover trader shuttles: 0.08 sim speed, 7.8 s to
-	/// recover). Before the next physics step each such body is still an island of its own, so the island call
-	/// (HkEntity.Deactivate is only a request, see ForcedSleepService.Sleep) puts just that body to sleep; a sleeping
-	/// pair makes no contact agents, and a touch by an awake body wakes it as in vanilla. Velocities stay as carried.
+	/// recover). The island call (HkEntity.Deactivate is only a request, see ForcedSleepService.Sleep) sleeps a body at
+	/// once, but the first physics step after the add wakes them all again (bench: 12 of 12 asleep after the call, 12
+	/// awake two frames later), so the ones still at rest two frames later are put to sleep a second time. One that is
+	/// moving by then was woken by something real and is left alone; a touch by an awake body wakes a sleeper as in
+	/// vanilla. Velocities stay as carried. Logs keep_asleep_check ten frames after the thaw, with the knob off too.
 	/// </summary>
 	private static int KeepAsleep(Transfer transfer)
 	{
-		if (!ClusterConfig.GetBool("import.keepAsleep")) return 0;
-		int count = 0;
-		List<MyCubeGrid> kept = new List<MyCubeGrid>();
+		bool on = ClusterConfig.GetBool("import.keepAsleep");
+		List<MyCubeGrid> asleep = new List<MyCubeGrid>();
 		foreach (long id in PluginHandoverService.AsleepArrivals(transfer.PluginStates))
 		{
 			if (!transfer.Members.Contains(id) || !MyEntities.TryGetEntityById(id, out MyEntity entity) || entity is not MyCubeGrid grid
 				|| grid.IsStatic || grid.MarkedForClose || grid.Physics?.RigidBody == null || !grid.Physics.Enabled)
 				continue;
-			Havok.HkWorld world = grid.Physics.HavokWorld;
-			if (world != null) world.DeactivateSimulationIslandRigidBodies(grid.Physics.RigidBody);
-			else grid.Physics.RigidBody.Deactivate();
-			kept.Add(grid);
-			count++;
+			asleep.Add(grid);
 		}
-		if (kept.Count > 0)
+		if (asleep.Count == 0) return 0;
+		if (on) foreach (MyCubeGrid grid in asleep) SleepIsland(grid);
+		Guid transferId = transfer.Id;
+		int awakeNow = AwakeCount(asleep);
+		AfterFrames(2, () =>
 		{
-			// SE-1272 diag: awake right after the island call, and two frames (at least one physics step) later.
-			int awakeNow = kept.Count(grid => grid.Physics.RigidBody.IsActive);
-			Guid transferId = transfer.Id;
-			MySandboxGame.Static.Invoke(() => MySandboxGame.Static.Invoke(() =>
-			{
-				List<MyCubeGrid> live = kept.Where(grid => !grid.MarkedForClose && grid.Physics?.RigidBody != null).ToList();
-				Log("keep_asleep_check transferId=" + transferId + " kept=" + kept.Count + " awakeNow=" + awakeNow
-					+ " awakeAfter=" + live.Count(grid => grid.Physics.RigidBody.IsActive) + " live=" + live.Count);
-			}, "SE-1272 keep asleep check"), "SE-1272 keep asleep check");
-		}
-		return count;
+			int awake2 = AwakeCount(asleep);
+			int slept = 0;
+			if (on)
+				foreach (MyCubeGrid grid in LiveGrids(asleep).Where(grid => grid.Physics.RigidBody.IsActive && AtRest(grid)))
+				{
+					SleepIsland(grid);
+					slept++;
+				}
+			AfterFrames(8, () => Log("keep_asleep_check transferId=" + transferId + " keepAsleep=" + on.ToString().ToLowerInvariant()
+				+ " asleepArrivals=" + asleep.Count + " awakeNow=" + awakeNow + " awake2=" + awake2 + " slept2=" + slept
+				+ " awake10=" + AwakeCount(asleep) + " live=" + LiveGrids(asleep).Count()));
+		});
+		return on ? asleep.Count : 0;
 	}
+
+	private static void SleepIsland(MyCubeGrid grid)
+	{
+		Havok.HkWorld world = grid.Physics.HavokWorld;
+		if (world != null) world.DeactivateSimulationIslandRigidBodies(grid.Physics.RigidBody);
+		else grid.Physics.RigidBody.Deactivate();
+	}
+
+	private static IEnumerable<MyCubeGrid> LiveGrids(List<MyCubeGrid> grids) =>
+		grids.Where(grid => !grid.MarkedForClose && grid.Physics?.RigidBody != null && grid.Physics.Enabled);
+
+	private static int AwakeCount(List<MyCubeGrid> grids) => LiveGrids(grids).Count(grid => grid.Physics.RigidBody.IsActive);
+
+	/// <summary>SE-1272: the speeds a resting grid keeps (solver jitter), well under anything that moves on its own.</summary>
+	private static bool AtRest(MyCubeGrid grid) =>
+		grid.Physics.LinearVelocity.LengthSquared() < 0.01f && grid.Physics.AngularVelocity.LengthSquared() < 0.0001f;
+
+	/// <summary>Runs <paramref name="action"/> on the game thread <paramref name="frames"/> frames from now.</summary>
+	private static void AfterFrames(int frames, Action action) =>
+		MySandboxGame.Static.Invoke(() => { if (frames <= 1) action(); else AfterFrames(frames - 1, action); }, "SE-1272 keep asleep");
 
 	private static int ThawSource(Guid transferId, ulong partitionId, uint generation)
 	{

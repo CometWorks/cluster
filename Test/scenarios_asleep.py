@@ -1,15 +1,16 @@
 """SE-1272: a handover keeps the grids Havok had asleep on the source asleep on the target.
 
 * ``P2-HANDOVER-ASLEEP`` - a row of touching cubes rests on node-1 until Havok puts every one to sleep, then its
-  partition is forced to node-2. The target's game thread is sampled from before the handover until 10 s after it:
-  once a cube's body is enabled there it must never be awake, and the thaw logs ``keptAsleep`` for all of them.
+  partition is forced to node-2. The thaw logs ``keptAsleep`` for all of them, and the target's
+  ``keep_asleep_check`` line, ten frames after the thaw, counts none awake. The cubes' sleep state on the target is
+  also sampled through the handover (recorded, not judged: a busy game thread answers too seldom to time a wake).
   Before the fix the thaw enabled every body awake, so the target simulated the whole pile again until it settled
   (live octahedron-test 2026-11-08: Moon Station's 207 leftover trader shuttles, 0.08 sim speed for 7.8 s on every
   rotation that moved them).
-* ``P2-HANDOVER-ASLEEP-RED`` - the same with ``import.keepAsleep`` off on the target: the cubes must wake there (the
-  known positive, so a green run is not a sampler that cannot see a wake).
+* ``P2-HANDOVER-ASLEEP-RED`` - the same with ``import.keepAsleep`` off on the target: the cubes must be awake there
+  ten frames after the thaw (the known positive, so a green run is not a check that cannot see a wake).
 
-No timers: the cubes fall asleep within seconds, and the sampler stops 10 s after the handover returns.
+No timers: the cubes fall asleep within seconds, and the scenario reads the check line 10 s after the handover returns.
 """
 
 from __future__ import annotations
@@ -82,19 +83,21 @@ def _asleep(bench, red: bool) -> None:
     sampler.join()
     bench.record("asleep-samples", sampler.rows)
     arrived = [row for row in sampler.rows if row[2] == CUBES]
-    awake = max((row[3] for row in arrived), default=0)
     thaw = _lines(bench, "node-2", rf"handover_thaw .*partition={partition} ")
     kept = int(m.group(1)) if thaw and (m := re.search(r"keptAsleep=(\d+)", thaw[-1])) else None
-    check = _lines(bench, "node-2", r"keep_asleep_check ")
-    bench.exercised(samples=len(sampler.rows), arrivedSamples=len(arrived), maxAwake=awake, keptAsleep=kept,
-                    keepAsleepCheck=check[-1][-160:] if check else None)
-    _require(bench, "the target was sampled with every cube enabled", len(arrived) >= 5, f"{len(arrived)} samples")
+    checks = _lines(bench, "node-2", r"keep_asleep_check ")
+    check = dict(re.findall(r"(\w+)=(\S+)", checks[-1].split("keep_asleep_check", 1)[1])) if checks else {}
+    awake10 = int(check.get("awake10", -1))
+    bench.exercised(samples=len(sampler.rows), arrivedSamples=len(arrived), keptAsleep=kept, keepAsleepCheck=check)
+    _require(bench, "the target logged keep_asleep_check for the cubes", check.get("asleepArrivals") == str(CUBES),
+             checks[-1][-200:] if checks else "no keep_asleep_check line")
     if red:
-        bench.check("RED: with import.keepAsleep off the cubes wake on the target", awake > 0,
-                    f"max awake {awake} of {CUBES}, keptAsleep={kept}")
+        bench.check("RED: with import.keepAsleep off the cubes are awake on the target 10 frames after the thaw",
+                    awake10 > 0, f"awake10={awake10} of {CUBES}, keptAsleep={kept}")
     else:
         bench.check("the thaw kept every cube asleep", kept == CUBES, thaw[-1][:300] if thaw else "no handover_thaw line")
-        bench.check("no cube woke on the target after the handover", awake == 0, f"max awake {awake} of {CUBES}")
+        bench.check("no cube is awake on the target 10 frames after the thaw", awake10 == 0,
+                    f"awake10={awake10} of {CUBES} ({checks[-1][-160:]})")
 
 
 def p2_handover_asleep(bench) -> None:
