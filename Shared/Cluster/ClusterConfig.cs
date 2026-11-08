@@ -69,6 +69,10 @@ public static class ClusterConfig
 		["release.closePerFrame"] = "0",
 		["hitch.thresholdMs"] = "100",
 		["hitch.logThresholdMs"] = "250",
+		// SE-1228: a game thread stuck this long in one frame logs every thread's stack once, while it is still stuck, so a
+		// long hitch names what it waits on. At most once per 30 min per process (the capture stops it for a moment);
+		// Linux only. 0 = off. Read every 0.5 s.
+		["hitch.stackMs"] = "3000",
 		// HotSpareNodes.md dormant spares: a registry-enabled regular node that has never owned
 		// a partition and has no clients throttles the whole main loop to dormant.hz.
 		["dormant.enabled"] = "true",

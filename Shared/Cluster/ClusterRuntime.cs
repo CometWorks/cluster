@@ -301,6 +301,33 @@ public static class ClusterRuntime
 			ArmExitWatchdog("game thread exited", graceSeconds: 30);
 		})
 		{ IsBackground = true, Name = "ClusterGameThreadWatcher" }.Start();
+		if (OperatingSystem.IsLinux())
+			new Thread(WatchLongFrames) { IsBackground = true, Name = "ClusterLongFrameWatcher" }.Start();
+	}
+
+	/// <summary>SE-1228: one long-frame stack capture per process this often at most.</summary>
+	private const long LongFrameStackIntervalMilliseconds = 30 * 60_000;
+
+	/// <summary>
+	/// SE-1228: the hitch line says how long a frame took, not what it waited on. While the game thread is stuck in one
+	/// frame for hitch.stackMs, every thread's stack is logged once. The World Authority's 5-10 s stalls on octahedron-test
+	/// had no stack, and reading the code did not find the wait. Not before the session is ready: loading the world takes
+	/// frames that long, and one of them would use up the capture.
+	/// </summary>
+	private static void WatchLongFrames()
+	{
+		long capturedFrame = 0, nextCapture = 0;
+		while (true)
+		{
+			Thread.Sleep(500);
+			long frame = Interlocked.Read(ref m_lastGameThreadUpdate), now = Environment.TickCount64;
+			int threshold = ClusterConfig.GetInt("hitch.stackMs");
+			if (threshold <= 0 || now - frame < threshold || frame == capturedFrame || now < nextCapture
+				|| MySession.Static?.Ready != true) continue;
+			capturedFrame = frame;
+			nextCapture = now + LongFrameStackIntervalMilliseconds;
+			GameThreadStacks.Log("game thread stuck in one frame for " + (now - frame) + " ms", m_gameThreadId, "long frame");
+		}
 	}
 
 	/// <summary>

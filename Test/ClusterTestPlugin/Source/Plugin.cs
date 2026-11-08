@@ -34,6 +34,7 @@ public class Plugin : IPlugin
         OfflineTestRoutes.ObserveZoneRestore();
         OfflineTestRoutes.ObserveGasCycle();
         GameThreadLoadRoutes.Update();   // SE-1134
+        WaCommandBurstRoutes.Update();   // SE-1228
     }
 
     public void Dispose()
