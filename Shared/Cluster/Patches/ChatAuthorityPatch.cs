@@ -32,6 +32,7 @@ public static class ChatAuthorityPatch
 	{
 		MyMultiplayerBaseSeams.ClusterChatRequestPrefix = RequestPrefix;
 		MyDedicatedServerSeams.ClusterChatAccepted = AcceptedPostfix;
+		MyDedicatedServerSeams.ClusterChatSkipAccepted = SkipAccepted;
 		GlobalStateChannel.RegisterAuthorityHandler(Subsystem, ExecuteAtAuthority);
 		GlobalStateChannel.RegisterReplicaHandler(Subsystem, RelayAtReplica);
 		GlobalStateChannel.RegisterSnapshot(Subsystem, () => string.Empty, _ => { });
@@ -40,12 +41,22 @@ public static class ChatAuthorityPatch
 	public static bool RequestPrefix(ChatMsg msg)
 	{
 		if (!ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority) return true;
-		ulong sender = MyEventContext.Current.Sender.Value;
+		Forward(msg, MyEventContext.Current.Sender.Value);
+		return false;
+	}
+
+	private static void Forward(ChatMsg msg, ulong sender)
+	{
 		if (!GlobalStateChannel.SendRequest(Subsystem, JsonSerializer.Serialize(Message.From(msg, sender))))
 			Console.WriteLine("[ClusterPlugin] global_state unavailable=true subsystem=chat action=dropped");
 		// ponytail: drop during WA outages; replay requires persisted deduplication before it is safe.
-		return false;
 	}
+
+	// A player's line reaches plugins and mods (ChatMessageReceived, MessageRecieved, admin debug commands) on the
+	// player's node when the accepted line comes back from the WA, not on the WA, where the player has no character.
+	// Only lines the WA accepted count: its prefixes (Magnetar, Hangar) and checks (anti-spam) still decide (SE-1261).
+	private static bool SkipAccepted(ulong sender) => ClusterRuntime.IsClustered && ClusterRuntime.IsWorldAuthority
+		&& sender != 0 && sender != MyMultiplayer.Static.ServerId;
 
 	public static void AcceptedPostfix(ChatMsg msg, ulong sender)
 	{
@@ -100,8 +111,8 @@ public static class ChatAuthorityPatch
 			}, "ClusterPlugin control chat send");
 			return true;
 		}
-		using (MyEventContext.Set(new EndpointId(sender), null, isInvokedLocally: false))
-			return !RequestPrefix(msg);
+		Forward(msg, sender);
+		return true;
 	}
 
 	private static void ExecuteAtAuthority(string origin, string payload)
@@ -129,6 +140,10 @@ public static class ChatAuthorityPatch
 			if (channel == ChatChannel.Faction && MySession.Static.Factions.TryGetFactionById(message.TargetId)?.IsMember(identity) != true) continue;
 			MyMultiplayerBaseSeams.ClusterRelayChat(msg, member);
 		}
+		// The sender's own node, the one it is attached to, accepts the line the way vanilla does (SkipAccepted).
+		if (!ClusterRuntime.IsWorldAuthority && message.Sender != 0 && MyMultiplayer.Static.Members.Contains(message.Sender))
+			using (MyEventContext.Set(new EndpointId(message.Sender), null, isInvokedLocally: false))
+				MyMultiplayer.Static.OnChatMessage(ref msg);
 	}
 
 	// CustomData carries the shown author of broadcast controller and scripted messages: without it
