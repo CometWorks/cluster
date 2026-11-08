@@ -26,17 +26,13 @@ public static class ChatAuthorityPatch
 	private static readonly MethodInfo ServerRequest = typeof(MyMultiplayerBase).GetMethod("OnChatMessageReceived_Server", BindingFlags.NonPublic | BindingFlags.Static, null, new[] { typeof(ChatMsg) }, null)
 		?? throw new MissingMethodException(typeof(MyMultiplayerBase).FullName, "OnChatMessageReceived_Server(ChatMsg)");
 
-	// Set while the World Authority runs a request a regular node forwarded: that node already ran
-	// OnChatMessage for it, so the WA only accepts and relays the line (SE-1261).
-	[ThreadStatic] private static bool t_forwarded;
-
 	public sealed record HistoryEntry(long Seq, DateTimeOffset At, ulong Author, byte Channel, string Text);
 
 	public static void Install()
 	{
 		MyMultiplayerBaseSeams.ClusterChatRequestPrefix = RequestPrefix;
 		MyDedicatedServerSeams.ClusterChatAccepted = AcceptedPostfix;
-		MyDedicatedServerSeams.ClusterChatForwarded = () => t_forwarded;
+		MyDedicatedServerSeams.ClusterChatSkipAccepted = SkipAccepted;
 		GlobalStateChannel.RegisterAuthorityHandler(Subsystem, ExecuteAtAuthority);
 		GlobalStateChannel.RegisterReplicaHandler(Subsystem, RelayAtReplica);
 		GlobalStateChannel.RegisterSnapshot(Subsystem, () => string.Empty, _ => { });
@@ -46,9 +42,6 @@ public static class ChatAuthorityPatch
 	{
 		if (!ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority) return true;
 		Forward(msg, MyEventContext.Current.Sender.Value);
-		// The sender is on this node, so the line reaches its plugins and mods here, once, the way vanilla
-		// accepts it: ChatMessageReceived, the mods' MessageRecieved and admin debug commands (SE-1261).
-		MyMultiplayer.Static.OnChatMessage(ref msg);
 		return false;
 	}
 
@@ -58,6 +51,12 @@ public static class ChatAuthorityPatch
 			Console.WriteLine("[ClusterPlugin] global_state unavailable=true subsystem=chat action=dropped");
 		// ponytail: drop during WA outages; replay requires persisted deduplication before it is safe.
 	}
+
+	// A player's line reaches plugins and mods (ChatMessageReceived, MessageRecieved, admin debug commands) on the
+	// player's node when the accepted line comes back from the WA, not on the WA, where the player has no character.
+	// Only lines the WA accepted count: its prefixes (Magnetar, Hangar) and checks (anti-spam) still decide (SE-1261).
+	private static bool SkipAccepted(ulong sender) => ClusterRuntime.IsClustered && ClusterRuntime.IsWorldAuthority
+		&& sender != 0 && sender != MyMultiplayer.Static.ServerId;
 
 	public static void AcceptedPostfix(ChatMsg msg, ulong sender)
 	{
@@ -122,11 +121,7 @@ public static class ChatAuthorityPatch
 		MySandboxGame.Static.Invoke(() =>
 		{
 			using (MyEventContext.Set(new EndpointId(message.Sender), null, isInvokedLocally: false))
-			{
-				t_forwarded = true;
-				try { ServerRequest.Invoke(null, new object[] { message.ToChatMsg() }); }
-				finally { t_forwarded = false; }
-			}
+				ServerRequest.Invoke(null, new object[] { message.ToChatMsg() });
 		}, "ClusterPlugin World Authority chat request");
 	}
 
@@ -145,6 +140,10 @@ public static class ChatAuthorityPatch
 			if (channel == ChatChannel.Faction && MySession.Static.Factions.TryGetFactionById(message.TargetId)?.IsMember(identity) != true) continue;
 			MyMultiplayerBaseSeams.ClusterRelayChat(msg, member);
 		}
+		// The sender's own node, the one it is attached to, accepts the line the way vanilla does (SkipAccepted).
+		if (!ClusterRuntime.IsWorldAuthority && message.Sender != 0 && MyMultiplayer.Static.Members.Contains(message.Sender))
+			using (MyEventContext.Set(new EndpointId(message.Sender), null, isInvokedLocally: false))
+				MyMultiplayer.Static.OnChatMessage(ref msg);
 	}
 
 	// CustomData carries the shown author of broadcast controller and scripted messages: without it

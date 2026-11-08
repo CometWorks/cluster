@@ -61,7 +61,8 @@ internal static class BroadcastChatRoutes
             }));
         });
         // POST /chat-event-probe - start recording the chat this node raises to server plugins (ChatMessageReceived)
-        // and mods (MessageRecieved), SE-1261.
+        // and mods (MessageRecieved), and refuse lines starting with VetoText the way Hangar refuses vanilla hangar
+        // commands: a last-priority prefix on the server's chat request (SE-1261).
         TestRoutes.Add("POST", "/chat-event-probe", context =>
         {
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
@@ -70,6 +71,10 @@ internal static class BroadcastChatRoutes
                 {
                     MyMultiplayer.Static.ChatMessageReceived += (sender, text, channel, _, _) => AddEvent("plugin", sender, text, channel);
                     MyAPIGateway.Utilities.MessageRecieved += (sender, text) => AddEvent("mod", sender, text, null);
+                    var request = AccessTools.Method(typeof(MyMultiplayerBase), "OnChatMessageReceived_Server", new[] { typeof(ChatMsg) })
+                        ?? throw new MissingMethodException("MyMultiplayerBase.OnChatMessageReceived_Server");
+                    new Harmony("ClusterTestPlugin.ChatEventProbe").Patch(request,
+                        prefix: new HarmonyMethod(AccessTools.Method(typeof(BroadcastChatRoutes), nameof(VetoPrefix))) { priority = Priority.Last });
                     m_listening = true;
                 }
                 return (object)new { armed = true };
@@ -88,6 +93,10 @@ internal static class BroadcastChatRoutes
                 TestRoutes.Json(context, 200, new { relayed = Relayed.ToList() });
         });
     }
+
+    private const string VetoText = "SE-1261 veto";
+
+    private static bool VetoPrefix(ChatMsg msg) => msg.Text?.StartsWith(VetoText, StringComparison.Ordinal) != true;
 
     private static void AddEvent(string kind, ulong sender, string text, ChatChannel? channel)
     {
