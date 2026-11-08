@@ -22,6 +22,7 @@ import time
 
 from scenarios import _force_handover
 from scenarios_core import _lines, _partitions
+from scenarios_ext import node_self_test
 from scenarios_offline import _put_config
 from scenarios_wa_ops import _poll, _require
 
@@ -101,6 +102,9 @@ def _asleep(bench, red: bool) -> None:
         bench.check("the thaw kept every cube asleep", kept == cubes, thaw[-1][:300] if thaw else "no handover_thaw line")
         bench.check("no cube is awake on the target 10 frames after the thaw", awake10 == 0,
                     f"awake10={awake10} of {cubes} ({checks[-1][-160:]})")
+        result = node_self_test(bench, "fast-motion-tracker", node="node-2")  # the asleep map's round trip
+        bench.check("node self-test section `fast-motion-tracker` passes",
+                    bool(result.get("ok")) and "fast-motion-tracker" in (result.get("ran") or []), json.dumps(result)[:400])
 
 
 def p2_handover_asleep(bench) -> None:
