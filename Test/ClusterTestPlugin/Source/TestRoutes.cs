@@ -61,7 +61,7 @@ internal static class TestRoutes
         PropertySyncRoutes.Register();  // #1376 null emotion controller Syncs in state sync
         VoxelCarryRoutes.Register();  // T-0368 asteroid carried across a handover
         StreamHoldRoutes.Register();  // T-0396 a grid held mid-stream to one client
-        BroadcastChatRoutes.Register(); // SE-943 broadcast controller chat and the chat a node relays
+        BroadcastChatRoutes.Register(); // SE-943 broadcast controller chat and the chat a node relays; SE-1261 chat events
         PanelTestRoutes.Register();   // SE-1133 maintenance panels open across a handover
         DriftTestRoutes.Register();   // SE-1152..1155 benign drift the round-trip gate rejected
         BlueprintTestRoutes.Register(); // T-0401 parked ship pastes (Visitor Ion) for the Add bench

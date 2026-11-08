@@ -26,12 +26,17 @@ public static class ChatAuthorityPatch
 	private static readonly MethodInfo ServerRequest = typeof(MyMultiplayerBase).GetMethod("OnChatMessageReceived_Server", BindingFlags.NonPublic | BindingFlags.Static, null, new[] { typeof(ChatMsg) }, null)
 		?? throw new MissingMethodException(typeof(MyMultiplayerBase).FullName, "OnChatMessageReceived_Server(ChatMsg)");
 
+	// Set while the World Authority runs a request a regular node forwarded: that node already ran
+	// OnChatMessage for it, so the WA only accepts and relays the line (SE-1261).
+	[ThreadStatic] private static bool t_forwarded;
+
 	public sealed record HistoryEntry(long Seq, DateTimeOffset At, ulong Author, byte Channel, string Text);
 
 	public static void Install()
 	{
 		MyMultiplayerBaseSeams.ClusterChatRequestPrefix = RequestPrefix;
 		MyDedicatedServerSeams.ClusterChatAccepted = AcceptedPostfix;
+		MyDedicatedServerSeams.ClusterChatForwarded = () => t_forwarded;
 		GlobalStateChannel.RegisterAuthorityHandler(Subsystem, ExecuteAtAuthority);
 		GlobalStateChannel.RegisterReplicaHandler(Subsystem, RelayAtReplica);
 		GlobalStateChannel.RegisterSnapshot(Subsystem, () => string.Empty, _ => { });
@@ -40,11 +45,18 @@ public static class ChatAuthorityPatch
 	public static bool RequestPrefix(ChatMsg msg)
 	{
 		if (!ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority) return true;
-		ulong sender = MyEventContext.Current.Sender.Value;
+		Forward(msg, MyEventContext.Current.Sender.Value);
+		// The sender is on this node, so the line reaches its plugins and mods here, once, the way vanilla
+		// accepts it: ChatMessageReceived, the mods' MessageRecieved and admin debug commands (SE-1261).
+		MyMultiplayer.Static.OnChatMessage(ref msg);
+		return false;
+	}
+
+	private static void Forward(ChatMsg msg, ulong sender)
+	{
 		if (!GlobalStateChannel.SendRequest(Subsystem, JsonSerializer.Serialize(Message.From(msg, sender))))
 			Console.WriteLine("[ClusterPlugin] global_state unavailable=true subsystem=chat action=dropped");
 		// ponytail: drop during WA outages; replay requires persisted deduplication before it is safe.
-		return false;
 	}
 
 	public static void AcceptedPostfix(ChatMsg msg, ulong sender)
@@ -100,8 +112,8 @@ public static class ChatAuthorityPatch
 			}, "ClusterPlugin control chat send");
 			return true;
 		}
-		using (MyEventContext.Set(new EndpointId(sender), null, isInvokedLocally: false))
-			return !RequestPrefix(msg);
+		Forward(msg, sender);
+		return true;
 	}
 
 	private static void ExecuteAtAuthority(string origin, string payload)
@@ -110,7 +122,11 @@ public static class ChatAuthorityPatch
 		MySandboxGame.Static.Invoke(() =>
 		{
 			using (MyEventContext.Set(new EndpointId(message.Sender), null, isInvokedLocally: false))
-				ServerRequest.Invoke(null, new object[] { message.ToChatMsg() });
+			{
+				t_forwarded = true;
+				try { ServerRequest.Invoke(null, new object[] { message.ToChatMsg() }); }
+				finally { t_forwarded = false; }
+			}
 		}, "ClusterPlugin World Authority chat request");
 	}
 

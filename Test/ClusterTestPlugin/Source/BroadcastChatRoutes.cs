@@ -6,6 +6,7 @@ using ClusterPlugin;
 using HarmonyLib;
 using Sandbox.Engine.Multiplayer;
 using Sandbox.Game.Gui;
+using Sandbox.ModAPI;
 using VRage.GameServices;
 using VRage.Network;
 using VRageMath;
@@ -14,7 +15,7 @@ namespace ClusterTestPlugin;
 
 /// <summary>
 /// SE-943 bench routes: a broadcast controller message sent the way the block sends it, and what this node
-/// relays to its clients. The bench's headless clients show no multiplayer chat on their HUD (vanilla
+/// relays to its clients. SE-1261: the chat events this node raises to server plugins and mods. The bench's headless clients show no multiplayer chat on their HUD (vanilla
 /// MyHudChat ignores it while MyGameService is inactive), so the sender name a client would show is read
 /// here, from the ChatMsg the node hands to the client: the client shows CustomData.AuthorName, and without
 /// it the name of the message's Author, the node's server member, Good.bot.
@@ -23,7 +24,9 @@ internal static class BroadcastChatRoutes
 {
     private static readonly object Lock = new();
     private static readonly List<object> Relayed = new();
+    private static readonly List<object> Events = new();
     private static bool m_patched;
+    private static bool m_listening;
 
     public static void Register()
     {
@@ -57,12 +60,39 @@ internal static class BroadcastChatRoutes
                 return (object)new { armed = true };
             }));
         });
+        // POST /chat-event-probe - start recording the chat this node raises to server plugins (ChatMessageReceived)
+        // and mods (MessageRecieved), SE-1261.
+        TestRoutes.Add("POST", "/chat-event-probe", context =>
+        {
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                if (!m_listening)
+                {
+                    MyMultiplayer.Static.ChatMessageReceived += (sender, text, channel, _, _) => AddEvent("plugin", sender, text, channel);
+                    MyAPIGateway.Utilities.MessageRecieved += (sender, text) => AddEvent("mod", sender, text, null);
+                    m_listening = true;
+                }
+                return (object)new { armed = true };
+            }));
+        });
+        // GET /chat-event-probe - every chat event raised since the probe was armed.
+        TestRoutes.Add("GET", "/chat-event-probe", context =>
+        {
+            lock (Lock)
+                TestRoutes.Json(context, 200, new { events = Events.ToList() });
+        });
         // GET /chat-relay-probe - every relayed message since the probe was armed.
         TestRoutes.Add("GET", "/chat-relay-probe", context =>
         {
             lock (Lock)
                 TestRoutes.Json(context, 200, new { relayed = Relayed.ToList() });
         });
+    }
+
+    private static void AddEvent(string kind, ulong sender, string text, ChatChannel? channel)
+    {
+        lock (Lock)
+            Events.Add(new { kind, sender = sender.ToString(CultureInfo.InvariantCulture), text, channel = channel?.ToString() });
     }
 
     private static void RelayPrefix(ChatMsg msg, ulong recipient)
