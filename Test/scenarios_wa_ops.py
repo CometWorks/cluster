@@ -1688,6 +1688,63 @@ def p2_wa_node_wait(bench) -> None:
     bench.exercised(**result)
 
 
+# -- P2-WA-REP-BURST reputation writes never wait on the WA (SE-1280) ----------------------------
+
+
+REP_BURST_CALLS = 1000  # node-4 on octahedron-test: over a thousand in one frame
+REP_BURST_FACTIONS = 5
+REP_BURST_FRAME_MS = 500  # the whole burst, all in one frame; it took a WA round trip per call before SE-1280
+
+
+def p2_wa_rep_burst(bench) -> None:
+    """SE-1280: a regular node's reputation writes never wait on the World Authority. On octahedron-test (2026-11-08) a
+    MES damage trigger read, changed and set the damage owner's reputation with a list of factions on every hit, through
+    IMyFactionCollection.SetReputationBetweenPlayerAndFaction; each write was a blocking WA round trip, node-4's game
+    thread stayed in one frame for 68 s and the Registry declared it dead. Here node-1 makes 1,000 such read-add-set
+    writes in one frame over 5 NPC factions, for an identity's reputation and then for faction-to-faction reputation
+    (IMyFactionCollection.SetReputation). The frame must stay under 500 ms, every read must see the last write, node-1
+    must send the WA one command per pair instead of one per write, and the WA and node-2 must end with the last values."""
+    from scenarios_blocks import _identity
+
+    bench.start_cluster()
+    identity = _identity(bench, "se1280-rep")
+    for kind in ("player", "faction"):
+        before = _try(bench.cluster.node, "node-1", "/faction-test-reputation-queue")
+        burst = bench.cluster.node("node-1", f"/faction-test-reputation-burst?identityId={identity}&calls={REP_BURST_CALLS}"
+                                   f"&factions={REP_BURST_FACTIONS}&kind={kind}&maxMs=20000", "POST")
+        rows = burst.get("factions") or []
+        bench.record(f"burst-{kind}", burst)
+        _require(bench, f"{kind}: the burst ran over NPC factions", bool(rows), json.dumps(burst)[:400])
+        bench.check(f"{kind}: {REP_BURST_CALLS} reputation writes in one frame took under {REP_BURST_FRAME_MS} ms",
+                    burst.get("calls") == REP_BURST_CALLS and burst.get("elapsedMs", 1e9) < REP_BURST_FRAME_MS,
+                    f"calls={burst.get('calls')} elapsedMs={burst.get('elapsedMs')} slowestMs={burst.get('slowestMs')}")
+        bench.check(f"{kind}: every read on node-1 saw the last write (read-add-set callers like MES add up)",
+                    all(row["local"] == row["expected"] for row in rows), json.dumps(rows))
+        seen = {}
+
+        def value(node_id, row):
+            if kind == "player":
+                return (_try(bench.cluster.node, node_id, f"/faction-test-status?tag={row['tag']}&identityId={identity}")
+                        or {}).get("reputation")
+            return (_try(bench.cluster.node, node_id, f"/faction-test-status?tag={burst['from']}&otherTag={row['tag']}")
+                    or {}).get("relationReputation")
+
+        def converged():
+            for node_id in ("wa-1", "node-2"):
+                seen[node_id] = {row["tag"]: value(node_id, row) for row in rows}
+            return all(seen[node_id][row["tag"]] == row["expected"] for node_id in seen for row in rows) or None
+        bench.check(f"{kind}: the WA and node-2 ended with node-1's last values", _poll(converged, 30) is not None,
+                    json.dumps({"expected": {row["tag"]: row["expected"] for row in rows}, **seen}))
+        after = _poll(lambda: (lambda q: q if q.get("sent") is not None and q["sent"] - (before.get("sent") or 0) >= len(rows)
+                               else None)(_try(bench.cluster.node, "node-1", "/faction-test-reputation-queue")), 15)
+        sent = (after or {}).get("sent", 0) - (before.get("sent") or 0)
+        bench.record(f"queue-{kind}", {"before": before, "after": after})
+        # The seed writes (0) and the burst are one frame, so one flush carries them: one command per pair.
+        bench.check(f"{kind}: node-1 sent the WA one command per pair, not one per write",
+                    len(rows) <= sent <= 2 * len(rows), f"sent={sent} pairs={len(rows)} writes={burst.get('calls')}")
+    bench.exercised(identity=identity)
+
+
 SCENARIOS_WA_OPS = {
     "P2-WA-04": (p2_wa_04, "antenna relay chain, remote terminal, on-demand pull", "3"),
     "P2-WA-06b": (p2_wa_06b, "cross-node pod respawn with least-loaded placement", "3"),
@@ -1697,6 +1754,7 @@ SCENARIOS_WA_OPS = {
     "P2-DROP-GPS": (p2_drop_gps, "SE-1146: a drop's GPS marker leaves the WA and every node with the drop; drops.maxActive caps markers", "3"),
     "P2-DROP-CAP": (p2_drop_cap, "#1443: at most drops.maxActive container drops active cluster-wide, offline ones included", "3"),
     "P2-WA-NODE-WAIT": (p2_wa_node_wait, "SE-1228: the WA's game thread never waits on a node whose game thread waits on the WA", "3"),
+    "P2-WA-REP-BURST": (p2_wa_rep_burst, "SE-1280: 1,000 reputation writes in one node frame never wait on the WA", "3"),
     # P2-WA-02 (concurrent cross-node mutations never overdraw; balances converge) is asserted here.
     "P2-REC-01": (p2_rec_01, "WA killed inside a held mutation; queue replay conserves", "4"),
     "P2-CHR-04": (p2_chr_04, "stale duplicate character arriving at the live body's node (T-0169)", "3"),
