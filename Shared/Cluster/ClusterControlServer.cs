@@ -1859,6 +1859,8 @@ internal sealed partial class ClusterControlServer
 				// report/presync must still refuse a clientless pull. Only deliberate co-location wins.
 				if (clients.Length == 0 && !allowRemoteUse && RemoteUse.Capture(new[] { partition }).ContainsKey(partitionId))
 					throw new InvalidOperationException("remote-use");
+				// SE-1272: read before the freeze disables the bodies.
+				transfer.Asleep = Asleep(entities);
 				Freeze(transfer, entities);
 				// Attached children (a seated pilot above all) serialize INSIDE their parent's
 				// object builder. Vanilla re-tops the pilot character when the switching client
@@ -1882,7 +1884,7 @@ internal sealed partial class ClusterControlServer
 				transfer.PluginGrids = PluginHandoverService.Grids(entities);
 				// T-0292: the fast members travel with their state (PluginHandoverService.FastKey).
 				Dictionary<long, double> fast = members.Where(m_partitions.Fast.IsFast).ToDictionary(id => id, m_partitions.Fast.SpeedOf);
-				pluginStates = PluginHandoverService.Leaving(transfer.PluginGrids, fast);
+				pluginStates = PluginHandoverService.Leaving(transfer.PluginGrids, fast, transfer.Asleep);
 			}
 			byte[] networkState = System.Text.Encoding.UTF8.GetBytes(PluginHandoverService.Append(ExportNetworkIds(members), pluginStates));
 			timer?.Step("ob_build");
@@ -3092,13 +3094,20 @@ internal sealed partial class ClusterControlServer
 		int restored = 0;
 		string ensure = "";
 		// T-0404 (import.thawEnsureSpace): one cluster placement for the bodies about to be enabled, inside the timed slice.
-		ImportAddDiag.Run(null, thaw, () => { ensure = ThawEnsureSpace(transfer); restored = RestoreFrozen(transfer); });
+		int keptAsleep = 0;
+		ImportAddDiag.Run(null, thaw, () =>
+		{
+			ensure = ThawEnsureSpace(transfer);
+			restored = RestoreFrozen(transfer);
+			keptAsleep = KeepAsleep(transfer);
+		});
 		if (thaw != null)
 			Log("handover_thaw transferId=" + transferId + " partition=" + partitionId + " restored=" + restored
 				// the TRANSFER's own mode (its entities were evaluated for deferral), not the knob at thaw time: an import
 				// Added before a flip and thawed after it logged the new value (r121i 06:04:57, node-720) - knobAtThaw is that
 				+ " deferPhysics=" + (transfer.PhysicsDeferEvaluated > 0 ? "true" : "false")
 				+ " knobAtThaw=" + ClusterConfig.GetBool("import.deferPhysics").ToString().ToLowerInvariant()
+				+ " keptAsleep=" + keptAsleep
 				+ " deferred=" + transfer.PhysicsDeferred + " deferredChildren=" + transfer.PhysicsDeferredChildren + " notDeferred=" + transfer.PhysicsNotDeferred.Values.Sum()
 				+ " notDeferredBy=" + (transfer.PhysicsNotDeferred.Count == 0 ? "-"
 					: string.Join(",", transfer.PhysicsNotDeferred.OrderBy(x => x.Key).Select(x => x.Key + ":" + x.Value))) + ensure + thaw.Fields());
@@ -3136,6 +3145,74 @@ internal sealed partial class ClusterControlServer
 		PluginHandoverService.Arrived(transfer.Members, transfer.PluginStates); // T-0256
 		transfer.PluginStates = null;
 	}
+
+	/// <summary>SE-1272, source: the dynamic grids whose rigid body Havok has asleep, read before the freeze disables them.</summary>
+	private static HashSet<long> Asleep(IEnumerable<MyEntity> entities) =>
+		entities.OfType<MyCubeGrid>()
+			.Where(grid => !grid.IsStatic && grid.Physics?.RigidBody != null && grid.Physics.Enabled && !grid.Physics.RigidBody.IsActive)
+			.Select(grid => grid.EntityId).ToHashSet();
+
+	/// <summary>
+	/// SE-1272 (import.keepAsleep), target, right after the thaw: puts back to sleep the arrived grids the source had
+	/// asleep. Havok adds every enabled body awake, so a resting pile woke on each handover and the target solved all of
+	/// it until it settled again (live 2026-11-08, Moon Station's 207 leftover trader shuttles: 0.08 sim speed, 7.8 s to
+	/// recover). The island call (HkEntity.Deactivate is only a request, see ForcedSleepService.Sleep) sleeps a body at
+	/// once, but the first physics step after the add wakes them all again (bench: 12 of 12 asleep after the call, 12
+	/// awake two frames later), so the ones still at rest two frames later are put to sleep a second time. One that is
+	/// moving by then was woken by something real and is left alone; a touch by an awake body wakes a sleeper as in
+	/// vanilla. Velocities stay as carried. Logs keep_asleep_check ten frames after the thaw, with the knob off too.
+	/// </summary>
+	private static int KeepAsleep(Transfer transfer)
+	{
+		bool on = ClusterConfig.GetBool("import.keepAsleep");
+		List<MyCubeGrid> asleep = new List<MyCubeGrid>();
+		foreach (long id in PluginHandoverService.AsleepArrivals(transfer.PluginStates))
+		{
+			if (!transfer.Members.Contains(id) || !MyEntities.TryGetEntityById(id, out MyEntity entity) || entity is not MyCubeGrid grid
+				|| grid.IsStatic || grid.MarkedForClose || grid.Physics?.RigidBody == null || !grid.Physics.Enabled)
+				continue;
+			asleep.Add(grid);
+		}
+		if (asleep.Count == 0) return 0;
+		if (on) foreach (MyCubeGrid grid in asleep) SleepIsland(grid);
+		Guid transferId = transfer.Id;
+		int awakeNow = AwakeCount(asleep);
+		AfterFrames(2, () =>
+		{
+			int awake2 = AwakeCount(asleep);
+			int slept = 0;
+			if (on)
+				foreach (MyCubeGrid grid in LiveGrids(asleep).Where(grid => grid.Physics.RigidBody.IsActive && AtRest(grid)))
+				{
+					SleepIsland(grid);
+					slept++;
+				}
+			AfterFrames(8, () => Log("keep_asleep_check transferId=" + transferId + " keepAsleep=" + on.ToString().ToLowerInvariant()
+				+ " asleepArrivals=" + asleep.Count + " awakeNow=" + awakeNow + " awake2=" + awake2 + " slept2=" + slept
+				+ " awake10=" + AwakeCount(asleep) + " live=" + LiveGrids(asleep).Count()));
+		});
+		return on ? asleep.Count : 0;
+	}
+
+	private static void SleepIsland(MyCubeGrid grid)
+	{
+		Havok.HkWorld world = grid.Physics.HavokWorld;
+		if (world != null) world.DeactivateSimulationIslandRigidBodies(grid.Physics.RigidBody);
+		else grid.Physics.RigidBody.Deactivate();
+	}
+
+	private static IEnumerable<MyCubeGrid> LiveGrids(List<MyCubeGrid> grids) =>
+		grids.Where(grid => !grid.MarkedForClose && grid.Physics?.RigidBody != null && grid.Physics.Enabled);
+
+	private static int AwakeCount(List<MyCubeGrid> grids) => LiveGrids(grids).Count(grid => grid.Physics.RigidBody.IsActive);
+
+	/// <summary>SE-1272: the speeds a resting grid keeps (solver jitter), well under anything that moves on its own.</summary>
+	private static bool AtRest(MyCubeGrid grid) =>
+		grid.Physics.LinearVelocity.LengthSquared() < 0.01f && grid.Physics.AngularVelocity.LengthSquared() < 0.0001f;
+
+	/// <summary>Runs <paramref name="action"/> on the game thread <paramref name="frames"/> frames from now.</summary>
+	private static void AfterFrames(int frames, Action action) =>
+		MySandboxGame.Static.Invoke(() => { if (frames <= 1) action(); else AfterFrames(frames - 1, action); }, "SE-1272 keep asleep");
 
 	private static int ThawSource(Guid transferId, ulong partitionId, uint generation)
 	{
@@ -3750,6 +3827,8 @@ internal sealed partial class ClusterControlServer
 		public int PhysicsDeferredChildren;
 		public readonly Dictionary<string, int> PhysicsNotDeferred = new Dictionary<string, int>();
 		public string PluginStates;
+		/// <summary>SE-1272, source: the members whose rigid body was asleep at capture (<see cref="Asleep"/>).</summary>
+		public HashSet<long> Asleep;
 		public HashSet<long> CreatedMembers = new HashSet<long>();
 		/// <summary>
 		/// T-0296 r3, target: the live client-controlled entities the import KEPT (not created, not frozen), with the

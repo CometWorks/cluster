@@ -1388,11 +1388,19 @@ internal static partial class ClusterSelfTest
 		for (int i = 1; i <= 4; i++)
 			arrived.Sample(new[] { new KeyValuePair<long, VRageMath.Vector3D>(4, new VRageMath.Vector3D(i * 3000.0, 0, 0)) }, 100 + i);
 		Assert(arrived.IsFast(4), "a seeded member still moving at 3000 m/s left the fast state");
-		Dictionary<long, double> carried = PluginHandoverService.FastArrivals(PluginHandoverService.Leaving(new HashSet<long>(),
-			new Dictionary<long, double> { [4] = 3000.5, [-9] = 1200 }));
+		string carriedWire = PluginHandoverService.Leaving(new HashSet<long>(), new Dictionary<long, double> { [4] = 3000.5, [-9] = 1200 });
+		Dictionary<long, double> carried = PluginHandoverService.FastArrivals(carriedWire);
 		Assert(carried.Count == 2 && carried[4] == 3000.5 && carried[-9] == 1200, "fast state lost in the handover map: " + string.Join(",", carried));
 		Assert(PluginHandoverService.FastArrivals(null).Count == 0 && PluginHandoverService.Leaving(new HashSet<long>(), new Dictionary<long, double>()) == null,
 			"an empty fast map must add nothing to the network state");
+		// SE-1272: the sleeping grids ride the same map, beside a fast entry for the same id, and nothing else reads as asleep.
+		string both = PluginHandoverService.Leaving(new HashSet<long>(), new Dictionary<long, double> { [4] = 3000.5 }, new long[] { 4, 7 });
+		HashSet<long> asleep = PluginHandoverService.AsleepArrivals(both);
+		Assert(asleep.SetEquals(new long[] { 4, 7 }) && PluginHandoverService.FastArrivals(both)[4] == 3000.5,
+			"asleep state lost in the handover map: " + string.Join(",", asleep));
+		Assert(PluginHandoverService.AsleepArrivals(null).Count == 0 && PluginHandoverService.AsleepArrivals(carriedWire).Count == 0
+			&& PluginHandoverService.Leaving(new HashSet<long>(), null, new long[0]) == null,
+			"no sleeping grid must add nothing and read as none");
 		// The derived threshold is the sync distance in use / 3 (this node's world).
 		(double derived, string source) = FastMotionTracker.Threshold();
 		double sync = MyLayers.GetSyncDistance();
