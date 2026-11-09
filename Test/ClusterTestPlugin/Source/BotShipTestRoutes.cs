@@ -39,9 +39,10 @@ internal static class BotShipTestRoutes
         var players = MySession.Static.Players;
         MyIdentity identity = players.CreateNewIdentity(name, initialPlayer: true);
         var playerId = new MyPlayer.PlayerId(steamId, 0);
+        // A Dictionary or a ConcurrentDictionary, by server build: both are an IDictionary.
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
-        var byIdentity = (Dictionary<long, MyPlayer.PlayerId>)typeof(Sandbox.Game.Multiplayer.MyPlayerCollection).GetField("m_identityPlayerIds", flags).GetValue(players);
-        var byPlayer = (Dictionary<MyPlayer.PlayerId, long>)typeof(Sandbox.Game.Multiplayer.MyPlayerCollection).GetField("m_playerIdentityIds", flags).GetValue(players);
+        var byIdentity = (System.Collections.IDictionary)typeof(Sandbox.Game.Multiplayer.MyPlayerCollection).GetField("m_identityPlayerIds", flags).GetValue(players);
+        var byPlayer = (System.Collections.IDictionary)typeof(Sandbox.Game.Multiplayer.MyPlayerCollection).GetField("m_playerIdentityIds", flags).GetValue(players);
         byIdentity[identity.IdentityId] = playerId;
         byPlayer[playerId] = identity.IdentityId;
         return new { identityId = identity.IdentityId, steamId = players.TryGetSteamId(identity.IdentityId), npc = players.IdentityIsNpc(identity.IdentityId) };
