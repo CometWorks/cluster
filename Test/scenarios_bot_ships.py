@@ -80,6 +80,10 @@ def _logged(bench, verb: str, grid: int) -> list[str]:
 def p2_bot_ship_cleanup(bench) -> None:
     bench.cluster.config.gateway_args += ["--export-root", str(bench.dir / "exports")]
     bench.start_cluster(nodes=STARTED)
+    # Nothing is spawned before node-1 has claimed the saves it loaded: a camera spawned before that was gone a moment later.
+    loaded = wait_until(lambda: (lambda n: n if n and len(_lines(bench, NODE, r"startup partition claimed: ")) >= n else None)(
+        len(_lines(bench, NODE, r"assigned save loaded: "))), 120, "node-1's startup claims")
+    _require(bench, "setup: node-1 claimed every save it loaded at startup", loaded)
     selftest = bench.cluster.node(NODE, "/self-test?section=bot-ship-cleanup")
     bench.check("node self-test bot-ship-cleanup (rule, knobs, the stamp in the builder)", selftest.get("ok") is True,
                 json.dumps(selftest)[:300])
