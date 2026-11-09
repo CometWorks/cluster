@@ -14,6 +14,13 @@ calls `EntityIdProjectorPatch.RemapPrefix` from 16 threads at once and prints PA
 remapped id ends up in `MyBlueprintIdTracker` for its projector, written on the game thread only.
 It needs the dedicated server's assemblies, no game process, and takes about a second.
 
+The entity-event registrations of the staged import's builder (SE-1313) have a check of their own:
+`dotnet run -c Release -p:RunPostBuildEvent=Never --project Test/EntityEventRegistry/EntityEventRegistryChecks.csproj`
+first registers listeners from 16 threads the unguarded way (it reports the race it hits), then
+records them on 16 threads through `EntityEventRegistryPatch.Recording` while the game thread adds
+and closes listeners of its own, replays them on the game thread, and prints PASS when nothing threw,
+no worker wrote the registry and every listener is registered. About a second, no game process.
+
 The suite deploys a cluster from an unpacked **release package** (the `ClusterForLinux-<version>`
 that `Build/release.sh` produces), joins headless clients to it, and asserts against structured
 state: the Gateway's `diag` snapshot, the Ownership Registry, node control routes, process logs and

@@ -56,11 +56,7 @@ internal sealed partial class ClusterControlServer
 			plan.Staged.Add(slot);
 			plan.Pending = 1;
 			Invoke(() => { ForceSerialUpdate(plan); return 0; });
-			ParallelTasks.Parallel.Start(() =>
-			{
-				try { StageOne(slot); }
-				finally { if (Interlocked.Decrement(ref plan.Pending) == 0) plan.Done.Set(); }
-			});
+			StartBuilders(plan.Staged, plan);
 			if (!plan.Done.Wait(TimeSpan.FromSeconds(60))) throw new TimeoutException("warm-up worker did not finish within 60 s");
 			if (slot.Error != null) throw slot.Error;
 			double stageMs = slot.InitMs;

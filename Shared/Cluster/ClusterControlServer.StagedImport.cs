@@ -43,6 +43,18 @@ namespace ClusterPlugin;
 /// own paste/missile/floating-object spawns run in (worker init concurrent with the serial frame),
 /// and restored in the activate frame - or in the failure path, always.
 ///
+/// SE-1313: at most import.stageWorkers builds run at once on this node, all imports and presyncs
+/// together (BuildGate); the default is 1. Init reaches static state of the game, of mods and of
+/// plugins that was written for one builder at a time (SE-1230 TableHologram, SE-1231
+/// MyBlueprintIdTracker, SE-1313 the entity-event registry), so builds that overlap each other
+/// corrupt it, and the next such static would break the import again. One build at a time is the
+/// regime vanilla runs its own live background builds in (paste, spawns: one entity's Init next to
+/// the running game thread). The entity-event registry, which the game thread writes all the time,
+/// is also kept out of the builder's reach: its (un)registrations are recorded and replayed on the
+/// game thread at activation (EntityEventRegistryPatch), as vanilla's parallel load postpones them.
+/// With import.stageWorkers=N&gt;1 the builds overlap as in vanilla's parallel world load, which is
+/// faster for big partitions but only as safe as every Init in the world is for that load.
+///
 /// A dormant entity (initialised, never Added) is not in MyEntities, not replicated, not updated,
 /// not saved, not a partition member and not in the census; its ids are registered only when it is
 /// activated. Discard = Delete() on the game thread.
@@ -56,6 +68,8 @@ internal sealed partial class ClusterControlServer
 		public MyEntities.InitEntityData Init;
 		public Exception Error;
 		public double InitMs;
+		/// <summary>SE-1313: the entity-event (un)registrations of a builder-thread Init, replayed on the game thread at activation.</summary>
+		public List<Action> EntityEvents;
 	}
 
 	private sealed class StagePlan
@@ -68,6 +82,8 @@ internal sealed partial class ClusterControlServer
 		public bool SerialForced;
 		public bool Activated;
 		public double StageWallMs;
+		/// <summary>Set by an abandon: the builder skips the slots it has not started yet.</summary>
+		public volatile bool Abandoned;
 		/// <summary>import.activatePerFrame &gt; 0: the physical groups (index lists into Staged), grouped in the
 		/// first slice frame; each slice frame takes the next whole groups (ImportActivateSlices.Take).</summary>
 		public List<List<int>> Groups;
@@ -290,9 +306,58 @@ internal sealed partial class ClusterControlServer
 	/// game thread. On the game thread it is the legacy CreateFromObjectBuilder (ids registered
 	/// directly) - InitEntityData.CallInitEntity must NEVER run on the main thread: its finally
 	/// copies and CLEARS the calling thread's id table, which on the main thread is the world's.
-	/// AllocationSuspended as the legacy import sets it.
+	/// AllocationSuspended as the legacy import sets it. Off the game thread with the entity-event
+	/// registrations recorded (SE-1313, see the class comment).
 	/// </summary>
 	private static void StageOne(StagedEntity slot)
+	{
+		if (VRage.Utils.MyUtils.MainThread == Thread.CurrentThread) { StageOneHere(slot); return; }
+		try { slot.EntityEvents = Shared.Patches.EntityEventRegistryPatch.Recording(() => StageOneHere(slot)); }
+		catch (Exception e) { slot.Error ??= e; }
+	}
+
+	private static readonly object s_buildGateLock = new object();
+	private static SemaphoreSlim s_buildGate;
+	private static int s_buildGateSize;
+
+	/// <summary>SE-1313: the node's gate of import.stageWorkers concurrent staged builds, whichever import or
+	/// presync they belong to. A new size makes a new gate; builds that hold the old one release it.</summary>
+	private static SemaphoreSlim BuildGate(int size)
+	{
+		lock (s_buildGateLock)
+		{
+			if (s_buildGate == null || s_buildGateSize != size) { s_buildGate = new SemaphoreSlim(size, size); s_buildGateSize = size; }
+			return s_buildGate;
+		}
+	}
+
+	/// <summary>
+	/// Builds <paramref name="slots"/> off the game thread, in order, through the node's BuildGate: as many
+	/// tasks as the gate lets build at once, never one per slot. plan.Pending must already count the slots;
+	/// the last one built sets plan.Done. An abandoned plan's slots not yet started are skipped.
+	/// </summary>
+	private static void StartBuilders(List<StagedEntity> slots, StagePlan plan)
+	{
+		SemaphoreSlim gate = BuildGate(Math.Max(1, plan.Workers));
+		int next = -1;
+		for (int builder = Math.Min(Math.Max(1, plan.Workers), slots.Count); builder > 0; builder--)
+			ParallelTasks.Parallel.Start(() =>
+			{
+				for (int i; (i = Interlocked.Increment(ref next)) < slots.Count;)
+				{
+					try
+					{
+						if (plan.Abandoned) continue;
+						gate.Wait();
+						try { StageOne(slots[i]); }
+						finally { gate.Release(); }
+					}
+					finally { if (Interlocked.Decrement(ref plan.Pending) == 0) plan.Done.Set(); }
+				}
+			});
+	}
+
+	private static void StageOneHere(StagedEntity slot)
 	{
 		Stopwatch watch = Stopwatch.StartNew();
 		bool mainThread = VRage.Utils.MyUtils.MainThread == Thread.CurrentThread;
@@ -426,6 +491,7 @@ internal sealed partial class ClusterControlServer
 			// table; addToScene is false so this neither Adds nor calls back.
 			steps?.Step("activate_init");
 			slot.Init?.OnEntityInitialized();
+			ReplayEntityEvents(slot);
 			MyEntity entity = slot.Entity;
 			if (entity.EntityId == 0) throw new InvalidDataException("Staged entity lost its id: " + slot.Builder.EntityId);
 			bool insertIntoScene = (slot.Builder.PersistentFlags & VRage.ObjectBuilders.MyPersistentEntityFlags2.InScene) != 0;
@@ -645,11 +711,22 @@ internal sealed partial class ClusterControlServer
 		if (context.Transfer?.Discarded == true) throw new InvalidOperationException("Transfer was discarded between activation slices");
 	}
 
-	/// <summary>Game thread: a dormant copy that will never be activated.</summary>
+	/// <summary>Game thread: the entity-event (un)registrations the builder recorded for this slot's entity.</summary>
+	private static void ReplayEntityEvents(StagedEntity slot)
+	{
+		List<Action> recorded = slot.EntityEvents;
+		slot.EntityEvents = null;
+		if (recorded == null) return;
+		foreach (Action replay in recorded) replay();
+	}
+
+	/// <summary>Game thread: a dormant copy that will never be activated. Its recorded entity-event
+	/// registrations are dropped with it: none of them reached the registry.</summary>
 	private static void DiscardDormant(StagedEntity slot)
 	{
 		MyEntity entity = slot.Entity;
 		slot.Entity = null;
+		slot.EntityEvents = null;
 		if (entity == null) return;
 		try { ClusterCloseScope.Run(entity.Delete); }
 		catch (Exception e) { Log("discarding dormant entity " + slot.Builder.EntityId + " failed: " + e.Message); }
@@ -658,11 +735,12 @@ internal sealed partial class ClusterControlServer
 	/// <summary>Game thread, failure path: serial mode off, dormant copies deleted, the import undone.</summary>
 	private static void StageAbandon(ImportContext context, StagePlan plan)
 	{
+		plan.Abandoned = true;
 		ReleaseSerialUpdate(plan);
 		if (plan.Workers > 0 && plan.Pending > 0)
 		{
-			// Workers still running own their slots; deleting under them would race. They are
-			// bounded by one entity's Init each; the dormant entities they produce are leaked to
+			// The builder still owns its slots; deleting under it would race. It finishes the Init
+			// in progress and skips the rest (Abandoned); the dormant entities it produced are leaked to
 			// the GC with their ids never registered, which is harmless but worth a line.
 			Log("staged import abandoned with " + plan.Pending + " workers still running partition=" + context.PartitionId + "; their dormant copies are dropped unregistered");
 		}

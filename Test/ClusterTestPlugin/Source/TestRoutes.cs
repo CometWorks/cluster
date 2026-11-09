@@ -74,6 +74,7 @@ internal static class TestRoutes
         GlobalSaveHoldRoutes.Register(); // #1270 a global save held before its registration
         NpcCensusRoutes.Register();   // #1354 the NPC census slot as mod-mes calls it, and a stand-in gap band
         MeteorRoutes.Register();      // #1381 a meteor probe and its carried lifetime
+        BagTestRoutes.Register();     // SE-1313 inventory bags for the parallel staged build
         OfflineTestRoutes.Register(); // SE-347 shared LoadRecovery apply/crash boundary and real production
         RespawnFaultRoutes.Register(); // SE-1124 a split or a refusal at a respawn switch target
         RespawnSwitchFaultRoutes.Register(); // SE-1189 a held or refused spawn preview switch at its source

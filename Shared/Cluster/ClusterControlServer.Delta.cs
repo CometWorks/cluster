@@ -281,20 +281,13 @@ internal sealed partial class ClusterControlServer
 		if (plan.Workers <= 0 || added.Count == 0) return;
 		ForceSerialUpdate(plan);
 		Interlocked.Add(ref plan.Pending, added.Count);
-		foreach (StagedEntity slot in added)
-		{
-			StagedEntity captured = slot;
-			ParallelTasks.Parallel.Start(() =>
-			{
-				try { StageOne(captured); }
-				finally { if (Interlocked.Decrement(ref plan.Pending) == 0) plan.Done.Set(); }
-			});
-		}
+		StartBuilders(added, plan);
 	}
 
 	/// <summary>Game thread: drop a plan's dormant copies (no transfer to fail).</summary>
 	private static void StageAbandonPlan(StagePlan plan)
 	{
+		plan.Abandoned = true;
 		ReleaseSerialUpdate(plan);
 		if (plan.Workers > 0 && plan.Pending > 0)
 		{
