@@ -35,7 +35,10 @@ internal sealed record NpcCensus(
     [property: JsonPropertyName("ageSeconds")] double AgeSeconds,
     [property: JsonPropertyName("online")] int Online,
     [property: JsonPropertyName("offline")] int Offline,
-    [property: JsonPropertyName("grids")] NpcGrid[] Grids);
+    [property: JsonPropertyName("grids")] NpcGrid[] Grids,
+    // SE-1316: the unix second the newest registry backup finished (its artifact released), null since the gateway started.
+    // The nodes' bot ship cleanup runs on each new one and removes only ships that were already unused when it was taken.
+    [property: JsonPropertyName("backupAt"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? BackupAt = null);
 
 internal sealed partial class DirectGateway
 {
@@ -44,6 +47,8 @@ internal sealed partial class DirectGateway
     private long _npcCensusOfflineRevision;
     private OfflinePartition[] _npcCensusOfflineRows = [];
     private NpcCensus? _npcCensus;
+    /// <summary>SE-1316: the unix second the newest registry backup artifact was released, 0 = none since start.</summary>
+    private long _lastBackupAt;
 
     /// <summary>
     /// The NPC grids online on every serving node (the last COMPLETE report pass, as the offline admission reads it)
@@ -68,7 +73,7 @@ internal sealed partial class DirectGateway
                 _npcCensus = new NpcCensus(0, online, offlineNpc, grids);
                 _npcCensusReportsAt = reports.At;
             }
-            return _npcCensus with { AgeSeconds = Math.Round(Math.Max(0, (DateTime.UtcNow - reports.At).TotalSeconds), 1) };
+            return _npcCensus with { BackupAt = _lastBackupAt == 0 ? null : Interlocked.Read(ref _lastBackupAt), AgeSeconds = Math.Round(Math.Max(0, (DateTime.UtcNow - reports.At).TotalSeconds), 1) };
         }
     }
 

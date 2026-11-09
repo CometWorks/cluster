@@ -97,6 +97,7 @@ internal static partial class ClusterSelfTest
 		("npc-census", NpcCensusRules),
 		("wreck-cleanup", WreckCleanupRules),
 		("meteor-lifetime", MeteorLifetimeRules),
+		("bot-ship-cleanup", BotShipCleanupRules),
 		("drop-cap", DropCapRules),
 		("mod-message-to-server", ModMessageToServer),
 		("ledger-replay", LedgerReplay),

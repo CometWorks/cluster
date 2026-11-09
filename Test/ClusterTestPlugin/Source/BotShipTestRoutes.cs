@@ -1,0 +1,61 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using Sandbox.Game.Entities;
+using Sandbox.Game.Entities.Character;
+using Sandbox.Game.World;
+using VRage.Game.Entity;
+
+namespace ClusterTestPlugin;
+
+/// <summary>
+/// SE-1316 bench: identities that stand for the sebot traders (a Steam ID of <c>cleanup.botSteamIds</c>, no client), and a
+/// pilot seated in a ship.
+/// <c>POST /bot-ship-test-identity?name=&amp;steamId=</c> creates an identity the player collection maps to that Steam ID,
+/// as it maps a player who has joined once. <c>POST /bot-ship-test-pilot?grid=&amp;owner=</c> seats a new character of
+/// that identity in the grid's first free cockpit.
+/// </summary>
+internal static class BotShipTestRoutes
+{
+    public static void Register()
+    {
+        TestRoutes.Add("POST", "/bot-ship-test-identity", context =>
+        {
+            string name = TestRoutes.Query(context, "name");
+            ulong steamId = ulong.Parse(TestRoutes.Query(context, "steamId"), System.Globalization.CultureInfo.InvariantCulture);
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => Identity(name, steamId)));
+        });
+        TestRoutes.Add("POST", "/bot-ship-test-pilot", context =>
+        {
+            long grid = TestRoutes.Long(context, "grid");
+            long owner = TestRoutes.Long(context, "owner");
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => Pilot(grid, owner)));
+        });
+    }
+
+    private static object Identity(string name, ulong steamId)
+    {
+        var players = MySession.Static.Players;
+        MyIdentity identity = players.CreateNewIdentity(name, initialPlayer: true);
+        var playerId = new MyPlayer.PlayerId(steamId, 0);
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        var byIdentity = (Dictionary<long, MyPlayer.PlayerId>)typeof(Sandbox.Game.Multiplayer.MyPlayerCollection).GetField("m_identityPlayerIds", flags).GetValue(players);
+        var byPlayer = (Dictionary<MyPlayer.PlayerId, long>)typeof(Sandbox.Game.Multiplayer.MyPlayerCollection).GetField("m_playerIdentityIds", flags).GetValue(players);
+        byIdentity[identity.IdentityId] = playerId;
+        byPlayer[playerId] = identity.IdentityId;
+        return new { identityId = identity.IdentityId, steamId = players.TryGetSteamId(identity.IdentityId), npc = players.IdentityIsNpc(identity.IdentityId) };
+    }
+
+    private static object Pilot(long gridId, long owner)
+    {
+        if (!MyEntities.TryGetEntityById(gridId, out MyEntity entity) || entity is not MyCubeGrid grid)
+            throw new InvalidOperationException($"Grid {gridId} is not on this node");
+        MyCockpit cockpit = grid.GetFatBlocks<MyCockpit>().FirstOrDefault(seat => seat.Pilot == null)
+            ?? throw new InvalidOperationException($"Grid {gridId} has no free cockpit");
+        MyCharacter character = MyCharacter.CreateCharacter(cockpit.WorldMatrix, VRageMath.Vector3.Zero, "se1316-pilot", "Default_Astronaut",
+            null, null, findNearPos: false, identityId: owner, addDefaultItems: false);
+        cockpit.AttachPilot(character, 0, storeOriginalPilotWorld: false);
+        return new { grid = gridId, cockpit = cockpit.EntityId, pilot = cockpit.Pilot?.EntityId ?? 0 };
+    }
+}
