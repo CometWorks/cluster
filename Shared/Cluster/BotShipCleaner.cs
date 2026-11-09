@@ -320,9 +320,9 @@ internal static class BotShipCleaner
 			Vector3D position = root.PositionComp.GetPosition();
 			string line = string.Format(CultureInfo.InvariantCulture,
 				"[ClusterPlugin] bot ship cleanup {0} grid {1} '{2}' ({3} grid(s), {4} blocks) owned by {5} at {6:F0},{7:F0},{8:F0} "
-				+ "in partition {9}: unused since {10:u} ({11:F1} h), still so at the backup of {12:u}, {13}",
+				+ "in partition {9}: unused since {10:u} ({11:F0} min), still so at the backup of {12:u}, {13}",
 				mode == Mode.On ? "removed" : "would remove", root.EntityId, root.DisplayName, group.Count, group.Sum(x => x.BlocksCount),
-				Owners(root), position.X, position.Y, position.Z, id, DateTimeOffset.FromUnixTimeSeconds(lastUse), (now - lastUse) / 3600.0,
+				Owners(root), position.X, position.Y, position.Z, id, DateTimeOffset.FromUnixTimeSeconds(lastUse), (now - lastUse) / 60.0,
 				DateTimeOffset.FromUnixTimeSeconds(backupAt), cause);
 			if (mode == Mode.On)
 			{
