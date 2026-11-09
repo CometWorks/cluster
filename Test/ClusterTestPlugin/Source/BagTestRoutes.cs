@@ -5,6 +5,7 @@ using Sandbox.Game.Entities;
 using VRage;
 using VRage.Game;
 using VRage.Game.Entity;
+using VRage.Game.ObjectBuilders;
 using VRage.ObjectBuilders.Private;
 using VRageMath;
 
