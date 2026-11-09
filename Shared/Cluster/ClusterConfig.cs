@@ -24,8 +24,11 @@ public static class ClusterConfig
 		// round-trip compare on the handler thread, entity Init on workers, one activate frame.
 		["import.mode"] = "staged",
 		// staged only: 0 = build the entities on the game thread inside the activate frame (deserialise
-		// and compare still off-thread); N>0 = build them on worker threads, one worker per entity.
-		["import.stageWorkers"] = "8",
+		// and compare still off-thread); N>0 = build them off the game thread, at most N at once on the
+		// node, all imports together. SE-1313: default 1, because Init of game, mod and plugin code
+		// writes statics that overlapping builds corrupt (SE-1230, SE-1231, SE-1313); N>1 overlaps them
+		// as vanilla's parallel world load does (faster for big partitions, not safe for such code).
+		["import.stageWorkers"] = "1",
 		// T-0392, staged only: 0 = activate every staged entity in ONE game-thread frame (as before);
 		// N>0 = at most N per frame (whole physical groups: rotor/piston/connector/landing gear never
 		// split, a larger group is one frame), then a final frame for partition adopt, the remaining

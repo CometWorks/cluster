@@ -281,16 +281,7 @@ internal sealed partial class ClusterControlServer
 		if (plan.Workers <= 0 || added.Count == 0) return;
 		ForceSerialUpdate(plan);
 		Interlocked.Add(ref plan.Pending, added.Count);
-		// SE-1313: one builder task, the slots one after the other (StageOne also serializes it with
-		// other plans' builders), never one task per slot.
-		ParallelTasks.Parallel.Start(() =>
-		{
-			foreach (StagedEntity slot in added)
-			{
-				try { if (!plan.Abandoned) StageOne(slot); }
-				finally { if (Interlocked.Decrement(ref plan.Pending) == 0) plan.Done.Set(); }
-			}
-		});
+		StartBuilders(added, plan);
 	}
 
 	/// <summary>Game thread: drop a plan's dormant copies (no transfer to fail).</summary>
