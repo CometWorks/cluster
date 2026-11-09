@@ -38,7 +38,8 @@ public class FakeEntity : DispatchProxy
 
     protected override object Invoke(MethodInfo method, object[] args) =>
         method.Name == "get_EntityId" ? Id
-        : method.ReturnType.IsValueType && method.ReturnType != typeof(void) ? Activator.CreateInstance(method.ReturnType)
+        : method.ReturnType.IsValueType && method.ReturnType != typeof(void)
+            ? Activator.CreateInstance(method.ReturnType)
         : null;
 
     public static IMyEntity Create(long id)
@@ -74,35 +75,69 @@ static class EntityEventRegistryChecks
         // Locals, not static fields: the class must load before Main hooks up the game's assemblies
         MyStringHash eventType = MyStringHash.GetOrCompute("SE1313");
         MyEntityContainerEventExtensions.EntityEventHandler Handler = _ => { };
-        FieldInfo listenersField = AccessTools.Field(typeof(MyEntityContainerEventExtensions), "RegisteredListeners");
-        MethodInfo onClose = AccessTools.Method(typeof(MyEntityContainerEventExtensions), "RegisteredEntityOnClose");
+        FieldInfo listenersField = AccessTools.Field(
+            typeof(MyEntityContainerEventExtensions),
+            "RegisteredListeners"
+        );
+        MethodInfo onClose = AccessTools.Method(
+            typeof(MyEntityContainerEventExtensions),
+            "RegisteredEntityOnClose"
+        );
         Type patch = typeof(Shared.Patches.EntityEventRegistryPatch);
-        var recording = (Func<Action, List<Action>>)
-            Delegate.CreateDelegate(typeof(Func<Action, List<Action>>), AccessTools.Method(patch, "Recording"));
+        var recording =
+            (Func<Action, List<Action>>)
+                Delegate.CreateDelegate(
+                    typeof(Func<Action, List<Action>>),
+                    AccessTools.Method(patch, "Recording")
+                );
 
         // Phase 1, the known positive: unrecorded registrations from parallel threads
         MyEntityContainerEventExtensions.InitEntityEvents();
-        Probe[] red = Enumerable.Range(0, Threads * PerThread).Select(i => Listener(1_000_000 + i)).ToArray();
-        int redFailures = OnWorkers(t => { for (int i = t * PerThread; i < (t + 1) * PerThread; i++) red[i].RegisterForEntityEvent(eventType, Handler); }, out string redFirst);
+        Probe[] red = Enumerable
+            .Range(0, Threads * PerThread)
+            .Select(i => Listener(1_000_000 + i))
+            .ToArray();
+        int redFailures = OnWorkers(
+            t =>
+            {
+                for (int i = t * PerThread; i < (t + 1) * PerThread; i++)
+                    red[i].RegisterForEntityEvent(eventType, Handler);
+            },
+            out string redFirst
+        );
         int redRegistered = Count(listenersField, red, out bool redCorrupted);
         bool raced = redFailures > 0 || redCorrupted || redRegistered != red.Length;
-        Console.WriteLine($"phase 1, unrecorded: {redFailures} exceptions, {(redCorrupted ? "registry corrupted, " : "")}{redRegistered}/{red.Length} registered"
-            + (redFirst != null ? $" (first: {redFirst})" : "") + (raced ? " - the race the fix closes" : " - no race seen this run"));
+        Console.WriteLine(
+            $"phase 1, unrecorded: {redFailures} exceptions, {(redCorrupted ? "registry corrupted, " : "")}{redRegistered}/{red.Length} registered"
+                + (redFirst != null ? $" (first: {redFirst})" : "")
+                + (raced ? " - the race the fix closes" : " - no race seen this run")
+        );
 
         // Phase 2, the fix: Harmony patch on, workers record, the game thread churns its own listeners meanwhile
-        new Harmony("SE-1313.test").CreateClassProcessor(patch).Patch();
+        new Harmony("SE-1313.test")
+            .CreateClassProcessor(patch)
+            .Patch();
         MyEntityContainerEventExtensions.InitEntityEvents();
-        Probe[] staged = Enumerable.Range(0, Threads * PerThread).Select(i => Listener(2_000_000 + i)).ToArray();
+        Probe[] staged = Enumerable
+            .Range(0, Threads * PerThread)
+            .Select(i => Listener(2_000_000 + i))
+            .ToArray();
         var recorded = new List<Action>[Threads];
         int done = 0;
-        int churned = 0, gameFailures = 0;
+        int churned = 0,
+            gameFailures = 0;
         string gameFirst = null;
         var workers = new Thread(() =>
         {
-            int failures = OnWorkers(t => recorded[t] = recording(() =>
-            {
-                for (int i = t * PerThread; i < (t + 1) * PerThread; i++) staged[i].RegisterForEntityEvent(eventType, Handler);
-            }), out string first);
+            int failures = OnWorkers(
+                t =>
+                    recorded[t] = recording(() =>
+                    {
+                        for (int i = t * PerThread; i < (t + 1) * PerThread; i++)
+                            staged[i].RegisterForEntityEvent(eventType, Handler);
+                    }),
+                out string first
+            );
             gameFailures += failures;
             gameFirst ??= first;
             Volatile.Write(ref done, 1);
@@ -114,12 +149,14 @@ static class EntityEventRegistryChecks
             {
                 Probe own = Listener(3_000_000 + churned);
                 own.RegisterForEntityEvent(eventType, Handler);
-                if (churned % 2 == 0) onClose.Invoke(null, [own.Entity]);
+                if (churned % 2 == 0)
+                    onClose.Invoke(null, [own.Entity]);
                 churned++;
             }
             catch (Exception e)
             {
-                if (++gameFailures == 1) gameFirst = "game thread: " + e.GetType().Name + ": " + e.Message;
+                if (++gameFailures == 1)
+                    gameFirst = "game thread: " + e.GetType().Name + ": " + e.Message;
             }
         }
         workers.Join();
@@ -127,16 +164,24 @@ static class EntityEventRegistryChecks
         int leaked = staged.Count(p => listeners.Contains(p.Entity.EntityId));
         int gameKept = listeners.Count;
         foreach (List<Action> list in recorded)
-            foreach (Action replay in list ?? [])
-                replay();
+        foreach (Action replay in list ?? [])
+            replay();
         int registered = Count(listenersField, staged, out bool corrupted);
         int replayed = recorded.Sum(list => list?.Count ?? 0);
 
-        bool ok = gameFailures == 0 && !corrupted && leaked == 0 && replayed == staged.Length
-            && registered == staged.Length && listeners.Count == gameKept + staged.Length && gameKept == churned / 2;
-        Console.WriteLine($"{(ok ? "PASS" : "FAIL")}: phase 2, recorded: {Threads} threads x {PerThread} listeners, {gameFailures} exceptions, "
-            + $"{leaked} written by a worker, {replayed} recorded and replayed on the game thread, {registered}/{staged.Length} registered, "
-            + $"game thread added {churned} listeners and closed half meanwhile ({gameKept} kept), {(corrupted ? "registry corrupted" : "registry intact")}");
+        bool ok =
+            gameFailures == 0
+            && !corrupted
+            && leaked == 0
+            && replayed == staged.Length
+            && registered == staged.Length
+            && listeners.Count == gameKept + staged.Length
+            && gameKept == churned / 2;
+        Console.WriteLine(
+            $"{(ok ? "PASS" : "FAIL")}: phase 2, recorded: {Threads} threads x {PerThread} listeners, {gameFailures} exceptions, "
+                + $"{leaked} written by a worker, {replayed} recorded and replayed on the game thread, {registered}/{staged.Length} registered, "
+                + $"game thread added {churned} listeners and closed half meanwhile ({gameKept} kept), {(corrupted ? "registry corrupted" : "registry intact")}"
+        );
         if (gameFirst != null)
             Console.WriteLine($"  first exception: {gameFirst}");
         return ok ? 0 : 1;
@@ -148,17 +193,26 @@ static class EntityEventRegistryChecks
         int failures = 0;
         string first = null;
         using var start = new Barrier(Threads);
-        Thread[] threads = Enumerable.Range(0, Threads).Select(t => new Thread(() =>
-        {
-            start.SignalAndWait();
-            try { work(t); }
-            catch (Exception e)
+        Thread[] threads = Enumerable
+            .Range(0, Threads)
+            .Select(t => new Thread(() =>
             {
-                if (Interlocked.Increment(ref failures) == 1) first = e.GetType().Name + ": " + e.Message;
-            }
-        })).ToArray();
-        foreach (Thread thread in threads) thread.Start();
-        foreach (Thread thread in threads) thread.Join();
+                start.SignalAndWait();
+                try
+                {
+                    work(t);
+                }
+                catch (Exception e)
+                {
+                    if (Interlocked.Increment(ref failures) == 1)
+                        first = e.GetType().Name + ": " + e.Message;
+                }
+            }))
+            .ToArray();
+        foreach (Thread thread in threads)
+            thread.Start();
+        foreach (Thread thread in threads)
+            thread.Join();
         firstFailure = first;
         return failures;
     }
