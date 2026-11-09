@@ -32,7 +32,7 @@ public static class MySessionComponentTrashPatch
 		MySession.OnUnloading -= OnSessionUnloading;
 		MySession.OnUnloading += OnSessionUnloading;
 		s_unloading = false;
-		lock (s_graceLock) s_graceUntil.Clear();
+		lock (s_graceLock) { s_graceUntil.Clear(); s_settleUntil.Clear(); }
 		s_handoverRegistration?.Dispose();
 		s_handoverRegistration = Environment.GetEnvironmentVariable("CLUSTER_TRASH_GRACE_HANDOVER") == "0"
 			? null : PluginHandoverService.Register("cluster.trash-grace", GraceHandover);
@@ -70,6 +70,11 @@ public static class MySessionComponentTrashPatch
 	public const double RecoveryGraceSeconds = 300;
 	private static readonly object s_graceLock = new object();
 	private static readonly Dictionary<long, DateTime> s_graceUntil = new Dictionary<long, DateTime>();
+	// SE-1317: when an arrival's links are re-formed, for the admin grid-delete. The trash grace is longer than that
+	// after a recovery load, because it waits for the displaced players: an offline wake is a recovery load, and the
+	// woken partition went offline again (offline.minOnlineSeconds 60 + graceSeconds 180) before its 300 s ended, so
+	// grid-delete refused its grids on every wake. Set to the link part only, overwritten (not extended) by each arrival.
+	private static readonly Dictionary<long, DateTime> s_settleUntil = new Dictionary<long, DateTime>();
 	internal static readonly IPluginGridHandover GraceHandover = new TrashGraceHandover();
 
 	// T-0303: carry the absolute expiry through the existing per-grid handover hooks. Restarting the
@@ -82,7 +87,7 @@ public static class MySessionComponentTrashPatch
 				return s_graceUntil.TryGetValue(gridId, out DateTime until) && until > DateTime.UtcNow
 					? BitConverter.GetBytes(until.Ticks) : null;
 		}
-		public void Left(long gridId) { lock (s_graceLock) s_graceUntil.Remove(gridId); }
+		public void Left(long gridId) { lock (s_graceLock) { s_graceUntil.Remove(gridId); s_settleUntil.Remove(gridId); } }
 		public void Stayed(long gridId) { }
 		public void Arrived(long gridId, byte[] state)
 		{
@@ -102,18 +107,30 @@ public static class MySessionComponentTrashPatch
 	/// <summary>Protect arriving entities from the trash sweep for `seconds` from now (extends, never shortens).</summary>
 	public static void ProtectArrivals(IEnumerable<long> entityIds, double seconds = ImportGraceSeconds)
 	{
-		DateTime until = DateTime.UtcNow.AddSeconds(seconds);
+		DateTime now = DateTime.UtcNow;
+		DateTime until = now.AddSeconds(seconds);
+		DateTime settled = now.AddSeconds(Math.Min(seconds, LinkSettleSeconds()));
 		lock (s_graceLock)
 		{
 			if (s_graceUntil.Count > 50000)
 			{
-				DateTime now = DateTime.UtcNow;
 				foreach (long stale in new List<long>(s_graceUntil.Keys))
 					if (s_graceUntil[stale] < now) s_graceUntil.Remove(stale);
+				foreach (long stale in new List<long>(s_settleUntil.Keys))
+					if (s_settleUntil[stale] < now) s_settleUntil.Remove(stale);
 			}
 			foreach (long id in entityIds)
+			{
 				ExtendGrace(id, until);
+				s_settleUntil[id] = settled;
+			}
 		}
+	}
+
+	private static double LinkSettleSeconds()
+	{
+		try { return ClusterConfig.GetInt("gridDelete.linkSettleSeconds"); }
+		catch (Exception) { return ImportGraceSeconds; }
 	}
 
 	/// <summary>One arriving entity, while its import is still running (the commit extends it).</summary>
@@ -123,6 +140,17 @@ public static class MySessionComponentTrashPatch
 	{
 		lock (s_graceLock)
 			return s_graceUntil.TryGetValue(entityId, out DateTime until) && until >= DateTime.UtcNow;
+	}
+
+	/// <summary>SE-1317: inside the import grace and its links may not be re-formed yet: within
+	/// <c>gridDelete.linkSettleSeconds</c> of its arrival (commit or recovery load), or no arrival seen here
+	/// (a carried grace before the commit). The rest of a recovery's 300 s is for the trash only.</summary>
+	internal static bool LinksSettling(long entityId)
+	{
+		DateTime now = DateTime.UtcNow;
+		lock (s_graceLock)
+			return s_graceUntil.TryGetValue(entityId, out DateTime until) && until >= now
+				&& (!s_settleUntil.TryGetValue(entityId, out DateTime settled) || settled >= now);
 	}
 
 	public static bool IsCloseToPlayerOrCameraPrefix(MyEntity entity, float distanceThreshold, ref bool __result)

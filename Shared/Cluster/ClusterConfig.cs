@@ -389,6 +389,10 @@ public static class ClusterConfig
 		// partition unowned once its empty Final is catalogued, and the registry reaps the row. "false" restores
 		// holding it, unreported, until the node's drain releases it.
 		["recovery.releaseEmpty"] = "true",
+		// SE-1317: POST /cluster/grid-delete refuses a grid for this long after its handover commit or recovery load,
+		// while its links re-form (T-0254's 60 s). Not the trash's 300 s recovery grace: an offline wake is a recovery
+		// load and the woken partition goes offline again before that ends. A bench sets a few seconds.
+		["gridDelete.linkSettleSeconds"] = "60",
 		// SE-1161: a recovery load that keeps failing. quarantineAfter (NODE): after this many failed loads in a row of one
 		// partition, cold or warm recovery alike, the node quarantines it (/cluster/quarantine, repairable in place) and
 		// the registry hands it to nobody while the node reports it; 0 = never. failedBackoffSeconds and

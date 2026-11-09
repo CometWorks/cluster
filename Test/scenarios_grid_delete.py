@@ -16,6 +16,13 @@ way trash or combat closes a grid (the test plugin's /test-close-entity) as the 
 * ``P2-GRID-DELETE-SLOW-FRAME`` - SE-897: the game thread stalls right after the delete of a partition's only grid
   (/test-empty-release-stall), so heartbeats run on the member counts published before it. The partition is still
   released and reaped, not "left alone: it has members again" until the drain.
+* ``P2-GRID-DELETE-WAKE`` - SE-1317, found removing abandoned trader ships on octahedron-test (2026-11-09). (a) Three
+  grids of one partition deleted in a row: before the fix each answer said "not emptied" (the member set still held
+  the grids closed a moment before), no empty Final was queued and the partition's older save brought all three back.
+  (b) A lone grid and a pair, each in an offline partition: a wake is a recovery load, whose 300 s trash grace outlived
+  the woken partition, and grid-delete refused them as "arrived recently (import grace)" on every wake. Now refused
+  only for ``gridDelete.linkSettleSeconds`` (3 s here); both partitions are emptied and reaped, and a second wake
+  brings nothing back.
 """
 from __future__ import annotations
 
@@ -23,6 +30,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -199,7 +207,147 @@ def p2_grid_delete_slow_frame(bench) -> None:
     bench.exercised(grid=grid, partition=partition)
 
 
+SETTLE_SECONDS = 3
+DELETE_WINDOW = 30  # seconds of retries; the 300 s trash grace of a recovery load is far longer
+
+
+def _delete(bench, grid: int, name: str) -> dict:
+    return bench.cluster.node(NODE, f"/grid-delete?{urllib.parse.urlencode({'entityId': grid, 'name': name})}", "POST")
+
+
+def _delete_retrying(bench, grid: int, name: str) -> dict:
+    """Delete, retrying while the answer is the import grace refusal, for DELETE_WINDOW seconds."""
+    deadline = time.time() + DELETE_WINDOW
+    while True:
+        answer = _delete(bench, grid, name)
+        if answer.get("deleted") or answer.get("reason") != "arrived recently (import grace)" or time.time() > deadline:
+            return answer
+        time.sleep(1)
+
+
+def _offline_members(bench) -> dict[int, list[int]]:
+    return {int(row["Partition"]): [int(x) for x in row.get("Members") or []]
+            for row in bench.cluster.get("/registry/partitions/offline").get("Partitions", [])}
+
+
+def _spawn_set(bench, xs: dict[str, float]) -> tuple[dict[str, int], dict[str, str]]:
+    spawned = {key: bench.cluster.node(NODE, f"/trash-test-spawn?x={x}&y=0&z=0&static=false&blocks=27", "POST")
+               for key, x in xs.items()}
+    bench.record(f"probes-{'-'.join(xs)}", spawned)
+    return {k: int(p["grid"]) for k, p in spawned.items()}, {k: p["name"] for k, p in spawned.items()}
+
+
+def _homes(bench, grids: dict[str, int]) -> dict[str, int] | None:
+    try:
+        return wait_until(lambda: (lambda m: {k: m[g] for k, g in grids.items()} if all(g in m for g in grids.values())
+                                   and all(_all_partitions(bench).get(m[g]) == NODE for g in grids.values()) else None)(
+            _members(bench)), 120, "every probe in a partition node-1 owns")
+    except ClusterError:
+        return None
+
+
+def _gone_for_good(bench, label: str, grids: dict[str, int], partitions: set[int]) -> None:
+    """The emptied partitions' rows are reaped and no offline save lists the deleted grids."""
+    ids = set(grids.values())
+    try:
+        wait_until(lambda: not (partitions & _rows(bench).keys()), REAP_TIMEOUT, f"{label}: rows reaped")
+        reaped = True
+    except ClusterError:
+        reaped = False
+    rows = _rows(bench)
+    offline = _offline_members(bench)
+    saved = sorted(ids & {m for members in offline.values() for m in members})
+    bench.record(f"{label}-after", {"rows": {str(p): rows.get(p) for p in partitions},
+                                     "offline": {str(p): offline.get(p) for p in partitions}, "savedOffline": saved})
+    bench.check(f"{label}: the registry reaped the emptied partitions {sorted(partitions)}", reaped,
+                json.dumps({str(p): rows.get(p) for p in partitions})[:400])
+    bench.check(f"{label}: no offline save holds a deleted grid", not saved, json.dumps(saved))
+    # Wake every row that is left: a delete that did not reach the save comes back here.
+    for partition in partitions & rows.keys():
+        try:
+            bench.record(f"{label}-rewake-{partition}", bench.cluster.post(
+                f"/registry/partitions/offline/load?partition={partition}&node={NODE}&reason=se1317"))
+        except ClusterError as error:
+            bench.record(f"{label}-rewake-{partition}", str(error))
+    try:
+        back = wait_until(lambda: (lambda m: sorted(ids & m.keys()) or None)(_members(bench)), 20, f"{label}: deleted grids back")
+    except ClusterError:
+        back = []
+    bench.check(f"{label}: no deleted grid is back online after a wake attempt", not back, json.dumps(back))
+
+
+def p2_grid_delete_wake(bench) -> None:
+    bench.start_cluster(nodes=STARTED)
+    bench.record("config-setup", bench.cluster.handover_config({"offline.enabled": "false"}))
+    try:
+        bench.record("config-settle", bench.cluster.handover_config({"gridDelete.linkSettleSeconds": str(SETTLE_SECONDS)}))
+    except ClusterError as error:   # a build before SE-1317 has no such key
+        bench.record("config-settle", str(error))
+
+    # (a) Three grids of one online partition, deleted in a row.
+    grids, names = _spawn_set(bench, {"T1": FAR, "T2": FAR + 100, "T3": FAR + 200})
+    homes = _homes(bench, grids)
+    _require(bench, "setup: T1, T2 and T3 share a partition node-1 owns", homes and len(set(homes.values())) == 1,
+             json.dumps(homes or _members(bench))[:300])
+    trio = homes["T1"]
+    _capture(bench, trio)
+    try:
+        wait_until(lambda: (_newest_entities(bench, trio) or 0) >= 3, 90, "a save of the three")
+        saved = True
+    except ClusterError:
+        saved = False
+    _require(bench, "setup: the partition has a catalogued save holding the three", saved)
+    answers = {k: _delete(bench, grids[k], names[k]) for k in ("T1", "T2", "T3")}
+    bench.record("trio-deletes", answers)
+    bench.check("trio: all three deletes succeed", all(a.get("deleted") for a in answers.values()), json.dumps(answers)[:500])
+    bench.check("trio: the last delete empties the partition and queues its empty release",
+                answers["T3"].get("emptyRelease") == "queued", json.dumps(answers["T3"]))
+    _gone_for_good(bench, "trio", grids, {trio})
+
+    # (b) A lone grid and a pair, each in an offline partition, deleted through a wake.
+    grids, names = _spawn_set(bench, {"L": FAR + 60_000, "P1": FAR + 120_000, "P2": FAR + 120_100})
+    homes = _homes(bench, grids)
+    _require(bench, "setup: L alone, P1 and P2 together, in partitions node-1 owns",
+             homes and homes["P1"] == homes["P2"] and homes["L"] != homes["P1"], json.dumps(homes or _members(bench))[:300])
+    woken = {homes["L"], homes["P1"]}
+    for partition in woken:
+        _capture(bench, partition)
+    bench.record("config-offline", bench.cluster.handover_config({
+        "offline.enabled": "true", "offline.minOnlineSeconds": "0", "offline.graceSeconds": "0"}))
+    try:
+        wait_until(lambda: woken <= _offline_members(bench).keys(), 180, "both partitions offline")
+        went = True
+    except ClusterError:
+        went = False
+    offline = _offline_members(bench)
+    _require(bench, "setup: both partitions went offline holding their grids", went and all(
+        grids[k] in offline.get(homes[k], []) for k in grids), json.dumps({str(p): offline.get(p) for p in woken}))
+    # Woken partitions stay up long enough for the deletes; production's 60 + 180 s would too.
+    bench.record("config-woken", bench.cluster.handover_config({"offline.minOnlineSeconds": "120", "offline.graceSeconds": "0"}))
+    for partition in woken:
+        bench.record(f"wake-{partition}", bench.cluster.post(
+            f"/registry/partitions/offline/load?partition={partition}&node={NODE}&reason=se1317"))
+    try:
+        wait_until(lambda: set(grids.values()) <= _members(bench).keys(), 120, "the woken grids online")
+        loaded = time.time()
+    except ClusterError:
+        loaded = None
+    _require(bench, "setup: the wakes loaded all three grids on node-1", loaded, json.dumps(_members(bench))[:300])
+    answers = {k: _delete_retrying(bench, grids[k], names[k]) for k in ("L", "P1", "P2")}
+    took = round(time.time() - loaded, 1)
+    bench.record("woken-deletes", {"answers": answers, "secondsAfterLoad": took})
+    bench.check("woken: every grid of a woken partition is deleted within the trash grace (not refused as import grace)",
+                all(a.get("deleted") for a in answers.values()), json.dumps({"took": took, **answers})[:500])
+    bench.check("woken: both woken partitions are emptied and queue their empty release",
+                answers["L"].get("emptyRelease") == "queued" and answers["P2"].get("emptyRelease") == "queued",
+                json.dumps({k: answers[k].get("emptyRelease") for k in answers}))
+    bench.record("config-offline-off", bench.cluster.handover_config({"offline.enabled": "false"}))
+    _gone_for_good(bench, "woken", grids, woken)
+    bench.exercised(woken=sorted(woken), deleteSecondsAfterLoad=took)
+
+
 SCENARIOS_GRID_DELETE = {
     "P2-GRID-DELETE": (p2_grid_delete, "#1334: the leftover-ship sweep deletes unpiloted grids on their node, and an emptied partition is reaped", "3"),
     "P2-GRID-DELETE-SLOW-FRAME": (p2_grid_delete_slow_frame, "SE-897: a slow frame right after the delete does not cost the emptied partition its release", "3"),
+    "P2-GRID-DELETE-WAKE": (p2_grid_delete_wake, "SE-1317: grids of a woken offline partition can be deleted, and deletes that empty a partition stay deleted", "3"),
 }
