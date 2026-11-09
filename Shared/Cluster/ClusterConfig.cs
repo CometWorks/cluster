@@ -362,7 +362,8 @@ public static class ClusterConfig
 		// offline partitions (a ship first seen without one counts as used then). It goes when the newest finished
 		// registry backup (the Gateway's NPC census) was taken botShipIdleMinutes or more after that use, so the backup
 		// holds it unused: right after each backup, at most botShipsMaxPerRun per node, and right before its partition
-		// goes offline. Never a ship docked or attached to a grid that is not a bot ship.
+		// goes offline. Never a ship docked or attached to a grid that is not a bot ship, and never while a human player (any
+		// player who is no bot, or a viewed camera) is within the sync distance of it.
 		["cleanup.botShips"] = "off",
 		["cleanup.botSteamIds"] = "",
 		["cleanup.botShipIdleMinutes"] = "180",

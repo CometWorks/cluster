@@ -8,6 +8,7 @@ using Sandbox.Engine.Physics;
 using Sandbox.Game.Entities.Cube;
 using Sandbox.Game.Multiplayer;
 using Sandbox.Game.World;
+using VRage.Network;
 using VRage.Game.Entity;
 using VRage.ObjectBuilders;
 using VRageMath;
@@ -36,7 +37,8 @@ namespace ClusterPlugin;
 ///   cap per partition.
 ///
 /// NEVER removed: a ship in use right now, a ship attached (docked, landed, on rotors) to any grid that is not a bot
-/// ship or its own ownerless subgrid, a grid mid-handover or whose links are still settling after an arrival
+/// ship or its own ownerless subgrid, a ship with a human player (no bot of the list, or a viewed camera) within the
+/// sync distance (the removal waits for a backup with none there; the idle clock keeps running), a grid mid-handover or whose links are still settling after an arrival
 /// (<c>gridDelete.linkSettleSeconds</c>), a group spanning partitions or in a
 /// partition this node does not own. <c>cleanup.botShips</c> = dryrun logs each ship it would remove and keeps it.
 /// Every removal is logged with the grid's id, name, owners, position, partition and the reason.
@@ -130,6 +132,27 @@ internal static class BotShipCleaner
 	private static List<MyCubeGrid> Group(MyCubeGrid root)
 		=> MyCubeGridGroups.Static?.Physical.GetGroup(root)?.Nodes.Select(node => node.NodeData).ToList() ?? new List<MyCubeGrid> { root };
 
+	/// <summary>
+	/// Every player who is no bot of <paramref name="bots"/>: the cluster position registry's (a viewed camera, ClientId 0,
+	/// counts: its viewer is unknown) and this node's online players at their exact positions.
+	/// </summary>
+	internal static List<Vector3D> HumanPositions(SteamIdRanges bots)
+	{
+		var positions = new List<Vector3D>();
+		foreach (ClusterPlayerPosition player in PositionRegistryService.Players)
+			if (!bots.Contains(player.ClientId))
+				positions.Add(new Vector3D(player.X, player.Y, player.Z));
+		foreach (MyPlayer player in MySession.Static.Players.GetOnlinePlayers())
+		{
+			if (bots.Contains(player.Id.SteamId)) continue;
+			if (player.Controller?.ControlledEntity?.Entity is MyEntity controlled && controlled.PositionComp != null)
+				positions.Add(controlled.PositionComp.GetPosition());
+			else if (player.Character?.PositionComp != null)
+				positions.Add(player.Character.PositionComp.GetPosition());
+		}
+		return positions;
+	}
+
 	/// <summary>Why the group is in use right now, or null.</summary>
 	private static string InUse(List<MyCubeGrid> group, double radius, List<Vector3D> people)
 	{
@@ -208,7 +231,7 @@ internal static class BotShipCleaner
 
 	/// <summary>Why <paramref name="root"/> must stay now, or null. <paramref name="group"/> = its physical group.</summary>
 	private static string Blocker(MyCubeGrid root, List<MyCubeGrid> group, SteamIdRanges bots, double radius, List<Vector3D> people,
-		Dictionary<long, ulong> holders, PartitionPersistence persistence, out ulong partition)
+		List<Vector3D> humans, Dictionary<long, ulong> holders, PartitionPersistence persistence, out ulong partition)
 	{
 		partition = holders.TryGetValue(root.EntityId, out ulong holder) ? holder : 0;
 		HashSet<MyCubeGrid> mechanical = MyCubeGridGroups.Static?.Mechanical.GetGroup(root)?.Nodes.Select(node => node.NodeData).ToHashSet()
@@ -225,6 +248,10 @@ internal static class BotShipCleaner
 			if (!holders.TryGetValue(grid.EntityId, out ulong other) || other != partition) return "group spans partitions";
 		}
 		if (InUse(group, radius, people) is { } use) return use;
+		// Viktor, 2026-11-09: a human player within the sync distance sees the ship, so it stays while one is there.
+		double sync = MyLayers.GetSyncDistance();
+		foreach (MyCubeGrid grid in group)
+			if (UnvisitedNpcSweeper.Visited(grid, sync, humans)) return "human player within sync distance";
 		if (partition == 0 || !persistence.OwnsPartition(partition)) return "partition not owned here";
 		return null;
 	}
@@ -237,6 +264,7 @@ internal static class BotShipCleaner
 		SteamIdRanges bots = Bots();
 		double radius = ClusterConfig.GetInt("cleanup.botShipUseRadius");
 		List<Vector3D> people = UnvisitedNpcSweeper.PlayerPositions();
+		List<Vector3D> humans = HumanPositions(bots);
 		Dictionary<long, ulong> holders = partitions.Holders();
 		var due = new List<(MyCubeGrid Root, List<MyCubeGrid> Group, ulong Partition, long LastUse)>();
 		var kept = new Dictionary<string, int>();
@@ -244,7 +272,7 @@ internal static class BotShipCleaner
 		{
 			if (!m_lastUse.TryGetValue(root.EntityId, out long lastUse) || !Abandoned(lastUse, backupAt, idle)) continue;
 			List<MyCubeGrid> group = Group(root);
-			if (Blocker(root, group, bots, radius, people, holders, persistence, out ulong partition) is { } blocker)
+			if (Blocker(root, group, bots, radius, people, humans, holders, persistence, out ulong partition) is { } blocker)
 			{
 				kept[blocker] = kept.GetValueOrDefault(blocker) + 1;
 				continue;
@@ -280,6 +308,7 @@ internal static class BotShipCleaner
 		SteamIdRanges bots = Bots();
 		double radius = ClusterConfig.GetInt("cleanup.botShipUseRadius");
 		List<Vector3D> people = UnvisitedNpcSweeper.PlayerPositions();
+		List<Vector3D> humans = HumanPositions(bots);
 		Dictionary<long, ulong> holders = partitions.Holders();
 		var due = new List<(MyCubeGrid Root, List<MyCubeGrid> Group, ulong Partition, long LastUse)>();
 		foreach (long member in partition.Members)
@@ -288,7 +317,7 @@ internal static class BotShipCleaner
 				|| !m_lastUse.TryGetValue(root.EntityId, out long lastUse) || !Abandoned(lastUse, backupAt, idle) || !IsBotShip(root, bots))
 				continue;
 			List<MyCubeGrid> group = Group(root);
-			if (Blocker(root, group, bots, radius, people, holders, persistence, out ulong holder) != null || holder != partition.Id) continue;
+			if (Blocker(root, group, bots, radius, people, humans, holders, persistence, out ulong holder) != null || holder != partition.Id) continue;
 			due.Add((root, group, holder, lastUse));
 		}
 		int max = ClusterConfig.GetInt("cleanup.botShipsMaxPerRun");

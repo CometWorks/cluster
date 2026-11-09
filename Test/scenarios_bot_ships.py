@@ -13,7 +13,9 @@ Two identities stand for sebot traders: identities the player collection maps to
      logs "would remove" for A1 and A2 only, and removes nothing. Then on, at most 1 per run: the next backup removes
      one of them, the one after it the other; each removal is logged with the grid's id, name, owners with their
      Steam IDs, position, partition and the unused and backup times; their emptied partitions are reaped. PLAYER,
-     SEATED, NEAR and FRESH stay; the last use of SEATED and NEAR keeps moving.
+     SEATED, NEAR and FRESH stay; the last use of SEATED and NEAR keeps moving. HUMAN (bot A's, unused, 1500 m from the
+     camera: no use, but a human player within the sync distance) is kept for that reason; once the camera is no longer
+     viewed, the next backup removes it.
   2. Offline. OFF (bot A's) goes offline right after its first sight, before any backup could hold it unused, so it
      is saved with its stamp. A backup is taken once it is past the idle time: OFF is offline and stays there. Woken
      (a recovery load), it comes back with the stamp it was saved with (/cluster/bot-ships), and the offline sweep
@@ -39,6 +41,7 @@ IDLE_SECONDS = 120
 BOTS = "76561190000000001-76561190000000099"
 BOT_STEAM = {"A": 76561190000000001, "B": 76561190000000002}
 PLAYER_STEAM = 76561198000001316
+HUMAN_METRES = 1500   # from the camera: outside cleanup.botShipUseRadius, inside the sync distance (3000 m)
 
 
 def _backup(bench, n: int) -> int:
@@ -108,19 +111,20 @@ def p2_bot_ship_cleanup(bench) -> None:
         row.get("ClientId") == 0 and row.get("EntityId") == camera.get("camera") for row in bench.cluster.node(NODE, "/position-registry")),
         60, "camera in the position registry"))
     probes = {}
-    for name, owner in (("A1", ids["A"]), ("A2", ids["B"]), ("PLAYER", ids["player"]), ("NEAR", ids["B"])):
-        probes[name] = bench.cluster.node(NODE, f"/trash-test-spawn?x={xs[name]}&y=0&z=0&blocks=8&npc=true&owner={owner}", "POST")
+    for name, owner in (("A1", ids["A"]), ("A2", ids["B"]), ("PLAYER", ids["player"]), ("NEAR", ids["B"]), ("HUMAN", ids["A"])):
+        x = xs["NEAR"] + HUMAN_METRES if name == "HUMAN" else xs[name]
+        probes[name] = bench.cluster.node(NODE, f"/trash-test-spawn?x={x}&y=0&z=0&blocks=8&npc=true&owner={owner}", "POST")
     seated = bench.cluster.node(NODE, f"/rich-test-spawn?kind=antennaship&x={xs['SEATED']}&y=0&z=0&builtBy={ids['A']}", "POST")
     probes["SEATED"] = {"grid": seated["grids"][0]["grid"], "name": seated["grids"][0]["name"]}
     bench.record("pilot", bench.cluster.node(NODE, f"/bot-ship-test-pilot?grid={probes['SEATED']['grid']}&owner={ids['B']}", "POST"))
     grids = {name: int(p["grid"]) for name, p in probes.items()}
-    tracked = wait_until(lambda: (lambda s: s if all(s.get(grids[n], {}).get("lastUse") for n in ("A1", "A2", "SEATED", "NEAR")) else None)(
+    tracked = wait_until(lambda: (lambda s: s if all(s.get(grids[n], {}).get("lastUse") for n in ("A1", "A2", "SEATED", "NEAR", "HUMAN")) else None)(
         _ships(bench)), 60, "the bot ships tracked")
     bench.check("node-1 tracks the bot ships, not the player's", grids["PLAYER"] not in tracked, json.dumps(tracked)[:500])
     homes = _homes(bench, {k: grids[k] for k in ("A1", "A2")})
     _require(bench, "setup: A1 and A2 each alone in a partition node-1 owns", homes and homes["A1"] != homes["A2"], json.dumps(homes))
     # Past the idle time for the first five; FRESH is first seen now.
-    time.sleep(max(0, max(tracked[grids[n]]["lastUse"] for n in ("A1", "A2")) + IDLE_SECONDS + 5 - time.time()))
+    time.sleep(max(0, max(tracked[grids[n]]["lastUse"] for n in ("A1", "A2", "HUMAN")) + IDLE_SECONDS + 5 - time.time()))
     probes["FRESH"] = bench.cluster.node(NODE, f"/trash-test-spawn?x={xs['FRESH']}&y=0&z=0&blocks=8&npc=true&owner={ids['A']}", "POST")
     grids["FRESH"] = int(probes["FRESH"]["grid"])
     wait_until(lambda: _ships(bench).get(grids["FRESH"], {}).get("lastUse"), 30, "FRESH tracked")
@@ -152,7 +156,7 @@ def p2_bot_ship_cleanup(bench) -> None:
     except ClusterError:
         pass
     gone3 = {n for n, g in grids.items() if g not in _members(bench)}
-    bench.check("the backup after it removes the other; PLAYER, SEATED, NEAR and FRESH stay", gone3 == {"A1", "A2"},
+    bench.check("the backup after it removes the other; PLAYER, SEATED, NEAR, HUMAN and FRESH stay", gone3 == {"A1", "A2"},
                 json.dumps({"gone": sorted(gone3), "line": line3}))
     removed = {n: (_logged(bench, "removed", grids[n]) or [None])[0] for n in ("A1", "A2")}
     bench.record("removed", removed)
@@ -165,6 +169,22 @@ def p2_bot_ship_cleanup(bench) -> None:
     bench.check("SEATED and NEAR count as in use: their last use is after the third backup",
                 all(use and use >= third - 15 for use in recent.values()), json.dumps({"third": third, **recent}))
     bench.check("the run summaries name the capped ship", bool(line2) and "over cleanup.botShipsMaxPerRun, next backup 1" in line2, str(line2))
+    bench.check("HUMAN, unused but with a human player within the sync distance, is kept for that reason",
+                all(line and "human player within sync distance 1" in line for line in (line2, line3)),
+                json.dumps({"run2": line2, "run3": line3}))
+    # The human leaves: the camera is no longer viewed, so the next backup takes HUMAN.
+    bench.record("unview", bench.cluster.node(NODE, f"/camera-test-view?entityId={camera.get('camera')}&active=false", "POST"))
+    wait_until(lambda: not any(row.get("EntityId") == camera.get("camera") for row in bench.cluster.node(NODE, "/position-registry")),
+               60, "the camera out of the position registry")
+    fourth = _backup(bench, 4)
+    line4 = _run_line(bench, fourth)
+    try:
+        wait_until(lambda: grids["HUMAN"] not in _members(bench), 30, "HUMAN removed")
+    except ClusterError:
+        pass
+    gone4 = {n for n, g in grids.items() if g not in _members(bench)}
+    bench.check("with nobody human in sync distance any more, the next backup removes HUMAN, nothing else", gone4 == {"A1", "A2", "HUMAN"},
+                json.dumps({"gone": sorted(gone4), "line": line4}))
     _gone_for_good(bench, "after-backup", {k: grids[k] for k in ("A1", "A2")}, {homes["A1"], homes["A2"]})
 
     # 2. Offline: the stamp rides the offline save, and the offline sweep removes the ship before it goes offline again.
@@ -177,8 +197,8 @@ def p2_bot_ship_cleanup(bench) -> None:
     wait_until(lambda: grid_off in _offline_members(bench).get(home_off, []), 120, "OFF offline")
     bench.record("config-offline-hold", bench.cluster.handover_config({"offline.enabled": "false"}))
     time.sleep(max(0, stamp + IDLE_SECONDS + 2 - time.time()))
-    fourth = _backup(bench, 4)
-    _run_line(bench, fourth)
+    fifth = _backup(bench, 5)
+    _run_line(bench, fifth)
     bench.check("OFF stays in its offline partition through the backup", grid_off in _offline_members(bench).get(home_off, []),
                 json.dumps(_offline_members(bench).get(home_off)))
     bench.record("wake", bench.cluster.post(f"/registry/partitions/offline/load?partition={home_off}&node={NODE}&reason=se1316"))
@@ -192,7 +212,7 @@ def p2_bot_ship_cleanup(bench) -> None:
     bench.check("the offline sweep removes OFF right before its partition goes offline", bool(line) and "before offline" in line, str(line))
     bench.record("config-offline-off", bench.cluster.handover_config({"offline.enabled": "false"}))
     _gone_for_good(bench, "before-offline", {"OFF": grid_off}, {home_off})
-    bench.exercised(grids=grids, off=grid_off, backups=[first, second, third, fourth])
+    bench.exercised(grids=grids, off=grid_off, backups=[first, second, third, fourth, fifth])
 
 SCENARIOS_BOT_SHIPS = {
     "P2-BOT-SHIP-CLEANUP": (p2_bot_ship_cleanup, "SE-1316: ships bots left go after a backup that holds them unused, dry run first and capped; in-use and player ships stay; offline partitions too", "3"),
