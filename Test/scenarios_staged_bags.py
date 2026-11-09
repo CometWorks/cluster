@@ -1,7 +1,7 @@
 """SE-1313: the staged handover import builds a partition of many inventory bags without corrupting game state.
 
-* ``P2-STAGED-BAGS`` - 24 astronaut backpacks and 4 small armor cubes rest on node-1 as one partition, which is
-  then forced node-1 -> node-2 and back four times (eight staged imports of 28 entities). Every import must go
+* ``P2-STAGED-BAGS`` - 120 astronaut backpacks and 4 small armor cubes rest on node-1 as one partition, which is
+  then forced node-1 -> node-2 and back four times (eight staged imports of 124 entities). Every import must go
   through on the first try, the bags must all arrive, and neither node may log an ``Entity init`` failure.
   Before the fix the import built its entities on parallel worker threads, and every bag's physics component
   registers an entity-event listener in the game's static, unlocked registry during Init
@@ -29,7 +29,7 @@ from scenarios import _all_partitions, _force_handover
 from scenarios_core import _lines, _partitions
 from scenarios_wa_ops import _poll, _require
 
-BAGS = 24
+BAGS = 120  # under partition.oversizeMembers (150): one partition
 CUBES = 4
 ROUND_TRIPS = 4
 ORIGIN = (750_000.0, 0.0, 0.0)
@@ -59,7 +59,9 @@ def _staged(bench, bags: int, cubes: int, ships: int) -> None:
     x, y, z = ORIGIN
     bag_ids = []
     if bags:
-        bag_ids = bench.cluster.node("node-1", f"/bag-test-spawn?x={x}&y={y}&z={z}&count={bags}&spacing=2", "POST")["bags"]
+        for row in range(0, bags, 20):  # rows of 20, 2 m apart
+            bag_ids += bench.cluster.node("node-1", f"/bag-test-spawn?x={x}&y={y + row // 10}&z={z}&count={min(20, bags - row)}&spacing=2",
+                                          "POST")["bags"]
         _require(bench, f"SETUP: {bags} bags spawned on node-1", len(bag_ids) == bags, str(bag_ids))
     for index in range(cubes):
         bench.cluster.node("node-1", f"/trash-test-spawn?x={x + index * 15}&y={y + 20}&z={z}&blocks=8", "POST")
@@ -94,7 +96,9 @@ def _staged(bench, bags: int, cubes: int, ships: int) -> None:
             if owner != target:  # a failed leg leaves the partition where it was: carry on from there
                 break
 
-    imports = [line for node in ("node-1", "node-2") for line in _lines(bench, node, rf"handover_import .*partition={partition} ")]
+    imports = list({re.search(r"transferId=(\S+)", line).group(1): line[line.index("handover_import"):]  # a node writes
+                    for node in ("node-1", "node-2")  # its plugin lines to two logs
+                    for line in _lines(bench, node, rf"handover_import transferId=\S+ partition={partition} ")}.values())
     bad = {node: [line for line in _lines(bench, node, r".") if BAD.search(line)] for node in ("node-1", "node-2")}
     bench.record("legs", legs)
     bench.record("imports", imports)
@@ -120,6 +124,6 @@ def p2_staged_ships(bench) -> None:
 
 
 SCENARIOS_STAGED_BAGS = {
-    "P2-STAGED-BAGS": (p2_staged_bags, "SE-1313 a partition of 24 inventory bags moves through the staged import every try", "2"),
+    "P2-STAGED-BAGS": (p2_staged_bags, "SE-1313 a partition of 120 inventory bags moves through the staged import every try", "2"),
     "P2-STAGED-SHIPS": (p2_staged_ships, "SE-1313 a partition of 24 cargo ships moves through the staged import (import times)", "2"),
 }
