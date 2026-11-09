@@ -71,6 +71,9 @@ State: `GET /registry/status` (lifecycle phase, nodes, node plan, executors).
   `npc`, `unowned` = no big owner: drops, debris; absent from an older node), and `o: true` when it comes from an
   offline partition. `grids` holds the `unowned` rows too, so the cleanup rule's count survives a handover and an
   offline cycle; `online`, `offline` and `Count` count only the NPC rows.
+  SE-1316: `backupAt`, the unix second the newest registry backup finished (its artifact released by
+  `DELETE /admin/v1/artifacts/{id}`, as Quasar does once it has copied the node data), absent until the first one since
+  the Gateway started. The nodes' bot ship cleanup (`cleanup.botShips`) runs once for each new value.
 - **Partition pass now** (SE1-0084): `POST /registry/report-now`, sent by a node when a member entered or left
   the fast state, at most once per 250 ms. The automatic loop's next pass (it pulls every node's
   `/cluster/partitions`) starts at once instead of after its one second wait, at most every 200 ms. Counted as

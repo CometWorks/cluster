@@ -244,7 +244,9 @@ internal sealed partial class PartitionPersistence
 				+ " blockers=" + string.Join(",", blockers.OrderByDescending(x => x.Value).Select(x => x.Key + ":" + x.Value)));
 		}
 		// #1390: its wreckage goes first, so the Final never holds it; the next sweep takes the partition as it then stands.
-		if (best != null && m_offlining == null && WreckageCleaner.BeforeOffline(best, this, "before offline", mayEmpty: true) == 0)
+		// SE-1316: so do its abandoned bot ships.
+		if (best != null && m_offlining == null
+			&& WreckageCleaner.BeforeOffline(best, this, "before offline", mayEmpty: true) + BotShipCleaner.BeforeOffline(best, this, m_partitions) == 0)
 			BeginOffline(best, now);
 	}
 

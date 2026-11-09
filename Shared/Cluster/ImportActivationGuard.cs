@@ -199,4 +199,6 @@ internal enum GuardUser
 	NpcSweep,
 	/// <summary>WreckageCleaner (a guarded grid is not removed this pass, #1390).</summary>
 	WreckCleanup,
+	/// <summary>BotShipCleaner (a guarded grid is not removed this run, SE-1316).</summary>
+	BotShipCleanup,
 }
