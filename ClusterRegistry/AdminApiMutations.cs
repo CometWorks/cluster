@@ -717,7 +717,10 @@ internal sealed partial class DirectGateway
         {
             bool released = _artifacts.Release(artifactId);
             // #1275: a registry backup's retention hold ends with its artifact.
-            _registry!.ReleaseBackupHold(artifactId);
+            // SE-1316: Quasar releases the registry copy once it has copied the node data: the backup is done. The
+            // nodes' bot ship cleanup reads the time from the NPC census.
+            if (_registry!.ReleaseBackupHold(artifactId))
+                Interlocked.Exchange(ref _lastBackupAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             _registry!.CompleteAdminOperation(record.OperationId, new Dictionary<string, string>
             {
                 ["artifactId"] = artifactId,

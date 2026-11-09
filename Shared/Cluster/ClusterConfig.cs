@@ -355,6 +355,20 @@ public static class ClusterConfig
 		// at +0.02; 0 = never), after wreckSeconds with none within wreckTouchMeters. wreckSeconds 0 = no periodic removal.
 		// wreckBeforeOffline: the offline sweep and the drain remove a partition's wreckage right before its Final, no wait.
 		// Off by default: the regression scenarios' probe grids are cheap armor cubes, wreckage by this rule.
+		// SE-1316 (BotShipCleaner): ships the bots of botSteamIds (comma list of Steam IDs, first-last for a range) left
+		// behind. botShips: off (default), dryrun (log what would go) or on. A BOT SHIP is a top-level grid whose block
+		// owners are all bots; it is IN USE while someone sits in it, controls it or stands within botShipUseRadius metres
+		// of it, and the node stamps the time of that use into the grid's builder, so the stamp moves with handovers and
+		// offline partitions (a ship first seen without one counts as used then). It goes when the newest finished
+		// registry backup (the Gateway's NPC census) was taken botShipIdleMinutes or more after that use, so the backup
+		// holds it unused: right after each backup, at most botShipsMaxPerRun per node, and right before its partition
+		// goes offline. Never a ship docked or attached to a grid that is not a bot ship, and never while a human player (any
+		// player who is no bot, or a viewed camera) is within the sync distance of it.
+		["cleanup.botShips"] = "off",
+		["cleanup.botSteamIds"] = "",
+		["cleanup.botShipIdleMinutes"] = "180",
+		["cleanup.botShipUseRadius"] = "50",
+		["cleanup.botShipsMaxPerRun"] = "25",
 		["cleanup.wreckSeconds"] = "0",
 		["cleanup.wreckBeforeOffline"] = "false",
 		["cleanup.wreckMaxBlocks"] = "50",
@@ -389,6 +403,10 @@ public static class ClusterConfig
 		// partition unowned once its empty Final is catalogued, and the registry reaps the row. "false" restores
 		// holding it, unreported, until the node's drain releases it.
 		["recovery.releaseEmpty"] = "true",
+		// SE-1317: POST /cluster/grid-delete refuses a grid for this long after its handover commit or recovery load,
+		// while its links re-form (T-0254's 60 s). Not the trash's 300 s recovery grace: an offline wake is a recovery
+		// load and the woken partition goes offline again before that ends. A bench sets a few seconds.
+		["gridDelete.linkSettleSeconds"] = "60",
 		// SE-1161: a recovery load that keeps failing. quarantineAfter (NODE): after this many failed loads in a row of one
 		// partition, cold or warm recovery alike, the node quarantines it (/cluster/quarantine, repairable in place) and
 		// the registry hands it to nobody while the node reports it; 0 = never. failedBackoffSeconds and
@@ -525,6 +543,7 @@ public static class ClusterConfig
 		["offline.unknownBlocks"] = new[] { "Freeze", "Mean", "Block" },
 		["offline.longObservation"] = new[] { "Skip", "InPlace" },
 		["import.prepareScope"] = new[] { "scoped", "full", "check" },
+		["cleanup.botShips"] = new[] { "off", "dryrun", "on" },
 	};
 
 	// Comma lists: every item must be one of the allowed words; order is kept, blanks dropped.
@@ -558,6 +577,9 @@ public static class ClusterConfig
 			return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double d) && d >= 0 && !double.IsInfinity(d)
 				? d.ToString("R", CultureInfo.InvariantCulture)
 				: throw new ArgumentException("Config key " + key + " expects a non-negative decimal" + (Auto.Contains(key) ? " or auto" : "") + ", got " + value);
+		if (key == "cleanup.botSteamIds")
+			return SteamIdRanges.Normalize(value)
+				?? throw new ArgumentException("Config key " + key + " expects a comma list of Steam IDs or first-last ranges, got " + value);
 		if (FactionTags.Contains(key))
 		{
 			List<string> tags = new List<string>();

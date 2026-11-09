@@ -484,6 +484,13 @@ internal sealed partial class ClusterControlServer
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 				return;
 			}
+			if (context.Request.HttpMethod == "GET" && path.EndsWith("/bot-ships", StringComparison.OrdinalIgnoreCase))
+			{
+				// SE-1316: this node's bot ships with their last use, and which of them the newest backup holds abandoned.
+				string result = Invoke(() => JsonSerializer.Serialize(BotShipCleaner.Report()));
+				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
+				return;
+			}
 			if (context.Request.HttpMethod == "POST" && path.EndsWith("/grid-delete", StringComparison.OrdinalIgnoreCase))
 			{
 				// #1334: remove an unpiloted leftover grid on its owning node. name must equal its display name.

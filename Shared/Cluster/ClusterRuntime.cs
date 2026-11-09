@@ -1046,6 +1046,7 @@ public static class ClusterRuntime
 		{
 			UnvisitedNpcSweeper.Update(m_partitions, m_persistence);   // #1354: unvisited/gap NPC removal; npc.sweepSeconds (default 60, 0 = off)
 			WreckageCleaner.Update(m_partitions, m_persistence);       // #1390: small cheap wreckage; cleanup.wreckSeconds (default 0 = off)
+			BotShipCleaner.Update(m_partitions, m_persistence);        // SE-1316: ships bots left, after each backup; cleanup.botShips (default off)
 			DropContainerRemovalService.Update(m_partitions, m_persistence);   // #1391: drops with no removal deadline get vanilla's
 		}
 		GroupPoolScrubber.Update();     // T-0147, drops pooled grid groups that pin closed grids; CLUSTER_GROUP_SCRUB_SECONDS (default 60)

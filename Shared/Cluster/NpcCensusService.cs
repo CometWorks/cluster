@@ -64,6 +64,8 @@ public static class NpcCensusService
 		public DropRow[] Drops;
 		/// <summary>The registry's age of the census when it answered, and the local time of the answer.</summary>
 		public double AgeAtAnswer, AnsweredAt;
+		/// <summary>SE-1316: the unix second the newest registry backup finished on the Gateway, 0 = none since it started.</summary>
+		public long BackupAt;
 
 		public double Age(double now) => AgeAtAnswer + Math.Max(0, now - AnsweredAt) / 1000.0;
 
@@ -183,6 +185,7 @@ public static class NpcCensusService
 			Offline = root.GetProperty("offline").GetInt32(),
 			AgeAtAnswer = root.GetProperty("ageSeconds").GetDouble(),
 			AnsweredAt = answeredAt,
+			BackupAt = root.TryGetProperty("backupAt", out JsonElement backupAt) && backupAt.ValueKind == JsonValueKind.Number ? backupAt.GetInt64() : 0,
 		};
 		int i = 0;
 		var drops = new List<DropRow>();

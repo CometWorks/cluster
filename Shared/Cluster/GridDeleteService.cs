@@ -21,9 +21,10 @@ namespace ClusterPlugin;
 /// a grid mechanically attached to others, a grid frozen for a handover - plus two of its own:
 /// <paramref name="name"/> must equal the grid's display name, so an id read from an older partitions
 /// report never removes something else, and a grid inside its import grace (its links are not re-formed
-/// yet, so "attached" cannot be read) is left alone, as the trash leaves it.
+/// yet, so "attached" cannot be read) is left alone, as the trash leaves it. That is the first
+/// <c>gridDelete.linkSettleSeconds</c> of an arrival only, not the rest of a recovery load's longer trash grace (SE-1317).
 ///
-/// A grid alone in its partition empties it, and an emptied partition is never saved again: its newest save
+/// A grid alone in its partition (the other members already closed by earlier deletes count as gone) empties it, and an emptied partition is never saved again: its newest save
 /// would still hold the grid and the next recovery of the row would bring it back. Such a delete also queues
 /// the partition's empty Final and releases it (<see cref="PartitionPersistence.ReleaseEmptied"/>), so the
 /// registry reaps the row; it is refused while that cannot be done (a registry request or a save in flight).
@@ -42,7 +43,7 @@ internal static class GridDeleteService
 			return new { deleted = false, entityId, reason = "not a top-level grid" };
 		if (ClusterRuntime.IsFrozen(grid.EntityId))
 			return new { deleted = false, entityId, reason = "frozen for a handover in progress" };
-		if (MySessionComponentTrashPatch.InImportGrace(grid.EntityId))
+		if (MySessionComponentTrashPatch.LinksSettling(grid.EntityId))
 			return new { deleted = false, entityId, reason = "arrived recently (import grace)" };
 		long[] pilots = grid.GetFatBlocks<MyCockpit>()
 			.Where(cockpit => cockpit.Pilot != null)
@@ -59,7 +60,7 @@ internal static class GridDeleteService
 			return new { deleted = false, entityId, reason = "mechanically attached to other grids",
 				attached = group.Nodes.Select(node => node.NodeData.EntityId).Where(id => id != entityId).ToArray() };
 		ulong partition = partitions.Holder(entityId);
-		bool alone = partition != 0 && partitions.Peek(partition).Members.Count == 1;
+		bool alone = partition != 0 && AloneIn(partitions.Peek(partition), entityId);
 		if (alone && (persistence == null ? "the node has no partition persistence yet" : persistence.EmptyReleaseBlocker(partition)) is { } blocker)
 			return new { deleted = false, entityId, reason = "alone in partition " + partition + " and " + blocker };
 		var position = grid.PositionComp.GetPosition();
@@ -69,5 +70,21 @@ internal static class GridDeleteService
 		grid.Close();
 		string release = alone ? persistence.ReleaseEmptied(partition) ?? "queued" : "not emptied";
 		return new { deleted = true, entityId, name, blocks, position = new[] { position.X, position.Y, position.Z }, partition, emptyRelease = release };
+	}
+
+	/// <summary>
+	/// SE-1317: no other member of <paramref name="partition"/> is still live. The member set is the standing layout,
+	/// which drops a closed grid only at the next topology sweep, so a grid an earlier delete closed a moment ago still
+	/// counts there. Deleting a partition's 3 ships in a row answered "not emptied" for each: none queued the empty
+	/// Final, the partition went offline with its older save and the next wake loaded all three back (4426 and 4976 on
+	/// octahedron-test, 2026-11-09). A member the census cannot see yet (a load in progress) counts as live.
+	/// </summary>
+	internal static bool AloneIn(PartitionManager.Partition partition, long entityId)
+	{
+		if (partition.HasPending) return partition.Members.Count == 1 && partition.Members.Contains(entityId);
+		foreach (long member in partition.Members)
+			if (member != entityId && MyEntities.TryGetEntityById(member, out MyEntity other) && !other.Closed && !other.MarkedForClose)
+				return false;
+		return true;
 	}
 }
