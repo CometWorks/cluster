@@ -114,8 +114,8 @@ def p2_bot_ship_cleanup(bench) -> None:
     probes["SEATED"] = {"grid": seated["grids"][0]["grid"], "name": seated["grids"][0]["name"]}
     bench.record("pilot", bench.cluster.node(NODE, f"/bot-ship-test-pilot?grid={probes['SEATED']['grid']}&owner={ids['B']}", "POST"))
     grids = {name: int(p["grid"]) for name, p in probes.items()}
-    tracked = wait_until(lambda: (lambda s: s if set(grids[n] for n in ("A1", "A2", "SEATED", "NEAR")) <= s.keys() else None)(_ships(bench)),
-                         60, "the bot ships tracked")
+    tracked = wait_until(lambda: (lambda s: s if all(s.get(grids[n], {}).get("lastUse") for n in ("A1", "A2", "SEATED", "NEAR")) else None)(
+        _ships(bench)), 60, "the bot ships tracked")
     bench.check("node-1 tracks the bot ships, not the player's", grids["PLAYER"] not in tracked, json.dumps(tracked)[:500])
     homes = _homes(bench, {k: grids[k] for k in ("A1", "A2")})
     _require(bench, "setup: A1 and A2 each alone in a partition node-1 owns", homes and homes["A1"] != homes["A2"], json.dumps(homes))
@@ -123,7 +123,7 @@ def p2_bot_ship_cleanup(bench) -> None:
     time.sleep(max(0, max(tracked[grids[n]]["lastUse"] for n in ("A1", "A2")) + IDLE_SECONDS + 5 - time.time()))
     probes["FRESH"] = bench.cluster.node(NODE, f"/trash-test-spawn?x={xs['FRESH']}&y=0&z=0&blocks=8&npc=true&owner={ids['A']}", "POST")
     grids["FRESH"] = int(probes["FRESH"]["grid"])
-    wait_until(lambda: grids["FRESH"] in _ships(bench), 30, "FRESH tracked")
+    wait_until(lambda: _ships(bench).get(grids["FRESH"], {}).get("lastUse"), 30, "FRESH tracked")
     bench.record("probes", probes)
 
     first = _backup(bench, 1)
