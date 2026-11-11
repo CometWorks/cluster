@@ -275,8 +275,13 @@ internal sealed class WorldAuthorityPersistence
 
 	private void WriteLoop()
 	{
-		foreach (PendingSave save in m_saves.GetConsumingEnumerable())
+		while (true)
 		{
+			if (!m_saves.TryTake(out PendingSave save, RetentionPoll))
+			{
+				ApplyRetentionDeletesIfDue();
+				continue;
+			}
 			while (true)
 			{
 				try
@@ -299,9 +304,9 @@ internal sealed class WorldAuthorityPersistence
 				}
 			}
 			save.Completed.Set();
-			if (save.Kind != "Final") ApplyRetentionDeletes();
 			lock (m_sync) m_active = null;
 			if (save.Kind == "Final") m_exitRequested = true;
+			ApplyRetentionDeletesIfDue();
 		}
 	}
 
@@ -321,11 +326,22 @@ internal sealed class WorldAuthorityPersistence
 	}
 
 	private readonly HashSet<string> m_foreignDeleteDirectives = new(StringComparer.Ordinal);
+	private static readonly TimeSpan RetentionPoll = TimeSpan.FromSeconds(10);
+	private DateTime m_lastRetention;
+
+	/// <summary>On the write loop, between saves and after each: <see cref="ApplyRetentionDeletes"/> every
+	/// <see cref="RetentionPoll"/>, whatever the save interval, but not once the stop has begun.</summary>
+	private void ApplyRetentionDeletesIfDue()
+	{
+		if (m_shutdownRequested || DateTime.UtcNow - m_lastRetention < RetentionPoll) return;
+		m_lastRetention = DateTime.UtcNow;
+		ApplyRetentionDeletes();
+	}
 
 	/// <summary>
 	/// SE-1346: the global saves retention released that this World Authority holds. It runs no persistence loop, so
-	/// without this nothing deleted its own GLOBAL copies; after each save, as the registry plans retention once a minute.
-	/// With the host store the registry hands host-held copies to a regular node of the host instead.
+	/// without this nothing deleted its own GLOBAL copies. The registry plans retention once a minute. With the host
+	/// store it hands host-held copies to a regular node of the host instead.
 	/// </summary>
 	private void ApplyRetentionDeletes()
 	{
