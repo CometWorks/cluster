@@ -140,7 +140,7 @@ internal sealed partial class DirectGateway
 internal sealed partial class GatewayRegistry
 {
     /// <summary>By holder (the artifact id): the held saves, null while the copy runs (everything held), and the end.</summary>
-    private readonly Dictionary<string, (HashSet<SaveId>? Saves, DateTimeOffset Until)> _backupHolds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (HashSet<SaveId>? Saves, HashSet<GlobalSaveId>? Globals, DateTimeOffset Until)> _backupHolds = new(StringComparer.Ordinal);
 
     /// <summary>
     /// <see cref="CopyStore(string)"/> under a retention hold for <paramref name="holder"/> until
@@ -149,7 +149,7 @@ internal sealed partial class GatewayRegistry
     /// </summary>
     public void CopyStore(string destination, string holder, DateTimeOffset until)
     {
-        lock (_lock) _backupHolds[holder] = (null, until);
+        lock (_lock) _backupHolds[holder] = (null, null, until);
         try
         {
             CopyStore(destination);
@@ -160,7 +160,8 @@ internal sealed partial class GatewayRegistry
             throw;
         }
         lock (_lock)
-            _backupHolds[holder] = (_state.Saves.Values.Where(save => !save.PendingDelete).Select(save => save.SaveId).ToHashSet(), until);
+            _backupHolds[holder] = (_state.Saves.Values.Where(save => !save.PendingDelete).Select(save => save.SaveId).ToHashSet(),
+                _state.GlobalSaves.Values.Where(save => !save.PendingDelete).Select(save => save.SaveId).ToHashSet(), until);
     }
 
     /// <summary>Ends <paramref name="holder"/>'s hold; false when it had none (already released or expired).</summary>
@@ -173,10 +174,17 @@ internal sealed partial class GatewayRegistry
     private void RetainBackupHolds(HashSet<SaveId> retained)
     {
         DateTimeOffset now = _clock();
-        foreach ((string holder, (HashSet<SaveId>? saves, DateTimeOffset until)) in _backupHolds.ToArray())
+        foreach ((string holder, (HashSet<SaveId>? saves, _, DateTimeOffset until)) in _backupHolds.ToArray())
             if (until <= now)
                 _backupHolds.Remove(holder);
             else
                 retained.UnionWith(saves ?? _state.Saves.Values.Select(save => save.SaveId));
+    }
+
+    /// <summary>SE-1346, PlanRetention after <see cref="RetainBackupHolds"/>, under _lock: the global saves the live holds keep.</summary>
+    private void RetainGlobalBackupHolds(HashSet<GlobalSaveId> retained)
+    {
+        foreach ((_, HashSet<GlobalSaveId>? globals, _) in _backupHolds.Values)
+            retained.UnionWith(globals ?? _state.GlobalSaves.Values.Select(save => save.SaveId));
     }
 }

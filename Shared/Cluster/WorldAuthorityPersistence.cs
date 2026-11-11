@@ -118,7 +118,7 @@ internal sealed class WorldAuthorityPersistence
 		// Cleared before the capture: a request made while it runs is for a change it may not hold (#1270).
 		bool soon = m_saveSoon;
 		m_saveSoon = false;
-		if (QueueCapture("Periodic")) m_nextCapture = DateTime.UtcNow.AddSeconds(60);
+		if (QueueCapture("Periodic")) m_nextCapture = DateTime.UtcNow.AddSeconds(Math.Max(1, ClusterConfig.GetInt("wa.globalSaveSeconds")));
 		else if (soon) m_saveSoon = true;
 	}
 

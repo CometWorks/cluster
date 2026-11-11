@@ -321,7 +321,7 @@ internal sealed partial class GatewayRegistry
             dropped += DropGoneLocations(save, gone);
             if (save.PendingDelete && save.Locations.Count == 0) RemoveSave(key);
         }
-        foreach (GlobalSaveRegistration global in _state.GlobalSaves.Values)
+        foreach (GlobalSaveRegistration global in _state.GlobalSaves.Values.ToArray())
         {
             if (!global.LocationHolders.Values.Any(gone.Contains)) continue;
             // (A released holder serves no global save - there is no proxied global fetch - so it covers none.)
@@ -335,6 +335,8 @@ internal sealed partial class GatewayRegistry
                 if (!global.LocationHolders.ContainsValue(holder)) global.HolderEndpoints.Remove(holder);
             }
             if (locations.Length != 0) { Touch(global); dropped += locations.Length; }
+            // SE-1346: a global retention released whose last copy was on a gone holder is done.
+            if (global.PendingDelete && global.Locations.Count == 0) RemoveGlobal(global.SaveId);
         }
         DroppedGoneLocations += dropped;
         if (dropped != 0) Persist();
