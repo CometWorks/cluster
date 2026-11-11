@@ -47,7 +47,7 @@ internal sealed partial class DirectGateway
     private long _npcCensusOfflineRevision;
     private OfflinePartition[] _npcCensusOfflineRows = [];
     private NpcCensus? _npcCensus;
-    /// <summary>SE-1316: the unix second the newest registry backup artifact was released, 0 = none since start.</summary>
+    /// <summary>SE-1316: the unix second the newest stored registry backup was released, 0 = none since start.</summary>
     private long _lastBackupAt;
 
     /// <summary>

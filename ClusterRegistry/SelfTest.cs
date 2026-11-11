@@ -189,6 +189,7 @@ internal static partial class SelfTest
         ("admin-artifacts", TestAdminArtifacts),
         ("registry-copy", TestRegistryCopy),
         ("registry-backup-retention", TestRegistryBackupRetention),
+        ("registry-backup-time", TestRegistryBackupTime),
         ("packet-queue", TestPacketQueue),
         ("multiplexing", TestMultiplexing),
         ("multiplexing-external", TestMultiplexingExternal),
@@ -1168,6 +1169,44 @@ internal static partial class SelfTest
     /// copied the node data. Three newer saves after the copy would otherwise let retention delete the copy's whole
     /// cover of the partition, and the restored world loses it.
     /// </summary>
+    // SE-1351: a failed or interrupted backup still ends its retention hold, but only a stored one moves the NPC
+    // census backup time, which runs the nodes' bot ship cleanup.
+    private static void TestRegistryBackupTime()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "cluster-gateway-registry-backup-time-self-test-" + Guid.NewGuid());
+        const System.Reflection.BindingFlags fields = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        static void Check(bool value, string what) { if (!value) throw new InvalidOperationException("registry-backup-time: " + what); }
+        try
+        {
+            var endpoint = new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 28417);
+            using var gateway = new DirectGateway(new GatewayOptions(endpoint, endpoint, null, false, null, null, null,
+                Path.Combine(root, "live"), TimeSpan.FromSeconds(10), Admission, null, []));
+            var registry = (GatewayRegistry)typeof(DirectGateway).GetField("_registry", fields)!.GetValue(gateway)!;
+            var backupAt = typeof(DirectGateway).GetField("_lastBackupAt", fields)!;
+            long BackupAt() => (long)backupAt.GetValue(gateway)!;
+            Directory.CreateDirectory(Path.Combine(root, "copies"));
+            void Copy(string holder) => registry.CopyStore(Path.Combine(root, "copies", holder + ".db"), holder, DateTimeOffset.UtcNow.AddHours(6));
+
+            Copy("interrupted");
+            Check(gateway.ReleaseRegistryBackup("interrupted", stored: false), "an interrupted backup releases its hold");
+            Check(!registry.ReleaseBackupHold("interrupted"), "the interrupted backup's hold is gone");
+            Check(BackupAt() == 0, "an interrupted backup set the backup time");
+
+            Copy("stored");
+            Check(gateway.ReleaseRegistryBackup("stored", stored: true), "a stored backup releases its hold");
+            long stored = BackupAt();
+            Check(stored > 0, "a stored backup did not set the backup time");
+
+            // A replayed release (no hold left) never moves the time again.
+            backupAt.SetValue(gateway, 1L);
+            Check(!gateway.ReleaseRegistryBackup("stored", stored: true) && BackupAt() == 1, "a replayed release moved the backup time");
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
     private static void TestRegistryBackupRetention()
     {
         string directory = Path.Combine(Path.GetTempPath(), "cluster-gateway-registry-backup-retention-self-test-" + Guid.NewGuid());
