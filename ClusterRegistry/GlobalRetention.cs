@@ -18,7 +18,15 @@ namespace ClusterRegistry;
 /// </summary>
 internal sealed partial class GatewayRegistry
 {
-    internal static int GlobalRetentionKeep = EnvInt("CLUSTER_RETENTION_GLOBAL_KEEP", 10);
+    // Not EnvInt: that drops 0, and 0 here means off.
+    internal static int GlobalRetentionKeep =
+        int.TryParse(
+            Environment.GetEnvironmentVariable("CLUSTER_RETENTION_GLOBAL_KEEP"),
+            out int keep
+        )
+        && keep >= 0
+            ? keep
+            : 10;
 
     /// <summary>Bumped when a global row is removed, so <see cref="GlobalReplicasRequired"/> rebuilds its cached set
     /// (the catalogue's count alone repeats once rows leave).</summary>
