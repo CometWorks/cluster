@@ -63,7 +63,7 @@ public static class ClusterConfig
 		// torn or rotted after its install stops counting as a holder. 0 = off. Read per check.
 		["replica.scrubSeconds"] = "6",
 		// SE-1346, read by the WORLD AUTHORITY: seconds between its Periodic global saves (default 60). Tests set a few
-		// seconds so global save retention can be watched without waiting minutes. Read when a save is queued.
+		// seconds so global save retention can be watched without waiting minutes. Read per check, so a change applies at once.
 		["wa.globalSaveSeconds"] = "60",
 		// HandoverDelta.md: the gateway presyncs the partition onto the target before the freeze and
 		// the capture carries a field-level patch. presync.enabled is read by the GATEWAY (same

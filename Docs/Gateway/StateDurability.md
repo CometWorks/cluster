@@ -425,9 +425,10 @@ pass (once a minute, `GlobalRetention.cs`) now releases global saves too:
 - **How:** the rest is marked `PendingDelete` and handed out by `GET /registry/deletions` like a
   partition save's copies, with `Global: true` and partition 0 in its `SaveId` (partition 0 is never a
   partition save's id). The node deletes the file and acks with partition 0, which the registry routes
-  to the global row; the last ack removes the row. A node built before this change does the same
-  without knowing the flag. A global row whose last copy was on a gone holder is removed by the release
-  pass.
+  to the global row; the last ack removes the row. A regular node built before this change does the
+  same without knowing the flag. The World Authority runs no persistence loop, so it applies the deletes
+  for its own copies after each of its global saves. A global row whose last copy was on a gone holder
+  is removed by the release pass.
 
 ## Durable plugin writes and Registry format v2 (superseded by the store above)
 
