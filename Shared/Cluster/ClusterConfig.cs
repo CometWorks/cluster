@@ -389,6 +389,10 @@ public static class ClusterConfig
 		// markers last this long plus up to a minute); 0 = vanilla's (the drop system definition's 15 min). Read by the node at
 		// each spawn and by the WA's marker sweep (5 s). A bench sets a few seconds so drops come and go within a lane.
 		["drops.lifetimeSeconds"] = "0",
+		// WORLD AUTHORITY: the role a player gets on first joining the cluster when the promotion map has no entry for
+		// them: None (default, vanilla), Scripter, Moderator or SpaceMaster. An explicit role, None included, is never
+		// overwritten, so a demoted player stays demoted. Bots get it too.
+		["players.defaultRole"] = "None",
 		// T-0265: carry each client's inventory delta counters across a handover. "false" restores the
 		// old fresh-counter adopt, only so a live A/B can earn the red on the same build.
 		["handover.inventoryCounters"] = "true",
@@ -544,6 +548,7 @@ public static class ClusterConfig
 		["offline.longObservation"] = new[] { "Skip", "InPlace" },
 		["import.prepareScope"] = new[] { "scoped", "full", "check" },
 		["cleanup.botShips"] = new[] { "off", "dryrun", "on" },
+		["players.defaultRole"] = new[] { "None", "Scripter", "Moderator", "SpaceMaster" },
 	};
 
 	// Comma lists: every item must be one of the allowed words; order is kept, blanks dropped.

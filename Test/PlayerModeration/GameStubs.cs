@@ -52,6 +52,16 @@ namespace ClusterPlugin
             ClusterPromotionChanged?.Invoke(user, level);
         }
     }
+    public static class ClusterConfig
+    {
+        public static string DefaultRole = "None";
+        public static string Get(string key) => key == "players.defaultRole" ? DefaultRole : throw new ArgumentException(key);
+    }
+    public static class OnlinePlayersService
+    {
+        public sealed record OnlinePlayerEntry(string Node, ulong SteamId, int SerialId);
+        public static OnlinePlayerEntry[] Cluster = [];
+    }
     public static class SecretRedactor { public static string Redact(string value) => value; }
     public static class GlobalStateChannel
     {

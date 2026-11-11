@@ -37,6 +37,7 @@ public static class PromotionService
 	private static bool m_applying;
 	private static volatile bool m_seeded;
 	private static double m_readySince;
+	private static double m_nextDefaultRole;
 
 	public sealed record PromotionEntry(ulong SteamId, int Level, long Revision = 0);
 	public sealed record PromotionChange(ulong SteamId, int Level, long ExpectedRevision);
@@ -219,6 +220,7 @@ public static class PromotionService
 		// Until the seed is in, an authoritative map that has never heard of this node's promotions would
 		// demote them.
 		if (!m_seeded) return;
+		GrantDefaultRole();
 		string payload;
 		Dictionary<ulong, int> replicated;
 		lock (SyncRoot)
@@ -250,6 +252,32 @@ public static class PromotionService
 			m_appliedLevels = replicated;
 			if (string.Equals(m_pending, payload, StringComparison.Ordinal)) m_pending = null;
 		}
+	}
+
+	/// <summary>
+	/// players.defaultRole, World Authority only: once a second, every online player the authoritative map has no
+	/// entry for gets the configured role. It goes in as a seed, so an entry that is already there (an explicit
+	/// None too) always wins, and replicates like any other change.
+	/// </summary>
+	private static void GrantDefaultRole()
+	{
+		if (!ClusterRuntime.IsWorldAuthority) return;
+		double now = ClusterRuntime.LocalMilliseconds;
+		if (now < m_nextDefaultRole) return;
+		m_nextDefaultRole = now + 1000;
+		var level = Enum.Parse<MyPromoteLevel>(ClusterConfig.Get("players.defaultRole"));
+		if (level == MyPromoteLevel.None) return;
+		PromotionEntry[] entries;
+		lock (SyncRoot)
+			entries = OnlinePlayersService.Cluster
+				.Where(player => player.SteamId != 0 && player.SerialId == 0 && !Levels.ContainsKey(player.SteamId))
+				.Select(player => player.SteamId)
+				.Distinct()
+				.Select(steamId => new PromotionEntry(steamId, (int)level))
+				.ToArray();
+		if (entries.Length == 0) return;
+		Console.WriteLine($"[ClusterPlugin] promotion default role={level} clients={string.Join(",", entries.Select(entry => entry.SteamId))}");
+		ReceiveReport(Node, JsonSerializer.Serialize(new PromotionReport(Node, entries, Seed: true)));
 	}
 
 	/// <summary>
