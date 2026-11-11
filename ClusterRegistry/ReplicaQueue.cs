@@ -254,6 +254,8 @@ internal sealed partial class GatewayRegistry
     /// </summary>
     private bool EligibleReplica(SaveRegistration save, string node, string? host, DateTimeOffset now)
     {
+        // SE-1347: not to a holder whose trimmed copy of this save is still to be deleted (CopyTrim.cs).
+        if (TrimPendingFor(save, node)) return false;
         if (_hostStore && HeldByHost(save)) return HostEligibleReplica(save, node, now);
         if (save.LocationHolders.ContainsValue(node)) return false;
         // T-0323: only a save something can serve - a live holder, or a gone one with a proxy on its host. Without this

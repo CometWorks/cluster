@@ -430,6 +430,33 @@ pass (once a minute, `GlobalRetention.cs`) now releases global saves too:
   for its own copies after each of its global saves. A global row whose last copy was on a gone holder
   is removed by the release pass.
 
+### Copies above the copy target (SE-1347, 2026-11-11)
+
+The replica queue only adds copies, and retention deleted a save's copies all at once, so a
+retained save kept a copy on every node that ever held it: old owners after handovers, replicas,
+and stopped nodes whose copies were copied again elsewhere. On a test cluster's backup every one of
+9,231 partitions sat on 2 to 8 nodes. The retention pass (`CopyTrim.cs`) now trims each retained
+partition save down to the copy target:
+
+- **Kept:** two holders (on two hosts while more than one host serves; with the host store, the
+  hosts' copy target), each live, usable and not marked corrupt: the partition's owner first, then
+  Active nodes before Closed ones, then by name. A save with fewer such holders is not trimmed.
+- **Not touched:** a save pending deletion, a save with a replica copy in flight, a partition that is
+  recovering, being loaded offline or in an incomplete handover, and with the host store a save that
+  still has a node-held location. Only a live holder's copy is trimmed; a stopped, gone or released
+  holder's copy is left to the gone-holder release, or trimmed once its holder serves again.
+- **How:** a trimmed copy leaves `Locations` at once, so nothing counts or offers it, and waits in the
+  save's `TrimmedLocations` until its holder deletes it through `GET /registry/deletions` and acks. The
+  replica queue hands that holder no copy of that save meanwhile, and a holder that registers the
+  location again cancels the trim. A partition with a trim waiting is not archived. A trim on a gone
+  holder is dropped with the holder's other locations.
+- **Paced:** at most `CLUSTER_RETENTION_TRIM_BATCH` copies a pass (default 1000, `0` = off).
+  `/registry/status` counts the waiting ones as `pendingTrims` and all trimmed since the Gateway
+  started as `trimmedCopies`.
+
+`manifest.jsonl` in a node's data dir (a line per save file written or deleted) had no bound and
+nothing reads it. Past 4 MB it now moves to `manifest.jsonl.1`, replacing the previous one.
+
 ## Durable plugin writes and Registry format v2 (superseded by the store above)
 
 Successful plugin CAS is an explicit durable commit. The first write after Gateway

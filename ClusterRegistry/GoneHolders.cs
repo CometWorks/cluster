@@ -315,11 +315,18 @@ internal sealed partial class GatewayRegistry
         int dropped = 0;
         foreach ((string key, SaveRegistration save) in _state.Saves.ToArray())
         {
+            // SE-1347: a trimmed copy on a gone holder is dropped like any other location of it: nothing would delete it.
+            if (save.TrimmedLocations is { } trimmed && trimmed.Values.Any(gone.Contains))
+            {
+                foreach (string location in trimmed.Where(x => gone.Contains(x.Value)).Select(x => x.Key).ToArray()) { CancelTrim(save, location); dropped++; }
+                Touch(save);
+                if (save.PendingDelete && save.Locations.Count == 0 && save.TrimmedLocations == null) { RemoveSave(key); continue; }
+            }
             if (!save.LocationHolders.Values.Any(gone.Contains)) continue;
             // A save being deleted is never offered to recovery; a covered save keeps its live copies.
             if (!save.PendingDelete && !CoveredByLiveHolders(save, multiHost)) continue;
             dropped += DropGoneLocations(save, gone);
-            if (save.PendingDelete && save.Locations.Count == 0) RemoveSave(key);
+            if (save.PendingDelete && save.Locations.Count == 0 && save.TrimmedLocations == null) RemoveSave(key);
         }
         foreach (GlobalSaveRegistration global in _state.GlobalSaves.Values.ToArray())
         {

@@ -367,12 +367,7 @@ internal sealed class WorldAuthorityPersistence
 		string manifest = JsonSerializer.Serialize(new { op = "write", key = "GLOBAL", gen = save.Generation,
 			seq = save.Sequence, kind = save.Kind, size = save.File.Length, xxh3 = parsed.BodyChecksum.ToString("X16"),
 			clusterTime = parsed.ClusterTime, wallTime = DateTimeOffset.UtcNow }) + Environment.NewLine;
-		Directory.CreateDirectory(m_root);
-		using FileStream stream = new FileStream(Path.Combine(m_root, "manifest.jsonl"), FileMode.Append, FileAccess.Write, FileShare.Read);
-		using StreamWriter writer = new StreamWriter(stream);
-		writer.Write(manifest);
-		writer.Flush();
-		stream.Flush(true);
+		SaveManifest.Append(m_root, manifest);
 	}
 
 	private void Register(PendingSave save, PartitionSaveFile.Parsed parsed, string path)

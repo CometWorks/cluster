@@ -3275,13 +3275,7 @@ internal sealed partial class PartitionPersistence
 			File.Delete(location);
 			string tombstone = JsonSerializer.Serialize(new { op = "delete", key = id.GetProperty("Partition").GetUInt64(),
 				gen = id.GetProperty("Generation").GetInt64(), seq = id.GetProperty("Sequence").GetInt64(), location, wallTime = DateTimeOffset.UtcNow }) + Environment.NewLine;
-			using (FileStream stream = new FileStream(Path.Combine(root, "manifest.jsonl"), FileMode.Append, FileAccess.Write, FileShare.Read))
-			{
-				using StreamWriter writer = new StreamWriter(stream);
-				writer.Write(tombstone);
-				writer.Flush();
-				stream.Flush(true);
-			}
+			SaveManifest.Append(root, tombstone);
 			post("/registry/deletions/ack?partition=" + id.GetProperty("Partition").GetUInt64().ToString(CultureInfo.InvariantCulture)
 				+ "&generation=" + id.GetProperty("Generation").GetInt64().ToString(CultureInfo.InvariantCulture)
 				+ "&sequence=" + id.GetProperty("Sequence").GetInt64().ToString(CultureInfo.InvariantCulture)
@@ -4720,14 +4714,7 @@ internal sealed partial class PartitionPersistence
 					string manifest = JsonSerializer.Serialize(new { op = "write", key = save.PartitionId, gen = save.Generation,
 						seq = save.Sequence, kind = parsed.Kind, size = save.File.Length, xxh3 = parsed.BodyChecksum.ToString("X16"), clusterTime = parsed.ClusterTime,
 						wallTime = DateTimeOffset.UtcNow }) + Environment.NewLine;
-					Directory.CreateDirectory(m_root);
-					using (FileStream stream = new FileStream(Path.Combine(m_root, "manifest.jsonl"), FileMode.Append, FileAccess.Write, FileShare.Read))
-					{
-						using StreamWriter writer = new StreamWriter(stream);
-						writer.Write(manifest);
-						writer.Flush();
-						stream.Flush(durable);
-					}
+					SaveManifest.Append(m_root, manifest, durable);
 					// T-0347: a local stop does not spend its budget asking a registry the heartbeat already found unreachable
 					// (10 s per save when it does not even refuse the connection).
 					if (m_localStop && RegistryEnabled && RegistryHeld)
