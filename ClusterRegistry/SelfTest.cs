@@ -321,6 +321,7 @@ internal static partial class SelfTest
         ("global-journal", TestGlobalJournal),
         ("global-replica-reservation", TestGlobalReplicaReservation),
         ("global-holder-withdraw", TestGlobalHolderWithdraw),
+        ("global-retention", TestGlobalRetention),
         ("voxel-catalog", TestVoxelCatalog),
         ("world-authority-shutdown", TestWorldAuthorityShutdown),
         ("global-save-stands-without-authority", TestGlobalSaveStandsWithoutAuthority),

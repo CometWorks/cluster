@@ -3235,14 +3235,24 @@ internal sealed partial class PartitionPersistence
 
 	private readonly HashSet<string> m_foreignDeleteDirectives = new(StringComparer.Ordinal);
 
-	private void ApplyDeletes(HttpClient client)
+	private void ApplyDeletes(HttpClient client) =>
+		// T-0340: with the host store the save root is the host's store root - the registry hands this node its host's
+		// deletes - and the node's own data dir stays a root: an unmoved save is still catalogued there, held by this node.
+		ApplyRetentionDeletes(path => Get(client, path), path => Post(client, path).Dispose(), m_node, m_nodeEpoch,
+			m_saveRoot, m_root, m_foreignDeleteDirectives);
+
+	/// <summary>
+	/// The node side of retention: GET /registry/deletions for <paramref name="node"/>, delete each named file under
+	/// <paramref name="saveRootPath"/> or <paramref name="root"/>/saves, ack it. SE-1346: the World Authority runs it too
+	/// (WorldAuthorityPersistence), for its own copies of global saves, as it has no persistence loop of its own.
+	/// </summary>
+	internal static void ApplyRetentionDeletes(Func<string, JsonDocument> get, Action<string> post, string node, long epoch,
+		string saveRootPath, string root, HashSet<string> foreignDirectives)
 	{
-		using JsonDocument document = Get(client, "/registry/deletions?node=" + Uri.EscapeDataString(m_node)
-			+ "&epoch=" + m_nodeEpoch.ToString(CultureInfo.InvariantCulture));
-		// T-0340: with the host store this is the host's store root - the registry hands this node its host's deletes -
-		// and the node's own data dir stays a root: an unmoved save is still catalogued there, held by this node.
-		string saveRoot = Path.GetFullPath(m_saveRoot) + Path.DirectorySeparatorChar;
-		string legacyRoot = Path.GetFullPath(Path.Combine(m_root, "saves")) + Path.DirectorySeparatorChar;
+		using JsonDocument document = get("/registry/deletions?node=" + Uri.EscapeDataString(node)
+			+ "&epoch=" + epoch.ToString(CultureInfo.InvariantCulture));
+		string saveRoot = Path.GetFullPath(saveRootPath) + Path.DirectorySeparatorChar;
+		string legacyRoot = Path.GetFullPath(Path.Combine(root, "saves")) + Path.DirectorySeparatorChar;
 		// One line per sweep, not per file: a line per deleted save was the node logs' largest line
 		// kind (18,775 of 91,079 lines in two hours of w32, 2026-09-23) and nothing reads it. The
 		// manifest.jsonl tombstone below is the per-file record.
@@ -3258,24 +3268,24 @@ internal sealed partial class PartitionPersistence
 				// incarnation's save root (a warm restart onto a fresh data root). It is not ours to
 				// delete, and acknowledging it would claim a deletion that did not happen: skip it
 				// and keep going with the rest.
-				if (m_foreignDeleteDirectives.Add(location))
+				if (foreignDirectives.Add(location))
 					MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] retention skipped a copy outside the node save root: " + location);
 				continue;
 			}
 			File.Delete(location);
 			string tombstone = JsonSerializer.Serialize(new { op = "delete", key = id.GetProperty("Partition").GetUInt64(),
 				gen = id.GetProperty("Generation").GetInt64(), seq = id.GetProperty("Sequence").GetInt64(), location, wallTime = DateTimeOffset.UtcNow }) + Environment.NewLine;
-			using (FileStream stream = new FileStream(Path.Combine(m_root, "manifest.jsonl"), FileMode.Append, FileAccess.Write, FileShare.Read))
+			using (FileStream stream = new FileStream(Path.Combine(root, "manifest.jsonl"), FileMode.Append, FileAccess.Write, FileShare.Read))
 			{
 				using StreamWriter writer = new StreamWriter(stream);
 				writer.Write(tombstone);
 				writer.Flush();
 				stream.Flush(true);
 			}
-			Post(client, "/registry/deletions/ack?partition=" + id.GetProperty("Partition").GetUInt64().ToString(CultureInfo.InvariantCulture)
+			post("/registry/deletions/ack?partition=" + id.GetProperty("Partition").GetUInt64().ToString(CultureInfo.InvariantCulture)
 				+ "&generation=" + id.GetProperty("Generation").GetInt64().ToString(CultureInfo.InvariantCulture)
 				+ "&sequence=" + id.GetProperty("Sequence").GetInt64().ToString(CultureInfo.InvariantCulture)
-				+ "&location=" + Uri.EscapeDataString(location)).Dispose();
+				+ "&location=" + Uri.EscapeDataString(location));
 			deleted++;
 			last = location;
 		}

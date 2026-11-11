@@ -215,7 +215,7 @@ wrote it, so a node stop invalidates nothing.
   the token, so the requester tries the next server. The node's save-file route runs on two worker threads and
   streams the file, so the control listener keeps answering during a read.
 - **Deletes.** A host's pending deletes are handed to one of its live nodes at a time (a 60 s turn). Global saves
-  have no retention, for node holders and host holders alike.
+  retention released (SE-1346, StateDurability.md) go the same way, for node holders and host holders alike.
 - **A damaged store copy** found by a recovering node on that host is reported corrupt (the host holder); the fetched
   copy replaces the file and its registration clears the mark.
 - **Rows of stopped nodes.** In store mode the release pass does not consult the archive: a stopped node's row goes on

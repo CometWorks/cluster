@@ -24,7 +24,8 @@ internal sealed class WorldAuthorityPersistence
 	private readonly string m_node;
 	private readonly string m_controlEndpoint;
 	private readonly object m_sync = new object();
-	private DateTime m_nextCapture;
+	/// <summary>When the last Periodic save was queued; the next is due wa.globalSaveSeconds later (read per check).</summary>
+	private DateTime m_lastCapture;
 	private uint m_sequence;
 	private PendingSave m_active;
 	private volatile bool m_shutdownRequested;
@@ -114,11 +115,11 @@ internal sealed class WorldAuthorityPersistence
 			QueueCapture("Final");
 			return;
 		}
-		if (DateTime.UtcNow < m_nextCapture && !m_saveSoon) return;
+		if (DateTime.UtcNow < m_lastCapture.AddSeconds(Math.Max(1, ClusterConfig.GetInt("wa.globalSaveSeconds"))) && !m_saveSoon) return;
 		// Cleared before the capture: a request made while it runs is for a change it may not hold (#1270).
 		bool soon = m_saveSoon;
 		m_saveSoon = false;
-		if (QueueCapture("Periodic")) m_nextCapture = DateTime.UtcNow.AddSeconds(60);
+		if (QueueCapture("Periodic")) m_lastCapture = DateTime.UtcNow;
 		else if (soon) m_saveSoon = true;
 	}
 
@@ -274,8 +275,13 @@ internal sealed class WorldAuthorityPersistence
 
 	private void WriteLoop()
 	{
-		foreach (PendingSave save in m_saves.GetConsumingEnumerable())
+		while (true)
 		{
+			if (!m_saves.TryTake(out PendingSave save, RetentionPoll))
+			{
+				ApplyRetentionDeletesIfDue();
+				continue;
+			}
 			while (true)
 			{
 				try
@@ -300,6 +306,7 @@ internal sealed class WorldAuthorityPersistence
 			save.Completed.Set();
 			lock (m_sync) m_active = null;
 			if (save.Kind == "Final") m_exitRequested = true;
+			ApplyRetentionDeletesIfDue();
 		}
 	}
 
@@ -316,6 +323,43 @@ internal sealed class WorldAuthorityPersistence
 		GlobalSaveFile.Read(File.ReadAllBytes(save.Path), save.Generation, save.Sequence);
 		AppendManifest(save, save.Parsed);
 		save.Prepared = true;
+	}
+
+	private readonly HashSet<string> m_foreignDeleteDirectives = new(StringComparer.Ordinal);
+	private static readonly TimeSpan RetentionPoll = TimeSpan.FromSeconds(10);
+	private DateTime m_lastRetention;
+
+	/// <summary>On the write loop, between saves and after each: <see cref="ApplyRetentionDeletes"/> every
+	/// <see cref="RetentionPoll"/>, whatever the save interval, but not once the stop has begun.</summary>
+	private void ApplyRetentionDeletesIfDue()
+	{
+		if (m_shutdownRequested || DateTime.UtcNow - m_lastRetention < RetentionPoll) return;
+		m_lastRetention = DateTime.UtcNow;
+		ApplyRetentionDeletes();
+	}
+
+	/// <summary>
+	/// SE-1346: the global saves retention released that this World Authority holds. It runs no persistence loop, so
+	/// without this nothing deleted its own GLOBAL copies. The registry plans retention once a minute. With the host
+	/// store it hands host-held copies to a regular node of the host instead.
+	/// </summary>
+	private void ApplyRetentionDeletes()
+	{
+		try
+		{
+			using HttpClient client = ClusterHttp.Client(TimeSpan.FromSeconds(10));
+			ClusterRuntime.AuthorizeRegistryClient(client);
+			PartitionPersistence.ApplyRetentionDeletes(path => ClusterRuntime.Get(client, m_gateway + path), path =>
+			{
+				using HttpResponseMessage response = client.PostAsync(m_gateway + path, null).GetAwaiter().GetResult();
+				ClusterRuntime.ReadRegistryResponse(response).Dispose();
+			}, m_node, ClusterRuntime.RegistryNodeEpoch, ClusterRuntime.HostStore ? ClusterRuntime.SaveRoot() : Path.Combine(m_root, "saves"),
+				m_root, m_foreignDeleteDirectives);
+		}
+		catch (Exception exception)
+		{
+			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] retention unavailable: " + SecretRedactor.Redact(exception.Message));
+		}
 	}
 
 	private void AppendManifest(PendingSave save, PartitionSaveFile.Parsed parsed)

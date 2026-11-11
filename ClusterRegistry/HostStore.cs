@@ -21,9 +21,8 @@ namespace ClusterRegistry;
 /// reads it from its host's disk, and its next global save replicates as before). The World Authority always runs on
 /// the gateway host, where its global saves' store is; a rollback with it anywhere else is out of scope.
 ///
-/// Global saves have no retention: the registry never marks one PendingDelete (PlanRetention covers partition saves
-/// only) and no delete directive names one, for node holders and host holders alike. A host's GLOBAL directory
-/// therefore grows as a node's did; this ticket does not add a retention rule for them.
+/// SE-1346 added retention for global saves (GlobalRetention.cs): their delete directives go to node holders and host
+/// holders alike, through the host's delete turn like a partition save's.
 /// </summary>
 /// <summary>
 /// T-0340 step 2: what a host's save store can do for the catalogue.

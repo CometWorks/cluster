@@ -408,6 +408,28 @@ registry ROWS (lineage and history stay queryable).
   rehydrates and re-archives keeps a stale stamp row, which the next load of this build drops only if
   the partition is no longer archived (a re-archived one keeps its older stamp).
 
+### Global save retention (SE-1346, 2026-11-11)
+
+The World Authority writes a Periodic global save every minute, and until SE-1346 nothing deleted
+one: GLOBAL grew by about 1,440 files a day on the World Authority and on every replica holder
+(1,744 files, 613 MB on the octahedron-test World Authority node after a few days). The retention
+pass (once a minute, `GlobalRetention.cs`) now releases global saves too:
+
+- **Kept:** the newest `CLUSTER_RETENTION_GLOBAL_KEEP` (default 10; `0` turns retention off), every
+  snapshot's `GlobalRef`, the last clean shutdown's, the one a warm start came from, the current
+  shutdown Final, and every global save an outstanding registry backup catalogues (its retention hold,
+  #1275).
+- **The floor:** nothing at or above the newest global save that has its full copy target of usable
+  holders is deleted (two nodes, one while only one node can hold anything; the hosts' copy target
+  with the host store). Without such a save the pass releases no global save at all.
+- **How:** the rest is marked `PendingDelete` and handed out by `GET /registry/deletions` like a
+  partition save's copies, with `Global: true` and partition 0 in its `SaveId` (partition 0 is never a
+  partition save's id). The node deletes the file and acks with partition 0, which the registry routes
+  to the global row; the last ack removes the row. A regular node built before this change does the
+  same without knowing the flag. The World Authority runs no persistence loop, so it applies the deletes
+  for its own copies after each of its global saves. A global row whose last copy was on a gone holder
+  is removed by the release pass.
+
 ## Durable plugin writes and Registry format v2 (superseded by the store above)
 
 Successful plugin CAS is an explicit durable commit. The first write after Gateway

@@ -3047,7 +3047,7 @@ internal sealed partial class GatewayRegistry : IDisposable
 		}
 	}
 
-	private (int Globals, int Snapshots, GlobalSaveId? Shutdown, int Newest, HashSet<GlobalSaveId>? Set) _globalRequired;
+	private (int Globals, int Removals, int Snapshots, GlobalSaveId? Shutdown, int Newest, HashSet<GlobalSaveId>? Set) _globalRequired;
 
 	/// <summary>
 	/// T-0397 (c): the global saves that must keep two usable node holders, or null = all of them
@@ -3059,15 +3059,16 @@ internal sealed partial class GatewayRegistry : IDisposable
 	{
 		int newest = GlobalReplicaNewest;
 		if (newest <= 0) return null;
-		var key = (_state.GlobalSaves.Count, _state.Snapshots.Count, _state.LastShutdown?.GlobalRef, newest);
-		if (_globalRequired.Set != null && (_globalRequired.Globals, _globalRequired.Snapshots, _globalRequired.Shutdown, _globalRequired.Newest) == key)
+		// SE-1346: retention removes rows, so the count alone can repeat with other saves behind it.
+		var key = (_state.GlobalSaves.Count, _globalRemovals, _state.Snapshots.Count, _state.LastShutdown?.GlobalRef, newest);
+		if (_globalRequired.Set != null && (_globalRequired.Globals, _globalRequired.Removals, _globalRequired.Snapshots, _globalRequired.Shutdown, _globalRequired.Newest) == key)
 			return _globalRequired.Set;
 		HashSet<GlobalSaveId> set = _state.GlobalSaves.Values.Where(item => !item.PendingDelete).Select(item => item.SaveId)
 			.OrderByDescending(id => id).Take(newest).ToHashSet();
 		foreach (SnapshotRegistration snapshot in _state.Snapshots)
 			if (snapshot.GlobalRef is GlobalSaveId reference) set.Add(reference);
 		if (_state.LastShutdown?.GlobalRef is GlobalSaveId shutdown) set.Add(shutdown);
-		_globalRequired = (key.Item1, key.Item2, key.Item3, key.Item4, set);
+		_globalRequired = (key.Item1, key.Item2, key.Item3, key.Item4, key.Item5, set);
 		return set;
 	}
 
@@ -4078,6 +4079,8 @@ internal sealed partial class GatewayRegistry : IDisposable
                 Touch(save);
 				result.AddRange(save.Locations.Select(location => new DeleteDirective(save.SaveId, save.LocationHolders.GetValueOrDefault(location, save.Node), location)));
             }
+            // SE-1346: and the global saves (GlobalRetention.cs).
+            result.AddRange(PlanGlobalRetention());
             bool changed = ArchiveRetired(needed) != 0 || result.Count != 0;
             // T-0400: the archive retention pass, in the same pass and lock, against the same `needed`: a partition
             // still archived here is reached by no live cover and no snapshot.
@@ -4092,6 +4095,9 @@ internal sealed partial class GatewayRegistry : IDisposable
     {
         lock (_lock)
         {
+            // SE-1346: partition 0 is a global save's copy (GlobalRetention.cs).
+            if (id.Partition == 0)
+                return AcknowledgeGlobalDelete(id, location);
             // T-0400: not in memory - an archived store file retention handed out.
             if (!_state.Saves.TryGetValue(Key(id), out SaveRegistration? save))
                 return AcknowledgeArchivedDelete(id, location);
@@ -4119,6 +4125,8 @@ internal sealed partial class GatewayRegistry : IDisposable
 				.SelectMany(save => save.Locations.Where(location => save.LocationHolders.GetValueOrDefault(location, save.Node) is { } holder
 						&& (holder == node || host != null && holder == host))
 					.Select(location => new DeleteDirective(save.SaveId, node, location)))
+				// SE-1346: the global copies retention released (GlobalRetention.cs).
+				.Concat(PendingGlobalDeletes(node, host))
 				// T-0400: and the host's archived store files archive retention queued.
 				.Concat(ArchivedDeletesFor(node, host)).ToArray();
         }
@@ -4131,7 +4139,8 @@ internal sealed partial class GatewayRegistry : IDisposable
                 networkIdBlocks = _state.NetworkIdBlocks.Count, networkIdBlocksFree = NetworkIdBlocksFree(_state.NetworkIdBlocks), networkIdBlocksReclaimed = _state.NetworkIdBlocksReclaimed, entityIdRanges = _state.EntityIdRanges.Count, nextEntityIdRange = _state.NextEntityIdRange, partitions = _state.Partitions.Count, saves = _state.Saves.Count, handovers = _state.Handovers.Count,
                 incompleteHandovers = _state.Handovers.Values.Count(x => x.State is HandoverState.Begun or HandoverState.Active), lineage = _state.Lineage.Count,
                 snapshots = _state.Snapshots.Count, voxelBases = _state.VoxelBases.Count, voxelJournals = _state.VoxelJournals.Count,
-                pendingDeletes = _state.Saves.Values.Count(x => x.PendingDelete), offlinePartitions = _state.OfflinePartitions.Count,
+                pendingDeletes = _state.Saves.Values.Count(x => x.PendingDelete), globalSaves = _state.GlobalSaves.Count,
+                pendingGlobalDeletes = _state.GlobalSaves.Values.Count(x => x.PendingDelete), offlinePartitions = _state.OfflinePartitions.Count,
                 walRecords = _store.Commits, walBytes = _store.WalBytes, storeBytes = _store.DatabaseBytes, storeAudited = _store.AuditedRows, storeAuditRepairs = _store.AuditRepairs,
                 replicaQueue = _replicaQueue.Count, hostStore = HostStoreStatus(),
                 // T-0323: replica capacity below invalidation rate (ReplicaPacing.cs), as of the last one-minute sample.
@@ -6198,7 +6207,8 @@ internal sealed record RecoveryClaim(PartitionOwnership Ownership, SaveCover[] R
 internal sealed record HomeElsewhere(long Identity, long Entity, ulong Partition, long Version, DateTimeOffset Updated, long Captured = 0);
 internal sealed record SnapshotRegistration(string SnapshotId, SnapshotKind Kind, long ClusterTime, SaveId[] PartitionRefs, string[] Dirty,
     GlobalSaveId? GlobalRef = null, VoxelRef[]? VoxelRefs = null);
-internal sealed record DeleteDirective(SaveId SaveId, string Node, string Location);
+/// <summary>SE-1346: <see cref="Global"/> names a global save copy; its SaveId then has partition 0.</summary>
+internal sealed record DeleteDirective(SaveId SaveId, string Node, string Location, bool Global = false);
 /// <summary>A replica source. <see cref="Proxy"/> set: the holder is gone and <see cref="Endpoint"/> is the proxy's, which serves
 /// exactly <see cref="Location"/> under a grant naming the proxy and that location (T-0323).</summary>
 internal sealed record HolderSource(string Holder, string Endpoint, string? Proxy = null, string? Location = null);

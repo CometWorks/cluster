@@ -59,7 +59,7 @@ internal sealed partial class GatewayRegistry
     /// delay the partition queue, and paced at all because unpaced they were copied as fast as the nodes could fsync.</summary>
     internal static int GlobalBytesPerSecond = EnvInt("CLUSTER_REPLICA_GLOBAL_BYTES_PER_SECOND", 1 << 20);
     /// <summary>T-0397 (c), the fallback to store mode: how many of the NEWEST global saves must keep two usable node
-    /// holders (CLUSTER_REPLICA_GLOBAL_NEWEST; 0 = all of them, today). Global saves are never retired and a node holder
+    /// holders (CLUSTER_REPLICA_GLOBAL_NEWEST; 0 = all of them, today). Global saves were never retired before SE-1346 and a node holder
     /// counts only while its node lives, so with "all" the whole global history (~2,500 on w33) goes round the node
     /// rotation: every recycle re-copies what the retiring node held (~1,000-2,800 copies). With N > 0 only the newest N,
     /// the ones a snapshot names and the last clean shutdown's must; the others keep whatever holders they have and their
