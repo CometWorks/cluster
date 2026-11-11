@@ -3243,7 +3243,7 @@ internal sealed partial class PartitionPersistence
 
 	/// <summary>
 	/// The node side of retention: GET /registry/deletions for <paramref name="node"/>, delete each named file under
-	/// <paramref name="saveRoot"/> or <paramref name="root"/>/saves, ack it. SE-1346: the World Authority runs it too
+	/// <paramref name="saveRootPath"/> or <paramref name="root"/>/saves, ack it. SE-1346: the World Authority runs it too
 	/// (WorldAuthorityPersistence), for its own copies of global saves, as it has no persistence loop of its own.
 	/// </summary>
 	internal static void ApplyRetentionDeletes(Func<string, JsonDocument> get, Action<string> post, string node, long epoch,
