@@ -317,7 +317,8 @@ internal sealed partial class GatewayRegistry : IDisposable
             if (eligible.Count >= ArchiveBatch) break;
             if (!IsRetired(partition)) continue;
             if (_state.Partitions.TryGetValue(partition, out PartitionOwnership? owner) && (owner.Node != null || owner.Recovering)) continue;
-            if (saves.Any(save => save.PendingDelete || needed.Contains(save.SaveId)
+            // SE-1347: nor while a trimmed copy waits for its ack (the archive keeps no pending deletes).
+            if (saves.Any(save => save.PendingDelete || save.TrimmedLocations != null || needed.Contains(save.SaveId)
                     || _replicaReservations.ContainsKey(save.SaveId))) continue;
             eligible.Add(partition);
         }
@@ -2668,6 +2669,7 @@ internal sealed partial class GatewayRegistry : IDisposable
                 if (old.Locations.Contains(location))
                     return Snapshot(old);   // KI-15: never hand out the live registration
                 old.Locations.Add(location);
+				CancelTrim(old, location);
 				string again = RegisteringHolder(node, location, host => HostStorePath(RunRoot, host, id));
 				old.LocationHolders[location] = again;
 				if (again == node && !string.IsNullOrWhiteSpace(control)) old.HolderEndpoints[node] = control;
@@ -2903,6 +2905,7 @@ internal sealed partial class GatewayRegistry : IDisposable
 				throw new RegistryConflictException($"Replica holder metadata does not match save {id}");
 			if (string.IsNullOrWhiteSpace(location) || string.IsNullOrWhiteSpace(control)) throw new ArgumentException("Replica location and control endpoint are required");
 			save.Locations.Add(location);
+			CancelTrim(save, location);
 			string holder = RegisteringHolder(node, location, host => HostStorePath(RunRoot, host, id));
 			save.LocationHolders[location] = holder;
 			if (holder == node) save.HolderEndpoints[node] = control;
@@ -2981,6 +2984,7 @@ internal sealed partial class GatewayRegistry : IDisposable
         HolderEndpoints = new Dictionary<string, string>(save.HolderEndpoints),
         CorruptHolders = [.. save.CorruptHolders],
         DeletedLocations = save.DeletedLocations == null ? null : new Dictionary<string, DateTimeOffset>(save.DeletedLocations),
+        TrimmedLocations = save.TrimmedLocations == null ? null : new Dictionary<string, string>(save.TrimmedLocations),
     };
 
     private static GlobalSaveRegistration Snapshot(GlobalSaveRegistration save) => save with
@@ -4081,6 +4085,8 @@ internal sealed partial class GatewayRegistry : IDisposable
             }
             // SE-1346: and the global saves (GlobalRetention.cs).
             result.AddRange(PlanGlobalRetention());
+            // SE-1347: and the copies of retained saves above the copy target (CopyTrim.cs).
+            result.AddRange(PlanCopyTrim());
             bool changed = ArchiveRetired(needed) != 0 || result.Count != 0;
             // T-0400: the archive retention pass, in the same pass and lock, against the same `needed`: a partition
             // still archived here is reached by no live cover and no snapshot.
@@ -4101,13 +4107,23 @@ internal sealed partial class GatewayRegistry : IDisposable
             // T-0400: not in memory - an archived store file retention handed out.
             if (!_state.Saves.TryGetValue(Key(id), out SaveRegistration? save))
                 return AcknowledgeArchivedDelete(id, location);
+            // SE-1347: a copy trimmed above the copy target (CopyTrim.cs), pending deletion or not.
+            if (save.TrimmedLocations?.ContainsKey(location) == true)
+            {
+                CancelTrim(save, location);
+                Touch(save);
+                if (save.PendingDelete && save.Locations.Count == 0 && save.TrimmedLocations == null)
+                    RemoveSave(Key(id));
+                Persist();
+                return true;
+            }
             if (!save.PendingDelete)
                 return false;
             if (!save.Locations.Remove(location))
                 return false;
 			save.LocationHolders.Remove(location);
 			Touch(save);
-            if (save.Locations.Count == 0)
+            if (save.Locations.Count == 0 && save.TrimmedLocations == null)
                 RemoveSave(Key(id));
             Persist();
             return true;
@@ -4121,10 +4137,12 @@ internal sealed partial class GatewayRegistry : IDisposable
             RequireNode(node, epoch);
 			// T-0340: the node's own copies, and its host's while this node has the host's turn (HostStore.cs).
 			string? host = HostDeleteTurn(node);
-			return _state.Saves.Values.Where(save => save.PendingDelete)
-				.SelectMany(save => save.Locations.Where(location => save.LocationHolders.GetValueOrDefault(location, save.Node) is { } holder
+			return _state.Saves.Values.Where(save => save.PendingDelete || save.TrimmedLocations != null)
+				.SelectMany(save => (save.PendingDelete ? save.Locations : []).Where(location => save.LocationHolders.GetValueOrDefault(location, save.Node) is { } holder
 						&& (holder == node || host != null && holder == host))
-					.Select(location => new DeleteDirective(save.SaveId, node, location)))
+					.Select(location => new DeleteDirective(save.SaveId, node, location))
+					// SE-1347: the copies trimmed above the copy target (CopyTrim.cs).
+					.Concat(PendingTrims(save, node, host)))
 				// SE-1346: the global copies retention released (GlobalRetention.cs).
 				.Concat(PendingGlobalDeletes(node, host))
 				// T-0400: and the host's archived store files archive retention queued.
@@ -4140,7 +4158,8 @@ internal sealed partial class GatewayRegistry : IDisposable
                 incompleteHandovers = _state.Handovers.Values.Count(x => x.State is HandoverState.Begun or HandoverState.Active), lineage = _state.Lineage.Count,
                 snapshots = _state.Snapshots.Count, voxelBases = _state.VoxelBases.Count, voxelJournals = _state.VoxelJournals.Count,
                 pendingDeletes = _state.Saves.Values.Count(x => x.PendingDelete), globalSaves = _state.GlobalSaves.Count,
-                pendingGlobalDeletes = _state.GlobalSaves.Values.Count(x => x.PendingDelete), offlinePartitions = _state.OfflinePartitions.Count,
+                pendingGlobalDeletes = _state.GlobalSaves.Values.Count(x => x.PendingDelete),
+                pendingTrims = _state.Saves.Values.Sum(x => x.TrimmedLocations?.Count ?? 0), trimmedCopies = TrimmedCopies, offlinePartitions = _state.OfflinePartitions.Count,
                 walRecords = _store.Commits, walBytes = _store.WalBytes, storeBytes = _store.DatabaseBytes, storeAudited = _store.AuditedRows, storeAuditRepairs = _store.AuditRepairs,
                 replicaQueue = _replicaQueue.Count, hostStore = HostStoreStatus(),
                 // T-0323: replica capacity below invalidation rate (ReplicaPacing.cs), as of the last one-minute sample.
@@ -6169,6 +6188,10 @@ internal sealed record SaveRegistration(SaveId SaveId, string Node, long Epoch, 
 	public Dictionary<string, string> LocationHolders { get; set; } = [];
 	public Dictionary<string, string> HolderEndpoints { get; set; } = [];
 	public HashSet<string> CorruptHolders { get; set; } = [];
+	/// <summary>SE-1347: copies retention trimmed above the copy target (CopyTrim.cs), location -> holder, handed out by
+	/// /registry/deletions until the holder acks. They are no longer in <see cref="Locations"/>. Null on every other save.</summary>
+	[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+	public Dictionary<string, string>? TrimmedLocations { get; set; }
 	/// <summary>T-0323: gone holder -> the live node on its host that serves its files. Only on the snapshots handed to a node
 	/// that will fetch the save (recovery claims), never on the stored registration.</summary>
 	[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
