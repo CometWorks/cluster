@@ -353,7 +353,7 @@ def _faction_button(bench, api, who: str, select: list[str], button: str) -> Non
 
 
 def start_second_client(bench, route_node: str = "node-2", partition: int | None = None, spawn: bool = False,
-                        client_id: int = CLIENT2_ID, remote_port: int = CLIENT2_PORT):
+                        client_id: int = CLIENT2_ID, remote_port: int = CLIENT2_PORT, name: str | None = None):
     """Client 2 (no-render), routed to ``route_node`` through /registry/client-routes before it
     connects. Without ``spawn`` it only has to become chat-ready: admitted, bound to an identity and
     serving its chat log (the WA lane never gives it a character).
@@ -379,7 +379,7 @@ def start_second_client(bench, route_node: str = "node-2", partition: int | None
     # cannot quietly rename what every earlier run recorded.
     tag = "client2" if client_id == CLIENT2_ID else f"client{client_id}"
     bench.record(f"{tag}-route", bench.cluster.post(f"/registry/client-routes?client={client_id}&partition={partition}"))
-    api2 = bench.start_client(client_id, remote_port, render=False)
+    api2 = bench.start_client(client_id, remote_port, render=False, name=name)
     _wait_line(bench, "gateway", rf"Resolved client {client_id} partition {partition} to {route_node} .* at {re.escape(backend)}",
                CLIENT_TIMEOUT)
     _wait_line(bench, route_node, rf"Accepted client {client_id} through cluster node link", CLIENT_TIMEOUT)

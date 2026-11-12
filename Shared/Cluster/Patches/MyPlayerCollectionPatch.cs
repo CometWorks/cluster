@@ -191,6 +191,7 @@ public static class MyPlayerCollectionPatch
 		// never heard of, and its handler returns at the TryGetIdentity guard with nothing to retry it. Announce
 		// unconditionally; a client that already knows the identity ignores the repeat.
 		MySession.Static.Players.ClusterAnnounceIdentity(ready.Identity.IdentityId);
+		RemotePlayerMirrorService.BeforeLocalPlayer(parameters.ClientSteamId, parameters.PlayerSerialId);  // SE-1372
 		return true;
 	}
 
