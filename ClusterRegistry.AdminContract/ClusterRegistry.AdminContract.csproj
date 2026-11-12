@@ -17,7 +17,8 @@
     <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="../LICENSE.MIT" Link="LICENSE.MIT" Pack="true" PackagePath=""
+    <None Include="../LICENSE;../LICENSE.MIT;../LICENSING.md;../EXCEPTION.md"
+          Link="%(Filename)%(Extension)" Pack="true" PackagePath=""
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
