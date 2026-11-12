@@ -91,6 +91,9 @@ def main():
         destination.mkdir(parents=True, exist_ok=True)
         for name in ("LICENSE", "NOTICE"):
             shutil.copy2(source / directory / name, destination / name)
+        permission = source / directory / "LICENSING.md"
+        if permission.is_file():
+            shutil.copy2(permission, destination / permission.name)
     provenance = dict(pin, dllSha256=hashlib.sha256((output / "Concealment.dll").read_bytes()).hexdigest())
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     print(f"Prepared Concealment contract {pin['contract']} from {commit}: {provenance['dllSha256']}")

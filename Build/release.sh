@@ -156,7 +156,7 @@ cp -a "$REPO/Docs/Magnetar.md" "$REPO/Docs/ClusterManager.md" "$STAGING/docs/"
 cp -a "$REPO/ClusterRegistry/README.md" "$STAGING/docs/Registry.md"
 cp -a "$REPO/ClusterRegistry.AdminContract/README.md" "$STAGING/docs/AdminContract.md"
 cp -a "$REPO/Build/release-README.md" "$STAGING/README.md"
-cp -a "$REPO/LICENSE" "$STAGING/LICENSE"
+cp -a "$REPO/LICENSE" "$REPO/LICENSE.MIT" "$REPO/LICENSING.md" "$STAGING/"
 [[ ! -f "$REPO/NOTICE" ]] || cp -a "$REPO/NOTICE" "$STAGING/NOTICE"
 # A ready-made two-partition test world so the cluster can be exercised without game scenarios.
 cp -a "$REPO/Test/Saves/Cluster-Simple" "$STAGING/examples/Cluster-Simple"
@@ -207,7 +207,7 @@ for required in gateway-rs/gateway-rs gateway-rs/libsteam_api.so gateway-rs/LICE
         plugins/Concealment/licenses/concealment/LICENSE plugins/Concealment/licenses/accounting/NOTICE \
         cli/cluster cli/cluster-status cli/cluster.py cli/gateway_supervisor.py cli/magnetar_config.py cli/cluster_hostd.py cli/managed_deployment.py cli/gateway-admin \
         docs/ClusterCLI.md docs/AdminAPI.md docs/GatewayAPI.md docs/NodeAPI.md docs/EnvVars.md docs/NodeControl.md \
-        examples/Cluster-Simple/Sandbox.sbc README.md LICENSE; do
+        examples/Cluster-Simple/Sandbox.sbc README.md LICENSE LICENSE.MIT LICENSING.md; do
     [[ -e "$STAGING/$required" ]] || { echo "missing from staging: $required" >&2; exit 1; }
 done
 python3 -m py_compile "$STAGING/cli/cluster.py" "$STAGING/cli/gateway_supervisor.py" "$STAGING/cli/magnetar_config.py" "$STAGING/cli/cluster_hostd.py" "$STAGING/cli/managed_deployment.py"

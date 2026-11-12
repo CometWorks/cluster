@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <TargetFramework>net8.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
@@ -14,5 +15,9 @@
   <ItemGroup>
     <Compile Include="../Shared/Cluster/Diagnostics/Protocol/DiagnosticsModels.cs" Link="DiagnosticsModels.cs" />
     <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="../LICENSE.MIT" Link="LICENSE.MIT" Pack="true" PackagePath=""
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

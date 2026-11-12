@@ -117,6 +117,7 @@ cp -a "$CLUSTER_REPO/Cli/cluster.py" "$CLUSTER_REPO/Cli/gateway_supervisor.py" "
 cp -a "$CLUSTER_REPO/Cli/cluster" "$STAGING/cli/cluster"
 chmod +x "$STAGING/cli/cluster"
 cp -a "$CLUSTER_REPO/Build/archive-README.md" "$STAGING/README.md"
+cp -a "$CLUSTER_REPO/LICENSE" "$CLUSTER_REPO/LICENSE.MIT" "$CLUSTER_REPO/LICENSING.md" "$STAGING/"
 for doc in ClusterCLI.md GatewayAPI.md NodeAPI.md EnvVars.md; do
     cp -a "$CLUSTER_REPO/Docs/Gateway/$doc" "$STAGING/docs/"
 done
@@ -138,7 +139,7 @@ staged_game="$(find "$STAGING" -type f \( -name 'VRage*.dll' -o -name 'Sandbox*.
 for required in magnetar/MagnetarInterim.bin magnetar/Libraries/MagnetarInterim/PluginSdk.dll \
         magnetar/Libraries/MagnetarInterim/Steamworks.NET.dll magnetar/Libraries/MagnetarInterim/libsteam_api.so \
         plugins/cluster/ClusterNode.xml plugins/cluster/WorldAuthority.xml \
-        registry/ClusterRegistry.dll tools/MagnetarWorld/MagnetarWorld.dll server/MagnetarWorld.dll cli/cluster.py cli/gateway_supervisor.py cli/magnetar_config.py cli/cluster_hostd.py cli/cluster README.md; do
+        registry/ClusterRegistry.dll tools/MagnetarWorld/MagnetarWorld.dll server/MagnetarWorld.dll cli/cluster.py cli/gateway_supervisor.py cli/magnetar_config.py cli/cluster_hostd.py cli/cluster README.md LICENSE LICENSE.MIT LICENSING.md; do
     [[ -e "$STAGING/$required" ]] || { echo "missing from staging: $required" >&2; exit 1; }
 done
 python3 -m py_compile "$STAGING/cli/cluster.py" "$STAGING/cli/gateway_supervisor.py" "$STAGING/cli/magnetar_config.py" "$STAGING/cli/cluster_hostd.py"

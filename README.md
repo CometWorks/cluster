@@ -57,7 +57,10 @@ building, Magnetar registration, CLI controls, release packaging and debugging.
 CometWorks Clustering (Dynamic Mashing)
 Copyright (C) 2026 CometWorks (https://github.com/CometWorks)
 
-Contact us if you need alternative licensing.
+Independent plugins and integrations using supported APIs may use their own
+licences, including proprietary terms. Public contract code is also available
+under MIT. See [licensing](LICENSING.md) for the additional permission, scope
+and source obligations. Alternate licensing is available by agreement.
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published by
