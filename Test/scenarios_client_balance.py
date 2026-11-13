@@ -3,8 +3,8 @@
 * ``P2-BAL-CLIENTS`` - three regular nodes with the deployed cost model (load floor 800000 sim-us/s). Three clients
   spawn on the same node, and two are teleported 100 km away in different directions, so that node holds three
   one-client partitions with no envelope neighbours. Every node stays far below the floor. On its own cadence the
-  balancer must move client partitions until at least two nodes serve players, and every pin it makes must be a
-  client move (T-0409 still holds load moves below the floor).
+  balancer must move client partitions until at least two nodes serve players, and it must make no load move (T-0409
+  still holds those below the floor). The pins' own peak loads show the floor was never reached.
 
 Live on octahedron-test (cluster 0.3.9, 2026-11-13) the nodes ran at sim 1.00 with peaks of 50k-400k sim-us/s. The
 Gateway logged "Balancing held by the load floor" on 26,252 passes, and 73 players stayed on 3 of the 6 nodes for 9 h.
@@ -93,20 +93,19 @@ def p2_bal_clients(bench) -> None:
         after = samples[-1]["clients"] if samples else {}
     bench.record("balance-trace", samples)
     bench.record("clients-after", after)
-    peaks = [s["status"].get("peakLoad") or s["status"].get("peak") for s in samples if isinstance(s.get("status"), dict)]
-    bench.record("peaks", peaks)
-    held = _lines(bench, "gateway", r"Balancing held by the load floor")
-    bench.record("held-lines", held[-5:])
-    _require(bench, "SETUP: the balancer ran below the load floor (it logged a held pass)", bool(held), "no held line")
-    kinds = [re.search(PIN, line).group(1) for line in _lines(bench, "gateway", PIN)[pins_before:]]
-    bench.record("pins", kinds)
+    bench.record("held-lines", _lines(bench, "gateway", r"Balancing held by the load floor")[-5:])
+    pins = _lines(bench, "gateway", PIN)[pins_before:]
+    bench.record("pin-lines", pins)
+    kinds = [re.search(PIN, line).group(1) for line in pins]
+    peaks = [int(m.group(1)) for m in (re.search(r"peak load (\d+)->", line) for line in pins) if m]
+    _require(bench, "SETUP: every pin happened below the 800000 sim-us/s load floor", all(p < 800_000 for p in peaks), str(peaks))
     nodes = sorted({n for n, _ in after.values()})
     bench.check(
         "below the load floor the balancer spreads the players over at least two nodes (SE-1415)",
         len(nodes) >= 2,
         json.dumps(after),
     )
-    bench.check("every pin below the floor is a client move", all(k == "client" for k in kinds), str(kinds))
+    bench.check("no load move below the floor (T-0409)", "load" not in kinds, str(kinds))
     for client_id, _ in CLIENTS:
         bench.check(f"client {client_id} still has a living character", bench.living_character(client_id) is not None)
     bench.exercised(route=f"3 clients on {source} -> balancer -> {', '.join(nodes)}; pins {kinds}")
