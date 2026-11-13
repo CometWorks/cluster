@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Reflection;
 using HarmonyLib;
 using Sandbox.Engine.Multiplayer;
 using Sandbox.Game.World;
@@ -17,6 +18,13 @@ internal static class StaleMemberRoutes
 {
     private static ulong m_raceClient;
     private static bool m_patched;
+
+    // SE-1444: the client whose node-link SessionRequest is held back until its CLIENT_CONNECTED ran, and the held call.
+    private static readonly object m_lateSync = new object();
+    private static ulong m_lateClient;
+    private static object m_lateInstance;
+    private static MethodInfo m_raiseSessionRequest;
+    [ThreadStatic] private static bool m_releasing;
 
     public static void Register()
     {
@@ -55,6 +63,80 @@ internal static class StaleMemberRoutes
                 return (object)new { armed = client };
             }));
         });
+
+        // POST /session-request-late?client= - arm (0 disarms): the client's next node-link SessionRequest reaches the
+        // game thread only after its CLIENT_CONNECTED has run, as it did live after a 725 ms hitch while 14 bots joined
+        // (SE-1444). The SessionRequest is held where the node link queues it and queued again from a
+        // ClientConnected postfix.
+        TestRoutes.Add("POST", "/session-request-late", context =>
+        {
+            ulong client = (ulong)TestRoutes.Long(context, "client");
+            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+            {
+                EnsureLatePatched();
+                lock (m_lateSync)
+                {
+                    m_lateClient = client;
+                    m_lateInstance = null;
+                }
+                Plugin.Log($"session-request-late armed client={client} (SE-1444)");
+                return (object)new { armed = client };
+            }));
+        });
+    }
+
+    private static void EnsureLatePatched()
+    {
+        if (m_raiseSessionRequest != null)
+            return;
+        MethodInfo raise = AccessTools.Method(AccessTools.TypeByName("ClusterPlugin.NodeLinkTransportBinding"), "RaiseSessionRequest")
+            ?? throw new MissingMethodException("ClusterPlugin.NodeLinkTransportBinding", "RaiseSessionRequest");
+        Harmony harmony = new Harmony("ClusterTestPlugin.SessionRequestLate");
+        harmony.Patch(raise, prefix: new HarmonyMethod(AccessTools.Method(typeof(StaleMemberRoutes), nameof(RaiseSessionRequestPrefix))));
+        harmony.Patch(
+            AccessTools.Method(typeof(MyDedicatedServerBase), nameof(MyDedicatedServerBase.ClientConnected)),
+            postfix: new HarmonyMethod(AccessTools.Method(typeof(StaleMemberRoutes), nameof(ClientConnectedPostfix))));
+        m_raiseSessionRequest = raise;
+    }
+
+    // Poll thread: hold the armed client's SessionRequest.
+    private static bool RaiseSessionRequestPrefix(object instance, ulong client)
+    {
+        if (m_releasing)
+            return true;
+        lock (m_lateSync)
+        {
+            if (client == 0 || client != m_lateClient || m_lateInstance != null)
+                return true;
+            m_lateInstance = instance;
+        }
+        Plugin.Log($"session-request-late held client={client} (SE-1444)");
+        return false;
+    }
+
+    // Game thread: the held client's CLIENT_CONNECTED has run, queue its SessionRequest now.
+    private static void ClientConnectedPostfix(MyPacket packet)
+    {
+        ulong client = packet.Sender.Id.Value;
+        object instance;
+        lock (m_lateSync)
+        {
+            if (client == 0 || client != m_lateClient || m_lateInstance == null)
+                return;
+            instance = m_lateInstance;
+            m_lateClient = 0;
+            m_lateInstance = null;
+        }
+        Plugin.Log($"session-request-late released after CLIENT_CONNECTED client={client} (SE-1444)");
+        m_releasing = true;
+        try
+        {
+            m_raiseSessionRequest.Invoke(null, new[] { instance, (object)client });
+        }
+        finally
+        {
+            m_releasing = false;
+        }
     }
 
     private static MyDedicatedServerBase Server() =>

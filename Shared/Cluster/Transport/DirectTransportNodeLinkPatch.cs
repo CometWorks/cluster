@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using LiteNetLib;
 using VRage.GameServices;
@@ -37,6 +38,13 @@ public static class DirectTransportNodeLinkPatch
 	/// CloseSession keeps the client's new node-link session open.
 	/// </summary>
 	[ThreadStatic] public static ulong KeepSession;
+
+	/// <summary>
+	/// SE-1444: node-link sessions whose SessionRequest is still queued. It reaches the game thread through the
+	/// transport's engine-event queue, the session's relayed packets through its receive queues, so after a hitch the
+	/// client's CLIENT_CONNECTED can run first. The value turns true when it did.
+	/// </summary>
+	public static readonly ConcurrentDictionary<ulong, bool> SessionRequestQueued = new ConcurrentDictionary<ulong, bool>();
 
 	/// <summary>
 	/// SE-1156: whether the client has an open session on this node, through the node link or as a
@@ -244,6 +252,7 @@ public static class DirectTransportNodeLinkPatch
 			if (attached)
 			{
 				log("Accepted client " + packet.ClientId + " through cluster node link");
+				SessionRequestQueued[packet.ClientId] = false;
 				sessionRequest(packet.ClientId);
 			}
 			if (attached || nodeLink.Contains(packet.ClientId))
