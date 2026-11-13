@@ -8111,6 +8111,29 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// LiteNetLib's DisconnectTimeout and the Steam rejoin grace (30 s each), so it only takes what no event will.</summary>
     internal static TimeSpan DeadClientGrace = TimeSpan.FromSeconds(45);
 
+    /// <summary>How long a world-ready Steam client may send nothing before its session ends (Steam P2P has no
+    /// disconnect detection of its own). CLUSTER_CLIENT_SILENCE_SECONDS, default 180.</summary>
+    internal static TimeSpan ClientSilenceLimit = SecondsFromEnvironment("CLUSTER_CLIENT_SILENCE_SECONDS", 180);
+
+    /// <summary>
+    /// SE-1450: the same limit for a client that has not sent CLIENT_READY yet. A vanilla client sends nothing
+    /// between its world request and CLIENT_READY: the node sends the world, then the client downloads mods
+    /// and loads it, silent all along. On octahedron-test (2026-11-13) 16 of 35 Steam joins were ended at the
+    /// 180 s limit while loading, and 14 of those players got in on a later attempt.
+    /// CLUSTER_CLIENT_LOADING_SILENCE_SECONDS, default 600.
+    /// </summary>
+    internal static TimeSpan LoadingSilenceLimit = SecondsFromEnvironment("CLUSTER_CLIENT_LOADING_SILENCE_SECONDS", 600);
+
+    private static TimeSpan SecondsFromEnvironment(string name, double fallback) => TimeSpan.FromSeconds(
+        double.TryParse(Environment.GetEnvironmentVariable(name), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out double seconds) && seconds > 0 ? seconds : fallback);
+
+    private static bool ClientSilent(ClientSession session, DateTimeOffset now) =>
+        now - session.LastClientActivity >= (session.WorldReady ? ClientSilenceLimit : LoadingSilenceLimit);
+
+    internal (bool WorldReady, string? DisconnectReason)? SessionForSelfTest(ulong clientId) =>
+        _clients.TryGetValue(clientId, out ClientSession? session) ? (session.WorldReady, session.DisconnectReason) : null;
+
     private bool ReapDeadClientSession(ClientSession session, long now)
     {
         if (session.Client?.Connected == true)
@@ -8338,7 +8361,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                             ForceReconnect(session, "client-ack-backlog");
                         // gateway-rs sees the traffic of its sessions and reports "silent" itself.
                         else if (session.Client is { Frontend: not "dt" } and not ExternalClientChannel
-                            && DateTimeOffset.UtcNow - session.LastClientActivity >= TimeSpan.FromSeconds(180))
+                            && ClientSilent(session, DateTimeOffset.UtcNow))
                             ForceReconnect(session, "client-silent");
                         else if (SteamSessionWithoutLogin(session))
                             EndSteamSessionWithoutLogin(session);
