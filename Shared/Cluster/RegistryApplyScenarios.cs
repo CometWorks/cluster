@@ -42,6 +42,9 @@ internal static class RegistryApplyScenarios
 		public bool Silent, LoseAnswer, Closed;
 		/// <summary>T-0339 (design C): a registry without transfers - a two-input split is a malformed split (400).</summary>
 		public bool NoTransfers;
+		/// <summary>SE-1443: ids another node's seed claim made rows of; <see cref="OldIdConflict"/> answers them as 0.3.11 did.</summary>
+		public readonly HashSet<ulong> Taken = new HashSet<ulong>();
+		public bool OldIdConflict;
 		public int Requests, Applies;
 		private ulong m_next = 100;
 
@@ -80,6 +83,10 @@ internal static class RegistryApplyScenarios
 					// As GatewayRegistry.RequireOwner: every input owned by the node AT the generation the request names.
 					if (((Request)operation.Request).Inputs.Any(x => !Owned.TryGetValue(x.Partition, out uint owned) || owned != x.Generation))
 						throw new HttpRequestException("Partition ownership is fenced", null, HttpStatusCode.Conflict);
+					// As GatewayRegistry.ApplyLineage: a new output id must be allocated and no other node's row (SE-1443).
+					if (change.Outputs.FirstOrDefault(x => !change.Inputs.Contains(x.Id) && Taken.Contains(x.Id)) is { } taken)
+						throw new HttpRequestException("registry answered 409 Conflict: " + (OldIdConflict ? "RegistryConflictException" : RegistryApplyQueue.PartitionIdConflict)
+							+ ": Partition " + taken.Id + " was not allocated or is already in use", null, HttpStatusCode.Conflict);
 					if (change.Outputs.Any(x => !change.Inputs.Contains(x.Id) && !Allocated.Contains(x.Id)))
 						throw new HttpRequestException("Partition was not allocated", null, HttpStatusCode.Conflict);
 					answer = change.Outputs.Select(x => (x.Id, (Owned.TryGetValue(x.Id, out uint generation) ? generation : 0) + 1)).ToArray();
@@ -267,6 +274,7 @@ internal static class RegistryApplyScenarios
 		TransferTargetPending(); ran.Add("transfer-target-pending");
 		TransferShortAllocator(); ran.Add("transfer-short-allocator");
 		LocalStopPendingApply(); ran.Add("local-stop-pending-apply");
+		IdRefusedReverts(); ran.Add("id-refused-reverts");
 		ClassifyRules(); ran.Add("classify");
 		return ran.ToArray();
 	}
@@ -737,6 +745,38 @@ internal static class RegistryApplyScenarios
 		Check(node.Drain() == null && node.Generations[home] == 3 && node.Generations[q] == 2, "both applied, home through two generations: " + node.Generations[home]);
 	}
 
+	/// SE-1443: the registry refuses a split's new id because another node's seed partition was claimed under it after the
+	/// id left the registry for this node's reserve. The split is reverted, the node keeps everything it owns, and the next
+	/// pass splits again with a fresh id, which the registry applies. Control: 0.3.11's answer (a plain conflict) is a fence.
+	private static void IdRefusedReverts()
+	{
+		foreach (bool control in new[] { false, true })
+		{
+			Node node = new Node();
+			ulong home = node.Start();
+			string before = Shape(node.Membership);
+			node.Registry.OldIdConflict = control;
+			PartitionMembership.Change[] changes = node.Pass(Apart, 100);
+			Check(changes.Length == 1 && changes[0].Split, "the drifted layout must split in memory");
+			ulong piece = changes[0].Outputs.Select(x => x.Id).Single(x => x != home);
+			// The other node's startup claim lands between the reserve fill and this split's apply.
+			node.Registry.Taken.Add(piece);
+			RegistryApplyQueue.Outcome? refusal = node.Drain();
+			if (control)
+			{
+				Check(refusal == RegistryApplyQueue.Outcome.Rejected, "control: a plain 409 on a topology apply must stay a fence: " + refusal);
+				continue;
+			}
+			Check(refusal == RegistryApplyQueue.Outcome.IdRefused, "an id conflict must revert the split, not fence: " + refusal);
+			Check(Shape(node.Membership) == before && node.Owned.SetEquals(new[] { home }) && !node.Queue.IsPending(home) && !node.Queue.IsPending(piece),
+				"the split must be reverted and its layouts free: " + Shape(node.Membership));
+			PartitionMembership.Change[] again = node.Pass(Apart, 200);
+			Check(again.Length == 1 && again[0].Split && !again[0].Outputs.Any(x => x.Id == piece), "the next pass must split again with a fresh id");
+			Check(node.Drain() == null && node.Owned.Count == 2 && node.Owned.Contains(home) && !node.Owned.Contains(piece),
+				"the split with a fresh id must be applied: " + Shape(node.Membership));
+		}
+	}
+
 	private static void ClassifyRules()
 	{
 		HttpRequestException Http(HttpStatusCode code, string message) => new HttpRequestException(message, null, code);
@@ -752,5 +792,11 @@ internal static class RegistryApplyScenarios
 			&& RegistryApplyQueue.Classify(false, Http(HttpStatusCode.BadRequest, "x")) == RegistryApplyQueue.Outcome.Rejected
 			&& RegistryApplyQueue.Classify(false, Http(HttpStatusCode.Conflict, "Partition 7 ownership is fenced"), true) == RegistryApplyQueue.Outcome.Rejected,
 			"a transfer's 400 is a transfer refusal; any other refusal keeps its rule");
+		// SE-1443: an id conflict reverts a topology apply; on a claim a 409 keeps its rule, and a plain 409 stays a fence.
+		Check(RegistryApplyQueue.Classify(false, Http(HttpStatusCode.Conflict, "PartitionIdConflictException: Partition 8 was not allocated or is already in use")) == RegistryApplyQueue.Outcome.IdRefused
+			&& RegistryApplyQueue.Classify(false, Http(HttpStatusCode.Conflict, "PartitionIdConflictException: x"), true) == RegistryApplyQueue.Outcome.IdRefused
+			&& RegistryApplyQueue.Classify(true, Http(HttpStatusCode.Conflict, "PartitionIdConflictException: x")) == RegistryApplyQueue.Outcome.Closed
+			&& RegistryApplyQueue.Classify(false, Http(HttpStatusCode.Conflict, "RegistryConflictException: Partition 8 was not allocated or is already in use")) == RegistryApplyQueue.Outcome.Rejected,
+			"an id conflict on a topology apply is IdRefused; everything else keeps its rule");
 	}
 }
