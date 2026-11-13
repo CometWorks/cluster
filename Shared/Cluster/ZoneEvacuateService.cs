@@ -164,7 +164,8 @@ public static class ZoneEvacuateService
 			ships.Add(new
 			{
 				entityId = ship.EntityId, name = ship.DisplayName, moved = !dryRun, grids = group.Count, pilots,
-				from = Round(sphere.Center), to = Round(to.Value), fromZoneCenter = Math.Round(Vector3D.Distance(center, to.Value)),
+				from = Round(sphere.Center), to = Round(to.Value), radius = Math.Round(sphere.Radius, 1),
+				fromZoneCenter = Math.Round(Vector3D.Distance(center, to.Value)),
 			});
 		}
 		foreach (MyCharacter character in plan.Characters)
@@ -195,7 +196,7 @@ public static class ZoneEvacuateService
 			characters.Add(new
 			{
 				entityId = character.EntityId, name = character.DisplayName, moved = !dryRun, closesHelmet = !helmet,
-				from = Round(sphere.Center), to = Round(to.Value),
+				from = Round(sphere.Center), to = Round(to.Value), radius = sphere.Radius,
 			});
 		}
 		return new { ships, characters };
@@ -207,8 +208,9 @@ public static class ZoneEvacuateService
 
 	/// <summary>
 	/// Where the sphere's center goes: on the ray from the zone's center through it, the sphere just outside
-	/// the zone, then further out in steps until nothing else is there (grids, characters, voxels, the spots
-	/// given out before). A sphere at the zone's center goes along the station's up.
+	/// the zone, then further out in steps until nothing else is there (grids, characters, voxels) and the
+	/// spheres given out before are at least the margin away. A sphere at the zone's center goes along the
+	/// station's up.
 	/// </summary>
 	private static Vector3D? Spot(Vector3D center, double radius, double margin, BoundingSphereD sphere, ISet<long> skip,
 		List<BoundingSphereD> taken, MyCubeGrid station)
@@ -220,7 +222,8 @@ public static class ZoneEvacuateService
 		for (double extra = 0; extra <= MaxExtraDistance; extra += step)
 		{
 			var candidate = new BoundingSphereD(center + direction * (radius + sphere.Radius + margin + extra), sphere.Radius);
-			if (taken.Any(t => t.Intersects(candidate)))
+			// Moved items keep the margin between them too, sphere to sphere (SE-1449)
+			if (taken.Any(t => Vector3D.Distance(t.Center, candidate.Center) < t.Radius + candidate.Radius + margin))
 				continue;
 			var query = new BoundingSphereD(candidate.Center, candidate.Radius + margin);
 			near.Clear();
