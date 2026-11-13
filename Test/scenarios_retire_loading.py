@@ -15,13 +15,15 @@ from __future__ import annotations
 import json
 import time
 
+from cluster import _field
 from scenarios_core import CLIENT_ID, _lines
 from scenarios_wa_ops import _poll, _require, _session, _try
 
 
 def _node_by_backend(bench, backend: str) -> str:
-    rows = bench.cluster.get("/registry/status").get("nodes") or []
-    return next((row["node"] for row in rows if row.get("endpoint") == backend), "")
+    """The live registry node at ``backend`` (the registry status serializes PascalCase)."""
+    rows = _field(bench.cluster.get("/registry/status"), "nodes") or []
+    return next((str(_field(row, "node")) for row in rows if _field(row, "endpoint") == backend), "")
 
 
 def _force_reconnects(bench) -> list[str]:
