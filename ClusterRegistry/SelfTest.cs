@@ -227,6 +227,7 @@ internal static partial class SelfTest
         ("lookahead-max-speed", TestLookaheadMaxSpeed),
         ("relay-join-admission", TestRelayJoinAdmission),
         ("dead-client-session", TestDeadClientSession),
+        ("loading-silence", TestLoadingSilence),
         ("attach-retry-switch-hold", TestAttachRetrySwitchHold),
         ("join-accept-stale-peer", TestJoinAcceptStalePeer),
         ("handover-capture", TestHandoverCapture),

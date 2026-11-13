@@ -730,6 +730,15 @@ internal sealed partial class DirectGateway
                 if (session.Credential != null && !ClientBacklogHeld(session)) ForceReconnect(session, "client-backlog-expired");
                 return;
             case "silent":
+                // gateway-rs counts 180 s from the last packet and knows nothing of CLIENT_READY; it reports
+                // again after another 180 s, so a loading client is ended at the first report past the
+                // loading limit (SE-1450).
+                if (!ClientSilent(session, DateTimeOffset.UtcNow))
+                {
+                    Console.WriteLine($"Client {session.ClientId} is silent while it loads the world; kept until "
+                        + $"{LoadingSilenceLimit.TotalSeconds:F0}s of silence");
+                    return;
+                }
                 ForceReconnect(session, "client-silent");
                 return;
             case "ackBacklog":
