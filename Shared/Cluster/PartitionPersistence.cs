@@ -1966,6 +1966,13 @@ internal sealed partial class PartitionPersistence
 				Thread.Sleep(1000);
 			}
 		}
+		// SE-1461 bench seam: hold the startup claims after the assigned saves loaded, so a scenario can have another
+		// node take one of these seed ids in between (P3-SEED-COLLIDE).
+		if (int.TryParse(Environment.GetEnvironmentVariable("CLUSTER_TEST_STARTUP_CLAIM_DELAY_MS"), out int claimDelay) && claimDelay > 0)
+		{
+			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] startup claims held " + claimDelay + " ms (CLUSTER_TEST_STARTUP_CLAIM_DELAY_MS)");
+			Thread.Sleep(claimDelay);
+		}
 		foreach ((ulong id, State state) in m_state.ToArray())
 		{
 			long expectedGeneration = state.Generation - 1L;
