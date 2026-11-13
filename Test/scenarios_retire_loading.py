@@ -71,6 +71,7 @@ def p2_retire_loading(bench) -> None:
         closed_at is None or (ready_at is not None and closed_at >= ready_at - 1),
         f"closed {closed_at} ready {ready_at}",
     )
+    _try(bench.attach_api, CLIENT_ID)
     spawned = isinstance(_try(bench.wait_spawned, CLIENT_ID), dict) and bench.living_character(CLIENT_ID) is not None
     bench.check("the client spawns", spawned)
     bench.check(

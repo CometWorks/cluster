@@ -206,7 +206,12 @@ class Bench:
 
     def start_client(self, client_id: int, remote_port: int = LEGACY_REMOTE_PORT, timeout: float = 420,
                      label: str | None = None, render: bool | None = None, name: str | None = None) -> RemoteAPI:
-        client = self.launch_client(client_id, remote_port, label=label, render=render, name=name)
+        self.launch_client(client_id, remote_port, label=label, render=render, name=name)
+        return self.attach_api(client_id, timeout, label=label)
+
+    def attach_api(self, client_id: int, timeout: float = 420, label: str | None = None) -> RemoteAPI:
+        """Wait for a launched client's Remote API and register it for ``client_id``."""
+        client = self.clients[label or client_id]
         client.wait_api_listening(timeout)
         api = RemoteAPI(client.url, username=REMOTE_USER, password=REMOTE_PASSWORD, timeout=180)
         api.wait_for_api(max_wait=timeout)
