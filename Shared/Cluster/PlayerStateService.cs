@@ -206,6 +206,7 @@ public static class PlayerStateService
 				// character whose velocity is being computed against something that is not there.
 				relativeDampeningEntity = character.RelativeDampeningEntity?.EntityId ?? 0L,
 				usingLadder = character.IsOnLadder,
+				helmet = character.OxygenComponent?.HelmetEnabled ?? false,
 				// MyClientState.Read gates every scrap of client input on exactly this, and drops the input
 				// silently when it does not hold - no log, no error, the stream is just skipped. A character
 				// with a controller but no CONTROLLING PLAYER, or one whose player carries a different steam

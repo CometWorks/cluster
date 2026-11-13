@@ -471,6 +471,38 @@ internal sealed partial class ClusterControlServer
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
 				return;
 			}
+			if (context.Request.HttpMethod == "POST" && path.EndsWith("/zone-evacuate", StringComparison.OrdinalIgnoreCase))
+			{
+				// SE-1417: move the ships and characters out of a station's admin safe zone, docked ships
+				// released first. gridId or name picks the station; dryRun=1 only lists what would happen.
+				var query = context.Request.QueryString;
+				long stationId = long.Parse(query["gridId"] ?? "0", CultureInfo.InvariantCulture);
+				string stationName = query["name"];
+				if (stationId == 0 && string.IsNullOrEmpty(stationName))
+					throw new ArgumentException("Missing gridId or name query parameter");
+				double margin = double.Parse(query["margin"] ?? "25", CultureInfo.InvariantCulture);
+				bool dryRun = query["dryRun"] is "1" or "true";
+				var exclude = new HashSet<long>((query["exclude"] ?? "")
+					.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+					.Select(id => long.Parse(id, CultureInfo.InvariantCulture)));
+				var plan = Invoke(() => ZoneEvacuateService.Find(stationId, stationName, exclude));
+				object outcome = plan.Error;
+				if (outcome == null)
+				{
+					List<object> released = Invoke(() => ZoneEvacuateService.Release(plan, dryRun));
+					// Undocking and unlocking settle over the next frames; the move skips what is still attached
+					if (released.Count > 0 && !dryRun)
+						Thread.Sleep(1000);
+					object moved = Invoke(() => ZoneEvacuateService.Move(plan, margin, dryRun));
+					outcome = new
+					{
+						evacuated = !dryRun, dryRun, station = plan.Station.EntityId, stationName = plan.Station.DisplayName,
+						zone = plan.Zone.EntityId, released, moved,
+					};
+				}
+				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(JsonSerializer.Serialize(outcome)));
+				return;
+			}
 			if (context.Request.HttpMethod == "POST" && path.EndsWith("/grid-stop", StringComparison.OrdinalIgnoreCase))
 			{
 				// T-0064: park a runaway unpiloted grid where it is (overrides off, dampeners on, speed cleared).
