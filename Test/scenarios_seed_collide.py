@@ -62,7 +62,9 @@ def p3_seed_collide(bench) -> None:
         return
 
     bench.cluster.wait_ready(nodes=["node-1"], timeout=CLAIM_DELAY_MS / 1000 + 300)
-    fenced = _poll(lambda: _lines(bench, "node-1", rf"startup partition fenced, waiting for recovery: {collided} ") or None, 60)
+    # "Game ready" comes before the held claims: wait out the hold.
+    fenced = _poll(lambda: _lines(bench, "node-1", rf"startup partition fenced, waiting for recovery: {collided} ") or None,
+                   CLAIM_DELAY_MS / 1000 + 120)
     bench.check(f"node-1's startup claim of seed {collided} is refused", bool(fenced))
     row = next((p for p in _partitions(bench, "node-1") if p["id"] == collided), None) or {}
     members = [m["id"] for m in row.get("members") or []]
