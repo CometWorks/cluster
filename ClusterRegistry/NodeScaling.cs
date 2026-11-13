@@ -265,11 +265,27 @@ internal sealed partial class DirectGateway
         if (registry.RecoveryPending()) return [.. registry.RetiringNodes()];
         HashSet<string> retiring = [.. registry.RetiringNodes()];
         HashSet<string> owning = [.. reports.Where(x => x.Report.Partitions.Length != 0).Select(x => x.Node.Node)];
+        // SE-1448: a client still loading the world on a retiring node is in no partition its report lists (a first
+        // join has none until it spawns), so the node read as owning nothing, was closed and killed under the load:
+        // octahedron-test 2026-11-13 20:34Z, AetherAdept on local-node-3. The node waits until the client is world-ready.
+        foreach ((string node, ulong[] clients) in LoadingClientsByNode(
+                     _clients.Values.Select(x => (x.ClientId, x.WorldReady, x.BackendEndpoint)), RetiringBackends(registry, retiring)))
+        {
+            owning.Add(node);
+            if (PassLogDue(_passFailureLogged, "loading|" + node + "|" + string.Join(",", clients), DateTime.UtcNow))
+                Console.WriteLine($"Scale: retiring node {node} owns nothing but client(s) {string.Join(", ", clients)} are still loading the world on it; it closes once they are world-ready");
+        }
         foreach (string node in registry.SettleRetiring(owning))
         {
             try
             {
                 NodeRegistration row = registry.Nodes().First(x => x.Node == node);
+                // SE-1448: a world-ready client in no partition (a new player on the respawn screen) has nothing to hand
+                // over; switch it to the node's receiver instead of letting the kill disconnect it.
+                if (registry.PreferredDrainReceiver(node) is { } receiver
+                    && registry.Nodes().FirstOrDefault(x => x.Node == receiver) is { Endpoint: not null } target)
+                    SwitchUnpartitionedOff(row, [.. _clients.Values.Where(x => x.WorldReady && x.BackendEndpoint.Equals(BackendOf(row)))],
+                        target.Node, BackendOf(target));
                 registry.CloseNode(node, row.Epoch, TimeSpan.FromSeconds(60));
                 Console.WriteLine($"Scale: retiring node {node} owns nothing; closed");
             }
@@ -325,6 +341,25 @@ internal sealed partial class DirectGateway
             }
         }
         return retiring;
+    }
+
+    private static IPEndPoint BackendOf(NodeRegistration row) => EndpointParser.Parse(row.Endpoint, DirectTransportConstants.DefaultPort);
+
+    private static IEnumerable<(string Node, IPEndPoint Backend)> RetiringBackends(GatewayRegistry registry, IReadOnlySet<string> retiring) =>
+        registry.Nodes().Where(x => retiring.Contains(x.Node) && x.State == NodeState.Active && x.Endpoint != null)
+            .Select(x => (x.Node, BackendOf(x)));
+
+    /// <summary>SE-1448: the nodes among <paramref name="nodes"/> a session is bound to that has not sent CLIENT_READY
+    /// yet, with those clients in id order.</summary>
+    internal static Dictionary<string, ulong[]> LoadingClientsByNode(IEnumerable<(ulong Client, bool WorldReady, IPEndPoint Backend)> sessions,
+        IEnumerable<(string Node, IPEndPoint Backend)> nodes)
+    {
+        (ulong Client, bool WorldReady, IPEndPoint Backend)[] loading = [.. sessions.Where(x => !x.WorldReady)];
+        Dictionary<string, ulong[]> result = new(StringComparer.Ordinal);
+        foreach ((string node, IPEndPoint backend) in nodes)
+            if (loading.Where(x => x.Backend.Equals(backend)).Select(x => x.Client).Order().ToArray() is { Length: > 0 } clients)
+                result[node] = clients;
+        return result;
     }
 
     /// <summary>The preferred receiver when it is one (a recycled node's replacement); else the receiver already holding an

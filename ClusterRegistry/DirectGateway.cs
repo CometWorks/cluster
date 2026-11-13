@@ -5547,6 +5547,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 .Where(x => x.Role == NodeRole.Regular && x.State == NodeState.Active && x.Serving && !x.Spare
                     && x.Endpoint != null && x.LeaseExpires > DateTimeOffset.UtcNow)
                 .ToArray();
+            // SE-1448: not onto a retiring node (rotation, scale-in): it closes once it owns nothing, and a first join
+            // owns nothing there until it spawns.
+            if (live.Where(x => !_registry.IsRetiring(x.Node)).ToArray() is { Length: > 0 } staying)
+                live = staying;
             if (live.Length == 0)
                 return _options.Backend;
             string configured = _options.Backend.ToString();
@@ -5556,7 +5560,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             NodeRegistration pick = live[(int)((ulong)Interlocked.Increment(ref _unroutedCursor)
                                                % (ulong)live.Length)];
             IPEndPoint backend = EndpointParser.Parse(pick.Endpoint, DirectTransportConstants.DefaultPort);
-            Console.WriteLine($"Unrouted client backend: {_options.Backend} is not Active; using "
+            Console.WriteLine($"Unrouted client backend: {_options.Backend} is not Active or is retiring; using "
                 + $"{pick.Node} at {backend}");
             return backend;
         }
@@ -5564,6 +5568,70 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         {
             Console.Error.WriteLine($"Unrouted-backend pick failed: {error.Message}");
             return _options.Backend;
+        }
+    }
+
+    /// <summary>Switches each attached client of <paramref name="unpartitioned"/> (connected to <paramref name="source"/>, in no partition
+    /// it reports) off the closing node: to the node owning its registry partition, else its character home, else the target.</summary>
+    private void SwitchUnpartitionedOff(NodeRegistration source, IReadOnlyList<ClientSession> unpartitioned, string targetNode, IPEndPoint targetBackend)
+    {
+        GatewayRegistry registry = _registry!;
+        // Riding the node into its kill was a guaranteed disconnect for these clients, and
+        // the vanilla client does not always survive one (native teardown crashes on
+        // host-left are the single biggest source of pilot churn). They have nothing to
+        // hand over, but they do have a live gateway connection, and that is switchable:
+        // move each to the node that owns its registry partition if one exists elsewhere
+        // (the stranded-client case), otherwise to the drain target. A client still in
+        // admission has no attachable binding yet and keeps the old forced-reconnect path;
+        // so does one whose switch fails - that is no worse than before.
+        foreach (ClientSession session in unpartitioned)
+        {
+            if (session.PlayerReady == null) continue;
+            try
+            {
+                IPEndPoint rescueBackend = targetBackend;
+                string rescueNode = targetNode;
+                if (registry.GetClientPartition(session.ClientId) is ClientPartition home)
+                {
+                    PartitionOwnership owner = registry.GetPartitionOwner(home.Partition);
+                    NodeRegistration? ownerNode = owner.Node == source.Node ? null
+                        : registry.Nodes().FirstOrDefault(x => x.Node == owner.Node && x.Epoch == owner.Epoch
+                            && x.State == NodeState.Active && x.LeaseExpires > DateTimeOffset.UtcNow);
+                    if (ownerNode != null)
+                    {
+                        rescueBackend = EndpointParser.Parse(ownerNode.Endpoint, DirectTransportConstants.DefaultPort);
+                        rescueNode = ownerNode.Node;
+                    }
+                }
+                else
+                {
+                    // No placement at all - the client is invisible to every partition
+                    // guard until something repairs it. The character-home path (§6.4)
+                    // still knows where its body lives; adopt the client there instead
+                    // of parking it on the drain target with the same broken state.
+                    try
+                    {
+                        if (registry.ResolveClientRoute(session.ClientId) is { } derived
+                            && derived.Node != source.Node)
+                        {
+                            rescueBackend = EndpointParser.Parse(derived.Endpoint, DirectTransportConstants.DefaultPort);
+                            rescueNode = derived.Node;
+                            Console.WriteLine($"Unpartitioned client {session.ClientId} adopted via its character home on {rescueNode}");
+                        }
+                    }
+                    catch (RegistryConflictException)
+                    {
+                        // mid-rotation home partition: the drain target is still the
+                        // right parking spot, exactly as before this repair existed.
+                    }
+                }
+                Console.WriteLine($"Switching unpartitioned client {session.ClientId} off closing node {source.Node} to {rescueNode}");
+                ControlSwitchBackend(session, rescueBackend);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"Unpartitioned client {session.ClientId} could not be switched off {source.Node}: {e.Message}");
+            }
         }
     }
 
@@ -5626,63 +5694,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             {
                 Console.WriteLine($"Node {source.Node} holds {unpartitioned.Length} client(s) in no partition "
                     + $"({string.Join(", ", unpartitioned.Select(x => x.ClientId))})");
-                // Riding the node into its kill was a guaranteed disconnect for these clients, and
-                // the vanilla client does not always survive one (native teardown crashes on
-                // host-left are the single biggest source of pilot churn). They have nothing to
-                // hand over, but they do have a live gateway connection, and that is switchable:
-                // move each to the node that owns its registry partition if one exists elsewhere
-                // (the stranded-client case), otherwise to the drain target. A client still in
-                // admission has no attachable binding yet and keeps the old forced-reconnect path;
-                // so does one whose switch fails - that is no worse than before.
-                foreach (ClientSession session in unpartitioned)
-                {
-                    if (session.PlayerReady == null) continue;
-                    try
-                    {
-                        IPEndPoint rescueBackend = targetBackend;
-                        string rescueNode = target.Registration.Node;
-                        if (_registry.GetClientPartition(session.ClientId) is ClientPartition home)
-                        {
-                            PartitionOwnership owner = _registry.GetPartitionOwner(home.Partition);
-                            NodeRegistration? ownerNode = owner.Node == source.Node ? null
-                                : _registry.Nodes().FirstOrDefault(x => x.Node == owner.Node && x.Epoch == owner.Epoch
-                                    && x.State == NodeState.Active && x.LeaseExpires > DateTimeOffset.UtcNow);
-                            if (ownerNode != null)
-                            {
-                                rescueBackend = EndpointParser.Parse(ownerNode.Endpoint, DirectTransportConstants.DefaultPort);
-                                rescueNode = ownerNode.Node;
-                            }
-                        }
-                        else
-                        {
-                            // No placement at all - the client is invisible to every partition
-                            // guard until something repairs it. The character-home path (§6.4)
-                            // still knows where its body lives; adopt the client there instead
-                            // of parking it on the drain target with the same broken state.
-                            try
-                            {
-                                if (_registry.ResolveClientRoute(session.ClientId) is { } derived
-                                    && derived.Node != source.Node)
-                                {
-                                    rescueBackend = EndpointParser.Parse(derived.Endpoint, DirectTransportConstants.DefaultPort);
-                                    rescueNode = derived.Node;
-                                    Console.WriteLine($"Unpartitioned client {session.ClientId} adopted via its character home on {rescueNode}");
-                                }
-                            }
-                            catch (RegistryConflictException)
-                            {
-                                // mid-rotation home partition: the drain target is still the
-                                // right parking spot, exactly as before this repair existed.
-                            }
-                        }
-                        Console.WriteLine($"Switching unpartitioned client {session.ClientId} off closing node {source.Node} to {rescueNode}");
-                        ControlSwitchBackend(session, rescueBackend);
-                    }
-                    catch (Exception e)
-                    {
-                        Console.WriteLine($"Unpartitioned client {session.ClientId} could not be switched off {source.Node}: {e.Message}");
-                    }
-                }
+                SwitchUnpartitionedOff(source, unpartitioned, target.Registration.Node, targetBackend);
             }
             var plans = sessions
                 .Select(session => (Session: session,
