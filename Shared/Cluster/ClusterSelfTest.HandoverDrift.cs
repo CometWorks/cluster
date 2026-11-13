@@ -17,6 +17,7 @@ internal static partial class ClusterSelfTest
 		HandoverDriftBlockGroups();
 		HandoverDriftSuitOxygen();
 		HandoverDriftInventoryLoad();
+		HandoverDriftComponentOrder();
 	}
 
 	/// <summary>
