@@ -250,6 +250,7 @@ internal static partial class SelfTest
         ("automatic-pass-partial", TestAutomaticPassPartial),
         ("fewest-partitions-placement", TestFewestPartitionsPlacement),
         ("node-scaling", TestNodeScaling),
+        ("retiring-loading-client", TestRetiringLoadingClient),
         ("node-control-ids", TestNodeControlIds),
         ("node-control-states", TestNodeControlStates),
         ("node-control-policy", TestNodeControlPolicy),
