@@ -95,8 +95,17 @@ public static class RemotePlayerMirrorService
 	/// <summary>
 	/// The remote players this node has broadcast a phantom for, by the (SteamId, SerialId) the merged list is keyed
 	/// by: the set a withdrawal works from. Purely local bookkeeping - a wrong entry costs one redundant message.
+	/// SE-1372: the value is the name the phantom was broadcast with. A client keeps the MyPlayer it has when
+	/// OnPlayerCreated comes again (CreateNewPlayerInternal returns the existing one), so a player back under a new
+	/// name before its phantom was withdrawn kept the old name there: /w found nobody by the new one.
 	/// </summary>
-	private static readonly HashSet<(ulong SteamId, int SerialId)> Installed = new();
+	private static readonly Dictionary<(ulong SteamId, int SerialId), string> Installed = new();
+
+	/// <summary>
+	/// SE-1372: phantoms whose player attached here, dropped from <see cref="Installed"/> without a withdrawal. Their
+	/// MyPlayer is still on the clients here until <see cref="BeforeLocalPlayer"/> replaces it at the player's login.
+	/// </summary>
+	private static readonly HashSet<(ulong SteamId, int SerialId)> Displaced = new();
 
 	/// <summary>The ready clients the last pass sent to, for <see cref="Status"/>.</summary>
 	private static readonly HashSet<ulong> Served = new();
@@ -247,7 +256,7 @@ public static class RemotePlayerMirrorService
 	/// player rule deleted, passed its own check in 3 runs out of 4 for exactly this reason.
 	/// </summary>
 	private static long m_passes;
-	private static long m_memberMessages, m_seededByArrival, m_selfAnnounced;
+	private static long m_memberMessages, m_seededByArrival, m_selfAnnounced, m_renamed, m_replacedByLogin;
 
 	public static void Update()
 	{
@@ -303,6 +312,7 @@ public static class RemotePlayerMirrorService
 		HashSet<(ulong, int)> present = Present(cluster, attached);
 
 		foreach (ulong gone in Held.Keys.Where(client => !attached.Contains(client)).ToArray()) Held.Remove(gone);
+		Displaced.RemoveWhere(key => !attached.Contains(key.SteamId));
 		foreach (ulong gone in Carried.Keys.Where(client => !attached.Contains(client)).ToArray()) Carried.Remove(gone);
 
 		// A player that left this node took its MyPlayer off every client here (RemovePlayer's OnPlayerRemoved).
@@ -336,6 +346,7 @@ public static class RemotePlayerMirrorService
 			// Nothing attached: nothing holds a phantom, so there is nothing to withdraw and
 			// nothing to remember. The next client to attach starts from an empty set.
 			Installed.Clear();
+			Displaced.Clear();
 			Pending.Clear();
 			return;
 		}
@@ -348,6 +359,19 @@ public static class RemotePlayerMirrorService
 		foreach (OnlinePlayersService.OnlinePlayerEntry entry in cluster)
 			if (string.Equals(entry.Node, Node, StringComparison.Ordinal) && attached.Contains(entry.SteamId))
 				wanted.Add((entry, true));
+
+		// SE-1372: a phantom whose player came back under another name is withdrawn whole, member and MyPlayer, so the
+		// loop below installs it again under the new name. The player is not attached here (desired holds none), so
+		// the withdrawal's broadcast cannot reach it.
+		foreach (var pair in desired)
+		{
+			if (!Installed.TryGetValue(pair.Key, out string shown) || shown == pair.Value.Name) continue;
+			MyLog.Default?.WriteLineAndConsole($"[ClusterPlugin] player mirror renamed steamId={pair.Key.Item1} serial={pair.Key.Item2} from='{shown}' to='{pair.Value.Name}' node={pair.Value.Node} (SE-1372)");
+			Remove(pair.Key);
+			Installed.Remove(pair.Key);
+			Forget(pair.Key);
+			m_renamed++;
+		}
 
 		int budget = MaxInstallsPerTick;
 		var lacking = new List<ulong>();
@@ -366,14 +390,14 @@ public static class RemotePlayerMirrorService
 			if (lacking.Count == 0 && !playerNeeded) continue;
 			budget--;
 			if (!Add(replication, lacking, playerNeeded, entry, isLocal)) continue;  // not delivered: next tick
-			if (!isLocal) Installed.Add(key);
+			if (!isLocal) Installed[key] = entry.Name;
 			foreach (ulong target in lacking) Held[target].Members.Add(key);
 			if (playerNeeded)
 				foreach (ulong target in targets) Held[target].Players.Add(key);   // a broadcast reached them all
 			m_memberMessages += lacking.Count;
 		}
 
-		foreach ((ulong, int) key in Installed.Where(key => !desired.ContainsKey(key)).ToArray())
+		foreach ((ulong, int) key in Installed.Keys.Where(key => !desired.ContainsKey(key)).ToArray())
 		{
 			// ARRIVED HERE: vanilla now owns the real member and MyPlayer under the SAME
 			// (SteamId, SerialId) as the phantom, so OnUserKicked cannot tell them apart and
@@ -381,6 +405,7 @@ public static class RemotePlayerMirrorService
 			if (local.Contains(key))
 			{
 				Installed.Remove(key);
+				Displaced.Add(key);
 				Pending.Remove(key);
 				continue;
 			}
@@ -395,6 +420,7 @@ public static class RemotePlayerMirrorService
 			if (attached.Contains(key.Item1))
 			{
 				Installed.Remove(key);
+				Displaced.Add(key);
 				Pending.Remove(key);
 				continue;
 			}
@@ -408,16 +434,39 @@ public static class RemotePlayerMirrorService
 			Remove(key);
 			Installed.Remove(key);
 			Pending.Remove(key);
-			foreach (Holdings holdings in Held.Values.Concat(Carried.Values))
-			{
-				holdings.Members.Remove(key);
-				holdings.Players.Remove(key);
-			}
+			Forget(key);
 		}
 
 		foreach (var pair in desired)
 			Pending.Remove(pair.Key);
 		m_passes++;
+	}
+
+	/// <summary>No client here holds this player's row any more: it was withdrawn.</summary>
+	private static void Forget((ulong SteamId, int SerialId) key)
+	{
+		foreach (Holdings holdings in Held.Values.Concat(Carried.Values))
+		{
+			holdings.Members.Remove(key);
+			holdings.Players.Remove(key);
+		}
+	}
+
+	/// <summary>
+	/// SE-1372: a player is about to get its real MyPlayer here (a fresh login, game thread), and vanilla's
+	/// OnPlayerCreated broadcast would leave the clients here with the phantom they already have, under the name it
+	/// was installed with. Withdraw the phantom's MyPlayer first. The member stays: vanilla sends its own member
+	/// message for the login, which replaces the name. The joining client gets the removal too, but it has no
+	/// MyPlayer of its own yet, so there is nothing for it to remove.
+	/// </summary>
+	internal static void BeforeLocalPlayer(ulong steamId, int serialId)
+	{
+		if (!Enabled || !Installed.Remove((steamId, serialId)) & !Displaced.Remove((steamId, serialId))) return;
+		Pending.Remove((steamId, serialId));
+		MyLog.Default?.WriteLineAndConsole($"[ClusterPlugin] player mirror phantom replaced by login steamId={steamId} serial={serialId} (SE-1372)");
+		MyMultiplayer.RaiseStaticEvent((IMyEventOwner s) => MyPlayerCollection.OnPlayerRemoved, steamId, serialId);
+		foreach (Holdings holdings in Held.Values.Concat(Carried.Values)) holdings.Players.Remove((steamId, serialId));
+		m_replacedByLogin++;
 	}
 
 	/// <summary>
@@ -636,10 +685,12 @@ public static class RemotePlayerMirrorService
 			carriedPending = Carried.Keys.OrderBy(client => client).ToArray(),
 			memberMessagesTotal = m_memberMessages,
 			seededByArrivalTotal = m_seededByArrival,
+			renamedTotal = m_renamed,
+			replacedByLoginTotal = m_replacedByLogin,
 			moderationForwardedTotal = Shared.Patches.GatewayModerationPatch.Forwarded,
 			moderationFailedTotal = Shared.Patches.GatewayModerationPatch.Failed,
 			selfAnnouncedTotal = m_selfAnnounced,
-			mirrored = Installed.OrderBy(key => key.SteamId).ThenBy(key => key.SerialId)
+			mirrored = Installed.Keys.OrderBy(key => key.SteamId).ThenBy(key => key.SerialId)
 				.Select(key => new { steamId = key.SteamId, serialId = key.SerialId }).ToArray()
 		};
 	}
