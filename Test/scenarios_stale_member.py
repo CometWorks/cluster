@@ -124,12 +124,18 @@ def p2_stale_member_first_login(bench) -> None:
     kept = _lines(bench, served, rf"session_request_after_login client={CLIENT_ID}\b")
     cleared = _lines(bench, served, rf"stale_member_cleared client={CLIENT_ID}\b")
     members = _members(bench, served) if served else []
+    # Before the fix the first connection got no world and the client gave up after 40 s; the headless Pulsar client
+    # then reconnects on its own and spawns, sebot bots and players did not.
+    connections = [line for name in ("node-1", "node-2")
+                   for line in _lines(bench, name, rf"Accepted client {CLIENT_ID} through cluster node link")]
     bench.record("first-login", {"node": node, "served": served, "late": late, "kept": kept, "cleared": cleared,
-                                 "userLeft": _lines(bench, served, r"User left"), "members": members})
+                                 "userLeft": _lines(bench, served, r"User left"), "connections": connections,
+                                 "members": members})
     _require(bench, "SETUP: the SessionRequest reached the game thread after CLIENT_CONNECTED", any(late.values()))
     bench.check("the node kept the member of the login whose SessionRequest came late", bool(kept), served)
     bench.check("no stale member was cleared on the first login", not cleared, "\n".join(cleared))
     bench.check("the client spawned", spawned)
+    bench.check("the client spawned on its first connection", len(connections) == 1, "\n".join(connections))
     bench.check("the node lists the client exactly once", members.count(CLIENT_ID) == 1, json.dumps(members))
     bench.exercised(route=f"{served}: CLIENT_CONNECTED before SessionRequest on a first login -> spawn")
 
