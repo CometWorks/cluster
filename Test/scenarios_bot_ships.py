@@ -22,6 +22,13 @@ Two identities stand for sebot traders: identities the player collection maps to
      removes it right before its partition would go offline again, "before offline": the partition is reaped and no
      offline save holds it. Without the stamp in the builder the wake would start its clock over and OFF would go
      offline again with the ship: the red arm.
+
+* ``P2-BOT-SHIP-RETURN`` (SE-1419) - node-1, node-2 and WA, cleanup in dry run. A bot ship spawned on node-1 is
+  stamped there and handed over to node-2 with its stamp. On node-2 it is sold to a player, so node-2 forgets it,
+  and it goes back to node-1 without a stamp while node-1 still remembers the old one (a grid that left is kept for
+  10 minutes). The return handover commits and node-1 logs no handover residual for it. Before the fix node-1 wrote
+  its old stamp into the import's builder, the round-trip gate found a mod storage entry the frozen source did not
+  have, and the handover aborted: the red arm (octahedron-test partitions 34201 and 35864, 2026-11-13).
 """
 from __future__ import annotations
 
@@ -30,7 +37,7 @@ import re
 import time
 
 from cluster import ClusterError, wait_until
-from scenarios_core import _lines
+from scenarios_core import _handover_url, _lines, _partitions
 from scenarios_grid_delete import _gone_for_good, _homes, _members, _offline_members, _require
 
 NODE = "node-1"
@@ -214,6 +221,73 @@ def p2_bot_ship_cleanup(bench) -> None:
     _gone_for_good(bench, "before-offline", {"OFF": grid_off}, {home_off})
     bench.exercised(grids=grids, off=grid_off, backups=[first, second, third, fourth, fifth])
 
+def _holder(bench, grid: int, nodes) -> tuple[str, int] | None:
+    """(node, partition) of the node partition holding the grid."""
+    for node in nodes:
+        for row in _partitions(bench, node):
+            if any(member.get("id") == grid for member in row.get("members") or []):
+                return node, int(row["id"])
+    return None
+
+
+def _move(bench, grid: int, source: str, target: str, nodes) -> tuple[dict | str, bool]:
+    """A clientless handover of the grid's partition; the answer and whether the grid then sits on the target."""
+    _, partition = _holder(bench, grid, nodes)
+    try:
+        answer = bench.cluster.post(_handover_url(bench, partition, clientless=True, source=source, target=target), timeout=300)
+    except ClusterError as error:
+        answer = str(error)
+    try:
+        wait_until(lambda: (_holder(bench, grid, nodes) or ("",))[0] == target, 60, f"grid {grid} on {target}")
+        return answer, True
+    except ClusterError:
+        return answer, False
+
+
+def p2_bot_ship_return(bench) -> None:
+    nodes = ("node-1", "node-2")
+    bench.start_cluster(nodes=[*nodes, "wa-1"])
+    selftest = bench.cluster.node("node-1", "/self-test?section=bot-ship-cleanup")
+    bench.check("node self-test bot-ship-cleanup (an arriving builder replaces the remembered stamp)", selftest.get("ok") is True,
+                json.dumps(selftest)[:300])
+    bench.record("config", bench.cluster.handover_config({
+        "offline.enabled": "false", "npc.sweepSeconds": "0", "gridDelete.linkSettleSeconds": "3",
+        "cleanup.botShips": "dryrun", "cleanup.botSteamIds": BOTS, "cleanup.botShipIdleMinutes": "60"}))
+    owners = {}
+    for name, steam in (("A", BOT_STEAM["A"]), ("player", PLAYER_STEAM)):
+        first = bench.cluster.node("node-1", f"/bot-ship-test-identity?name=Trader-{name}&steamId={steam}", "POST")
+        second = bench.cluster.node("node-2", f"/bot-ship-test-identity?name=Trader-{name}&steamId={steam}&identityId={first['identityId']}", "POST")
+        _require(bench, f"setup: {name} is the same identity with the same Steam ID on both nodes",
+                 first["identityId"] == second["identityId"] and first["steamId"] == second["steamId"] == steam, json.dumps([first, second]))
+        owners[name] = first["identityId"]
+    bench.record("owners", owners)
+    ship = int(bench.cluster.node("node-1", f"/trash-test-spawn?x={X}&y=0&z=0&blocks=8&npc=true&owner={owners['A']}", "POST")["grid"])
+    stamp = wait_until(lambda: (lambda s: s.get(ship, {}).get("lastUse"))(
+        {int(s["id"]): s for s in bench.cluster.node("node-1", "/bot-ships")["ships"]}), 60, "the ship stamped on node-1")
+    bench.record("stamp", {"ship": ship, "lastUse": stamp, "holder": _holder(bench, ship, nodes)})
+
+    answer, there = _move(bench, ship, "node-1", "node-2", nodes)
+    bench.record("handover-out", answer)
+    _require(bench, "setup: the ship moved to node-2", there, str(answer)[:300])
+    carried = wait_until(lambda: (lambda s: s.get(ship, {}).get("lastUse"))(
+        {int(s["id"]): s for s in bench.cluster.node("node-2", "/bot-ships")["ships"]}), 60, "the ship tracked on node-2")
+    bench.check("node-2 took the stamp the ship arrived with", carried == stamp, json.dumps({"node-1": stamp, "node-2": carried}))
+
+    time.sleep(5)  # past the import grace and gridDelete.linkSettleSeconds
+    bench.record("sale", bench.cluster.node("node-2", f"/bot-ship-test-owner?grid={ship}&owner={owners['player']}", "POST"))
+    wait_until(lambda: ship not in {int(s["id"]) for s in bench.cluster.node("node-2", "/bot-ships")["ships"]}, 30,
+               "the ship no bot ship on node-2")
+    time.sleep(12)  # one tracking pass (10 s): node-2 forgets the stamp
+    answer, back = _move(bench, ship, "node-2", "node-1", nodes)
+    bench.record("handover-back", answer)
+    residuals = _lines(bench, "node-1", rf"handover residual .*#{ship}/")
+    bench.record("residuals", residuals)
+    bench.check("the ship goes back to node-1 without a stamp: the handover commits, no residual on its storage",
+                back and not residuals, json.dumps({"back": back, "residuals": residuals[:4], "answer": str(answer)[:300]}))
+    bench.exercised(ship=ship, stamp=stamp)
+
+
 SCENARIOS_BOT_SHIPS = {
     "P2-BOT-SHIP-CLEANUP": (p2_bot_ship_cleanup, "SE-1316: ships bots left go after a backup that holds them unused, dry run first and capped; in-use and player ships stay; offline partitions too", "3"),
+    "P2-BOT-SHIP-RETURN": (p2_bot_ship_return, "SE-1419: a bot ship back on a node that remembers its old stamp arrives without one and its handover commits", "3"),
 }

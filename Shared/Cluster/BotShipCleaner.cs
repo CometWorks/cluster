@@ -82,10 +82,22 @@ internal static class BotShipCleaner
 	{
 		if (grid == null || builder == null || !ClusterRuntime.IsClustered) return;
 		string carried = BlockBuilderEntry.Read(builder, Key);
-		if (carried == null) return;
-		grid.Storage?.RemoveValue(Key); // unregistered: vanilla would log it on every save and drop it
+		if (carried != null) grid.Storage?.RemoveValue(Key); // unregistered: vanilla would log it on every save and drop it
+		Arrived(builder.EntityId, carried);
+	}
+
+	/// <summary>
+	/// The arriving builder's stamp replaces whatever this node remembers of the grid. SE-1419: a grid that left this node
+	/// stays in <see cref="m_lastUse"/> for <see cref="MissingSeconds"/>. When it came back within that time without a
+	/// stamp (the node it was on had forgotten it), the old entry went into the import's builder, the frozen source had
+	/// none, and the round-trip gate blocked the partition (octahedron-test partitions 34201 and 35864, 2026-11-13).
+	/// </summary>
+	internal static void Arrived(long entityId, string carried)
+	{
 		if (Active && long.TryParse(carried, NumberStyles.Integer, CultureInfo.InvariantCulture, out long lastUse))
-			m_lastUse[builder.EntityId] = lastUse;
+			m_lastUse[entityId] = lastUse;
+		else
+			m_lastUse.TryRemove(entityId, out _);
 	}
 
 	/// <summary>MyCubeGrid.GetObjectBuilder postfix: write the stamp of a tracked bot ship into the builder.</summary>

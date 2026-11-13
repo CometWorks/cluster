@@ -6,8 +6,8 @@ namespace ClusterPlugin;
 internal static partial class ClusterSelfTest
 {
 	/// <summary>
-	/// SE-1316 bot ship cleanup, the pure parts: the abandonment rule, the Steam ID list knob and the stamp entry on a
-	/// grid builder.
+	/// SE-1316 bot ship cleanup, the pure parts: the abandonment rule, the Steam ID list knob, the stamp entry on a grid
+	/// builder, and what an arriving builder does to the stamp this node remembers.
 	/// </summary>
 	private static void BotShipCleanupRules()
 	{
@@ -36,5 +36,13 @@ internal static partial class ClusterSelfTest
 		BlockBuilderEntry.Write(builder, BotShipCleaner.Key, "1762700000");
 		Check(BlockBuilderEntry.Read(builder, BotShipCleaner.Key) == "1762700000" && BlockBuilderEntry.Read(new MyObjectBuilder_CubeGrid(), BotShipCleaner.Key) == null,
 			"the stamp rides the grid's builder");
+		// SE-1419: a grid back on a node that still remembers it from its last visit takes the stamp it arrives with, none too.
+		const long returned = -1419;
+		BotShipCleaner.SetLastUse(returned, use);
+		BotShipCleaner.Arrived(returned, null);
+		Check(BotShipCleaner.LastUse(returned) == null, "a grid that arrives without a stamp drops the one this node remembers");
+		BotShipCleaner.SetLastUse(returned, use);
+		BotShipCleaner.Arrived(returned, "not a number");
+		Check(BotShipCleaner.LastUse(returned) == null, "an unreadable stamp counts as none");
 	}
 }
