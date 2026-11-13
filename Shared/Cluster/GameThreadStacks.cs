@@ -48,16 +48,16 @@ internal static class GameThreadStacks
 		string report = path + ".crashreport.json";
 		try
 		{
-			RequestCrashReport(path);
+			const uint normalDump = 1, crashReportOnly = 8;
+			RequestDump(path, normalDump, crashReportOnly);
 			return "stacks:\n" + Render(File.ReadAllBytes(report), gameThreadId);
 		}
 		finally { File.Delete(report); }
 	}
 
-	/// <summary>The diagnostics IPC's GenerateCoreDump2 with CrashReportOnly. Answers once the tool has finished.</summary>
-	private static void RequestCrashReport(string path)
+	/// <summary>The diagnostics IPC's GenerateCoreDump2. Answers once the tool has finished.</summary>
+	internal static void RequestDump(string path, uint dumpType, uint flags)
 	{
-		const uint normalDump = 1, crashReportOnly = 8;
 		const byte dumpCommandSet = 1, generateCoreDump2 = 2, serverCommandSet = 0xFF, serverOk = 0;
 		string socketPath = Directory.EnumerateFiles(Path.GetTempPath(), "dotnet-diagnostic-" + Environment.ProcessId + "-*-socket").FirstOrDefault()
 			?? throw new FileNotFoundException("no diagnostics socket");
@@ -66,8 +66,8 @@ internal static class GameThreadStacks
 		{
 			writer.Write(path.Length + 1);
 			writer.Write(Encoding.Unicode.GetBytes(path + '\0'));
-			writer.Write(normalDump);
-			writer.Write(crashReportOnly);
+			writer.Write(dumpType);
+			writer.Write(flags);
 		}
 		using var message = new MemoryStream();
 		using (var writer = new BinaryWriter(message, Encoding.ASCII, leaveOpen: true))
@@ -86,7 +86,7 @@ internal static class GameThreadStacks
 		var response = new byte[20];
 		stream.ReadExactly(response);
 		if (response[16] != serverCommandSet || response[17] != serverOk)
-			throw new IOException("the runtime refused the crash report, code 0x" + response[17].ToString("X2", CultureInfo.InvariantCulture));
+			throw new IOException("the runtime refused the dump, code 0x" + response[17].ToString("X2", CultureInfo.InvariantCulture));
 	}
 
 	/// <summary>The threads that run managed code, the game thread first. A run of frames in one native module is one line.</summary>

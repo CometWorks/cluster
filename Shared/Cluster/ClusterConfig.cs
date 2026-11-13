@@ -65,6 +65,11 @@ public static class ClusterConfig
 		// SE-1346, read by the WORLD AUTHORITY: seconds between its Periodic global saves (default 60). Tests set a few
 		// seconds so global save retention can be watched without waiting minutes. Read per check, so a change applies at once.
 		["wa.globalSaveSeconds"] = "60",
+		// SE-1382, read by the WORLD AUTHORITY every 2 s: one heap dump (dotnet-dump readable) when its managed heap first passes
+		// heapDumpMb, and exit 6 when it passes heapLimitMb, so Host restarts it before it takes the host's memory. Its heap is
+		// 1.2-1.7 GB in a 100-trader soak; the one that grew to 67 GB froze the host. 0 = off.
+		["wa.heapDumpMb"] = "6144",
+		["wa.heapLimitMb"] = "24576",
 		// HandoverDelta.md: the gateway presyncs the partition onto the target before the freeze and
 		// the capture carries a field-level patch. presync.enabled is read by the GATEWAY (same
 		// document); the nodes read ttlSeconds (baseline / dormant-copy lifetime) and the applier

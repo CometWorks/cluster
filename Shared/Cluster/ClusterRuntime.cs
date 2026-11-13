@@ -303,6 +303,7 @@ public static class ClusterRuntime
 		{ IsBackground = true, Name = "ClusterGameThreadWatcher" }.Start();
 		if (OperatingSystem.IsLinux())
 			new Thread(WatchLongFrames) { IsBackground = true, Name = "ClusterLongFrameWatcher" }.Start();
+		HeapWatch.Start();
 	}
 
 	/// <summary>SE-1228: one long-frame stack capture per process this often at most.</summary>
