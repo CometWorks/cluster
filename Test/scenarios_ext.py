@@ -1880,6 +1880,48 @@ def p3_hnd_dummy(bench) -> None:
     bench.exercised(fixture="target dummy", legs="intact, destroyed", directions="both per leg")
 
 
+def p3_hnd_stator(bench) -> None:
+    """SE-1416 - a headless rotor whose live LimitsActive is stale crosses the §6.10 gate. Every server
+    load re-derives the flag (MyMotorStator.Init), so the import may disagree with the frozen source;
+    on octahedron-test that blocked four partitions until a rotation drain timed out. Each leg makes the
+    flag stale on the source, hands the partition over and asserts zero residuals from the gate's log."""
+    from scenarios import _force_handover
+    bench.start_cluster()
+    bench.quiesce()
+    bench.cluster.post("/automatic/pause")
+    try:
+        spawned = bench.cluster.node("node-1", "/rich-test-spawn?kind=rotorrig&x=890000&y=0&z=0", "POST")
+        bench.record("rotor-fixture", spawned)
+        grid = spawned["grids"][0]["grid"]
+        partition = _wait_partition(bench, "node-1", grid)
+        for source, target in (("node-1", "node-2"), ("node-2", "node-1")):
+            bench.quiesce(timeout=120)
+            stale = bench.cluster.node(source, f"/rich-test-act?grid={grid}&action=stale-limits", "POST")
+            bench.record(f"{source}-stale-limits", stale)
+            try:
+                _force_handover(bench, source, target, partition)
+                _wait_arrival(bench, partition, target, timeout=120)
+                arrived = True
+            except ClusterError as error:
+                arrived = False
+                bench.record(f"{source}-{target}-error.txt", str(error))
+            residuals = _gate_residuals(bench, target, partition)
+            lines = _residual_lines(bench, partition)
+            bench.record(f"{source}-{target}-residuals.txt", "\n".join(lines))
+            bench.check(f"{source}->{target}: a stale LimitsActive {stale['limitsActive']} passes the §6.10 gate with zero residuals",
+                        arrived and residuals == 0, f"residuals={residuals} " + " | ".join(lines[-4:]))
+            if not arrived:
+                break
+            bench.record(f"{target}-rotor", bench.cluster.node(target, f"/rich-test-state?grid={grid}")["rotors"])
+        bench.record("handover-diff-census", _handover_diff_census(bench))
+    finally:
+        try:
+            bench.cluster.post("/automatic/resume")
+        except ClusterError:
+            pass
+    bench.exercised(fixture="headless rotor, stale LimitsActive", directions="both")
+
+
 SCENARIOS_EXT = {
     "T0266-HVK-02": (t0266_hvk_02, "T-0266 harness: real release paths under the Havok body audit", "1"),
     "T0266-HVK-03": (t0266_hvk_03, "T-0266 harness: cluster release/offline paths in a procedural world", "1"),
@@ -1887,6 +1929,7 @@ SCENARIOS_EXT = {
     "P3-HND-01": (p3_hnd_01, "round-trip fidelity on rich content, both directions, both modes", "3"),
     "P3-HND-02": (p3_hnd_02, "transient interaction-state matrix", "3"),
     "P3-HND-DUMMY": (p3_hnd_dummy, "SE1-0225: a target dummy round-trips the gate, intact and destroyed", "3"),
+    "P3-HND-STATOR": (p3_hnd_stator, "SE-1416: a headless rotor's stale LimitsActive passes the gate", "3"),
     "P3-HND-03": (p3_hnd_03, "validation-abort containment and HandoverBlocked", "3"),
     "P3-INF-01": (p3_inf_01, "run-root hygiene and stale-registry refusal", "2"),
     "P3-REC-01": (p3_rec_01, "fenced node fails fast, cluster reports it", "3"),

@@ -18,6 +18,25 @@ internal static partial class ClusterSelfTest
 		HandoverDriftSuitOxygen();
 		HandoverDriftInventoryLoad();
 		HandoverDriftComponentOrder();
+		HandoverDriftStatorLimits();
+	}
+
+	/// <summary>
+	/// SE-1416: a headless stator's saved LimitsActive against the value MyMotorStator.Init re-derives. The values are
+	/// partition 36482's SmallStator (octahedron-test, 2026-11-13); its limits and angle must stay compared.
+	/// </summary>
+	private static void HandoverDriftStatorLimits()
+	{
+		string Stator(string limitsActive, string maxAngle = "6.2831855") => DriftHead
+			+ "<MyObjectBuilder_EntityBase xsi:type=\"MyObjectBuilder_CubeGrid\"><EntityId>1</EntityId><CubeBlocks>"
+			+ "<MyObjectBuilder_CubeBlock xsi:type=\"MyObjectBuilder_MotorStator\"><SubtypeName>SmallStator</SubtypeName><EntityId>2</EntityId>"
+			+ "<TopBlockId xsi:nil=\"true\" /><MinAngle>6.2831855</MinAngle><MaxAngle>" + maxAngle + "</MaxAngle>"
+			+ "<CurrentAngle>6.283215</CurrentAngle><LimitsActive>" + limitsActive + "</LimitsActive><RotorLock>false</RotorLock>"
+			+ "</MyObjectBuilder_CubeBlock></CubeBlocks></MyObjectBuilder_EntityBase>" + DriftTail;
+		List<string> residuals = ImportRoundTrip.ResidualsOfXml(Stator("false"), Stator("true"));
+		Assert(residuals.Count == 0, "a stator's LimitsActive that Init re-derives was reported: " + DriftReport(residuals));
+		residuals = ImportRoundTrip.ResidualsOfXml(Stator("false"), Stator("false", "3.1415927"));
+		Assert(residuals.Count == 1 && residuals[0].Contains("/MaxAngle: "), "a LOST stator limit must stay a residual, got: " + DriftReport(residuals));
 	}
 
 	/// <summary>

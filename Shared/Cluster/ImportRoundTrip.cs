@@ -550,6 +550,14 @@ internal static class ImportRoundTrip
 		// defers that until the partition thaws and the grid is live. Comparing it here asks the target to
 		// have finished work the freeze exists to postpone.
 		document.Descendants("ParentEntityId").Remove();
+		// SE-1416: a rotor's or hinge's LimitsActive is re-derived by every server load, so the saved value is not state.
+		// MyMotorStator.Init reads it, then SetSafeAngles sets m_limitsActive = false and TryActivateLimits recomputes it
+		// from the limits, the angle and RotorLock. A live stator only recomputes it on a limit change or while it has a
+		// top, so a headless one keeps whatever an earlier attach left. On octahedron-test 2026-11-13 a headless
+		// SmallStator (limits 2pi..2pi, angle 6.283215) saved false and imported true, and blocked partitions 36482,
+		// 36511, 36513 and 36516 until a rotation drain timed out; a locked headless SmallHinge saved true and imported
+		// false on 36991. The limits, the angle and the lock stay compared.
+		document.Descendants("LimitsActive").Remove();
 		// An NPC grid's claim timer is queued on import, not stored. MyCubeGrid.Init calls
 		// RequestSetFramesElapsed, which only puts the value in m_NPCGridsChanges;
 		// MyNPCGridClaimSessionComponent.UpdateAfterSimulation drains that on a 60-frame boundary, so a
