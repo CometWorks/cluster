@@ -74,7 +74,10 @@ The shell harness these scenarios replace (`run-cluster.sh` and its lanes) was r
 
 1. Install the dedicated server (SteamCMD app 298740) and the game client (Steam) at the same
    build. Install Magnetar (`MagnetarForLinux-*.7z`) and Pulsar; the Pulsar `Interim/` profile
-   must enable the `remote` and `direct-transport` client plugins.
+   must enable the `remote` and `direct-transport` client plugins. Load Remote from a dev folder on
+   the `main` branch of `CometWorks/remote` and keep it current: some scenarios read fields that
+   newer Remote versions add (P2-CHAT-NAMES needs the chat receipts' `Sender`, PR #54). A checkout
+   left at an older commit fails those at setup.
 2. Install the .NET 10 SDK, Python 3.11+ and `uv`. Clone this repository and run `uv sync` in
    `Test/`. Check out the se-remote skill (`CometWorks/remote`, `skills/se-remote`) next to the
    Remote plugin the Pulsar profile loads.
