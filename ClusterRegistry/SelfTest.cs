@@ -210,6 +210,7 @@ internal static partial class SelfTest
         ("balance-residence-size", TestBalanceResidenceSize),
         ("balance-target-budget", TestBalanceTargetBudget),
         ("balance-load-floor", TestBalanceLoadFloor),
+        ("balance-floor-clients", TestBalanceFloorClients),
         ("balance-peak-drop", TestBalancePeakDrop),
         ("balance-ratio-dip", TestBalanceRatioDip),
         ("balance-heavy-control", TestBalanceHeavyControl),
