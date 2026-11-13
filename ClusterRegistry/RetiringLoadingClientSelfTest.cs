@@ -29,11 +29,11 @@ internal static partial class SelfTest
         );
         Check(
             loading.Count == 1 && loading["node-3"].SequenceEqual([aether]),
-            "a client still loading on the retiring node holds it; a ready one and one loading elsewhere do not"
+            "a client still loading on the retiring node holds it; a settled one and one loading elsewhere do not"
         );
         Check(
             DirectGateway.LoadingClientsByNode([(aether, true, three)], retiring).Count == 0,
-            "once world-ready it holds nothing"
+            "once settled it holds nothing"
         );
 
         string directory = Directory.CreateTempSubdirectory("retiring-loading-selftest-").FullName;
@@ -66,7 +66,7 @@ internal static partial class SelfTest
             ];
             Check(
                 registry.SettleRetiring(owning).SequenceEqual(["node-3"]),
-                "it closes once the client is world-ready"
+                "it closes once the client is world-ready and settled"
             );
         }
         finally

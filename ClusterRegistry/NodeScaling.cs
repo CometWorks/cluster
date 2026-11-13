@@ -267,13 +267,16 @@ internal sealed partial class DirectGateway
         HashSet<string> owning = [.. reports.Where(x => x.Report.Partitions.Length != 0).Select(x => x.Node.Node)];
         // SE-1448: a client still loading the world on a retiring node is in no partition its report lists (a first
         // join has none until it spawns), so the node read as owning nothing, was closed and killed under the load:
-        // octahedron-test 2026-11-13 20:34Z, AetherAdept on local-node-3. The node waits until the client is world-ready.
+        // octahedron-test 2026-11-13 20:34Z, AetherAdept on local-node-3. The node waits until the client is world-ready
+        // and past the post-ready settle (T-0238), the same rule the drains apply to a client-bearing move.
+        DateTimeOffset now = DateTimeOffset.UtcNow;
         foreach ((string node, ulong[] clients) in LoadingClientsByNode(
-                     _clients.Values.Select(x => (x.ClientId, x.WorldReady, x.BackendEndpoint)), RetiringBackends(registry, retiring)))
+                     _clients.Values.Select(x => (x.ClientId, x.WorldReady && now - x.WorldReadyAt >= PostReadySettle, x.BackendEndpoint)),
+                     RetiringBackends(registry, retiring)))
         {
             owning.Add(node);
             if (PassLogDue(_passFailureLogged, "loading|" + node + "|" + string.Join(",", clients), DateTime.UtcNow))
-                Console.WriteLine($"Scale: retiring node {node} owns nothing but client(s) {string.Join(", ", clients)} are still loading the world on it; it closes once they are world-ready");
+                Console.WriteLine($"Scale: retiring node {node} owns nothing but client(s) {string.Join(", ", clients)} are still loading the world on it; it closes once they are world-ready and settled");
         }
         foreach (string node in registry.SettleRetiring(owning))
         {
@@ -349,12 +352,12 @@ internal sealed partial class DirectGateway
         registry.Nodes().Where(x => retiring.Contains(x.Node) && x.State == NodeState.Active && x.Endpoint != null)
             .Select(x => (x.Node, BackendOf(x)));
 
-    /// <summary>SE-1448: the nodes among <paramref name="nodes"/> a session is bound to that has not sent CLIENT_READY
-    /// yet, with those clients in id order.</summary>
-    internal static Dictionary<string, ulong[]> LoadingClientsByNode(IEnumerable<(ulong Client, bool WorldReady, IPEndPoint Backend)> sessions,
+    /// <summary>SE-1448: the nodes among <paramref name="nodes"/> a session is bound to that has not settled (not world-ready,
+    /// or ready under the post-ready settle), with those clients in id order.</summary>
+    internal static Dictionary<string, ulong[]> LoadingClientsByNode(IEnumerable<(ulong Client, bool Settled, IPEndPoint Backend)> sessions,
         IEnumerable<(string Node, IPEndPoint Backend)> nodes)
     {
-        (ulong Client, bool WorldReady, IPEndPoint Backend)[] loading = [.. sessions.Where(x => !x.WorldReady)];
+        (ulong Client, bool Settled, IPEndPoint Backend)[] loading = [.. sessions.Where(x => !x.Settled)];
         Dictionary<string, ulong[]> result = new(StringComparer.Ordinal);
         foreach ((string node, IPEndPoint backend) in nodes)
             if (loading.Where(x => x.Backend.Equals(backend)).Select(x => x.Client).Order().ToArray() is { Length: > 0 } clients)
