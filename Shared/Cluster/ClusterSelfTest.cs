@@ -53,6 +53,7 @@ internal static partial class ClusterSelfTest
 		("fast-tick-detector", FastTickDetectorRules),
 		("fast-flap-monitor", FastFlapMonitorRules),
 		("startup-conflict", StartupConflict),
+		("fenced-id-collision", FencedIdCollision),
 		("double-captured-pilot", DoubleCapturedPilot),
 		("nested-pilot-live-elsewhere", NestedPilotLiveElsewhere),
 		("census-seated-pilots", CensusSeatedPilots),
@@ -665,6 +666,37 @@ internal static partial class ClusterSelfTest
 		Assert(Describe(9, prefix + "Partition 3 is generation 4, not 8").Contains("investigate"), "a registry behind the save is a real conflict");
 		Assert(Describe(2, prefix + "Partition 3 is owned by live node 'node-2'").Contains("investigate"), "another refusal is flagged");
 		Assert(!Describe(1, prefix + "Partition 3 is generation 15, not 0").Contains("investigate"), "a stale copy is not flagged");
+	}
+
+	/// SE-1461: a startup-fenced seed whose id another node minted for a partition of its own keeps its content (it takes a
+	/// fresh id); a stale copy of content that moved on is still purged. Red arm: cluster 0.3.11 purged every fenced
+	/// partition owned elsewhere, which closed Gamma Station on the nav bench (node-2 held id 5, a client's layout).
+	private static void FencedIdCollision()
+	{
+		PartitionPersistence.FencedVerdict Classify(bool retired, string owner, long row, uint local, long[] recorded, HashSet<long> live, bool answered)
+			=> PartitionPersistence.ClassifyFenced(retired, owner, row, local, "node-1", recorded, live, answered);
+		long[] station = { 128425315645744115 };
+		var census = new HashSet<long> { 72057594088263302, 72057594088263304 };   // node-2's client characters
+		Assert(Classify(false, "node-2", 1, 1, station, census, true) == PartitionPersistence.FencedVerdict.Collision,
+			"a fresh row elsewhere that holds none of the loaded members is an id collision");
+		census.Add(station[0]);
+		Assert(Classify(false, "node-2", 1, 1, station, census, true) == PartitionPersistence.FencedVerdict.Stale,
+			"the members live on the owner: a stale duplicate, purged");
+		census.Remove(station[0]);
+		Assert(Classify(false, "node-2", 3, 1, station, census, true) == PartitionPersistence.FencedVerdict.Stale,
+			"a row that moved on (generation 3) is a stale copy");
+		Assert(Classify(false, "node-2", 1, 1, station, census, false) == PartitionPersistence.FencedVerdict.Stale,
+			"no answer from the owner proves nothing: stale");
+		Assert(Classify(false, "node-2", 1, 1, station, null, true) == PartitionPersistence.FencedVerdict.Stale,
+			"no census proves nothing: stale");
+		Assert(Classify(false, "node-2", 1, 1, System.Array.Empty<long>(), census, true) == PartitionPersistence.FencedVerdict.Stale,
+			"no recorded members: stale");
+		Assert(Classify(true, "node-2", 1, 1, station, census, true) == PartitionPersistence.FencedVerdict.Stale,
+			"a retired or offline row is stale");
+		Assert(Classify(false, null, 1, 1, station, census, true) == PartitionPersistence.FencedVerdict.Kept,
+			"an unowned row keeps the content");
+		Assert(Classify(false, "node-1", 1, 1, station, census, true) == PartitionPersistence.FencedVerdict.Kept,
+			"this node's own row keeps the content");
 	}
 
 	/// T-0186: the ship-antenna predicate. The ticket is about which ships keep their antenna, so the
