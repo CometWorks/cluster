@@ -5024,7 +5024,7 @@ internal sealed partial class PartitionPersistence
 
 	/// <summary>
 	/// True only when the registry names THIS node as the partition's owner. The inverse of
-	/// <see cref="FencedPartitionOwnedElsewhere"/> is not good enough for T-0207's retry: that one
+	/// <see cref="ClassifyFencedPartition"/> is not good enough for T-0207's retry: that one
 	/// also answers false for an UNOWNED partition, and an unowned partition is the case ordinary
 	/// recovery already handles correctly. Any doubt - unknown partition, retired, registry
 	/// unreachable - answers false and leaves the existing fence in place.
@@ -5135,8 +5135,6 @@ internal sealed partial class PartitionPersistence
 			&& !recorded.Any(liveElsewhere.Contains) ? FencedVerdict.Collision : FencedVerdict.Stale;
 	}
 
-	private bool FencedPartitionOwnedElsewhere(ulong partitionId) => ClassifyFencedPartition(partitionId) != FencedVerdict.Kept;
-
 	private FencedVerdict ClassifyFencedPartition(ulong partitionId)
 	{
 		try
@@ -5227,12 +5225,10 @@ internal sealed partial class PartitionPersistence
 				if (m_registryReady
 					&& m_fencedRegistrations.AddOrUpdate(save.PartitionId, 1, (_, strikes) => strikes + 1) == 3)
 				{
-					FencedVerdict verdict = m_startupFenced.ContainsKey(save.PartitionId) || m_assignedMembers.ContainsKey(save.PartitionId)
-						? ClassifyFencedPartition(save.PartitionId)
-						: FencedPartitionOwnedElsewhere(save.PartitionId) ? FencedVerdict.Stale : FencedVerdict.Kept;
+					FencedVerdict verdict = ClassifyFencedPartition(save.PartitionId);
 					if (verdict != FencedVerdict.Kept)
 					{
-						m_startupFenced.TryRemove(save.PartitionId, out _);
+						if (verdict == FencedVerdict.Collision) m_startupFenced.TryRemove(save.PartitionId, out _);
 						EnqueueFenced(save.PartitionId, verdict);
 					}
 					else
