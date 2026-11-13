@@ -131,6 +131,8 @@ internal sealed partial class PartitionPersistence
 	private readonly string m_node;
 	private readonly string m_endpoint;
 	private readonly int m_catalogSlot;
+	/// <summary>SE-1443: every partition id of the world's catalog seed, all slots (see <see cref="IsLocallyKnownPartitionId"/>).</summary>
+	private readonly HashSet<ulong> m_seedIds;
 	private readonly string m_controlEndpoint;
 	private readonly bool m_warmRecovery;
 	private readonly int m_maxPartitions;
@@ -277,6 +279,7 @@ internal sealed partial class PartitionPersistence
 		m_node = Environment.GetEnvironmentVariable(NodeEnvironmentVariable);
 		m_endpoint = Environment.GetEnvironmentVariable(EndpointEnvironmentVariable);
 		int.TryParse(Environment.GetEnvironmentVariable(CatalogSlotEnvironmentVariable), out m_catalogSlot);
+		m_seedIds = CatalogSeedIds(world);
 		// T-0321: the same advertised endpoint the node registers (ClusterRuntime.AdvertisedControlEndpoint).
 		m_controlEndpoint = int.TryParse(Environment.GetEnvironmentVariable(ControlPortEnvironmentVariable), out int controlPort)
 			? ClusterProtocol.ClusterNet.AdvertisedControlEndpoint(Environment.GetEnvironmentVariable("CLUSTER_NODE_CONTROL_ENDPOINT"),
@@ -1554,7 +1557,22 @@ internal sealed partial class PartitionPersistence
 	private long m_allocationRetryLoggedTicks;
 	private long m_topologyRetryLoggedTicks;
 
-	private bool IsLocallyKnownPartitionId(ulong id) => m_state.ContainsKey(id) || m_partitions.IsKnownId(id);
+	/// <summary>
+	/// SE-1443: an id of the catalog seed counts as known though another slot's node holds it. A fresh registry hands
+	/// out ids from 1 and learns a seed id only when its node's startup claim lands, so a reserve filled first held
+	/// the other node's seed ids: node-1 split a ship off into id 8 a minute after node-2 had claimed and merged
+	/// away its seed partition 8, the registry refused the split and node-1 fenced (cluster 0.3.11).
+	/// </summary>
+	private bool IsLocallyKnownPartitionId(ulong id) => m_state.ContainsKey(id) || m_seedIds.Contains(id) || m_partitions.IsKnownId(id);
+
+	/// <summary>SE-1443: the ids of every partition in &lt;world&gt;/catalog-seed.json, every slot; none without one.</summary>
+	internal static HashSet<ulong> CatalogSeedIds(string world)
+	{
+		string catalog = string.IsNullOrWhiteSpace(world) ? null : Path.Combine(Path.GetFullPath(world), "catalog-seed.json");
+		if (catalog == null || !File.Exists(catalog)) return new HashSet<ulong>();
+		using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(catalog));
+		return document.RootElement.GetProperty("partitions").EnumerateArray().Select(entry => entry.GetProperty("id").GetUInt64()).ToHashSet();
+	}
 
 	/// <summary>T-0252: entity ids of the characters seated in cockpits of the given member grids.</summary>
 	private static long[] SeatedPilots(IEnumerable<long> members)
@@ -1734,6 +1752,24 @@ internal sealed partial class PartitionPersistence
 				// fence and stop. The layouts stay locked: the process is exiting and discarding ownership.
 				FenceForRejection((change == null ? "partition claim rejected: " : "topology WAL apply rejected: ") + operation.Error);
 				return;
+			}
+			if (operation.Outcome == RegistryApplyQueue.Outcome.IdRefused)
+			{
+				// SE-1443: the registry refused a new output id of this change (PartitionIdConflictException) and changed
+				// nothing. Only that id is bad, not the node: revert the change and what is queued behind it as for a
+				// refused transfer, and the next pass makes it again with a fresh id from the reserve. The refused id left
+				// the reserve when it was taken and is never offered again.
+				RegistryApplyQueue.Operation[] unsent = m_apply.Abandon();
+				PartitionMembership.Change[] refused = unsent.Prepend(operation).Where(x => x.Change != null).Select(x => x.Change).ToArray();
+				ulong[] unclaimed = unsent.Where(x => x.Change == null).Select(x => x.Claim).ToArray();
+				m_partitions.RevertTopology(refused, unclaimed);
+				m_apply.Finish(operation);
+				foreach (RegistryApplyQueue.Operation other in unsent) m_apply.Finish(other);
+				MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] topology " + (change.Split ? "Split" : "Merge") + " refused for its new partition id, reverted "
+					+ refused.Length + " change(s) in memory, dissolved unclaimed layout(s) [" + string.Join(",", unclaimed)
+					+ "], the next pass makes it again with a fresh id: inputs=" + string.Join(",", change.Inputs)
+					+ " outputs=" + string.Join(",", change.Outputs.Select(x => x.Id)) + " " + SecretRedactor.Redact(operation.Error ?? ""));
+				continue;
 			}
 			if (operation.Outcome == RegistryApplyQueue.Outcome.TransferRefused)
 			{

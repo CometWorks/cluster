@@ -3699,7 +3699,7 @@ internal sealed partial class GatewayRegistry : IDisposable
             foreach (ulong id in outputIds.Where(x => inputs.All(y => y.Partition != x)))
                 if (!_state.AllocatedPartitionIds.Contains(id) || _state.Partitions.TryGetValue(id, out PartitionOwnership? allocatedOwner)
                     && (allocatedOwner.Node != node || allocatedOwner.Epoch != epoch || allocatedOwner.Generation != 1))
-                    throw new RegistryConflictException($"Partition {id} was not allocated or is already in use");
+                    throw new PartitionIdConflictException($"Partition {id} was not allocated or is already in use");
 
             DateTimeOffset expires = _clock() + _leaseTtl;
             foreach (PartitionVersion input in inputs)
@@ -6316,6 +6316,11 @@ internal sealed class AdminOperationRecord
     public string? ErrorMessage { get; set; }
 }
 internal class RegistryConflictException(string message) : InvalidOperationException(message);
+
+/// <summary>SE-1443: a new output id of a topology apply is not the node's to use: never allocated, or already a row (another
+/// node's seed partition claimed under it). Thrown before anything changes. A 409 like any conflict; its name in the answer
+/// lets the node revert that change and make it again with a fresh id (RegistryApplyQueue.Outcome.IdRefused) instead of fencing.</summary>
+internal sealed class PartitionIdConflictException(string message) : RegistryConflictException(message);
 
 /// <summary>T-0354b: a handover refused because a registry request about the partition is unanswered on its source (a new
 /// layout's id claim, a topology apply). Nothing was frozen; DirectGateway.WhenRegistryApplied retries a requested move.</summary>

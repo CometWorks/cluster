@@ -361,6 +361,7 @@ internal static partial class SelfTest
         ("lineage-cover-walk", TestLineageCoverWalk),
         ("lineage-same-pass", TestLineageSamePass),
         ("split-keeps-input-id", TestSplitKeepsInputId),
+        ("partition-id-claimed-elsewhere", TestPartitionIdClaimedElsewhere),
         ("topology-transfer", TestTopologyTransfer),
         ("offline-partitions", TestOfflinePartitions),
         ("remote-use", TestRemoteUse),

@@ -38,6 +38,12 @@ internal sealed class RegistryApplyQueue
 		/// proposing transfers; no fence, no hold.
 		/// </summary>
 		TransferRefused,
+		/// <summary>
+		/// SE-1443: a topology apply refused for one of its new output ids (the registry's PartitionIdConflictException:
+		/// not allocated, or already another node's partition). Nothing changed; revert it and what is queued behind it
+		/// as for <see cref="TransferRefused"/>, and the next pass makes it again with a fresh id. No fence, no hold.
+		/// </summary>
+		IdRefused,
 	}
 
 	internal enum Progress { Idle, Unavailable, Answered }
@@ -298,11 +304,16 @@ internal sealed class RegistryApplyQueue
 	/// refused with "is Closed", is the registry phasing the node out (T-0048: not a fence); any other 4xx is
 	/// definitive (ClusterRuntime.IsDefinitiveRejection); everything else - no answer, a timeout, 5xx - is retried.
 	/// T-0339 (design C): a 400 on a <paramref name="transfer"/> is <see cref="Outcome.TransferRefused"/>, not a fence.
+	/// SE-1443: a topology apply's 409 naming PartitionIdConflictException is <see cref="Outcome.IdRefused"/>, not a fence.
 	/// </summary>
+	/// <summary>SE-1443: the registry's exception type name in its 409 body (GatewayRegistry.PartitionIdConflictException).</summary>
+	internal const string PartitionIdConflict = "PartitionIdConflictException";
+
 	public static Outcome Classify(bool claim, Exception exception, bool transfer = false)
 	{
 		if (exception is not HttpRequestException { StatusCode: { } status }) return Outcome.Unavailable;
 		if (transfer && !claim && status == HttpStatusCode.BadRequest) return Outcome.TransferRefused;
+		if (!claim && status == HttpStatusCode.Conflict && exception.Message.Contains(PartitionIdConflict, StringComparison.Ordinal)) return Outcome.IdRefused;
 		if (status == HttpStatusCode.Conflict && (claim || exception.Message.Contains(" is Closed", StringComparison.Ordinal)))
 			return Outcome.Closed;
 		return (int)status >= 400 && (int)status < 500 ? Outcome.Rejected : Outcome.Unavailable;
