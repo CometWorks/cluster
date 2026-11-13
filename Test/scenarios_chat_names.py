@@ -12,8 +12,9 @@ mirror still counted the member as held from when the player was attached there 
 client that joins on a node without a medbay takes the same switch at world-ready, which is client 3's leg.
 
 The bench's headless clients show no multiplayer chat on their HUD (MyHudChat needs an active game service), so the
-name is read from the Remote plugin's chat receipts: ``Sender`` is what the HUD would show for the line. A Remote
-without that field fails the scenario instead of passing it.
+name is read from the Remote plugin's chat receipts: ``Sender`` is what the HUD would show for the line. Remote has
+it since CometWorks/remote 23fefc1 (PR #54, after the 1.3.0 release). An older Remote fails setup with that version
+named instead of passing the scenario.
 """
 
 from __future__ import annotations
@@ -69,7 +70,12 @@ def _say(bench, sender_api, receiver_api, label: str) -> dict:
         60,
     )
     _require(bench, f"{label}: the line reached the other client", receipt is not None, text)
-    _require(bench, f"{label}: the client's Remote reports the shown sender", "Sender" in receipt, json.dumps(receipt))
+    _require(
+        bench,
+        f"{label}: the client's Remote reports the shown sender (needs Remote 23fefc1 or later, CometWorks/remote PR #54)",
+        "Sender" in receipt,
+        json.dumps(receipt),
+    )
     bench.record(f"receipt-{label}", receipt)
     return receipt
 
