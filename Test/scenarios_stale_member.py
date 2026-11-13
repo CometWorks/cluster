@@ -11,6 +11,11 @@
      (octahedron-test node-0, 2026-11-06 04:11:33Z). The node drops that CLIENT_CONNECTED
      (``client_connected_dropped``) instead of listing the client with no session, and the next join spawns.
 
+* ``P2-STALE-MEMBER-FIRST-LOGIN`` (SE-1444): a client's first login whose SessionRequest reaches the game thread
+  after its CLIENT_CONNECTED (``/session-request-late``), which a 725 ms hitch did live while 14 bots joined at once.
+  The listed member is the new login's own, so the node keeps it (``session_request_after_login``) and the client
+  spawns. Before the fix the takeover ran the leave on it ("User left") and its OnNewPlayerRequest was never answered.
+
 No timers: the legs wait only for the Gateway to time out the killed client (Direct Transport, 120 s).
 """
 
@@ -104,10 +109,46 @@ def p2_stale_member(bench) -> None:
     bench.exercised(route=f"{node}: injected stale member -> takeover; leave before CLIENT_CONNECTED -> rejoin")
 
 
+def p2_stale_member_first_login(bench) -> None:
+    """A first login whose CLIENT_CONNECTED runs before its SessionRequest keeps its member and spawns."""
+    bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
+    for node in ("node-1", "node-2"):
+        armed = bench.cluster.node(node, f"/session-request-late?client={CLIENT_ID}", method="POST")
+        _require(bench, f"SETUP: late SessionRequest armed on {node}", armed.get("armed") == CLIENT_ID, json.dumps(armed))
+    bench.start_client(CLIENT_ID)
+    spawned = isinstance(_try(bench.wait_spawned, CLIENT_ID), dict) and bench.living_character(CLIENT_ID) is not None
+    node = _node_of(bench)
+    late = {name: _lines(bench, name, rf"session-request-late released after CLIENT_CONNECTED client={CLIENT_ID}\b")
+            for name in ("node-1", "node-2")}
+    served = next((name for name, lines in late.items() if lines), node)
+    kept = _lines(bench, served, rf"session_request_after_login client={CLIENT_ID}\b")
+    cleared = _lines(bench, served, rf"stale_member_cleared client={CLIENT_ID}\b")
+    members = _members(bench, served) if served else []
+    # Before the fix the first connection got no world and the client gave up after 40 s; the headless Pulsar client
+    # then reconnects on its own and spawns, sebot bots and players did not.
+    connections = [line for name in ("node-1", "node-2")
+                   for line in _lines(bench, name, rf"Accepted client {CLIENT_ID} through cluster node link")]
+    bench.record("first-login", {"node": node, "served": served, "late": late, "kept": kept, "cleared": cleared,
+                                 "userLeft": _lines(bench, served, r"User left"), "connections": connections,
+                                 "members": members})
+    _require(bench, "SETUP: the SessionRequest reached the game thread after CLIENT_CONNECTED", any(late.values()))
+    bench.check("the node kept the member of the login whose SessionRequest came late", bool(kept), served)
+    bench.check("no stale member was cleared on the first login", not cleared, "\n".join(cleared))
+    bench.check("the client spawned", spawned)
+    bench.check("the client spawned on its first connection", len(connections) == 1, "\n".join(connections))
+    bench.check("the node lists the client exactly once", members.count(CLIENT_ID) == 1, json.dumps(members))
+    bench.exercised(route=f"{served}: CLIENT_CONNECTED before SessionRequest on a first login -> spawn")
+
+
 SCENARIOS_STALE_MEMBER = {
     "P2-STALE-MEMBER": (
         p2_stale_member,
         "SE-1156: a member left with no session clears itself, and the leave-before-login race leaves none",
+        "3",
+    ),
+    "P2-STALE-MEMBER-FIRST-LOGIN": (
+        p2_stale_member_first_login,
+        "SE-1444: a first login whose SessionRequest comes after its CLIENT_CONNECTED keeps its member and spawns",
         "3",
     ),
 }
