@@ -91,7 +91,7 @@ createdump and take under a second; the capture has a limit of 10 s.
 The World Authority checks its managed heap every 2 s (SE-1382). When the heap first passes `wa.heapDumpMb` (6 GB) it
 writes one heap dump, `heap-<pid>-<MB>MB.dmp`, next to the crash dumps or in its data root, and logs
 `heap watch: ... heap dump <path> written in <s> s`. The process stands still while the dump is written. Read it with
-`dotnet-dump analyze` (`dumpheap -stat`, `gcroot`). Past `wa.heapLimitMb` (24 GB) it exits with code 6 and Host
+`dotnet-dump analyze` (`dumpheap -stat`, `gcroot`). Past `wa.heapLimitMb` (24 GB) it writes the dump if it has none yet and exits with code 6 and Host
 restarts it, before it can take the host's memory and every node on the host with it. Its heap is 1.2-1.7 GB in a
 100-trader soak.
 

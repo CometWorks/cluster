@@ -48,6 +48,8 @@ internal static class HeapWatch
 					Log("managed heap " + heapMb + " MB passed wa.heapDumpMb; " + WriteDump(heapMb));
 					break;
 				case Step.Exit:
+					// A heap that jumped past both marks between two checks still leaves its dump.
+					if (!dumped) Log("managed heap " + heapMb + " MB passed wa.heapLimitMb; " + WriteDump(heapMb));
 					ClusterRuntime.ExitProcess(ExitCode, "managed heap " + heapMb + " MB passed wa.heapLimitMb");
 					return;
 			}
@@ -58,8 +60,8 @@ internal static class HeapWatch
 
 	/// <summary>
 	/// A dump with the managed heap, readable with dotnet-dump (dumpheap -stat, gcroot). The folder is the one crash dumps go to
-	/// (DOTNET_DbgMiniDumpName), else the node's data root. Never throws; skipped when the disk has less room than twice the
-	/// process's working set. The process stands still while the tool writes.
+	/// (DOTNET_DbgMiniDumpName), else the node's data root. Never throws; skipped when the disk has less room than the
+	/// process's working set and 1 GB. The process stands still while the tool writes.
 	/// </summary>
 	internal static string WriteDump(long heapMb)
 	{
@@ -69,7 +71,7 @@ internal static class HeapWatch
 			string crashDumps = Environment.GetEnvironmentVariable("DOTNET_DbgMiniDumpName");
 			string folder = !string.IsNullOrEmpty(crashDumps) ? Path.GetDirectoryName(Path.GetFullPath(crashDumps))
 				: Environment.GetEnvironmentVariable("CLUSTER_DATA_ROOT") ?? Environment.CurrentDirectory;
-			long freeMb = new DriveInfo(folder).AvailableFreeSpace / MB, needMb = 2 * Environment.WorkingSet / MB;
+			long freeMb = new DriveInfo(folder).AvailableFreeSpace / MB, needMb = Environment.WorkingSet / MB + 1024;
 			if (freeMb < needMb) return "no dump: " + freeMb + " MB free in " + folder + ", needs " + needMb + " MB";
 			string path = Path.Combine(folder, "heap-" + Environment.ProcessId + "-" + heapMb + "MB.dmp");
 			long started = Environment.TickCount64;
