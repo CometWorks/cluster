@@ -86,6 +86,15 @@ node's log if the game thread made no update for 15 s, so the line `exit watchdo
 start of the evidence. Host's `hang-evidence.txt` only covers the registry's kill. The stacks come from the runtime's
 createdump and take under a second; the capture has a limit of 10 s.
 
+### World Authority memory
+
+The World Authority checks its managed heap every 2 s (SE-1382). When the heap first passes `wa.heapDumpMb` (8 GB) it
+writes one heap dump, `heap-<pid>-<MB>MB.dmp`, next to the crash dumps or in its data root, and logs
+`heap watch: ... heap dump <path> written in <s> s`. The process stands still while the dump is written. Read it with
+`dotnet-dump analyze` (`dumpheap -stat`, `gcroot`). Past `wa.heapLimitMb` (24 GB) it writes the dump if it has none yet and exits with code 6 and Host
+restarts it, before it can take the host's memory and every node on the host with it. Its heap is 1.2-1.7 GB in a
+100-trader soak.
+
 ### Hot spares
 
 The approved `nodes` list is the whole inventory, so node ids cannot be allocated at runtime. Hot spares are

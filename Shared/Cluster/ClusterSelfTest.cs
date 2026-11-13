@@ -67,6 +67,7 @@ internal static partial class ClusterSelfTest
 		("save-container", SaveContainer),
 		("host-save-store", HostSaveStoreWriters),
 		("game-thread-stacks", GameThreadStacksRender),
+		("heap-watch", HeapWatchDecide),
 		("global-scrub", GlobalScrub),
 		("retention-deletes", RetentionDeletes),
 		("time-of-day", TimeOfDay),
