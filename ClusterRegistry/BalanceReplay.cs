@@ -36,12 +36,18 @@ internal sealed partial class DirectGateway
             {
                 string[] pair = args[i].Split('=', 2);
                 PartitionReport report = JsonSerializer.Deserialize<PartitionReport>(File.ReadAllText(pair[1]))!;
-                if (report.Partitions.Length != 0) nodes.Add((report, pair[0]));
+                nodes.Add((report, pair[0]));
             }
         }
         string F(double x) => x.ToString("F0", CultureInfo.InvariantCulture);
         foreach ((PartitionReport report, string node) in nodes)
         {
+            // SE-1415: an empty node is a receiver like any other; the live planner sees it too.
+            if (report.Partitions.Length == 0)
+            {
+                Console.WriteLine($"{node}: sim {report.SimulationRatio:F2}, empty");
+                continue;
+            }
             (PartitionInfo Partition, bool OnSource)[] all = [.. report.Partitions.Select(p => (p, true))];
             double envelope = report.SyncDistance + report.Margin;
             double engage = envelope * model.ColocationEngageFraction;

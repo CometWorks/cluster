@@ -510,6 +510,67 @@ internal static partial class SelfTest
             + $" at 800k (peak 554384); at 1.6x it plans as floor 0; rising load resumes at the first pass above the floor; co-location unchanged");
     }
 
+    /// <summary>SE-1415: below the load floor the client tier still evens out the players; load moves stay held. The shape is
+    /// octahedron-test's live reports of 2026-11-13 14:24Z (0.3.9, sim 1.00 everywhere, peak 216k): stations with 15/23/19/11/6/0
+    /// players over six serving nodes. Red before SE-1415: held by the floor, nothing planned, pass after pass.</summary>
+    private static void TestBalanceFloorClients()
+    {
+        static void Check(bool value, string what) { if (!value) throw new InvalidOperationException("balance-floor-clients: " + what); }
+        ulong next = 1;
+        PartitionInfo P(ulong id, double x, int members, int clients, long simLoad) =>
+            new(id, members, true, new PartitionSphere(x, 0, 0, 200), 0, [.. Enumerable.Range(0, clients).Select(_ => 76561190000000000UL + next++)],
+                1000, 400L * 1000 + 300_000L * members + 2_000, simLoad);
+        (PartitionReport, string) N(string node, params PartitionInfo[] parts) => (new PartitionReport(3000, 1000, parts, 0, 50, SimLoadSupported: true), node);
+        (PartitionReport Report, string Node)[] Live(bool withClients)
+        {
+            int C(int clients) => withClients ? clients : 0;
+            return [
+                N("node-0", P(37614, 0, 76, C(15), 160_481)),
+                N("node-2", P(37647, 100_000, 53, C(15), 146_016), P(37649, 150_000, 29, C(8), 63_445), P(34383, 200_000, 2, 0, 4_492)),
+                N("node-3", P(37607, 300_000, 32, C(11), 68_371), P(37291, 303_350, 17, 0, 57_090), P(37603, 350_000, 21, C(8), 36_759),
+                    P(32594, 400_000, 17, 0, 22_616)),
+                N("node-4", P(37588, 500_000, 64, C(11), 71_042), P(37354, 503_286, 1, 0, 421), P(37143, 550_000, 96, 0, 48_491)),
+                N("node-5", P(37578, 600_000, 35, C(6), 47_536), P(10006, 650_000, 83, 0, 43_932), P(15108, 700_000, 1, 0, 720)),
+                N("node-6"),
+            ];
+        }
+        CostModel deployed = CostModel.Deployed();
+        var nodes = Live(true);
+        RebalancePlan[] plans = ChooseRebalancePlans(nodes, deployed, [], _ => false, null, null, false, null, out var d);
+        Check(d.WorstClientDeviation > deployed.BalanceRiskTolerance, $"VOID - the players are not uneven: client deviation {d.WorstClientDeviation:F2}");
+        Check(plans.Length != 0 && d.FloorHeldPeak == 0, $"uneven players below the floor plan a move: {PaceMoves(plans)}, held at {d.FloorHeldPeak}");
+        Check(plans.All(p => p.Kind == RebalanceKind.Client && p.Members.Sum(m => m.Clients.Length) > 0), $"only client moves: {PaceMoves(plans)}");
+        Check(plans.All(p => p.NewPeak <= p.OldPeak), "no move raises the peak");
+        // Without players the same loads are a pure load imbalance below the floor: held, as T-0409 wants.
+        RebalancePlan[] loadOnly = ChooseRebalancePlans(Live(false), deployed, [], _ => false, null, null, false, null, out var dLoad);
+        Check(loadOnly.Length == 0 && dLoad.FloorHeldPeak > 0, $"a load imbalance below the floor stays held: {PaceMoves(loadOnly)}, held at {dLoad.FloorHeldPeak}");
+        // Paced passes, each applied at once: the players spread and the planner goes quiet.
+        Dictionary<string, List<PartitionInfo>> owned = nodes.ToDictionary(n => n.Node, n => n.Report.Partitions.ToList());
+        var pace = new BalancePace();
+        DateTime t0 = new(2026, 11, 13, 14, 24, 0, DateTimeKind.Utc);
+        int moves = 0, lastMovePass = -1;
+        for (int pass = 0; pass < 12; pass++)
+        {
+            (PartitionReport, string)[] now = [.. owned.Select(x => N(x.Key, [.. x.Value]))];
+            double gate = pace.Gate(deployed);
+            RebalancePlan[] step = ChooseRebalancePlans(now, deployed, [], _ => false, null, null, false, null, out var ds, gate);
+            Check(step.All(p => p.Kind == RebalanceKind.Client), $"pass {pass}: only client moves: {PaceMoves(step)}");
+            foreach (RebalancePlan plan in step)
+            {
+                owned[plan.Source].RemoveAll(m => plan.Members.Any(x => x.Id == m.Id));
+                owned[plan.Target].AddRange(plan.Members);
+                moves++;
+                lastMovePass = pass;
+            }
+            pace.Passed(deployed, gate, ds.WorstDeviation, ds.WorstClientDeviation, step.Length, ds.MinGainSkipped, ds.BudgetSkipped, 0, t0.AddMinutes(pass));
+        }
+        int[] crews = [.. owned.Values.Select(v => v.Sum(m => m.Clients.Length))];
+        Check(moves is > 0 and <= 4 && lastMovePass < 8, $"a few moves, then quiet: {moves} move(s), the last in pass {lastMovePass}");
+        Check(crews.Max() < 23 && crews.All(c => c > 0), $"the 23-player node sheds players and every node serves some: [{string.Join(" ", crews)}]");
+        Console.WriteLine($"balance-floor-clients: live 14:24Z shape plans {PaceMoves(plans)}; load-only held at {dLoad.FloorHeldPeak};"
+            + $" {moves} move(s) over 12 passes -> players [{string.Join(" ", crews)}]");
+    }
+
     // T-0409 follow-up: r143's own unchanged-peak pin (A1 OFF, gateway.log 2026-10-09 13:51:26: node-854->node-851, 14996 sim-us/s,
     // peak 596114->596114; loads node-851=347448 node-852=309886 node-854=552030 node-855=475722 node-856=596114 node-858=410231,
     // the optimum takes ~111k off node-856, which was busy). node-856 carries its base and the 110976 component the optimum moves;

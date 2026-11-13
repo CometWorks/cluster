@@ -2178,10 +2178,17 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             clientExcess, worstClientDeviation, explain, 0, 0, 0, 0);
         if (worstDeviation <= gateThreshold
             && worstClientDeviation <= gateThreshold) return [.. heavyPlans];
-        // T-0409: the load floor. Below it no node is short of sim time, and a paced move costs its pilots lag for no
-        // sim gain, so the paced planner idles. The diagnostics above stay complete (the deviations feed /diag and the
-        // pace hysteresis); FloorHeldPeak tells the caller why nothing was planned.
-        if (!fullPlan && simLoad && model.BalanceMinPeakLoad > 0 && oldPeak < model.BalanceMinPeakLoad)
+        // T-0409: the load floor. Below it no node is short of sim time, and a paced LOAD move costs its pilots lag for no
+        // sim gain, so tier 1 idles. The diagnostics above stay complete (the deviations feed /diag and the pace
+        // hysteresis); FloorHeldPeak tells the caller why nothing was planned.
+        // SE-1415: the client tier is not held. Players are a balance dimension of their own, and below the floor
+        // nothing else ever spreads them: on octahedron-test (0.3.9, 2026-11-13) the nodes ran at sim 1.00 with peaks
+        // of 50k-400k sim-us/s, 26,252 passes were held, and 73 players sat on 3 of 6 nodes for 9 h. Before the 17:43Z
+        // restart of 2026-11-12 the same cluster balanced only because slow nodes (sim 0.25-0.6) lifted the peak over
+        // the floor. Below the floor every candidate takes the tier-2 rules (it must even out the players and pay for
+        // its lag, SE-1134), and nothing is planned unless the client deviation is over the gate.
+        bool floorHeld = !fullPlan && simLoad && model.BalanceMinPeakLoad > 0 && oldPeak < model.BalanceMinPeakLoad;
+        if (floorHeld && worstClientDeviation <= gateThreshold)
         {
             diagnostics.FloorHeldPeak = oldPeak;
             return [.. heavyPlans];
@@ -2261,7 +2268,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // load; it moves when it evens the client split and the load picture tolerates it.
             // T-0393: a load move whose gain is inside the noise does not qualify for tier 1 (it may still be a client move).
             bool belowGain = components[i].LoadUnit && reduction > 0 && newPeak <= oldPeak && reduction < minLoadGain;
-            if (!components[i].LoadUnit || reduction <= 0 || newPeak > oldPeak || belowGain)   // tier 1: never trade peak for spread
+            if (floorHeld || !components[i].LoadUnit || reduction <= 0 || newPeak > oldPeak || belowGain)   // tier 1: never trade peak for spread
             {
                 // Tier 2 - a move that helps only the CLIENT dimension (Viktor 2026-08-24: clients
                 // are load too). Eligible while it strictly reduces client over-optimal load and
@@ -2312,6 +2319,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             if (!used.Add(c.Plan.Target)) { used.Remove(c.Plan.Source); continue; }
             selected.Add(c.Plan);
         }
+        if (floorHeld && selected.Count == 0) diagnostics.FloorHeldPeak = oldPeak;
         return [.. heavyPlans, .. selected];
     }
 
