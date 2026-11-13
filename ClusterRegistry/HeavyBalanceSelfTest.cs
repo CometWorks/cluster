@@ -275,6 +275,46 @@ internal static partial class SelfTest
             + $" ({pinned!.Value.Moving.Id}, {pinned.Value.Why}); a heavy merge keeps the bigger crew ({merged!.Value.Moving.Id} moves)");
     }
 
+    /// <summary>SE-1415: a recycled node's crews spread over the receivers by client count instead of moving whole onto the
+    /// spare (octahedron-test 2026-11-13: 73 players in 7 station partitions on 3 of 6 nodes, carried node to spare every
+    /// 20 min while the load floor held the balancer). Red before SE-1415: every component goes to the spare.</summary>
+    private static void TestRotationClientSpread()
+    {
+        static void Check(bool value, string what) { if (!value) throw new InvalidOperationException("rotation-client-spread: " + what); }
+        // The 05:26:15 CET recycle: node-0 drains stations with 9, 9 and 3 clients; node-5 and node-6 serve 28 and 24,
+        // node-2..4 none, spare node-1 none. Stations are 50 km apart: no envelope neighbours.
+        Dictionary<string, double> projected = new() { ["n1"] = 0, ["n2"] = 20_000, ["n3"] = 30_000, ["n4"] = 10_000, ["n5"] = 300_000, ["n6"] = 250_000 };
+        Dictionary<string, int> crew = new() { ["n1"] = 0, ["n2"] = 0, ["n3"] = 0, ["n4"] = 0, ["n5"] = 28, ["n6"] = 24 };
+        (string, PartitionReport)[] receivers = [.. projected.Keys.Select((k, i) => (k, new PartitionReport(3000, 1000,
+            k == "n1" ? [] : [HeavyAt(200 + (ulong)i, 1_000_000 + i * 50_000, 10_000, crew[k])], 0, 50, SimLoadSupported: true)))];
+        PartitionInfo[] stations = [HeavyAt(301, -1_000_000, 90_000, 9), HeavyAt(302, -2_000_000, 80_000, 9), HeavyAt(303, -3_000_000, 30_000, 3)];
+        string[] Drain(Dictionary<string, int>? clients, string? avoid)
+        {
+            Dictionary<string, int>? projectedClients = clients == null ? null : new(clients);
+            List<string> targets = [];
+            foreach (PartitionInfo station in stations)
+            {
+                string target = DrainTarget([station], receivers, 4000, projected, "n1", null, station.Clients.Length, projectedClients, avoid);
+                if (projectedClients != null) projectedClients[target] += station.Clients.Length;
+                targets.Add(target);
+            }
+            return [.. targets];
+        }
+        string[] before = Drain(null, null);
+        Check(before.All(x => x == "n1"), $"control: without client counts the spare takes all ({string.Join(",", before)})");
+        string[] after = Drain(crew, null);
+        Check(after.SequenceEqual(["n1", "n4", "n2"]), $"the crews go to three crew-less nodes, the spare first ({string.Join(",", after)})");
+        string[] skipNext = Drain(crew, "n4");
+        Check(skipNext.SequenceEqual(["n1", "n2", "n3"]), $"never the node that rotates next ({string.Join(",", skipNext)})");
+        // An empty component (no clients) still follows the spare, and a neighbour still wins over the spread.
+        Check(DrainTarget([HeavyAt(304, -4_000_000, 1_000)], receivers, 4000, projected, "n1", null, 0, crew) == "n1", "no clients: the spare");
+        Check(DrainTarget([HeavyAt(305, 1_000_000 + 4 * 50_000 + 150, 1_000, 5)], receivers, 4000, projected, "n1", null, 5, crew) == "n5",
+            "a crew next to a partition of n5 joins it");
+        Check(DrainTarget([HeavyAt(306, -5_000_000, 1_000, 5)], receivers, 4000, projected, "n1", new HashSet<string> { "n1", "n2", "n3", "n4" }, 5, crew) == "n6",
+            "heavy-holding receivers stay closed");
+        Console.WriteLine($"rotation-client-spread: before {string.Join(",", before)}; after {string.Join(",", after)}; skipping the next {string.Join(",", skipNext)}");
+    }
+
     /// <summary>Case 6: drains move a heavy component once, to the emptiest node without one; light components keep off it;
     /// once landed, the balancer does not move it on (no chain).</summary>
     private static void TestBalanceHeavyDrain()

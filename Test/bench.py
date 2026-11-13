@@ -98,7 +98,7 @@ class Bench:
     def __init__(self, scenario: str, title: str, tier: str, results_root: Path, keep_root: bool = False,
                  regular_nodes: int = 2, world_template: Path | None = None, split_step: str = "to-split",
                  directory: str | None = None, administrators: list[int] | None = None,
-                 node_control: bool = False, kick_timeout_seconds: int | None = None):
+                 node_control: bool = False, kick_timeout_seconds: int | None = None, spare_nodes: int = 0):
         self.scenario = scenario
         self.title = title
         self.tier = tier
@@ -124,7 +124,7 @@ class Bench:
         # which the registry refuses once node control is active (node_id_retired / node_not_planned).
         # Off, the registry never activates it (no hosts file, no runtime target) and accepts nodes
         # outside a plan exactly as before.
-        self.cluster = Cluster(Config(root=self.run_root, regular_nodes=regular_nodes,
+        self.cluster = Cluster(Config(root=self.run_root, regular_nodes=regular_nodes, spare_nodes=spare_nodes,
                                       world_template=world_template, split_step=split_step,
                                       steam_listen=None, administrators=list(administrators or []),
                                       node_control=node_control, kick_timeout_seconds=kick_timeout_seconds))
@@ -654,7 +654,7 @@ def run_scenario(function, scenario: str, title: str, tier: str, results_root: P
     # A scenario that needs more than the default two regular nodes (or a different world, e.g.
     # the declared-Survival template) declares it as a function attribute
     # (`p3_clu_01.regular_nodes = 3`, `p3_hnd_01.world_template = ...`), so the registry tuple
-    # keeps its shape. `administrators` lists Steam ids admitted as admins, `kick_timeout_seconds` shortens the
+    # keeps its shape. `spare_nodes` adds hot spare slots. `administrators` lists Steam ids admitted as admins, `kick_timeout_seconds` shortens the
     # Gateway's admin kick cooldown.
     bench = Bench(scenario, title, tier, results_root,
                   regular_nodes=getattr(function, "regular_nodes", 2),
@@ -662,7 +662,8 @@ def run_scenario(function, scenario: str, title: str, tier: str, results_root: P
                   split_step=getattr(function, "split_step", "to-split"), directory=directory,
                   administrators=getattr(function, "administrators", None),
                   node_control=getattr(function, "node_control", False),
-                  kick_timeout_seconds=getattr(function, "kick_timeout_seconds", None))
+                  kick_timeout_seconds=getattr(function, "kick_timeout_seconds", None),
+                  spare_nodes=getattr(function, "spare_nodes", 0))
     started = time.time()
     print(f"\n=== {scenario} - {title} ===")
     try:

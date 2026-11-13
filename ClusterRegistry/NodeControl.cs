@@ -597,7 +597,20 @@ internal sealed partial class GatewayRegistry
         lock (_lock) return ServingTargetTotalLocked();
     }
 
-    /// <summary>For ScaleInPass: a recycled node's activated replacement receives its whole drain.</summary>
+    /// <summary>SE-1415, for ScaleInPass: the serving node the managed rotation recycles next, or null (no managed
+    /// deployment, rotation off).</summary>
+    public string? NextToRotate()
+    {
+        lock (_lock)
+        {
+            if (_state.ManagedDeployment is null || RotationSeconds(RotationLifetimeKey, 7200) <= 0) return null;
+            return RotationOrder(_state.Nodes.Values.Where(x => x.Role == NodeRole.Regular && x.State == NodeState.Active), DateTimeOffset.UtcNow)
+                .FirstOrDefault()?.Node;
+        }
+    }
+
+    /// <summary>For ScaleInPass: a recycled node's activated replacement receives its drain (SE-1415: components with
+    /// clients spread by client count, DrainTarget).</summary>
     public string? PreferredDrainReceiver(string node)
     {
         lock (_lock)

@@ -219,6 +219,7 @@ internal static partial class SelfTest
         ("balance-heavy-early", TestBalanceHeavyEarlyEvacuation),
         ("balance-heavy-merge", TestBalanceHeavyMerge),
         ("balance-heavy-drain", TestBalanceHeavyDrain),
+        ("rotation-client-spread", TestRotationClientSpread),
         ("balance-heavy-spare", TestBalanceHeavySpare),
         ("control-bodyless-post", TestControlBodylessPost),
         ("balance-simulation-speed", TestBalanceSimulationSpeed),

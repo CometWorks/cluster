@@ -293,6 +293,10 @@ internal sealed partial class DirectGateway
         // #1454 case 6: a heavy component drains once, to the emptiest node without one, and the light ones keep off it.
         IReadOnlySet<ulong> heavy = _heavy;
         HashSet<string> heavyNodes = [.. _heavyNodes];
+        // SE-1415: the clients each receiver serves, plus the components already given to it this pass, and the node the
+        // rotation recycles next (a crew sent there would move again within one rotation spacing).
+        Dictionary<string, int> projectedClients = receivers.ToDictionary(x => x.Node.Node, x => x.Report.Partitions.Sum(p => ClientCount(p, routed)));
+        string? nextToRotate = registry.NextToRotate();
         foreach ((ServedNode node, PartitionReport report) in reports.Where(x => retiring.Contains(x.Node.Node)))
         {
             if (report.Partitions.Length == 0) continue;
@@ -301,19 +305,24 @@ internal sealed partial class DirectGateway
             double envelope = report.SyncDistance + report.Margin;
             (PartitionInfo Partition, bool OnSource)[] all = [.. report.Partitions.Select(p => (p, true))];
             int[] labels = Components(all, envelope, gapModel);
-            // Heavy components first, so the light ones know which receivers took one.
+            // Heavy components first, so the light ones know which receivers took one; then the biggest crews, so the
+            // client spread below places them first.
             foreach (IGrouping<int, int> group in Enumerable.Range(0, all.Length).GroupBy(i => labels[i])
-                         .OrderByDescending(g => g.Any(i => heavy.Contains(all[i].Partition.Id))))
+                         .OrderByDescending(g => g.Any(i => heavy.Contains(all[i].Partition.Id)))
+                         .ThenByDescending(g => g.Sum(i => ClientCount(all[i].Partition, routed))))
             {
                 PartitionInfo[] members = [.. group.Select(i => all[i].Partition)];
                 bool isHeavy = members.Any(m => heavy.Contains(m.Id));
+                int clients = members.Sum(m => ClientCount(m, routed));
                 string? pinned = members.Select(m => MigrationTarget(m.Id)).FirstOrDefault(t => t != null && projected.ContainsKey(t));
                 string target = pinned
                     ?? (isHeavy ? HeavyDrainTarget(projected.Select(x => (x.Key, x.Value)), heavyNodes, preferred) : null)
-                    ?? DrainTarget(members, [.. receivers.Select(x => (x.Node.Node, x.Report))], envelope, projected, preferred, heavyNodes);
+                    ?? DrainTarget(members, [.. receivers.Select(x => (x.Node.Node, x.Report))], envelope, projected, preferred, heavyNodes,
+                        clients, projectedClients, nextToRotate);
                 if (pinned == null || members.Any(m => MigrationTarget(m.Id) != target))
                     PinMigration(members, target);
                 if (isHeavy) heavyNodes.Add(target);
+                projectedClients[target] += clients;
                 if (pinned == null)
                 {
                     long load = members.Sum(m => PartitionLoad(m, true));
@@ -329,15 +338,30 @@ internal sealed partial class DirectGateway
 
     /// <summary>The preferred receiver when it is one (a recycled node's replacement); else the receiver already holding an
     /// envelope neighbour of the component, else the least projected load. #1454: a receiver in <paramref name="heavyNodes"/>
-    /// (it holds or takes a heavy component) is the target only for an envelope neighbour or when nothing else receives.</summary>
+    /// (it holds or takes a heavy component) is the target only for an envelope neighbour or when nothing else receives.
+    /// SE-1415: a component carrying <paramref name="clients"/> out of a recycled node (one with a preferred receiver) goes to
+    /// an envelope neighbour if there is one, else to the open receiver with the fewest <paramref name="projectedClients"/>
+    /// (ties: the preferred one first, then the least load), never to <paramref name="avoid"/> while another is open. Sending
+    /// every component to the replacement moved each node's crowd whole onto the spare, so the players stayed on the same
+    /// few nodes for good: the paced balancer holds below its load floor and never spreads them.</summary>
     internal static string DrainTarget(PartitionInfo[] members, (string Node, PartitionReport Report)[] receivers, double envelope,
-        IReadOnlyDictionary<string, double> projected, string? preferred = null, IReadOnlySet<string>? heavyNodes = null)
+        IReadOnlyDictionary<string, double> projected, string? preferred = null, IReadOnlySet<string>? heavyNodes = null,
+        int clients = 0, IReadOnlyDictionary<string, int>? projectedClients = null, string? avoid = null)
     {
         bool Open(string node) => heavyNodes?.Contains(node) != true;
-        if (preferred != null && receivers.Any(x => x.Node == preferred) && Open(preferred)) return preferred;
+        bool spread = preferred != null && clients > 0 && projectedClients != null;
+        if (!spread && preferred != null && receivers.Any(x => x.Node == preferred) && Open(preferred)) return preferred;
         foreach ((string node, PartitionReport report) in receivers.OrderBy(x => projected[x.Node]).ThenBy(x => x.Node, StringComparer.Ordinal))
             if (report.Partitions.Any(p => members.Any(m => SphereGap(m.Sphere, p.Sphere) < envelope)))
                 return node;
+        if (spread)
+        {
+            string[] open = [.. receivers.Select(x => x.Node).Where(Open)];
+            string[] candidates = open.Length > 1 ? [.. open.Where(x => x != avoid)] : open;
+            if (candidates.Length != 0)
+                return candidates.OrderBy(x => projectedClients!.GetValueOrDefault(x)).ThenBy(x => x == preferred ? 0 : 1)
+                    .ThenBy(x => projected[x]).ThenBy(x => x, StringComparer.Ordinal).First();
+        }
         return receivers.OrderBy(x => Open(x.Node) ? 0 : 1).ThenBy(x => projected[x.Node]).ThenBy(x => x.Node, StringComparer.Ordinal).First().Node;
     }
 }
