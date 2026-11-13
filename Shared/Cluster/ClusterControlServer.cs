@@ -494,10 +494,12 @@ internal sealed partial class ClusterControlServer
 					if (released.Count > 0 && !dryRun)
 						Thread.Sleep(1000);
 					object moved = Invoke(() => ZoneEvacuateService.Move(plan, margin, dryRun));
+					VRageMath.Vector3D center = plan.Zone.PositionComp.GetPosition();
 					outcome = new
 					{
 						evacuated = !dryRun, dryRun, station = plan.Station.EntityId, stationName = plan.Station.DisplayName,
-						zone = plan.Zone.EntityId, released, moved,
+						zone = plan.Zone.EntityId, zoneCenter = new[] { center.X, center.Y, center.Z }, zoneRadius = plan.Zone.Radius,
+						released, moved,
 					};
 				}
 				Write(context, 200, "application/json", Encoding.UTF8.GetBytes(JsonSerializer.Serialize(outcome)));
