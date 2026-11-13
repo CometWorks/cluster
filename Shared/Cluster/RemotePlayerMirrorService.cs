@@ -366,6 +366,7 @@ public static class RemotePlayerMirrorService
 		foreach (var pair in desired)
 		{
 			if (!Installed.TryGetValue(pair.Key, out string shown) || shown == pair.Value.Name) continue;
+			MyLog.Default?.WriteLineAndConsole($"[ClusterPlugin] player mirror renamed steamId={pair.Key.Item1} serial={pair.Key.Item2} from='{shown}' to='{pair.Value.Name}' node={pair.Value.Node} (SE-1372)");
 			Remove(pair.Key);
 			Installed.Remove(pair.Key);
 			Forget(pair.Key);
@@ -462,6 +463,7 @@ public static class RemotePlayerMirrorService
 	{
 		if (!Enabled || !Installed.Remove((steamId, serialId)) & !Displaced.Remove((steamId, serialId))) return;
 		Pending.Remove((steamId, serialId));
+		MyLog.Default?.WriteLineAndConsole($"[ClusterPlugin] player mirror phantom replaced by login steamId={steamId} serial={serialId} (SE-1372)");
 		MyMultiplayer.RaiseStaticEvent((IMyEventOwner s) => MyPlayerCollection.OnPlayerRemoved, steamId, serialId);
 		foreach (Holdings holdings in Held.Values.Concat(Carried.Values)) holdings.Players.Remove((steamId, serialId));
 		m_replacedByLogin++;
