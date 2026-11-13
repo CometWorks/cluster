@@ -354,6 +354,17 @@ public static class RichTestHarness
 				recreate.Invoke(mechanical, arguments);
 				return new { grid = gridId, action, hasTop = mechanical.TopBlock != null };
 			}
+			case "stale-limits":
+			{
+				// SE-1416: the stale LimitsActive a headless stator keeps on a live node. The game only
+				// recomputes the private flag on a limit change or while a top is attached, so flipping it
+				// here leaves the value a load re-derives differently, as an earlier attach left it live.
+				MyMotorStator stator = Fat<MyMotorStator>(grid);
+				FieldInfo field = typeof(MyMotorStator).GetField("m_limitsActive", BindingFlags.Instance | BindingFlags.NonPublic)
+					?? throw new InvalidOperationException("m_limitsActive not found");
+				field.SetValue(stator, !(bool)field.GetValue(stator));
+				return new { grid = gridId, action, limitsActive = ((MyObjectBuilder_MotorStator)stator.GetObjectBuilderCubeBlock()).LimitsActive };
+			}
 			case "track":
 			{
 				if (!MyEntities.TryGetEntityById(targetId, out MyEntity target))
@@ -443,7 +454,8 @@ public static class RichTestHarness
 					});
 					break;
 				case MyMotorStator stator:
-					rotors.Add(new { angle = stator.CurrentAngle, hasTop = stator.TopBlock != null, topGrid = stator.TopBlock?.CubeGrid?.EntityId ?? 0, working = stator.IsWorking });
+					rotors.Add(new { angle = stator.CurrentAngle, hasTop = stator.TopBlock != null, topGrid = stator.TopBlock?.CubeGrid?.EntityId ?? 0, working = stator.IsWorking,
+						limitsActive = ((MyObjectBuilder_MotorStator)stator.GetObjectBuilderCubeBlock()).LimitsActive });
 					break;
 				case MyPistonBase piston:
 					pistons.Add(new { position = piston.CurrentPosition, hasTop = piston.TopBlock != null, topGrid = piston.TopBlock?.CubeGrid?.EntityId ?? 0, working = piston.IsWorking });
