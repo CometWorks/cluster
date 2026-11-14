@@ -104,6 +104,65 @@ internal sealed partial class DirectGateway
         WriteOperation(context, record);
     }
 
+    private readonly ConcurrentDictionary<string, byte> _forgetInFlight = new();
+
+    /// <summary>
+    /// SE-1487: DELETE /players/{userId} removes an offline player from the world: the World Authority drops the
+    /// identity (faction membership, bank account, GPS, reputation), the promotion entry and the character record,
+    /// then the Gateway drops the character home. Refused while the player is online or still has built blocks.
+    /// A lost acknowledgement fails as forget_uncertain; the same Idempotency-Key replays the WA ledger entry.
+    /// </summary>
+    private void AdminForgetPlayer(HttpListenerContext context, AdminActor actor, ulong userId)
+    {
+        if (!RequireManage(context, actor, "player-forget")) return;
+        if (userId == 0)
+        {
+            WriteAdminError(context, 400, "invalid_arguments", "A non-zero userId is required.");
+            return;
+        }
+        var record = BeginMutation(context, actor, "player-forget", userId.ToString(), userId.ToString(), out bool replayed);
+        if (record == null) return;
+        if ((record.State == AdminOperationPhase.Running || record.ErrorCode == "forget_uncertain")
+            && _forgetInFlight.TryAdd(record.OperationId, 0))
+        {
+            try
+            {
+                if (record.State == AdminOperationPhase.Failed && !_registry!.ResumePlayerForget(record.OperationId))
+                {
+                    WriteOperation(context, record);
+                    return;
+                }
+                var result = JsonSerializer.Deserialize<NodeForgetResult>(PlayerPromotionCommand("player-forget",
+                    JsonSerializer.Serialize(new NodeForgetRequest(userId)), Guid.Parse(record.OperationId)));
+                if (result == null || result.SteamId != userId)
+                    throw new InvalidDataException("World Authority forget acknowledgement does not match the player.");
+                bool homeRemoved = _registry!.ForgetCharacterHome(userId);
+                _registry.CompleteAdminOperation(record.OperationId, new Dictionary<string, string>
+                {
+                    ["userId"] = userId.ToString(), ["identityId"] = result.IdentityId.ToString(),
+                    ["identityRemoved"] = result.IdentityRemoved.ToString(), ["promotionRemoved"] = result.PromotionRemoved.ToString(),
+                    ["recordRemoved"] = result.RecordRemoved.ToString(), ["homeRemoved"] = homeRemoved.ToString(),
+                });
+            }
+            catch (InvalidOperationException e) when (e.Message is "player_online" or "player_has_blocks" or "identity_not_removed")
+            {
+                _registry!.FailAdminOperation(record.OperationId, e.Message, e.Message switch
+                {
+                    "player_online" => "The player is online. Forget only works on offline players.",
+                    "player_has_blocks" => "The player still has built blocks. Delete their grids first.",
+                    _ => "The World Authority did not remove the identity.",
+                });
+            }
+            catch (Exception e) when (e is InvalidOperationException or IOException or InvalidDataException or TimeoutException or JsonException)
+            {
+                _registry!.FailAdminOperation(record.OperationId, "forget_uncertain",
+                    "Forget was not confirmed; it may have applied. Retry the same Idempotency-Key to reconcile. " + e.Message);
+            }
+            finally { _forgetInFlight.TryRemove(record.OperationId, out _); }
+        }
+        WriteOperation(context, record);
+    }
+
     private void AdminClearKickCooldown(HttpListenerContext context, AdminActor actor, ulong userId)
     {
         if (!RequireManage(context, actor, "kick-cooldown-clear")) return;
@@ -134,4 +193,6 @@ internal sealed partial class DirectGateway
     private sealed record NodePromotionChange(ulong SteamId, int Level, long ExpectedRevision);
     private sealed record NodePromotionEntry(ulong SteamId, int Level, long Revision = 0);
     private sealed record NodePromotionSnapshot(NodePromotionEntry[] Entries);
+    private sealed record NodeForgetRequest(ulong SteamId);
+    private sealed record NodeForgetResult(ulong SteamId, long IdentityId, bool IdentityRemoved, bool PromotionRemoved, bool RecordRemoved);
 }

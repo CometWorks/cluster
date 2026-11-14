@@ -543,6 +543,7 @@ public static class ClusterRuntime
 		ShipStorageService.Install();
 		AdminSafeZones.Install();
 		PromotionService.Install();
+		PlayerForgetService.Install();
 		OnlinePlayersService.Install();
 		ClusterPresenceAnnouncer.Install();
 		PlayerStateService.Install();

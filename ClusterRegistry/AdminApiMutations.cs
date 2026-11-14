@@ -29,6 +29,13 @@ internal sealed partial class DirectGateway
             return;
         }
         if (context.Request.HttpMethod == "DELETE"
+            && path.StartsWith(prefix + "/players/", StringComparison.OrdinalIgnoreCase)
+            && ulong.TryParse(path[(prefix + "/players/").Length..], out ulong forgetUser))
+        {
+            AdminForgetPlayer(context, actor, forgetUser);
+            return;
+        }
+        if (context.Request.HttpMethod == "DELETE"
             && path.StartsWith(prefix + "/admission/kicks/", StringComparison.OrdinalIgnoreCase)
             && ulong.TryParse(path[(prefix + "/admission/kicks/").Length..], out ulong clearKickUser))
         {

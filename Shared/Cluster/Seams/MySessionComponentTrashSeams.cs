@@ -40,6 +40,13 @@ public static class MySessionComponentTrashSeams
 	}
 
 	/// <summary>
+	/// SE-1487 admin "forget player": the vanilla abandoned-identity removal for an identity the caller has already
+	/// checked (offline, no built blocks), without waiting for the sweep's identity list to contain it.
+	/// </summary>
+	public static bool ClusterForgetIdentity(this MySessionComponentTrash self, MyIdentity identity, MyPlayer.PlayerId playerId)
+		=> self.TryRemoveAbandonedIdentity(identity, playerId);
+
+	/// <summary>
 	/// Cluster test entry: runs the vanilla abandoned-identity removal for one identity NOW, skipping
 	/// only the logout-age timer. Identity cleanup is gated to the World Authority in the cluster and
 	/// the lane worlds keep RemoveOldIdentitiesH at 0, so the production path would otherwise stay

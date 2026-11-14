@@ -430,6 +430,12 @@ public static class CharacterRegistryService
 				&& instance.State == "Live" && instance.CharacterEntityId != 0);
 	}
 
+	/// <summary>SE-1487 forget player, World Authority: drops the identity's settings of record and registry instance.</summary>
+	internal static bool Forget(long identityId)
+	{
+		lock (Sync) return Record.Remove(identityId) | Live.Remove(identityId);
+	}
+
 	public static string PersistedRecord()
 	{
 		lock (Sync) return JsonSerializer.Serialize(Record.Values.OrderBy(settings => settings.IdentityId).ToArray());
