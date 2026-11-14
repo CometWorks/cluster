@@ -5173,7 +5173,15 @@ internal sealed partial class PartitionPersistence
 					ownerNode, rowGeneration, localGeneration, m_node, recorded, liveElsewhere, ownerAnswered);
 				FencedVerdict verdict = Classify(null, false);
 				// Only a possible collision (the same verdict with an empty census the owner answered) pays for the census.
-				if (verdict != FencedVerdict.Stale || Classify(new HashSet<long>(), true) != FencedVerdict.Collision) return verdict;
+				if (verdict != FencedVerdict.Stale || Classify(new HashSet<long>(), true) != FencedVerdict.Collision)
+				{
+					if (verdict == FencedVerdict.Stale)
+						MyLog.Default.WriteLineAndConsole("[ClusterPlugin] fenced partition " + partitionId + " is stale: row owner=" + (ownerNode ?? "-")
+							+ " generation=" + rowGeneration + " retired=" + isRetired + " offline=" + isOffline + " carried=" + (retiredMembers?.Length ?? -1)
+							+ " carriedOurs=" + (recorded != null && retiredMembers != null ? recorded.Count(retiredMembers.Contains) : -1)
+							+ ", local generation=" + localGeneration + " recorded=" + (recorded?.Length ?? -1));
+					return verdict;
+				}
 				LiveCensus census = SnapshotLiveEntitiesElsewhere(client);
 				return Classify(census, census.HoldersOf.Values.Any(holders => holders.Any(holder => holder.Node == ownerNode)));
 			}
