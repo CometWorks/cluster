@@ -140,6 +140,9 @@ One recycle runs at a time:
    pins its components to the spare, clients last, as for a node-control recycle.
 2. Once the node owns nothing it is closed and reports Empty, which turns its slot's incumbent action from Draining
    into Kill. Past the drain timeout it is closed anyway, and its own close drain hands out or offlines the rest.
+   A player in a partition that is still there is disconnected and rejoins by itself: the Gateway accepts the
+   closed node's release although the player is routed to the partition, the spare recovers it, and the join,
+   held meanwhile, lands in the player's body (SE-1553).
 3. Empty (or Dead) designates the slot a spare. Host kills that incarnation and reports Gone; the slot is still
    wanted, so Host restarts it, and the new incarnation registers as the spare holding nothing.
 

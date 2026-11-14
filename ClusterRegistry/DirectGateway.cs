@@ -703,7 +703,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                                 _ => MigrationSide.Elsewhere,
                             };
                             if (ChooseMove(reports[i].Report, reports[j].Report, pairEnvelope, routed, HeldMover, gapModel, TravellingClients(), ValidationBlocked, PairMigrationSide,
-                                    passLoad[sourceNode], passLoad[targetNode], voidedPins.UnionWith, trains.Add, heavy)
+                                    passLoad[sourceNode], passLoad[targetNode], voidedPins.UnionWith, trains.Add, heavy,
+                                    retiring.Contains(sourceNode), retiring.Contains(targetNode))
                                 is { } candidate && (decision is not { } current || candidate.Gap < current.Move.Gap))
                                 decision = candidate.ToTarget
                                     ? (candidate, reports[i], reports[j])
@@ -1364,6 +1365,17 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// stop blocking disposal. A missing entry means no scheduler pass has observed the
     /// disagreement yet - the conservative case, so the pin stands.
     /// </summary>
+    /// <summary>
+    /// SE-1553: whether a connected client routed to a partition still refuses its release. Not for a Closed node:
+    /// it releases a partition only after its drain registered the Final and unloaded it, and the registry routes
+    /// no join to a Closed node, so the routed client cannot be served there. Refusing kept the partition on the
+    /// closed node for the whole <see cref="RouteOverReportGrace"/> while the client it was kept for could not join
+    /// (octahedron 2026-11-14 19:11 and 20:11 CET, 117 refusals for one client). Released, recovery loads the Final
+    /// on a serving node and the client's route resolves there.
+    /// </summary>
+    internal static bool ReleaseRoutePinApplies(bool pinStale, NodeState? releasingNode) =>
+        !pinStale && releasingNode != NodeState.Closed;
+
     private bool RoutePinStale(ulong partition) =>
         _routeContradictedSince.TryGetValue(partition, out DateTimeOffset since)
         && DateTimeOffset.UtcNow - since >= RouteOverReportGrace;
@@ -1509,7 +1521,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         HashSet<ulong> routed, Func<ulong, bool> blocked, CostModel? model = null,
         HashSet<ulong>? travelling = null, Func<ulong, bool>? validationBlocked = null,
         Func<ulong, MigrationSide>? migration = null, double loadSource = 0, double loadTarget = 0,
-        Action<ulong[]>? pinVoided = null, Action<ulong[]>? carried = null, IReadOnlySet<ulong>? heavy = null)
+        Action<ulong[]>? pinVoided = null, Action<ulong[]>? carried = null, IReadOnlySet<ulong>? heavy = null,
+        bool sourceRetiring = false, bool targetRetiring = false)
     {
         model ??= new CostModel();
         Func<ulong, bool> hardBlocked = validationBlocked ?? (_ => false);
@@ -1601,6 +1614,18 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         why += $"; HandoverBlocked {string.Join(",", blockedIsTarget ? blockedOnTarget : blockedOnSource)}"
                             + $" -> home {(blockedIsTarget ? "target" : "source")}";
                     homeIsTarget = blockedIsTarget;
+                }
+                // SE-1553: never onto a retiring node. Its drain pins each component to the node that replaces it; a
+                // member that cannot leave (HandoverBlocked) voids the pin, and the cost or the block then homed the
+                // component on the retiring node, so what the drain had carried out was handed back (octahedron
+                // 2026-11-14 19:01-19:11 CET: 9 handovers into local-node-3 during its drain, 27 of 29 partitions
+                // still there at the forced close). The other side is the home; the blocked member stays behind
+                // until its block clears or the node closes, and the per-member loop below skips it.
+                if ((homeIsTarget ? targetRetiring : sourceRetiring) && !(homeIsTarget ? sourceRetiring : targetRetiring))
+                {
+                    homeIsTarget = !homeIsTarget;
+                    why += $"; {(homeIsTarget ? "source" : "target")} is retiring -> home {(homeIsTarget ? "target" : "source")}";
+                    if (!members.Any(m => m.OnSource == homeIsTarget)) continue;
                 }
             }
             // T-0249 (w33 2026-09-26 01:46): a migration moves its component member by member, so while it
@@ -3332,6 +3357,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     return false;
                 }
                 session.ClientConnectedPacket = packet;
+                NoteSteamLoginPresented(session);
                 if (session.Credential != null) BeginPlayerAdmission(session);
                 else if (!BeginTicketValidation(session, packet)) return false;
             }
@@ -4865,14 +4891,16 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // (w19 partition 1780: a clean drain Final, reported nowhere, held node-3
                 // past its kill deadline). Retirement below keeps the unconditional guard -
                 // that one destroys reachability.
-                if (!RoutePinStale(releasePartition))
+                string releaseNode = Required(context, "node");
+                if (ReleaseRoutePinApplies(RoutePinStale(releasePartition),
+                        _registry.Nodes().FirstOrDefault(x => x.Node == releaseNode)?.State))
                     foreach (ulong releaseClient in _clients.Keys)
                     {
                         if (_registry.RoutedPartition(releaseClient) == releasePartition)
                             throw new RegistryConflictException(
                                 $"Partition {releasePartition} is routed to connected client {releaseClient}; refusing release");
                     }
-                WriteJson(context, 200, _registry.ReleasePartition(releasePartition, Required(context, "node"), long.Parse(Required(context, "epoch")),
+                WriteJson(context, 200, _registry.ReleasePartition(releasePartition, releaseNode, long.Parse(Required(context, "epoch")),
                     long.Parse(Required(context, "generation")), memberless: context.Request.QueryString["memberless"] == "true",
                     failedRecovery: context.Request.QueryString["failed"] == "true"));
                 return;
