@@ -84,6 +84,8 @@ internal sealed partial class PartitionPersistence
 	private readonly ConcurrentQueue<ulong> m_fencedOrphans = new ConcurrentQueue<ulong>();
 	/// <summary>SE-1461: startup-fenced partitions whose id another node's partition took; their content takes a fresh id.</summary>
 	private readonly ConcurrentQueue<ulong> m_fencedCollisions = new ConcurrentQueue<ulong>();
+	/// <summary>SE-1461 bench seam CLUSTER_TEST_STARTUP_CLAIM_DELAY_MS: set while it holds the startup claims.</summary>
+	private volatile bool m_startupClaimsHeld;
 
 	private void EnqueueFenced(ulong id, FencedVerdict verdict)
 	{
@@ -337,7 +339,7 @@ internal sealed partial class PartitionPersistence
 		// start 5 s after m_registryReady, imports need registration): everything that appears is the
 		// node's own world file streaming in, and one sweep at first Update proved too early - the
 		// entities materialize over the following frames. Sweep every frame of that window.
-		if (RegistryEnabled && !m_registryReady) DropWorldFileEntities();
+		if (RegistryEnabled && !m_registryReady) DropWorldFileEntities(spareAssigned: m_startupClaimsHeld);
 		if (!m_loaded)
 		{
 			LoadAssigned();
@@ -883,10 +885,11 @@ internal sealed partial class PartitionPersistence
 	/// line with the World Authority's set (<see cref="AdminSafeZones"/>). A block's zone goes; it lives with
 	/// its block (<see cref="BlockSafeZones"/>).
 	/// </summary>
-	private static void DropWorldFileEntities()
+	private static void DropWorldFileEntities(bool spareAssigned)
 	{
 		MyEntity[] dynamicEntities = MyEntities.GetEntities()
-			.Where(entity => entity is not MyVoxelBase && entity is not MySafeZone { SafeZoneBlockId: 0 } && !entity.MarkedForClose)
+			.Where(entity => entity is not MyVoxelBase && entity is not MySafeZone { SafeZoneBlockId: 0 } && !entity.MarkedForClose
+				&& !(spareAssigned && IsFenceTainted(entity.EntityId)))
 			.ToArray();
 		ClusterCloseScope.Run(() =>
 		{
@@ -1970,6 +1973,8 @@ internal sealed partial class PartitionPersistence
 		// node take one of these seed ids in between (P3-SEED-COLLIDE).
 		if (int.TryParse(Environment.GetEnvironmentVariable("CLUSTER_TEST_STARTUP_CLAIM_DELAY_MS"), out int claimDelay) && claimDelay > 0)
 		{
+			// The boot sweep runs until the registry is ready and would close the assigned saves' content meanwhile.
+			m_startupClaimsHeld = true;
 			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] startup claims held " + claimDelay + " ms (CLUSTER_TEST_STARTUP_CLAIM_DELAY_MS)");
 			Thread.Sleep(claimDelay);
 		}
