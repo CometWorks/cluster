@@ -64,7 +64,8 @@ def _backup(bench, n: int) -> int:
         bench.cluster._request("GET", f"/admin/v1/operations/{op['operationId']}", control)["data"]), 60, f"backup {n} done")
     _require(bench, f"backup {n}: the registry copy succeeded", done["state"] == "Succeeded", json.dumps(done)[:300])
     artifact = done["result"]["artifactId"]
-    bench.cluster._request("DELETE", f"/admin/v1/artifacts/{artifact}", control, 60,
+    # ?backup=stored, as Quasar says once it has stored the backup: only that moves the census's backupAt (SE-1351).
+    bench.cluster._request("DELETE", f"/admin/v1/artifacts/{artifact}?backup=stored", control, 60,
                            headers={"Idempotency-Key": f"se1316-release-{n}"})
     at = wait_until(lambda: (lambda c: c.get("backupAt") if (c.get("backupAt") or 0) >= started else None)(
         bench.cluster.get("/registry/npc-census")), 30, f"backup {n} in the census")
