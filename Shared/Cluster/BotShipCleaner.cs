@@ -22,8 +22,9 @@ namespace ClusterPlugin;
 /// new one; the old one stays in the world (about 20 an hour on octahedron-test, 367 removed by hand on 2026-11-09).
 ///
 /// A BOT SHIP is a top-level grid whose block owners (big and small) are all identities of <c>cleanup.botSteamIds</c>.
-/// It is IN USE while a pilot sits in any grid of its physical group, a player controls it, or a player or bot stands
-/// within <c>cleanup.botShipUseRadius</c> metres of it. Every <see cref="TrackMilliseconds"/> the node stamps a bot
+/// It is IN USE while a pilot sits in any grid of its physical group, a player controls it, or a human player (a viewed
+/// camera too) or one of its owner bots stands within <c>cleanup.botShipUseRadius</c> metres of it; other bots passing by
+/// don't count (SE-1528). Every <see cref="TrackMilliseconds"/> the node stamps a bot
 /// ship in use with the time (unix seconds). The stamp rides the grid's object builder (<see cref="BlockBuilderEntry"/>,
 /// <see cref="Key"/>), so a handover, a partition save, an offline partition and a node restart all keep it. A ship
 /// first seen without one counts as used then: switching the cleanup on starts every ship's clock.
@@ -107,6 +108,17 @@ internal static class BotShipCleaner
 		BlockBuilderEntry.Write(builder, Key, lastUse.ToString(CultureInfo.InvariantCulture));
 	}
 
+	/// <summary>SE-1528 bench: people standing somewhere with no client behind them (a bot beside a ship), by test key.</summary>
+	private static readonly ConcurrentDictionary<string, (ulong Steam, Vector3D At)> m_testPeople =
+		new ConcurrentDictionary<string, (ulong Steam, Vector3D At)>();
+
+	/// <summary>Test seam: put someone with that Steam ID at <paramref name="at"/> for the use tracking, or take them away (null).</summary>
+	internal static void SetTestPerson(string key, ulong steamId, Vector3D? at)
+	{
+		if (at is { } position) m_testPeople[key] = (steamId, position);
+		else m_testPeople.TryRemove(key, out _);
+	}
+
 	/// <summary>The grid's last use (test probe), null when it is not tracked.</summary>
 	internal static long? LastUse(long entityId) => m_lastUse.TryGetValue(entityId, out long lastUse) ? lastUse : null;
 
@@ -165,14 +177,43 @@ internal static class BotShipCleaner
 		return positions;
 	}
 
-	/// <summary>Why the group is in use right now, or null.</summary>
-	private static string InUse(List<MyCubeGrid> group, double radius, List<Vector3D> people)
+	/// <summary>
+	/// Every player and viewed camera the cluster position registry knows, plus this node's online players at their exact
+	/// positions, with their Steam IDs (0 for a camera: its viewer is unknown).
+	/// </summary>
+	private static List<(ulong Steam, Vector3D At)> People()
 	{
+		var people = new List<(ulong, Vector3D)>();
+		foreach (ClusterPlayerPosition player in PositionRegistryService.Players)
+			people.Add((player.ClientId, new Vector3D(player.X, player.Y, player.Z)));
+		foreach (MyPlayer player in MySession.Static.Players.GetOnlinePlayers())
+			if (player.Controller?.ControlledEntity?.Entity is MyEntity controlled && controlled.PositionComp != null)
+				people.Add((player.Id.SteamId, controlled.PositionComp.GetPosition()));
+			else if (player.Character?.PositionComp != null)
+				people.Add((player.Id.SteamId, player.Character.PositionComp.GetPosition()));
+		people.AddRange(m_testPeople.Values);
+		return people;
+	}
+
+	/// <summary>
+	/// SE-1528: whether someone near a bot ship keeps it in use: a human (or a viewed camera) does, and so does a bot that
+	/// owns the ship. Any other bot is only passing by: in a station hangar janitors, traders and taxi drivers come and go
+	/// all the time, and counting them kept an abandoned ship there in use for good.
+	/// </summary>
+	internal static bool KeepsInUse(ulong steamId, SteamIdRanges bots, ICollection<ulong> ownerSteamIds)
+		=> !bots.Contains(steamId) || ownerSteamIds.Contains(steamId);
+
+	/// <summary>Why the group is in use right now, or null.</summary>
+	private static string InUse(List<MyCubeGrid> group, double radius, List<(ulong Steam, Vector3D At)> people, SteamIdRanges bots)
+	{
+		var owners = new HashSet<ulong>(group.SelectMany(grid => grid.BigOwners.Concat(grid.SmallOwners))
+			.Select(owner => MySession.Static.Players.TryGetSteamId(owner)));
+		List<Vector3D> near = people.Where(person => KeepsInUse(person.Steam, bots, owners)).Select(person => person.At).ToList();
 		foreach (MyCubeGrid grid in group)
 		{
 			foreach (MyCockpit cockpit in grid.GetFatBlocks<MyCockpit>())
 				if (cockpit.Pilot != null) return "seated";
-			if (UnvisitedNpcSweeper.Visited(grid, radius, people)) return "someone near";
+			if (UnvisitedNpcSweeper.Visited(grid, radius, near)) return "someone near";
 		}
 		foreach (MyPlayer player in MySession.Static.Players.GetOnlinePlayers())
 			if (player.Controller?.ControlledEntity?.Entity?.GetTopMostParent() is MyCubeGrid controlled && group.Contains(controlled))
@@ -207,7 +248,7 @@ internal static class BotShipCleaner
 	{
 		SteamIdRanges bots = Bots();
 		double radius = ClusterConfig.GetInt("cleanup.botShipUseRadius");
-		List<Vector3D> people = UnvisitedNpcSweeper.PlayerPositions();
+		List<(ulong Steam, Vector3D At)> people = People();
 		long now = Now;
 		var ships = new List<MyCubeGrid>();
 		var seen = new HashSet<long>();
@@ -222,7 +263,7 @@ internal static class BotShipCleaner
 			{
 				if (!settling) m_lastUse[grid.EntityId] = now;
 			}
-			else if (!settling && InUse(Group(grid), radius, people) != null)
+			else if (!settling && InUse(Group(grid), radius, people, bots) != null)
 				m_lastUse[grid.EntityId] = now;
 		}
 		// A grid that is no bot ship root (any more) is forgotten. One not in the entity list may be an import still being
@@ -242,7 +283,7 @@ internal static class BotShipCleaner
 	}
 
 	/// <summary>Why <paramref name="root"/> must stay now, or null. <paramref name="group"/> = its physical group.</summary>
-	private static string Blocker(MyCubeGrid root, List<MyCubeGrid> group, SteamIdRanges bots, double radius, List<Vector3D> people,
+	private static string Blocker(MyCubeGrid root, List<MyCubeGrid> group, SteamIdRanges bots, double radius, List<(ulong Steam, Vector3D At)> people,
 		List<Vector3D> humans, Dictionary<long, ulong> holders, PartitionPersistence persistence, out ulong partition)
 	{
 		partition = holders.TryGetValue(root.EntityId, out ulong holder) ? holder : 0;
@@ -259,7 +300,7 @@ internal static class BotShipCleaner
 			if (grid != root && !ownSubgrid && !IsBotShip(grid, bots)) return "attached to another grid";
 			if (!holders.TryGetValue(grid.EntityId, out ulong other) || other != partition) return "group spans partitions";
 		}
-		if (InUse(group, radius, people) is { } use) return use;
+		if (InUse(group, radius, people, bots) is { } use) return use;
 		// Viktor, 2026-11-09: a human player within the sync distance sees the ship, so it stays while one is there.
 		double sync = MyLayers.GetSyncDistance();
 		foreach (MyCubeGrid grid in group)
@@ -275,7 +316,7 @@ internal static class BotShipCleaner
 		int max = ClusterConfig.GetInt("cleanup.botShipsMaxPerRun");
 		SteamIdRanges bots = Bots();
 		double radius = ClusterConfig.GetInt("cleanup.botShipUseRadius");
-		List<Vector3D> people = UnvisitedNpcSweeper.PlayerPositions();
+		List<(ulong Steam, Vector3D At)> people = People();
 		List<Vector3D> humans = HumanPositions(bots);
 		Dictionary<long, ulong> holders = partitions.Holders();
 		var due = new List<(MyCubeGrid Root, List<MyCubeGrid> Group, ulong Partition, long LastUse)>();
@@ -319,7 +360,7 @@ internal static class BotShipCleaner
 		if (backupAt == 0) return 0;
 		SteamIdRanges bots = Bots();
 		double radius = ClusterConfig.GetInt("cleanup.botShipUseRadius");
-		List<Vector3D> people = UnvisitedNpcSweeper.PlayerPositions();
+		List<(ulong Steam, Vector3D At)> people = People();
 		List<Vector3D> humans = HumanPositions(bots);
 		Dictionary<long, ulong> holders = partitions.Holders();
 		var due = new List<(MyCubeGrid Root, List<MyCubeGrid> Group, ulong Partition, long LastUse)>();

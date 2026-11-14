@@ -17,6 +17,8 @@ namespace ClusterTestPlugin;
 /// node lacks it), so a second node knows the owner of a ship that arrives from the first. <c>POST /bot-ship-test-pilot?grid=&amp;owner=</c> seats a new character of
 /// that identity in the grid's first free cockpit. <c>POST /bot-ship-test-owner?grid=&amp;owner=</c> gives every block of
 /// the grid to that identity (SE-1419: a bot ship sold to a player is no bot ship any more).
+/// <c>POST /bot-ship-test-person?key=&amp;steamId=[&amp;x=&amp;y=&amp;z=]</c> has someone with that Steam ID stand at x, y, z for
+/// the cleanup's use tracking, with no client (SE-1528: a bot beside a ship); without x, y, z it takes them away.
 /// </summary>
 internal static class BotShipTestRoutes
 {
@@ -35,6 +37,17 @@ internal static class BotShipTestRoutes
             long grid = TestRoutes.Long(context, "grid");
             long owner = TestRoutes.Long(context, "owner");
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => Pilot(grid, owner)));
+        });
+        TestRoutes.Add("POST", "/bot-ship-test-person", context =>
+        {
+            string key = TestRoutes.Query(context, "key");
+            ulong steamId = ulong.Parse(TestRoutes.Query(context, "steamId"), System.Globalization.CultureInfo.InvariantCulture);
+            VRageMath.Vector3D? at = context.Request.QueryString["x"] == null ? null
+                : new VRageMath.Vector3D(TestRoutes.Double(context, "x"), TestRoutes.Double(context, "y"), TestRoutes.Double(context, "z"));
+            var seam = HarmonyLib.AccessTools.Method("ClusterPlugin.BotShipCleaner:SetTestPerson")
+                ?? throw new MissingMethodException("ClusterPlugin.BotShipCleaner", "SetTestPerson");
+            seam.Invoke(null, new object[] { key, steamId, at });
+            TestRoutes.Json(context, 200, new { key, steamId, placed = at.HasValue });
         });
         TestRoutes.Add("POST", "/bot-ship-test-owner", context =>
         {
