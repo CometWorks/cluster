@@ -14,8 +14,8 @@ using VRage.Plugins;
 #if !LOCAL_BUILD
 using System.Reflection;
 
-[assembly: AssemblyVersion("0.3.13.0")]
-[assembly: AssemblyFileVersion("0.3.13.0")]
+[assembly: AssemblyVersion("0.3.14.0")]
+[assembly: AssemblyFileVersion("0.3.14.0")]
 #endif
 
 namespace ClusterNodePlugin;
