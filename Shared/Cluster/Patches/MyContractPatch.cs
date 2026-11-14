@@ -17,6 +17,7 @@ public static class MyContractPatch
 		MyContractSeams.ClusterBeginDeposit = SeamBeginDeposit;
 		MyContractSeams.ClusterCommitDeposit = SeamCommitDeposit;
 		ContractLedger.Install();
+		StationContractOffers.Install();
 	}
 
 	private static (IDisposable Scope, bool Approved) SeamBeginDeposit(long payerId, long amount)

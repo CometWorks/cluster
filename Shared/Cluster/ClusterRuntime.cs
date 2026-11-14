@@ -1030,6 +1030,7 @@ public static class ClusterRuntime
 		MyPlayerCollectionPatch.Update();
 		MyBankingSystemPatch.Update();
 		ContractLedger.Update();
+		StationContractOffers.Update();
 		MyFactionCollectionPatch.Update();
 		PositionRegistryService.Update();
 		OfflinePartitionService.Update();   // T-0193: the World Authority's offline table poll and player wake pass
