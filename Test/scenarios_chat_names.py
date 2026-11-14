@@ -169,8 +169,12 @@ def p2_chat_names(bench) -> None:
     _check_named(bench, "client 3 names client 1", _say(bench, api1, api3, "1to3"), name1)
 
     # SE-1476: client 1 rides handovers while another player's member is taken off it after its export.
-    api3 = _transit_leg(bench, api1, "pending", "node-1", "node-3", CLIENT3_ID, name3)
-    api3 = _transit_leg(bench, api1, "after", "node-3", "node-1", CLIENT3_ID, name3)
+    # _join boots node-1 and node-2 only; node-3 is the handover target. Automatic placement is paused, so it hosts
+    # nothing until client 1 is handed to it.
+    bench.cluster.start_node("node-3")
+    bench.cluster.wait_ready(nodes=["node-3"])
+    api3 = _transit_leg(bench, api1, "pending", "node-1", "node-3", CLIENT3_ID, name3, api3)
+    api3 = _transit_leg(bench, api1, "after", "node-3", "node-1", CLIENT3_ID, name3, api3)
     _transit_leg(bench, api1, "leave", "node-1", "node-3", CLIENT2_ID, name2, api2)
     bench.exercised(
         route="client 1 node-1, client 2 node-2, client 3 node-1 -> respawn preview switch -> node-2; "
@@ -178,7 +182,7 @@ def p2_chat_names(bench) -> None:
     )
 
 
-def _transit_leg(bench, api1, mode: str, source: str, target: str, subject: int, name: str, subject_api=None):
+def _transit_leg(bench, api1, mode: str, source: str, target: str, subject: int, name: str, subject_api):
     """SE-1476: hand client 1 from ``source`` to ``target`` while ``subject``'s member is taken off client 1 between
     its export and its release, then the subject (back) on node-2 says a line client 1 must name.
 
@@ -195,12 +199,18 @@ def _transit_leg(bench, api1, mode: str, source: str, target: str, subject: int,
     nodes = _nodes(bench)
     bench.cluster.node(source, f"/test-mirror-transit?client={CLIENT_ID}&mode={mode}&subject={subject}", "POST")
     if mode != "leave":
-        bench.kill_client(subject)
+        # A quit the way a player does it (Remote -> ExitThreadSafe); a killed client is noticed only at the
+        # Gateway's timeout, minutes later.
+        try:
+            subject_api.exit_game(force=True)
+        except Exception:  # noqa: BLE001 - the client may go before it answers
+            pass
         _require(
             bench,
             f"SETUP {mode}: {source} no longer lists the logged out client {subject}",
-            bool(_poll(lambda: not any(r["steamId"] == subject for r in _cluster_players(bench, source)), 120)),
+            bool(_poll(lambda: not any(r["steamId"] == subject for r in _cluster_players(bench, source)), 180)),
         )
+        bench.kill_client(subject)
         if mode == "pending":
             frozen = _poll(lambda: bench.cluster.node(source, "/test-mirror-transit").get("frozen") or None, 60)
             _require(bench, f"SETUP {mode}: {source}'s mirror has client {subject}'s withdrawal pending", bool(frozen))
@@ -226,7 +236,7 @@ def _transit_leg(bench, api1, mode: str, source: str, target: str, subject: int,
     _require(
         bench, f"SETUP {mode}: {source} took client {subject}'s member off client 1 after its export", bool(transit)
     )
-    if subject_api is None:
+    if mode != "leave":
         subject_api = start_second_client(bench, route_node="node-2", client_id=subject, remote_port=CLIENT3_PORT)
     wait_until(
         lambda: any(r["steamId"] == subject and r.get("node") == "node-2" for r in _cluster_players(bench, target))
