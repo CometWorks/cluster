@@ -82,6 +82,21 @@ def _answer(api, since: int, kind: str, owner: int, timeout: float = ANSWER_TIME
     )
 
 
+def _answered(api, since: int, kind: str, owner: int, key: str, expected: int) -> list[dict]:
+    """The admin's answers about ``owner`` once one shows ``expected`` (or the timeout ran out). A node may first
+    send vanilla's answer from its replica and then the corrected one; the menu shows the last."""
+    answers: list[dict] = []
+
+    def shown():
+        answers[:] = [
+            a for a in api.admin_economy_answers(since)["answers"] if a["kind"] == kind and a["identityId"] == owner
+        ]
+        return bool(answers) and answers[-1][key] == expected or None
+
+    _poll(shown, ANSWER_TIMEOUT)
+    return answers
+
+
 def _converged(bench, label: str, read, expected, places: dict) -> None:
     """Every place (name -> zero-argument reader) shows ``expected`` within CONVERGE_TIMEOUT."""
     seen = {}
@@ -99,12 +114,12 @@ def _converged(bench, label: str, read, expected, places: dict) -> None:
 
 def _change_balance(bench, admin, owner: int, amount: int, expected: int, places: dict, label: str) -> None:
     sent = admin.admin_economy("change-balance", owner, amount)
-    answer = _answer(admin, sent["sequence"], "balance", owner)
-    bench.record(f"balance-{label}", {"sent": sent, "answer": answer})
+    answers = _answered(admin, sent["sequence"], "balance", owner, "balance", expected)
+    bench.record(f"balance-{label}", {"sent": sent, "answers": answers})
     bench.check(
-        f"{label}: the admin is answered with the new balance {expected}",
-        answer is not None and answer["balance"] == expected,
-        json.dumps(answer),
+        f"{label}: the admin is shown the new balance {expected}",
+        bool(answers) and answers[-1]["balance"] == expected,
+        json.dumps(answers),
     )
     _converged(bench, label, lambda reader: reader(), expected, places)
 
@@ -113,12 +128,12 @@ def _change_reputation(
     bench, admin, owner: int, faction: int, amount: int, expected: int, places: dict, label: str
 ) -> None:
     sent = admin.admin_economy("change-reputation", owner, amount, faction_id=faction)
-    answer = _answer(admin, sent["sequence"], "reputation", owner)
-    bench.record(f"reputation-{label}", {"sent": sent, "answer": answer})
+    answers = _answered(admin, sent["sequence"], "reputation", owner, "reputation", expected)
+    bench.record(f"reputation-{label}", {"sent": sent, "answers": answers})
     bench.check(
-        f"{label}: the admin is answered with the new reputation {expected}",
-        answer is not None and answer["reputation"] == expected,
-        json.dumps(answer),
+        f"{label}: the admin is shown the new reputation {expected}",
+        bool(answers) and answers[-1]["reputation"] == expected,
+        json.dumps(answers),
     )
     _converged(bench, label, lambda reader: reader(), expected, places)
 
