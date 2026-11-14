@@ -62,14 +62,19 @@ def p3_seed_collide(bench) -> None:
         return
 
     bench.cluster.wait_ready(nodes=["node-1"], timeout=CLAIM_DELAY_MS / 1000 + 300)
-    # "Game ready" comes before the held claims: wait out the hold.
-    fenced = _poll(lambda: _lines(bench, "node-1", rf"startup partition fenced, waiting for recovery: {collided} ") or None,
-                   CLAIM_DELAY_MS / 1000 + 120)
+    # "Game ready" comes before the held claims: wait out the hold. The members are read while it lasts, because
+    # the re-home follows the refusal at once and the fenced row is then gone.
+    members = []
+
+    def refused():
+        if not members:
+            row = next((p for p in _partitions(bench, "node-1") if p["id"] == collided), None) or {}
+            members.extend(m["id"] for m in row.get("members") or [])
+        return _lines(bench, "node-1", rf"startup partition fenced, waiting for recovery: {collided} ") or None
+    fenced = _poll(refused, CLAIM_DELAY_MS / 1000 + 120)
     bench.check(f"node-1's startup claim of seed {collided} is refused", bool(fenced))
-    row = next((p for p in _partitions(bench, "node-1") if p["id"] == collided), None) or {}
-    members = [m["id"] for m in row.get("members") or []]
-    bench.record("fenced-seed", {"partition": collided, "members": members, "fenced": row.get("fenced")})
-    bench.check("node-1 reports the seed's members, fenced", bool(members) and row.get("fenced") is True, json.dumps(row)[:300])
+    bench.record("fenced-seed", {"partition": collided, "members": members})
+    bench.check("node-1 held the seed's members before the refusal", bool(members))
 
     def rehomed():
         places = {_where(bench, member)[:2] for member in members}
