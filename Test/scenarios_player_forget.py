@@ -50,14 +50,14 @@ def _view(bench, role: str, identity: int, tag: str, steam: int) -> dict:
     return {
         "identity": bench.cluster.node(role, f"/identity-test-status?identityId={identity}").get("exists"),
         "bank": bench.cluster.node(role, f"/banking-test-status?ownerId={identity}").get("exists"),
-        "faction": bench.cluster.node(role, f"/faction-test-status?tag={tag}").get("members"),
+        "faction": (lambda f: f.get("members") if f.get("exists") else None)(bench.cluster.node(role, f"/faction-test-status?tag={tag}")),
         "promoted": bench.cluster.node(role, f"/promote-test?userId={steam}").get("promoted"),
     }
 
 
 def p2_player_forget(bench) -> None:
     bench.start_cluster(nodes=list(ROLES))
-    tag = f"F{random.randrange(100, 999)}"
+    tag = f"F{random.randrange(100):02d}"
     ids = {}
     for name, steam in STEAM.items():
         made = bench.cluster.node("wa-1", f"/bot-ship-test-identity?name=Trader-{name}&steamId={steam}", "POST")
@@ -75,8 +75,9 @@ def p2_player_forget(bench) -> None:
     _require(bench, "setup: identity, bank account, faction membership and promotion reached every role", _poll(
         lambda: before.update({role: _view(bench, role, forget, tag, STEAM["forget"]) for role in ROLES}) or all(
             v["identity"] and v["bank"] and forget in (v["faction"] or []) and v["promoted"] == 1 for v in before.values()), 90),
-        json.dumps(before))
+        json.dumps(before) + " wa faction " + json.dumps(bench.cluster.node("wa-1", f"/faction-test-status?tag={tag}")))
     bench.record("before", before)
+    bench.record("faction-before", bench.cluster.node("wa-1", f"/faction-test-status?tag={tag}&identityId={forget}"))
 
     # 1. A player with built blocks on a loaded grid stays.
     grid = bench.cluster.node("node-1", f"/trash-test-spawn?x=700000&y=0&z=0&blocks=8&builtBy={ids['builder']}", "POST")
