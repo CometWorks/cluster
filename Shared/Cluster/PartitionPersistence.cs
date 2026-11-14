@@ -82,6 +82,16 @@ internal sealed partial class PartitionPersistence
 	private const double FencedRegistrationRetrySeconds = 5;
 	private readonly ConcurrentDictionary<ulong, byte> m_fencedKeptLogged = new ConcurrentDictionary<ulong, byte>();
 	private readonly ConcurrentQueue<ulong> m_fencedOrphans = new ConcurrentQueue<ulong>();
+	/// <summary>SE-1461: startup-fenced partitions whose id another node's partition took; their content takes a fresh id.</summary>
+	private readonly ConcurrentQueue<ulong> m_fencedCollisions = new ConcurrentQueue<ulong>();
+	/// <summary>SE-1461 bench seam CLUSTER_TEST_STARTUP_CLAIM_DELAY_MS: set while it holds the startup claims.</summary>
+	private volatile bool m_startupClaimsHeld;
+
+	private void EnqueueFenced(ulong id, FencedVerdict verdict)
+	{
+		if (verdict == FencedVerdict.Collision) m_fencedCollisions.Enqueue(id);
+		else m_fencedOrphans.Enqueue(id);
+	}
 	// The member ids each assigned save was loaded with, kept until the partition's claim verdict
 	// arrives: the census misses entities still in the parallel init pipeline, so any purge that
 	// enumerates members through Evaluate() silently leaves a big grid alive (the 11k-block seed
@@ -279,7 +289,9 @@ internal sealed partial class PartitionPersistence
 		m_node = Environment.GetEnvironmentVariable(NodeEnvironmentVariable);
 		m_endpoint = Environment.GetEnvironmentVariable(EndpointEnvironmentVariable);
 		int.TryParse(Environment.GetEnvironmentVariable(CatalogSlotEnvironmentVariable), out m_catalogSlot);
-		m_seedIds = CatalogSeedIds(world);
+		// SE-1461 bench seam: CLUSTER_TEST_MINT_SEED_IDS=1 brings back 0.3.11's id reserve (it may mint other slots'
+		// seed ids), so a bench can make the startup id collision that the re-homing of fenced partitions answers.
+		m_seedIds = Environment.GetEnvironmentVariable("CLUSTER_TEST_MINT_SEED_IDS") == "1" ? new HashSet<ulong>() : CatalogSeedIds(world);
 		// T-0321: the same advertised endpoint the node registers (ClusterRuntime.AdvertisedControlEndpoint).
 		m_controlEndpoint = int.TryParse(Environment.GetEnvironmentVariable(ControlPortEnvironmentVariable), out int controlPort)
 			? ClusterProtocol.ClusterNet.AdvertisedControlEndpoint(Environment.GetEnvironmentVariable("CLUSTER_NODE_CONTROL_ENDPOINT"),
@@ -327,7 +339,7 @@ internal sealed partial class PartitionPersistence
 		// start 5 s after m_registryReady, imports need registration): everything that appears is the
 		// node's own world file streaming in, and one sweep at first Update proved too early - the
 		// entities materialize over the following frames. Sweep every frame of that window.
-		if (RegistryEnabled && !m_registryReady) DropWorldFileEntities();
+		if (RegistryEnabled && !m_registryReady) DropWorldFileEntities(spareAssigned: m_startupClaimsHeld);
 		if (!m_loaded)
 		{
 			LoadAssigned();
@@ -498,20 +510,54 @@ internal sealed partial class PartitionPersistence
 			{
 				foreach (ulong id in probe)
 				{
-					if (!FencedPartitionOwnedElsewhere(id))
+					FencedVerdict verdict = ClassifyFencedPartition(id);
+					if (verdict == FencedVerdict.Kept)
 					{
 						m_fencedRegistrations.TryRemove(id, out _);
 						continue;
 					}
-					if (m_fencedRegistrations.AddOrUpdate(id, 1, (_, strikes) => strikes + 1) >= 3
+					// SE-1461: a collision carries its own proof (the census), and the proof does not keep: the other
+					// node can merge its partition away within seconds, and the retired row then reads as stale. So it
+					// counts on the first probe, which runs right after the startup claims.
+					if ((m_fencedRegistrations.AddOrUpdate(id, 1, (_, strikes) => strikes + 1) >= 3 || verdict == FencedVerdict.Collision)
 							&& m_startupFenced.TryRemove(id, out _))
 					{
-						m_fencedOrphans.Enqueue(id);
-						MyLog.Default?.WriteLineAndConsole(
-							"[ClusterPlugin] startup-fenced partition confirmed stale by registry probe: " + id);
+						EnqueueFenced(id, verdict);
+						MyLog.Default?.WriteLineAndConsole(verdict == FencedVerdict.Collision
+							? "[ClusterPlugin] startup-fenced partition id taken by another node's partition (SE-1461): " + id
+							: "[ClusterPlugin] startup-fenced partition confirmed stale by registry probe: " + id);
 					}
 				}
 			});
+		}
+		while (m_fencedCollisions.TryDequeue(out ulong collided))
+		{
+			// SE-1461: the registry's row of this id is another node's partition and holds none of this content, so the
+			// content is the only copy. Drop the id, keep the entities: untainted and in no layout, the next membership
+			// pass gives them a new layout, whose fresh id this node claims. The registry and the Gateway then agree
+			// on one owner for each id, and the content moves like any other partition.
+			bool reowned;
+			lock (m_owned) reowned = m_owned.ContainsKey(collided);
+			reowned |= ClusterControlServer.HasLiveInboundTransfer(collided);
+			long[] members = m_assignedMembers.TryGetValue(collided, out long[] loaded) ? loaded : Array.Empty<long>();
+			if (!reowned)
+			{
+				m_partitions.Remove(collided);
+				ForgetOwnership(collided);
+				m_state.TryRemove(collided, out _);
+				lock (m_drainSaves) m_drainSaves.Remove(collided);
+				foreach (long member in members)
+					if (IsFenceTainted(member)) ClusterRuntime.ClearFrozen(member);
+			}
+			UntaintAssigned(collided);
+			m_assignedMembers.TryRemove(collided, out _);
+			m_fencedRegistrations.TryRemove(collided, out _);
+			m_fencedRegistrationRetry.TryRemove(collided, out _);
+			m_fencedOrphanSince.TryRemove(collided, out _);
+			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] " + (reowned
+				? "skipped re-homing (partition re-owned or re-importing): " + collided
+				: "re-homed startup partition " + collided + ": its id is another node's partition, " + members.Length
+					+ " member(s) kept for a new layout with a fresh id (SE-1461)"));
 		}
 		List<ulong> stillInitializing = null;
 		while (m_fencedOrphans.TryDequeue(out ulong orphan))
@@ -842,10 +888,11 @@ internal sealed partial class PartitionPersistence
 	/// line with the World Authority's set (<see cref="AdminSafeZones"/>). A block's zone goes; it lives with
 	/// its block (<see cref="BlockSafeZones"/>).
 	/// </summary>
-	private static void DropWorldFileEntities()
+	private static void DropWorldFileEntities(bool spareAssigned)
 	{
 		MyEntity[] dynamicEntities = MyEntities.GetEntities()
-			.Where(entity => entity is not MyVoxelBase && entity is not MySafeZone { SafeZoneBlockId: 0 } && !entity.MarkedForClose)
+			.Where(entity => entity is not MyVoxelBase && entity is not MySafeZone { SafeZoneBlockId: 0 } && !entity.MarkedForClose
+				&& !(spareAssigned && IsFenceTainted(entity.EntityId)))
 			.ToArray();
 		ClusterCloseScope.Run(() =>
 		{
@@ -1924,6 +1971,15 @@ internal sealed partial class PartitionPersistence
 				MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] node epoch persistence unavailable, retrying: " + SecretRedactor.Redact(exception.Message));
 				Thread.Sleep(1000);
 			}
+		}
+		// SE-1461 bench seam: hold the startup claims after the assigned saves loaded, so a scenario can have another
+		// node take one of these seed ids in between (P3-SEED-COLLIDE).
+		if (int.TryParse(Environment.GetEnvironmentVariable("CLUSTER_TEST_STARTUP_CLAIM_DELAY_MS"), out int claimDelay) && claimDelay > 0)
+		{
+			// The boot sweep runs until the registry is ready and would close the assigned saves' content meanwhile.
+			m_startupClaimsHeld = true;
+			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] startup claims held " + claimDelay + " ms (CLUSTER_TEST_STARTUP_CLAIM_DELAY_MS)");
+			Thread.Sleep(claimDelay);
 		}
 		foreach ((ulong id, State state) in m_state.ToArray())
 		{
@@ -4976,7 +5032,7 @@ internal sealed partial class PartitionPersistence
 
 	/// <summary>
 	/// True only when the registry names THIS node as the partition's owner. The inverse of
-	/// <see cref="FencedPartitionOwnedElsewhere"/> is not good enough for T-0207's retry: that one
+	/// <see cref="ClassifyFencedPartition"/> is not good enough for T-0207's retry: that one
 	/// also answers false for an UNOWNED partition, and an unowned partition is the case ordinary
 	/// recovery already handles correctly. Any doubt - unknown partition, retired, registry
 	/// unreachable - answers false and leaves the existing fence in place.
@@ -5066,7 +5122,28 @@ internal sealed partial class PartitionPersistence
 		}
 	}
 
-	private bool FencedPartitionOwnedElsewhere(ulong partitionId)
+	/// <summary>SE-1461: what a startup-fenced partition is, by its registry row (see <see cref="ClassifyFenced"/>).</summary>
+	internal enum FencedVerdict { Kept, Stale, Collision }
+
+	/// <summary>
+	/// SE-1461: a startup-fenced partition whose registry row is owned elsewhere is usually a stale copy of content that
+	/// moved on (T-0155), and the fenced-orphan purge closes it. One shape is not: the other node minted this id for a
+	/// partition of its own. The row is then a fresh claim (generation 1, as the local seed is) and the other node holds
+	/// none of the members this save loaded. Purging that closed the only copy: on the cluster 0.3.11 nav bench node-2
+	/// minted node-1's seed ids 1,3,5,7 for its clients' layouts (SE-1443), node-1's startup claims got "is generation
+	/// 1, not 0", and a minute later node-1 purged Gamma Station. Such content keeps living and takes a fresh id.
+	/// No census (<paramref name="liveElsewhere"/> null), or one without the owner's answer, is no proof: stale.
+	/// </summary>
+	internal static FencedVerdict ClassifyFenced(bool retiredOrOffline, string owner, long rowGeneration, uint localGeneration,
+		string node, long[] recorded, ISet<long> liveElsewhere, bool ownerAnswered)
+	{
+		if (retiredOrOffline) return FencedVerdict.Stale;
+		if (owner == null || owner == node) return FencedVerdict.Kept;
+		return rowGeneration == 1 && localGeneration == 1 && recorded is { Length: > 0 } && liveElsewhere != null && ownerAnswered
+			&& !recorded.Any(liveElsewhere.Contains) ? FencedVerdict.Collision : FencedVerdict.Stale;
+	}
+
+	private FencedVerdict ClassifyFencedPartition(ulong partitionId)
 	{
 		try
 		{
@@ -5079,14 +5156,28 @@ internal sealed partial class PartitionPersistence
 				// Retired means lineage migrated the content into a successor whose saves are
 				// catalogued - the fenced local copy is provably stale and blocks the successor
 				// from ever co-locating here (partition 24 vs 27, 2026-08-10).
-				if (partition.TryGetProperty("Retired", out JsonElement retired) && retired.GetBoolean())
-					return true;
 				// T-0193: an offline partition's truth is its offline Final; a seed or template copy loaded
 				// here at boot is stale by construction and must not survive to meet the real one.
-				if (partition.TryGetProperty("Offline", out JsonElement offline) && offline.ValueKind == JsonValueKind.True)
-					return true;
+				bool retiredOrOffline = partition.TryGetProperty("Retired", out JsonElement retired) && retired.GetBoolean()
+					|| partition.TryGetProperty("Offline", out JsonElement offline) && offline.ValueKind == JsonValueKind.True;
 				string ownerNode = partition.GetProperty("Node").GetString();
-				return ownerNode != null && ownerNode != m_node;
+				long rowGeneration = partition.GetProperty("Generation").GetInt64();
+				uint localGeneration = m_state.TryGetValue(partitionId, out State state) ? state.Generation : 0;
+				long[] recorded = m_assignedMembers.TryGetValue(partitionId, out long[] members) ? members : null;
+				FencedVerdict verdict = ClassifyFenced(retiredOrOffline, ownerNode, rowGeneration, localGeneration, m_node, recorded, null, false);
+				// Only a possible collision (the same verdict with an empty census the owner answered) pays for the census.
+				if (verdict != FencedVerdict.Stale || ClassifyFenced(false, ownerNode, rowGeneration, localGeneration, m_node, recorded,
+						new HashSet<long>(), true) != FencedVerdict.Collision)
+				{
+					if (verdict == FencedVerdict.Stale)
+						MyLog.Default.WriteLineAndConsole("[ClusterPlugin] fenced partition " + partitionId + " is stale: row owner=" + (ownerNode ?? "-")
+							+ " generation=" + rowGeneration + " retired or offline=" + retiredOrOffline + ", local generation=" + localGeneration
+							+ " recorded=" + (recorded?.Length ?? -1));
+					return verdict;
+				}
+				LiveCensus census = SnapshotLiveEntitiesElsewhere(client);
+				bool ownerAnswered = census.HoldersOf.Values.Any(holders => holders.Any(holder => holder.Node == ownerNode));
+				return ClassifyFenced(false, ownerNode, rowGeneration, localGeneration, m_node, recorded, census, ownerAnswered);
 			}
 		}
 		catch (Exception exception)
@@ -5094,7 +5185,7 @@ internal sealed partial class PartitionPersistence
 			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] fenced partition ownership check unavailable: "
 				+ SecretRedactor.Redact(exception.Message));
 		}
-		return false;
+		return FencedVerdict.Kept;
 	}
 
 	private bool RegisterSave(PendingSave save, string path, PartitionSaveFile.Parsed parsed)
@@ -5148,8 +5239,12 @@ internal sealed partial class PartitionPersistence
 				if (m_registryReady
 					&& m_fencedRegistrations.AddOrUpdate(save.PartitionId, 1, (_, strikes) => strikes + 1) == 3)
 				{
-					if (FencedPartitionOwnedElsewhere(save.PartitionId))
-						m_fencedOrphans.Enqueue(save.PartitionId);
+					FencedVerdict verdict = ClassifyFencedPartition(save.PartitionId);
+					if (verdict != FencedVerdict.Kept)
+					{
+						if (verdict == FencedVerdict.Collision) m_startupFenced.TryRemove(save.PartitionId, out _);
+						EnqueueFenced(save.PartitionId, verdict);
+					}
 					else
 					{
 						// Unowned in the registry means nobody else holds a live copy - deleting ours
