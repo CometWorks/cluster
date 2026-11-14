@@ -2621,6 +2621,10 @@ internal sealed partial class GatewayRegistry : IDisposable
                 {
                     x.Partition, x.Node, x.Epoch, x.Generation, x.LeaseExpires, x.Recovering, Retired = IsRetired(x.Partition),
                     Offline = _state.OfflinePartitions.ContainsKey(x.Partition),
+                    // SE-1461: what the lineage that retired this row carried, for the one-row query only. A node
+                    // whose fenced startup copy shares none of it knows the id was another partition's.
+                    RetiredMembers = only != null && RetiringRecord(x.Partition) is { } retiring
+                        ? retiring.Members.Values.SelectMany(members => members).Distinct().ToArray() : null,
                     HandoverBlocked = _state.HandoverBlocks.TryGetValue(x.Partition, out HandoverBlockRecord? block)
                         && block.Attempts >= HandoverValidationAborts
                         ? new { Since = block.FirstAbort, block.Attempts, block.Reason, block.Signature, block.BackoffUntil }

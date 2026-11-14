@@ -674,7 +674,7 @@ internal static partial class ClusterSelfTest
 	private static void FencedIdCollision()
 	{
 		PartitionPersistence.FencedVerdict Classify(bool retired, string owner, long row, uint local, long[] recorded, HashSet<long> live, bool answered)
-			=> PartitionPersistence.ClassifyFenced(retired, owner, row, local, "node-1", recorded, live, answered);
+			=> PartitionPersistence.ClassifyFenced(false, retired, null, owner, row, local, "node-1", recorded, live, answered);
 		long[] station = { 128425315645744115 };
 		var census = new HashSet<long> { 72057594088263302, 72057594088263304 };   // node-2's client characters
 		Assert(Classify(false, "node-2", 1, 1, station, census, true) == PartitionPersistence.FencedVerdict.Collision,
@@ -693,6 +693,20 @@ internal static partial class ClusterSelfTest
 			"no recorded members: stale");
 		Assert(Classify(true, "node-2", 1, 1, station, census, true) == PartitionPersistence.FencedVerdict.Stale,
 			"a retired or offline row is stale");
+		// The other node's partition was merged away before the probe: the row is retired, its lineage lists what it carried.
+		PartitionPersistence.FencedVerdict Retired(bool offline, long[] carried, uint local, HashSet<long> live)
+			=> PartitionPersistence.ClassifyFenced(offline, true, carried, null, 1, local, "node-1", station, live, false);
+		long[] strays = { 72057594088263302 };
+		Assert(Retired(false, strays, 1, census) == PartitionPersistence.FencedVerdict.Collision,
+			"a retired row whose lineage carried none of the loaded members is an id collision");
+		Assert(Retired(false, new[] { strays[0], station[0] }, 1, census) == PartitionPersistence.FencedVerdict.Stale,
+			"the lineage carried the members on: a stale copy");
+		Assert(Retired(false, null, 1, census) == PartitionPersistence.FencedVerdict.Stale, "no lineage members proves nothing: stale");
+		Assert(Retired(false, strays, 2, census) == PartitionPersistence.FencedVerdict.Stale, "a local copy past its first generation is stale");
+		Assert(Retired(false, strays, 1, null) == PartitionPersistence.FencedVerdict.Stale, "a retired row without a census: stale");
+		Assert(Retired(false, strays, 1, new HashSet<long> { station[0] }) == PartitionPersistence.FencedVerdict.Stale,
+			"a retired row whose members live elsewhere: stale");
+		Assert(Retired(true, strays, 1, census) == PartitionPersistence.FencedVerdict.Stale, "an offline row is stale");
 		Assert(Classify(false, null, 1, 1, station, census, true) == PartitionPersistence.FencedVerdict.Kept,
 			"an unowned row keeps the content");
 		Assert(Classify(false, "node-1", 1, 1, station, census, true) == PartitionPersistence.FencedVerdict.Kept,
