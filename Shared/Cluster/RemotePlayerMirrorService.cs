@@ -186,9 +186,63 @@ public static class RemotePlayerMirrorService
 		if (!Enabled || !ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority) return null;
 		if (!Held.TryGetValue(client, out Holdings holdings) && !Carried.TryGetValue(client, out holdings))
 			holdings = new Holdings(Present(OnlinePlayersService.Cluster, AttachedClients()));
-		return holdings.Members.Union(holdings.Players)
+		// SE-1476: a player whose withdrawal is pending here is about to be taken off this client by a broadcast it
+		// still gets while it is attached, so this node does not vouch for it. The next node sends it again if the
+		// player is still online, which at worst repeats a member the client has.
+		List<MirrorHolding> held = holdings.Members.Union(holdings.Players)
+			.Where(key => !Pending.ContainsKey(key))
 			.Select(key => new MirrorHolding(key.SteamId, key.SerialId, holdings.Members.Contains(key), holdings.Players.Contains(key)))
 			.ToList();
+		Exported[client] = (new HashSet<(ulong, int)>(held.Where(h => h.Member).Select(h => (h.SteamId, h.SerialId))),
+			ClusterRuntime.LocalMilliseconds);
+		return held;
+	}
+
+	/// <summary>
+	/// SE-1476: the members a client riding a handover (or a cross-node respawn) out of this node was vouched to hold
+	/// at its export, and when. The next node trusts that list, so nothing here may take one of them off the client
+	/// while it is still attached: a withdrawal waits (<see cref="VouchedInTransit"/>) and a real leave is followed by
+	/// the member again (<see cref="BeforeMemberGone"/>). Live 2026-11-14 00:14Z: a player logged out, LJS was
+	/// exported 4 s later still holding him, this node's withdrawal reached LJS before the release, and the next node
+	/// never sent the player again when he came back: his lines showed no sender name on LJS's client.
+	/// Kept while the client is attached and either still leaving by handover or exported less than
+	/// <see cref="ExportedHoldMilliseconds"/> ago (a detach for a respawn, a thawed handover).
+	/// </summary>
+	private static readonly Dictionary<ulong, (HashSet<(ulong SteamId, int SerialId)> Members, double At)> Exported = new();
+
+	private const double ExportedHoldMilliseconds = 10000;
+
+	private static bool VouchedInTransit((ulong, int) key) => Exported.Values.Any(export => export.Members.Contains(key));
+
+	/// <summary>
+	/// SE-1476: vanilla's disconnect broadcast for <paramref name="steamId"/> (MyDedicatedServer_ClientLeft) is about
+	/// to reach every member here, including clients this node exported as holding that player. Returns the member
+	/// message to send them right after it, or null when no such client is attached. Game thread, before vanilla runs:
+	/// the name is read while the member data is still here.
+	/// </summary>
+	internal static Action BeforeMemberGone(ulong steamId)
+	{
+		if (!Enabled || Exported.Count == 0) return null;
+		List<ulong> clients = Exported
+			.Where(pair => pair.Key != steamId && pair.Value.Members.Contains((steamId, 0)))
+			.Select(pair => pair.Key).ToList();
+		if (clients.Count == 0) return null;
+		MyMultiplayerBase multiplayer = MyMultiplayer.Static;
+		var msg = new ConnectedClientDataMsg
+		{
+			ClientId = new EndpointId(steamId),
+			Name = multiplayer.GetMemberPlatformName(steamId),
+			IsAdmin = MySession.Static.IsUserAdmin(steamId),
+			Join = false,
+			ServiceName = multiplayer.GetMemberServiceName(steamId)
+		};
+		return () =>
+		{
+			if (MyMultiplayer.Static?.ReplicationLayer is not MyReplicationServer replication) return;
+			foreach (ulong client in clients)
+				replication.SendClientConnected(ref msg, client);
+			MyLog.Default?.WriteLineAndConsole($"[ClusterPlugin] player mirror kept member steamId={steamId} on clients in transit [{string.Join(",", clients)}] (SE-1476)");
+		};
 	}
 
 	/// <summary>
@@ -314,6 +368,11 @@ public static class RemotePlayerMirrorService
 		foreach (ulong gone in Held.Keys.Where(client => !attached.Contains(client)).ToArray()) Held.Remove(gone);
 		Displaced.RemoveWhere(key => !attached.Contains(key.SteamId));
 		foreach (ulong gone in Carried.Keys.Where(client => !attached.Contains(client)).ToArray()) Carried.Remove(gone);
+		double now = ClusterRuntime.LocalMilliseconds;
+		foreach (ulong gone in Exported.Where(pair => !attached.Contains(pair.Key)
+			|| (!ClusterControlServer.IsLeavingByHandover(pair.Key) && now - pair.Value.At >= ExportedHoldMilliseconds))
+			.Select(pair => pair.Key).ToArray())
+			Exported.Remove(gone);
 
 		// A player that left this node took its MyPlayer off every client here (RemovePlayer's OnPlayerRemoved).
 		var departed = new HashSet<(ulong, int)>(m_present);
@@ -366,6 +425,7 @@ public static class RemotePlayerMirrorService
 		foreach (var pair in desired)
 		{
 			if (!Installed.TryGetValue(pair.Key, out string shown) || shown == pair.Value.Name) continue;
+			if (VouchedInTransit(pair.Key)) continue;   // SE-1476: after the client in transit is gone
 			MyLog.Default?.WriteLineAndConsole($"[ClusterPlugin] player mirror renamed steamId={pair.Key.Item1} serial={pair.Key.Item2} from='{shown}' to='{pair.Value.Name}' node={pair.Value.Node} (SE-1372)");
 			Remove(pair.Key);
 			Installed.Remove(pair.Key);
@@ -431,6 +491,9 @@ public static class RemotePlayerMirrorService
 			// list shows a sub-second absence that is not a logout. Measured on this cluster:
 			// 6 of 32 traversals produced such a gap.
 			if (!Expired(key)) continue;
+			// SE-1476: a client on its way out was exported holding this player; withdrawing now would reach it and
+			// leave the next node believing it still holds the member. Stay pending until it is gone from here.
+			if (VouchedInTransit(key)) continue;
 			Remove(key);
 			Installed.Remove(key);
 			Pending.Remove(key);
@@ -683,6 +746,14 @@ public static class RemotePlayerMirrorService
 					.Select(key => new { steamId = key.SteamId, serialId = key.SerialId }).ToArray()
 			}).ToArray(),
 			carriedPending = Carried.Keys.OrderBy(client => client).ToArray(),
+			// SE-1476: withdrawals waiting out the grace, and clients in transit with what their export vouched for.
+			pending = Pending.Keys.OrderBy(key => key.SteamId).ThenBy(key => key.SerialId)
+				.Select(key => new { steamId = key.SteamId, serialId = key.SerialId }).ToArray(),
+			exported = Exported.OrderBy(pair => pair.Key).Select(pair => new
+			{
+				client = pair.Key,
+				members = pair.Value.Members.OrderBy(key => key.SteamId).Select(key => key.SteamId).ToArray()
+			}).ToArray(),
 			memberMessagesTotal = m_memberMessages,
 			seededByArrivalTotal = m_seededByArrival,
 			renamedTotal = m_renamed,
