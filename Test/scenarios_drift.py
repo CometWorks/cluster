@@ -9,9 +9,11 @@
 - a server-made character seated in that cockpit, its suit one breath under full (0.9979), which the target may
   refill before the gate serializes it (SE-1154, partitions 5253/5852/5888/5921);
 - a large reactor holding 0.0032 kg more uranium than MyInventory.InitItems restores, as a station refuel left
-  one (SE-1155, partition 4519).
+  one (SE-1155, partition 4519);
+- a small cargo container full of stone and ice, the ice 0.00076 kg over what the load restores beside the stone,
+  as a harvester left one (SE-1556, partition 51971).
 
-Without the fixes the target reports residuals on CountdownMs, BlockGroups and the uranium Amount (the suit only
+Without the fixes the target reports residuals on CountdownMs, BlockGroups, the uranium Amount and the ice Amount (the suit only
 when the target refills it first) and the partitions stay on node-1. With them every handover commits with no
 residual. The node self-test section ``handover-drift`` (the same rules against the live dumps' values) runs on
 node-2 as well.
@@ -32,6 +34,7 @@ FIXTURES = [
     {"key": "warhead", "typeId": "Warhead", "subtype": "SmallWarhead"},
     {"key": "seat", "typeId": "Cockpit", "subtype": "LargeBlockCockpitSeat"},
     {"key": "reactor", "typeId": "Reactor", "subtype": "LargeBlockLargeGenerator"},
+    {"key": "cargo", "typeId": "CargoContainer", "subtype": "LargeBlockSmallContainer"},
 ]
 ONE_BREATH_UNDER = 0.9979
 
@@ -46,8 +49,8 @@ def _state(bench, node: str, blocks: dict[str, int]) -> dict[str, dict]:
 
 
 def p3_hnd_drift(bench) -> None:
-    """SE-1152..1155: hand over a warhead that ran out, an empty block group, a seated pilot one breath under a full
-    suit and an overfull reactor."""
+    """SE-1152..1155, SE-1556: hand over a warhead that ran out, an empty block group, a seated pilot one breath under
+    a full suit, an overfull reactor and a full ore container."""
     bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
     bench.cluster.post("/automatic/pause")  # the only partition moves are the forced handovers
 
@@ -62,6 +65,7 @@ def p3_hnd_drift(bench) -> None:
         "warhead": _act(bench, "warhead-runout", f"block={blocks['warhead']}"),
         "group": _act(bench, "empty-group", f"grid={built['seat']['grid']}"),
         "reactor": _act(bench, "overfill", f"block={blocks['reactor']}"),
+        "cargo": _act(bench, "overfill-ore", f"block={blocks['cargo']}"),
         "pilot": _act(bench, "pilot", f"block={blocks['seat']}&owner={owner}"),
     }
     bench.record("10-setup", setup)
@@ -71,6 +75,8 @@ def p3_hnd_drift(bench) -> None:
              [group["blocks"] for group in setup["group"].get("groups") or []] == [0], json.dumps(setup["group"]))
     source_uranium = float(setup["reactor"].get("uranium") or 0)
     _require(bench, "the reactor holds a uranium load", source_uranium > 0, json.dumps(setup["reactor"]))
+    source_stone, source_ice = float(setup["cargo"].get("stone") or 0), float(setup["cargo"].get("ice") or 0)
+    _require(bench, "the cargo container holds stone and ice", source_stone > 0 and source_ice > 0, json.dumps(setup["cargo"]))
     pilot = setup["pilot"].get("pilot") or 0
     _require(bench, "a character sits in the cockpit", pilot > 0, json.dumps(setup["pilot"]))
 
@@ -108,6 +114,12 @@ def p3_hnd_drift(bench) -> None:
     bench.check("the reactor arrived with the uranium the load restores (a little less, the overshoot clamped)",
                 0 < source_uranium - target_uranium < 0.01, f"source {source_uranium} target {target_uranium}")
 
+    cargo = after.get("cargo") or {}
+    target_stone, target_ice = float(cargo.get("stone") or 0), float(cargo.get("ice") or 0)
+    bench.check("the cargo container arrived with its stone and the ice the load restores (the overshoot clamped)",
+                target_stone == source_stone and 0 < source_ice - target_ice < 0.01,
+                f"source {source_stone} + {source_ice} target {target_stone} + {target_ice}")
+
     result = node_self_test(bench, "handover-drift", node="node-2")
     bench.check("node self-test section `handover-drift` passes",
                 bool(result.get("ok")) and "handover-drift" in (result.get("ran") or []), json.dumps(result)[:400])
@@ -115,5 +127,5 @@ def p3_hnd_drift(bench) -> None:
 
 
 SCENARIOS_DRIFT = {
-    "P3-HND-DRIFT": (p3_hnd_drift, "SE-1152..1155: a run-out warhead, an empty block group, a pilot's suit and an overfull reactor pass the handover gate", "3"),
+    "P3-HND-DRIFT": (p3_hnd_drift, "SE-1152..1155: a run-out warhead, an empty block group, a pilot's suit, an overfull reactor and a full ore container pass the handover gate", "3"),
 }
