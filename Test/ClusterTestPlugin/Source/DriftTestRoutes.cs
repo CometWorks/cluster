@@ -87,11 +87,13 @@ internal static class DriftTestRoutes
                 MyInventory inventory = Entity<MyCargoContainer>(id).GetInventory();
                 inventory.Clear();
                 // SE-1556: partition 51971's harvester container, full of stone and ice, the ice 0.00076 kg over what
-                // the load restores beside the stone. Neither stack is over an empty container.
-                double capacity = (double)inventory.MaxVolume / (double)MyDefinitionManager.Static.GetPhysicalItemDefinition(Stone).Volume;
-                MyFixedPoint stone = (MyFixedPoint)(capacity * 0.167951);
+                // the load restores beside the stone (ComputeAmountThatFits against the stone's volume). Neither stack
+                // is over an empty container. AddItems would refuse the ice, so it goes in past the check.
+                float volume = MyDefinitionManager.Static.GetPhysicalItemDefinition(Stone).Volume;
+                MyFixedPoint stone = (MyFixedPoint)((double)inventory.MaxVolume / (double)volume * 0.167951);
+                double fits = ((double)inventory.MaxVolume - (double)(stone * volume)) * (1.0 / (double)volume);
                 inventory.AddItemsInternal(stone, new MyObjectBuilder_Ore { SubtypeName = "Stone" });
-                inventory.AddItemsInternal((MyFixedPoint)(capacity - (double)stone + 0.00076), new MyObjectBuilder_Ore { SubtypeName = "Ice" });
+                inventory.AddItemsInternal((MyFixedPoint)fits + (MyFixedPoint)0.00076, new MyObjectBuilder_Ore { SubtypeName = "Ice" });
                 return State(id);
             }
             case "pilot":
