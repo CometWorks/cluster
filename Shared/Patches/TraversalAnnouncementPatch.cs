@@ -85,8 +85,9 @@ public static class TraversalAnnouncementPatch
 	public static class ClientLeft
 	{
 		[HarmonyPrefix]
-		private static void Prefix(ulong user, ref MyChatMemberStateChangeEnum arg2)
+		private static void Prefix(ulong user, ref MyChatMemberStateChangeEnum arg2, out System.Action __state)
 		{
+			__state = null;
 			if (!ClusterRuntime.IsClustered) return;
 			// Already suppressed by vanilla; leave the reason vanilla was given intact. A kick or ban removes the
 			// member on every client here by its own broadcast, like a disconnect does (SE-1192).
@@ -94,11 +95,20 @@ public static class TraversalAnnouncementPatch
 				|| !ClusterControlServer.IsLeavingByHandover(user))
 			{
 				RemotePlayerMirrorService.NoteMemberGone(user);
+				if (arg2 != MyChatMemberStateChangeEnum.Kicked && arg2 != MyChatMemberStateChangeEnum.Banned)
+					__state = RemotePlayerMirrorService.BeforeMemberGone(user);   // SE-1476
 				return;
 			}
 			arg2 = MyChatMemberStateChangeEnum.Kicked;
 			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] traversal leave toast suppressed client="
 				+ user + " (T-0179)");
 		}
+
+		/// <summary>
+		/// SE-1476: vanilla's disconnect broadcast also reached the clients riding a handover out of this node, which
+		/// the next node trusts to hold this member (they were exported holding it). Give it back to them.
+		/// </summary>
+		[HarmonyPostfix]
+		private static void Postfix(System.Action __state) => __state?.Invoke();
 	}
 }

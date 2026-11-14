@@ -86,6 +86,7 @@ internal static class TestRoutes
         ReputationBurstRoutes.Register(); // SE-1280 a MES-style burst of reputation writes in one frame
         EntitlementRoutes.Register(); // SE-1158 DLC and skin ownership as the game checks it
         AsleepTestRoutes.Register(); // SE-1272 Havok sleep state of grids across a handover
+        MirrorTransitRoutes.Register(); // SE-1476 a member taken off a client between its export and its release
     }
 
     public static bool Dispatch(HttpListenerContext context, string path)

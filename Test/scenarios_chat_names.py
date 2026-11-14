@@ -3,6 +3,8 @@
 * ``P2-CHAT-NAMES`` - client 1 spawns on node-1 and the medbay moves to node-2. Client 2 joins later on node-2, and
   each of the two sends a global line the other must show with the sender's name. Then client 3 joins on node-1
   and its respawn screen's preview moves it to the medbay on node-2: client 1 must still name client 3's lines.
+  SE-1476 adds three handovers of client 1 between node-1 and node-3 while another player's member is taken off
+  it between its export and its release (see ``_transit_leg``).
 
 The client shows ``MyMultiplayer.GetMemberPlatformName(author)`` as the sender of a player's line, so a player the
 client has no member entry for is shown as ": text". Live (octahedron-test, 2026-11-06 19:25Z) a player died on
@@ -165,10 +167,97 @@ def p2_chat_names(bench) -> None:
     bench.record("node-1-mirror", bench.cluster.node("node-1", "/player-mirror"))
     _check_named(bench, "client 1 names client 3 after a respawn switch took it from node-1 to node-2", receipt, name3)
     _check_named(bench, "client 3 names client 1", _say(bench, api1, api3, "1to3"), name1)
-    bench.exercised(route="client 1 node-1, client 2 node-2, client 3 node-1 -> respawn preview switch -> node-2")
+
+    # SE-1476: client 1 rides handovers while another player's member is taken off it after its export.
+    # _join boots node-1 and node-2 only; node-3 is the handover target. Automatic placement is paused, so it hosts
+    # nothing until client 1 is handed to it.
+    bench.cluster.start_node("node-3")
+    bench.cluster.wait_ready(nodes=["node-3"])
+    api3 = _transit_leg(bench, api1, "pending", "node-1", "node-3", CLIENT3_ID, name3, api3)
+    api3 = _transit_leg(bench, api1, "after", "node-3", "node-1", CLIENT3_ID, name3, api3)
+    _transit_leg(bench, api1, "leave", "node-1", "node-3", CLIENT2_ID, name2, api2)
+    bench.exercised(
+        route="client 1 node-1, client 2 node-2, client 3 node-1 -> respawn preview switch -> node-2; "
+        "client 1 handed node-1 -> node-3 -> node-1 -> node-3 with a member lost in transit"
+    )
 
 
-p2_chat_names.regular_nodes = 2
+def _transit_leg(bench, api1, mode: str, source: str, target: str, subject: int, name: str, subject_api):
+    """SE-1476: hand client 1 from ``source`` to ``target`` while ``subject``'s member is taken off client 1 between
+    its export and its release, then the subject (back) on node-2 says a line client 1 must name.
+
+    Live (octahedron-test 2026-11-14 00:14Z) Welcemir logged out, LJS's partition was captured 4 s later, and the
+    source node's mirror withdrew Welcemir from LJS by broadcast before LJS left it. The export had vouched for the
+    member, so the next node never sent it when Welcemir came back, and LJS saw his lines as ": text".
+    The test route on the source node (``/test-mirror-transit``) makes the window certain:
+
+    * ``pending`` - the subject logs out and the source's mirror has its withdrawal pending at the export (the live case).
+    * ``after`` - the subject logs out but the source's mirror only notices after the export.
+    * ``leave`` - vanilla's disconnect for the subject runs on the source after the export (a real leave from that
+      node, like SE-1193's respawn switch), while the subject stays online on node-2.
+    """
+    nodes = _nodes(bench)
+    bench.cluster.node(source, f"/test-mirror-transit?client={CLIENT_ID}&mode={mode}&subject={subject}", "POST")
+    if mode != "leave":
+        # A quit the way a player does it (Remote -> ExitThreadSafe); a killed client is noticed only at the
+        # Gateway's timeout, minutes later.
+        try:
+            subject_api.exit_game(force=True)
+        except Exception:  # noqa: BLE001 - the client may go before it answers
+            pass
+        _require(
+            bench,
+            f"SETUP {mode}: {source} no longer lists the logged out client {subject}",
+            bool(_poll(lambda: not any(r["steamId"] == subject for r in _cluster_players(bench, source)), 180)),
+        )
+        bench.kill_client(subject)
+        if mode == "pending":
+            frozen = _poll(lambda: bench.cluster.node(source, "/test-mirror-transit").get("frozen") or None, 60)
+            _require(bench, f"SETUP {mode}: {source}'s mirror has client {subject}'s withdrawal pending", bool(frozen))
+    partition = _client_partition(_partitions(bench, source))
+    _require(bench, f"SETUP {mode}: {source} reports client 1's partition", partition is not None)
+    bench.record(
+        f"transit-{mode}-handover",
+        bench.cluster.post(
+            _handover_url(bench, partition, source=source, target=target, client=CLIENT_ID), timeout=300
+        ),
+    )
+    arrived = _poll(
+        lambda: (_session(bench, CLIENT_ID) or {}).get("backend") == nodes[target].backend or None, HANDOVER_TIMEOUT
+    )
+    _require(bench, f"SETUP {mode}: client 1 handed over to {target}", bool(arrived))
+    transit = _poll(
+        lambda: (
+            lambda s: s if (s.get("events") or [""])[-1].startswith(("mirror released", "vanilla leave")) else None
+        )(bench.cluster.node(source, "/test-mirror-transit")),
+        60,
+    )
+    bench.record(f"transit-{mode}-source", transit)
+    _require(
+        bench, f"SETUP {mode}: {source} took client {subject}'s member off client 1 after its export", bool(transit)
+    )
+    if mode != "leave":
+        subject_api = start_second_client(bench, route_node="node-2", client_id=subject, remote_port=CLIENT3_PORT)
+    wait_until(
+        lambda: any(r["steamId"] == subject and r.get("node") == "node-2" for r in _cluster_players(bench, target))
+        or None,
+        120,
+        f"{target}'s cluster list to carry client {subject} on node-2",
+    )
+    first = _mirror_passes(bench, target)
+    wait_until(lambda: _mirror_passes(bench, target) >= first + 3 or None, 60, f"three mirror passes on {target}")
+    receipt = _say(bench, subject_api, api1, f"transit-{mode}")
+    bench.record(f"transit-{mode}-{target}-mirror", bench.cluster.node(target, "/player-mirror"))
+    _check_named(
+        bench,
+        f"client 1 names client {subject} after a handover {source} -> {target} that lost the member in transit ({mode})",
+        receipt,
+        name,
+    )
+    return subject_api
+
+
+p2_chat_names.regular_nodes = 3
 
 SCENARIOS_CHAT_NAMES = {
     "P2-CHAT-NAMES": (
