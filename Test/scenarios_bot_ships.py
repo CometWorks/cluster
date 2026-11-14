@@ -9,16 +9,15 @@ Two identities stand for sebot traders: identities the player collection maps to
   1. After a backup. Probes, each far from the others: A1 (bot A) and A2 (bot B), unused; PLAYER (a player
      identity with a Steam ID outside the bot list); SEATED (bot A's ship with a pilot of bot B in its cockpit); NEAR
      (bot B's ship 30 m from a viewed camera, a player position); FRESH (bot A's, spawned 2 min after the others, so
-     the backups below were taken less than the idle time after its first sight). Dry run first: the backup's run
-     logs "would remove" for A1 and A2 only, and removes nothing. Then on, at most 1 per run: the next backup removes
-     one of them, the one after it the other; each removal is logged with the grid's id, name, owners with their
-     Steam IDs, position, partition and the unused and backup times; their emptied partitions are reaped. PLAYER,
-     SEATED, NEAR and FRESH stay; the last use of SEATED and NEAR keeps moving. HUMAN (bot A's, unused, 1500 m from the
-     camera: no use, but a human player within the sync distance) is kept for that reason; once the camera is no longer
-     viewed, the next backup removes it. SE-1528: OTHER (bot A's) has bot B standing 20 m from it, as other bots pass an
-     abandoned ship in a station hangar all the time: it is abandoned and goes like A1 and A2. OWNER (bot A's) has bot A
-     itself 20 m from it and stays in use. With up to 2 per run, the second backup removes two of A1, A2 and OTHER, the
-     third the last one. Before SE-1528 every bot near a ship kept it in use, so OTHER stayed: the red arm.
+     the backups below were taken less than the idle time after its first sight); OTHER (bot A's, with bot B standing
+     20 m from it, as other bots pass an abandoned ship in a station hangar all the time); OWNER (bot A's, with bot A
+     itself 20 m from it). Dry run first: the backup's run logs "would remove" for A1, A2 and OTHER only, and removes
+     nothing. Then on, at most 2 per run: the next backup removes two of them, the one after it the third; each
+     removal is logged with the grid's id, name, owners with their Steam IDs, position, partition and the unused and
+     backup times; their emptied partitions are reaped. PLAYER, SEATED, NEAR, FRESH and OWNER stay; the last use of
+     SEATED, NEAR and OWNER keeps moving. HUMAN (bot A's, unused, 1500 m from the camera: no use, but a human player
+     within the sync distance) is kept for that reason; once the camera is no longer viewed, the next backup removes
+     it. Before SE-1528 every bot near a ship kept it in use, so OTHER stayed: the red arm.
   2. Offline. OFF (bot A's) goes offline right after its first sight, before any backup could hold it unused, so it
      is saved with its stamp. A backup is taken once it is past the idle time: OFF is offline and stays there. Woken
      (a recovery load), it comes back with the stamp it was saved with (/cluster/bot-ships), and the offline sweep
