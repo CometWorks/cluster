@@ -76,6 +76,10 @@ public static class MyBankingSystemPatch
 		}
 		__result = BankingAuthorityCodec.ReadResult(GlobalStateChannel.SendCommand(Subsystem,
 			BankingAuthorityCodec.WriteRequest(new BankingAuthorityRequest("Change", identifierId, amount)))).Success;
+		// SE-1488: like a transfer, the settled change reaches this node's replica and its clients now, through vanilla's
+		// own ChangeBalance and its broadcast. The caller may read the balance right away: the Alt-F10 Economy page answers
+		// the admin with it, and before this the admin was shown the old balance. The next snapshot finds it applied.
+		if (__result) ApplyLocally(() => MyBankingSystem.ChangeBalance(identifierId, amount));
 		return false;
 	}
 
