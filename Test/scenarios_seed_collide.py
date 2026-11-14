@@ -26,7 +26,7 @@ from scenarios_seed_id import _registry_owners, _seed_ids
 
 BASE = 900_000.0          # m, far from every seed partition: each stray makes a layout of its own
 CLAIM_DELAY_MS = 90_000   # node-1 holds its startup claims this long after its seed saves loaded
-REHOME_S = 300            # three registry probes a minute apart, then the next membership pass
+REHOME_S = 300            # the first registry probe after the claims, then the next membership pass
 
 
 def p3_seed_collide(bench) -> None:
@@ -35,6 +35,9 @@ def p3_seed_collide(bench) -> None:
     env["node-1"] = {**env.get("node-1", {}), "CLUSTER_TEST_STARTUP_CLAIM_DELAY_MS": str(CLAIM_DELAY_MS)}
     bench.start_cluster(nodes=["wa-1", "node-2"])
     bench.cluster.post("/automatic/pause")   # no balancing: every partition stays where it is made
+    selftest = bench.cluster.node("node-2", "/self-test?section=fenced-id-collision")
+    bench.check("node self-test fenced-id-collision (kept, stale or collision by row, generations and census)",
+                selftest.get("ok") is True, json.dumps(selftest)[:300])
     slots = _seed_ids(bench)
     bench.record("seed-ids", slots)
     mine = set(slots.get(1) or [])
