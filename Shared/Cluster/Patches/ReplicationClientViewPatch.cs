@@ -5,10 +5,16 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
 using Sandbox.Engine.Multiplayer;
+using Sandbox.Game;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Replication;
 using Sandbox.Game.Replication.StateGroups;
+using VRage;
+using VRage.Game;
+using VRage.Game.Entity;
 using VRage.Network;
+using VRage.ObjectBuilders;
+using VRage.ObjectBuilders.Private;
 using VRage.Replication;
 using VRage.Utils;
 
@@ -506,6 +512,7 @@ public static class ReplicationClientViewPatch
 		List<IMyReplicable> redeliver = new List<IMyReplicable>();
 		int streamedKept = 0, streamedResent = 0, inventoryMismatch = 0, inventoryCarried = 0, inventorySkipped = 0;
 		uint inventoryMaxId = 0;
+		int inventoryHeld = 0, inventoryHeldItems = 0, inventoryUnsent = 0, inventoryHeldMismatch = 0;
 		foreach ((ClientReplicableState exported, IMyReplicable replicable) in resolved)
 		{
 			// T-0261. A streamed replicable (grid, voxel) the client already holds must not be
@@ -530,6 +537,17 @@ public static class ReplicationClientViewPatch
 					inventoryMaxId = Math.Max(inventoryMaxId, exported.InventoryMessageIds.Max());
 				}
 				else inventoryMismatch++;
+			}
+			if (exported.InventoryHeld.Count != 0 && ClusterConfig.GetBool("handover.inventoryHeld"))
+			{
+				int set = ImportInventoryHeld(GroupsOf(server, replicable), endpoint, exported.InventoryHeld, server.AddToDirtyGroups);
+				if (set < 0) inventoryHeldMismatch++;
+				else
+				{
+					inventoryHeld += set;
+					inventoryHeldItems += exported.InventoryHeld.Sum(held => held.Items.Count);
+					inventoryUnsent += exported.InventoryHeld.Sum(held => held.Unsent.Count);
+				}
 			}
 			if (keepStream)
 			{
@@ -627,6 +645,8 @@ public static class ReplicationClientViewPatch
 			MyLog.Default?.WriteLine($"client_view_inventory_counters client={endpoint.Id.Value} carried={inventoryCarried} maxMessageId={inventoryMaxId}");
 		if (inventoryMismatch != 0)
 			MyLog.Default?.WriteLine($"client_view_inventory_counters_mismatch client={endpoint.Id.Value} replicables={inventoryMismatch} (their inventories resync only on the next change past the source's counter)");
+		if (inventoryHeld != 0 || inventoryHeldMismatch != 0)
+			MyLog.Default?.WriteLine($"client_view_inventory_held client={endpoint.Id.Value} inventories={inventoryHeld} items={inventoryHeldItems} unsent={inventoryUnsent} mismatch={inventoryHeldMismatch} (SE-1554)");
 		if (streamedKept != 0 || streamedResent != 0)
 			MyLog.Default?.WriteLine($"client_view_adopt_streamed client={endpoint.Id.Value} kept={streamedKept} resent={streamedResent}");
 		if (redeliver.Count != 0)
@@ -745,6 +765,7 @@ public static class ReplicationClientViewPatch
 			ControlledEntityId = (client.State.ControlledReplicable as IMyEntityReplicable)?.EntityId ?? 0,
 			CharacterEntityId = (client.State.CharacterReplicable as IMyEntityReplicable)?.EntityId ?? 0
 		};
+		int heldBudget = MaxHeldBytes;
 		foreach (IMyReplicable replicable in replicables)
 		{
 			if (!client.Replicables.TryGetValue(replicable, out MyReplicableClientData data)) continue;
@@ -752,7 +773,12 @@ public static class ReplicationClientViewPatch
 			ClientReplicableState exported = new ClientReplicableState { NetworkId = getId(replicable), IsPending = data.IsPending, IsStreaming = data.IsStreaming,
 				Layer = client.ReplicableToLayer.TryGetValue(replicable, out MyClient.UpdateLayer layer) ? layer.Index : -1,
 				PermanentLayer = client.PermanentReplicables.TryGetValue(replicable, out byte permanent) ? permanent : null };
-			if (inventoryGroups != null) ExportInventoryMessageIds(inventoryGroups(replicable), client.State.EndpointId, exported.InventoryMessageIds);
+			if (inventoryGroups != null)
+			{
+				ExportInventoryMessageIds(inventoryGroups(replicable), client.State.EndpointId, exported.InventoryMessageIds);
+				if (heldBudget > 0 && ClusterConfig.GetBool("handover.inventoryHeld"))
+					heldBudget -= ExportInventoryHeld(inventoryGroups(replicable), client.State.EndpointId, exported.InventoryHeld, heldBudget);
+			}
 			state.Replicables.Add(exported);
 		}
 		state.CachedVoxelNames.AddRange(client.m_clientCachedData);
@@ -776,6 +802,90 @@ public static class ReplicationClientViewPatch
 				into.Add(inventory.m_clientInventoryUpdate != null && inventory.m_clientInventoryUpdate.TryGetValue(endpoint, out MyEntityInventoryStateGroup.InventoryClientData data)
 					? data.CurrentMessageId : 0u);
 		if (into.TrueForAll(id => id == 0)) into.Clear();
+	}
+
+	/// <summary>SE-1554: the most bytes of held inventory state one client's view carries. Inventories past it are
+	/// left to the old behaviour: the target takes its own items for the client's.</summary>
+	private const int MaxHeldBytes = 1024 * 1024;
+	private const int HeldItemBytes = 24;
+
+	/// <summary>
+	/// SE-1554: an inventory's items reach a client as deltas against ClientItems, what the node knows the client
+	/// has: amounts relative, each delta under the next message id, and the client applies them strictly in id
+	/// order. The target's AddClientReplicable fills ClientItems from its own inventory (CreateClientData), so
+	/// whatever the source had not delivered at the export was lost for the rest of the session. A change still
+	/// waiting in the dirty queue left the client's amounts off by it, or without the new item. A delta sent but
+	/// not acknowledged, when it did not arrive, left a gap in the ids: the client then holds every later delta
+	/// back and its list freezes, while mass and volume, plain Syncs, stay right. So the source's ClientItems of
+	/// every inventory with a waiting change go with the view, and its unacknowledged deltas too.
+	/// </summary>
+	/// <returns>The bytes the exported state takes, roughly.</returns>
+	internal static int ExportInventoryHeld(IEnumerable<IMyStateGroup> groups, Endpoint endpoint, List<InventoryHeld> into, int budget = int.MaxValue)
+	{
+		int index = -1, bytes = 0;
+		foreach (IMyStateGroup group in groups)
+		{
+			if (group is not MyEntityInventoryStateGroup inventory) continue;
+			index++;
+			if (inventory.m_clientInventoryUpdate == null || !inventory.m_clientInventoryUpdate.TryGetValue(endpoint, out MyEntityInventoryStateGroup.InventoryClientData data)
+					|| (!data.Dirty && data.SendPackets.Count == 0 && data.FailedIncompletePackets.Count == 0))
+				continue;
+			InventoryHeld held = new InventoryHeld { Group = index, ItemsSaid = data.Dirty };
+			foreach (MyEntityInventoryStateGroup.InventoryDeltaInformation delta in data.SendPackets.Values.Concat(data.FailedIncompletePackets).OrderBy(delta => delta.MessageId))
+				held.Unsent.Add(InventoryDeltaWire.Write(delta));
+			if (held.ItemsSaid)
+				foreach (MyEntityInventoryStateGroup.ClientInvetoryData item in data.ClientItems)
+					held.Items.Add(new InventoryHeldItem(item.Item.ItemId, item.Amount.RawValue, item.GasAmount,
+						item.Item.Content.TypeId + "/" + item.Item.Content.SubtypeName));
+			int size = held.Items.Count * HeldItemBytes + held.Unsent.Sum(delta => delta.Length);
+			if (size > budget - bytes) continue;
+			bytes += size;
+			into.Add(held);
+		}
+		return bytes;
+	}
+
+	/// <summary>SE-1554: puts the source's record of what the client holds in place of the target's fresh one, queues
+	/// the source's unacknowledged deltas to be sent again, and marks the inventory changed for the client.</summary>
+	/// <returns>The number of inventories set; -1 when a group index does not exist on the target (nothing is set).</returns>
+	internal static int ImportInventoryHeld(IEnumerable<IMyStateGroup> groups, Endpoint endpoint, List<InventoryHeld> held, Action<IMyStateGroup> markDirty)
+	{
+		List<MyEntityInventoryStateGroup> inventories = groups.OfType<MyEntityInventoryStateGroup>().ToList();
+		foreach (InventoryHeld each in held)
+			if (each.Group >= inventories.Count || inventories[each.Group].m_clientInventoryUpdate == null
+					|| !inventories[each.Group].m_clientInventoryUpdate.ContainsKey(endpoint))
+				return -1;
+		foreach (InventoryHeld each in held)
+		{
+			MyEntityInventoryStateGroup.InventoryClientData data = inventories[each.Group].m_clientInventoryUpdate[endpoint];
+			foreach (byte[] delta in each.Unsent) data.FailedIncompletePackets.Add(InventoryDeltaWire.Read(delta));
+			if (each.ItemsSaid)
+			{
+				data.ClientItems.Clear();
+				data.ClientItemsSorted.Clear();
+				foreach (InventoryHeldItem item in each.Items)
+				{
+					// An item of a definition this node does not have is left out: the next change of that
+					// inventory then sends it as new.
+					if (!MyDefinitionId.TryParse(item.Definition, out MyDefinitionId id)
+							|| MyObjectBuilderSerializerKeen.CreateNewObject(id) is not MyObjectBuilder_PhysicalObject content)
+						continue;
+					MyFixedPoint amount = default;
+					amount.RawValue = item.AmountRaw;
+					MyEntityInventoryStateGroup.ClientInvetoryData row = new MyEntityInventoryStateGroup.ClientInvetoryData
+					{
+						Item = new MyPhysicalInventoryItem(amount, content) { ItemId = item.ItemId },
+						Amount = amount,
+						GasAmount = item.Gas
+					};
+					data.ClientItems.Add(row);
+					data.ClientItemsSorted[item.ItemId] = row;
+				}
+				data.Dirty = true;
+			}
+			markDirty(inventories[each.Group]);
+		}
+		return held.Count;
 	}
 
 	/// <returns>False when the target's inventory groups do not line up with the exported ones (nothing is set).</returns>
