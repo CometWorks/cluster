@@ -649,6 +649,41 @@ internal static partial class ClusterSelfTest
 		PartitionMembership.Layout expired = membership.Layouts.Single(layout => layout.Id == 60);
 		Assert(!expired.Members.Contains(5) && expired.Pending.Length == 0,
 			"a member that never materializes must unpin at the deadline");
+
+		// SE-1552: a fast group leaves a pinned layout at once; the pinned member, its deadline and its cover stay
+		// with the slow rest. Before, the layout stayed whole and a member that took a trade lane stretched it.
+		membership = Fresh();
+		(double, double, double, double) cover = (100, 0, 0, 150);
+		membership.Adopt(70, new long[] { 1, 2 }, 10, mature: true, pending: new long[] { 3 }, cover: cover);
+		changes = membership.Evaluate(new[] { At(1, 0), At(2, 200, 2) with { Fast = true } }, 11);
+		Assert(changes.Length == 1 && changes[0].Split && changes[0].Why.StartsWith("fast split"),
+			"a fast member must leave a pinned layout: " + string.Join("; ", changes.Select(x => x.Why)));
+		PartitionMembership.Layout slow = membership.Layouts.Single(layout => layout.Members.Contains(1));
+		PartitionMembership.Layout fast = membership.Layouts.Single(layout => layout.Members.Contains(2));
+		Assert(slow.Members.SequenceEqual(new long[] { 1, 3 }) && slow.Pending.SequenceEqual(new long[] { 3 })
+			&& slow.PinnedUntil == 10 + PartitionMembership.PinSeconds && slow.PinCover == cover,
+			"the pinned member, its deadline and its cover stay with the slow part");
+		Assert(fast.Members.SequenceEqual(new long[] { 2 }) && fast.Pending.Length == 0 && fast.PinCover == null,
+			"the fast group is alone and carries no pin");
+		// The flyer stops 165 km away: the slow part is not stretched and nothing more changes while it is pinned.
+		changes = membership.Evaluate(new[] { At(1, 0), At(2, 165000, 2) }, 40);
+		Assert(changes.Length == 0 && membership.Layouts.Single(layout => layout.Members.Contains(1)).Members.Length == 2,
+			"the pinned rest stays as it is after the flight");
+		// A slow member cannot leave a pinned layout, so the cover must not follow it: the cover is the adoption's.
+		membership = Fresh();
+		membership.Adopt(80, new long[] { 1, 2 }, 10, mature: true, pending: new long[] { 3 }, cover: cover);
+		membership.Evaluate(new[] { At(1, 0), At(2, 50000) }, 11);
+		Assert(membership.Layouts.Single().PinCover == cover, "the cover of a pinned layout is the one it was adopted with");
+		PartitionManager.Partition stretched = new PartitionManager.Partition
+			{ Sphere = new VRageMath.BoundingSphereD(new VRageMath.Vector3D(25000, 0, 0), 25000), MaxMemberSpeed = 90,
+			  PendingCover = new VRageMath.BoundingSphereD(new VRageMath.Vector3D(100, 0, 0), 150) };
+		Assert(PartitionManager.CoverRow(stretched).Sphere.Radius == 150 && PartitionManager.CoverRow(stretched).Speed == 0,
+			"a pending member is reported inside the adoption cover, not the stretched partition sphere");
+		stretched.PendingCover = null;
+		Assert(PartitionManager.CoverRow(stretched).Sphere.Radius == 25000, "without a cover the partition sphere is the fallback");
+		// The pin resolves: the cover goes with it.
+		membership.Evaluate(new[] { At(1, 0), At(2, 50000), At(3, 100) }, 12);
+		Assert(membership.Layouts.All(layout => layout.PinCover == null), "an unpinned layout has no cover");
 	}
 
 	// -- save container ----------------------------------------------------

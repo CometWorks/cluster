@@ -38,6 +38,9 @@ internal sealed class PartitionManager
 		/// pipeline yet. A capture taken now would silently omit them, so periodic saves skip the
 		/// partition and handover captures refuse it until the set drains (or the pin expires).</summary>
 		public bool HasPending;
+		/// <summary>SE-1552: where the present members were when the pending ones were adopted
+		/// (PartitionMembership.Layout.PinCover); null without pending members or when none was present.</summary>
+		public BoundingSphereD? PendingCover;
 		/// <summary>T-0292: a member of this partition moves fast (FastMotionTracker); the partition is
 		/// alone with that group, and the registry keeps it out of merges, wakes, pulls and migration.</summary>
 		public bool Fast;
@@ -315,7 +318,7 @@ internal sealed class PartitionManager
 		Dictionary<long, MyEntity> entities = MyEntities.GetEntities().Where(IsMember).ToDictionary(entity => entity.EntityId);
 		m_partitions.Clear();
 		foreach (PartitionMembership.Layout layout in m_membership.Layouts)
-			Add(layout.Id, layout.Members.ToHashSet(), entities, layout.Pending.Length != 0);
+			Add(layout.Id, layout.Members.ToHashSet(), entities, layout.Pending.Length != 0, layout.PinCover);
 	}
 
 	private IReadOnlyCollection<Partition> Evaluate(ulong? held)
@@ -434,7 +437,7 @@ internal sealed class PartitionManager
 					+ " groups=" + pieces + " sinceS=" + since.ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
 		m_partitions.Clear();
 		foreach (PartitionMembership.Layout layout in m_membership.Layouts)
-			Add(layout.Id, layout.Members.ToHashSet(), entities, layout.Pending.Length != 0);
+			Add(layout.Id, layout.Members.ToHashSet(), entities, layout.Pending.Length != 0, layout.PinCover);
 		LastChanges = changes;
 		if (m_membership.Created.Count != 0) LayoutsCreated?.Invoke(m_membership.Created.ToArray());
 		if (changes.Length != 0) TopologyChanged?.Invoke(changes);
@@ -487,8 +490,17 @@ internal sealed class PartitionManager
 			partition.Members.ExceptWith(set);
 		}
 		m_partitions.Remove(id);
-		m_membership.Adopt(id, set, ClusterRuntime.LocalMilliseconds / 1000.0, mature, pending);
-		Add(id, all.ToHashSet(), entities, pending.Length != 0);
+		// SE-1552: a pending member is reported where the present ones are now, not wherever they go later.
+		(double, double, double, double)? cover = null;
+		if (pending.Length != 0 && set.Count != 0)
+		{
+			BoundingBoxD box = BoundingBoxD.CreateInvalid();
+			foreach (long member in set) box.Include(entities[member].PositionComp.WorldAABB);
+			BoundingSphereD sphere = BoundingSphereD.CreateFromBoundingBox(box);
+			cover = (sphere.Center.X, sphere.Center.Y, sphere.Center.Z, sphere.Radius);
+		}
+		m_membership.Adopt(id, set, ClusterRuntime.LocalMilliseconds / 1000.0, mature, pending, cover);
+		Add(id, all.ToHashSet(), entities, pending.Length != 0, cover);
 	}
 
 	public void Remove(ulong id) { m_partitions.Remove(id); m_membership.Remove(id); }
@@ -500,7 +512,7 @@ internal sealed class PartitionManager
 		Dictionary<long, MyEntity> entities = MyEntities.GetEntities().Where(IsMember).ToDictionary(entity => entity.EntityId);
 		m_partitions.Clear();
 		foreach (PartitionMembership.Layout layout in m_membership.Layouts)
-			Add(layout.Id, layout.Members.ToHashSet(), entities, layout.Pending.Length != 0);
+			Add(layout.Id, layout.Members.ToHashSet(), entities, layout.Pending.Length != 0, layout.PinCover);
 	}
 
 	/// <summary>The partition holding an entity in the STANDING layout, or 0 - no topology sweep.</summary>
@@ -837,8 +849,12 @@ internal sealed class PartitionManager
 	/// rows, so the gateway can place by the TRUE minimum entity-pair gap instead of the partition
 	/// bounding sphere (whose inflation on a spread partition manufactured a 443k false-atomic
 	/// component out of content 10.9 km apart, w23 2026-08-24). A member whose entity the census
-	/// cannot see yet (pending, mid-init) has no position, so the partition's own bounding sphere is
-	/// appended as a cover row - the unknown stays conservatively inside the geometry.
+	/// cannot see yet (pending, mid-init) has no position, so a cover row is appended - the unknown
+	/// stays conservatively inside the geometry. SE-1552: the cover is the sphere of the members present
+	/// when the pending ones were adopted (<see cref="Partition.PendingCover"/>), and the partition's own
+	/// bounding sphere only when that is not known. The live sphere follows every present member: with
+	/// one of them 165 km away it was a 103 km cover row, the registry linked every partition inside it
+	/// into one component and co-located 94 of them onto this node (octahedron, 2026-11-14).
 	/// </summary>
 	private static string MemberSpheresJson(Partition partition)
 	{
@@ -864,11 +880,17 @@ internal sealed class PartitionManager
 				velocity.Length(), velocity.X, velocity.Y, velocity.Z));
 		}
 		if (missing != 0)
+		{
+			(BoundingSphereD cover, double speed) = CoverRow(partition);
 			rows.Add(string.Format(CultureInfo.InvariantCulture, "[{0:R},{1:R},{2:R},{3:R},{4:R}]",
-				partition.Sphere.Center.X, partition.Sphere.Center.Y, partition.Sphere.Center.Z,
-				partition.Sphere.Radius, partition.MaxMemberSpeed));
+				cover.Center.X, cover.Center.Y, cover.Center.Z, cover.Radius, speed));
+		}
 		return string.Join(',', rows);
 	}
+
+	/// <summary>The sphere and speed reported for the members the census cannot see, see <see cref="MemberSpheresJson"/>.</summary>
+	internal static (BoundingSphereD Sphere, double Speed) CoverRow(Partition partition)
+		=> partition.PendingCover is { } cover ? (cover, 0) : (partition.Sphere, partition.MaxMemberSpeed);
 
 	public ClientPartition[] ClientPartitions(IReadOnlyCollection<Partition> partitions)
 	{
@@ -1022,9 +1044,11 @@ internal sealed class PartitionManager
 		return left.Distance(ref right);
 	}
 
-	private void Add(ulong id, HashSet<long> members, Dictionary<long, MyEntity> entities, bool hasPending = false)
+	private void Add(ulong id, HashSet<long> members, Dictionary<long, MyEntity> entities, bool hasPending = false,
+		(double X, double Y, double Z, double Radius)? cover = null)
 	{
-		Partition partition = new Partition { Id = id, Members = members, HasPending = hasPending };
+		Partition partition = new Partition { Id = id, Members = members, HasPending = hasPending,
+			PendingCover = cover is { } c ? new BoundingSphereD(new Vector3D(c.X, c.Y, c.Z), c.Radius) : null };
 		foreach (long member in members)
 			if (m_fast.IsFast(member))
 			{
