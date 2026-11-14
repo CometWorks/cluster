@@ -516,7 +516,10 @@ internal sealed partial class PartitionPersistence
 						m_fencedRegistrations.TryRemove(id, out _);
 						continue;
 					}
-					if (m_fencedRegistrations.AddOrUpdate(id, 1, (_, strikes) => strikes + 1) >= 3
+					// SE-1461: a collision carries its own proof (the census), and the proof does not keep: the other
+					// node can merge its partition away within seconds, and the retired row then reads as stale. So it
+					// counts on the first probe, which runs right after the startup claims.
+					if ((m_fencedRegistrations.AddOrUpdate(id, 1, (_, strikes) => strikes + 1) >= 3 || verdict == FencedVerdict.Collision)
 							&& m_startupFenced.TryRemove(id, out _))
 					{
 						EnqueueFenced(id, verdict);
@@ -5130,17 +5133,11 @@ internal sealed partial class PartitionPersistence
 	/// minted node-1's seed ids 1,3,5,7 for its clients' layouts (SE-1443), node-1's startup claims got "is generation
 	/// 1, not 0", and a minute later node-1 purged Gamma Station. Such content keeps living and takes a fresh id.
 	/// No census (<paramref name="liveElsewhere"/> null), or one without the owner's answer, is no proof: stale.
-	/// The other node's partition may be merged away before the probe runs, which leaves the row retired. The lineage
-	/// record that retired it lists the entities it carried (<paramref name="retiredMembers"/>). When none of the loaded
-	/// members is among them and none lives elsewhere, the retired row was never this content: a collision as well.
 	/// </summary>
-	internal static FencedVerdict ClassifyFenced(bool offline, bool retired, long[] retiredMembers, string owner, long rowGeneration,
-		uint localGeneration, string node, long[] recorded, ISet<long> liveElsewhere, bool ownerAnswered)
+	internal static FencedVerdict ClassifyFenced(bool retiredOrOffline, string owner, long rowGeneration, uint localGeneration,
+		string node, long[] recorded, ISet<long> liveElsewhere, bool ownerAnswered)
 	{
-		if (offline) return FencedVerdict.Stale;
-		if (retired)
-			return localGeneration == 1 && recorded is { Length: > 0 } && retiredMembers is { Length: > 0 } && liveElsewhere != null
-				&& !recorded.Any(retiredMembers.Contains) && !recorded.Any(liveElsewhere.Contains) ? FencedVerdict.Collision : FencedVerdict.Stale;
+		if (retiredOrOffline) return FencedVerdict.Stale;
 		if (owner == null || owner == node) return FencedVerdict.Kept;
 		return rowGeneration == 1 && localGeneration == 1 && recorded is { Length: > 0 } && liveElsewhere != null && ownerAnswered
 			&& !recorded.Any(liveElsewhere.Contains) ? FencedVerdict.Collision : FencedVerdict.Stale;
@@ -5161,29 +5158,26 @@ internal sealed partial class PartitionPersistence
 				// from ever co-locating here (partition 24 vs 27, 2026-08-10).
 				// T-0193: an offline partition's truth is its offline Final; a seed or template copy loaded
 				// here at boot is stale by construction and must not survive to meet the real one.
-				bool isRetired = partition.TryGetProperty("Retired", out JsonElement retired) && retired.GetBoolean();
-				bool isOffline = partition.TryGetProperty("Offline", out JsonElement offline) && offline.ValueKind == JsonValueKind.True;
-				long[] retiredMembers = partition.TryGetProperty("RetiredMembers", out JsonElement carried) && carried.ValueKind == JsonValueKind.Array
-					? carried.EnumerateArray().Select(x => x.GetInt64()).ToArray() : null;
+				bool retiredOrOffline = partition.TryGetProperty("Retired", out JsonElement retired) && retired.GetBoolean()
+					|| partition.TryGetProperty("Offline", out JsonElement offline) && offline.ValueKind == JsonValueKind.True;
 				string ownerNode = partition.GetProperty("Node").GetString();
 				long rowGeneration = partition.GetProperty("Generation").GetInt64();
 				uint localGeneration = m_state.TryGetValue(partitionId, out State state) ? state.Generation : 0;
 				long[] recorded = m_assignedMembers.TryGetValue(partitionId, out long[] members) ? members : null;
-				FencedVerdict Classify(ISet<long> liveElsewhere, bool ownerAnswered) => ClassifyFenced(isOffline, isRetired, retiredMembers,
-					ownerNode, rowGeneration, localGeneration, m_node, recorded, liveElsewhere, ownerAnswered);
-				FencedVerdict verdict = Classify(null, false);
+				FencedVerdict verdict = ClassifyFenced(retiredOrOffline, ownerNode, rowGeneration, localGeneration, m_node, recorded, null, false);
 				// Only a possible collision (the same verdict with an empty census the owner answered) pays for the census.
-				if (verdict != FencedVerdict.Stale || Classify(new HashSet<long>(), true) != FencedVerdict.Collision)
+				if (verdict != FencedVerdict.Stale || ClassifyFenced(false, ownerNode, rowGeneration, localGeneration, m_node, recorded,
+						new HashSet<long>(), true) != FencedVerdict.Collision)
 				{
 					if (verdict == FencedVerdict.Stale)
 						MyLog.Default.WriteLineAndConsole("[ClusterPlugin] fenced partition " + partitionId + " is stale: row owner=" + (ownerNode ?? "-")
-							+ " generation=" + rowGeneration + " retired=" + isRetired + " offline=" + isOffline + " carried=" + (retiredMembers?.Length ?? -1)
-							+ " carriedOurs=" + (recorded != null && retiredMembers != null ? recorded.Count(retiredMembers.Contains) : -1)
-							+ ", local generation=" + localGeneration + " recorded=" + (recorded?.Length ?? -1));
+							+ " generation=" + rowGeneration + " retired or offline=" + retiredOrOffline + ", local generation=" + localGeneration
+							+ " recorded=" + (recorded?.Length ?? -1));
 					return verdict;
 				}
 				LiveCensus census = SnapshotLiveEntitiesElsewhere(client);
-				return Classify(census, census.HoldersOf.Values.Any(holders => holders.Any(holder => holder.Node == ownerNode)));
+				bool ownerAnswered = census.HoldersOf.Values.Any(holders => holders.Any(holder => holder.Node == ownerNode));
+				return ClassifyFenced(false, ownerNode, rowGeneration, localGeneration, m_node, recorded, census, ownerAnswered);
 			}
 		}
 		catch (Exception exception)
