@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Sandbox;
 using Sandbox.Definitions;
 using Sandbox.Engine.Multiplayer;
+using Sandbox.Game.Gui;
 using Sandbox.Game.Multiplayer;
 using Sandbox.Game.World;
 using VRage.Game;
@@ -38,6 +39,16 @@ public static class MyFactionCollectionPatch
 	[ThreadStatic] private static bool m_accepted;
 	[ThreadStatic] private static bool m_successPublishFailed;
 
+	/// <summary>
+	/// SE-1488: the Alt-F10 Economy page answers a reputation change with the reputation it reads right after the
+	/// change, and on a regular node that is this node's replica, which the World Authority's result reaches a moment
+	/// later. So the admin's screen kept the old value. Such an admin is answered again once the result has been
+	/// applied here, or after <see cref="AdminAnswerTimeoutMs"/> at the latest.
+	/// </summary>
+	private static readonly Func<IMyEventOwner, Action<long, long, int>> AdminReputationAnswer = BindAdminReputationAnswer();
+	private static readonly List<(ulong Admin, long Player, long Faction, double Deadline)> PendingAdminAnswers = new();
+	private const int AdminAnswerTimeoutMs = 10000;
+
 	public static void Install()
 	{
 		MyFactionCollectionSeams.ClusterFactionRequestPrefix = SeamRequestPrefix;
@@ -67,6 +78,7 @@ public static class MyFactionCollectionPatch
 			m_readySession = session;
 		}
 		FlushDamageReputation();
+		AnswerAdmins(player: null);
 		if (!ClusterRuntime.IsWorldAuthority || ClusterRuntime.LocalMilliseconds < m_nextRefresh) return;
 		m_nextRefresh = ClusterRuntime.LocalMilliseconds + 1000;
 		PublishSnapshotIfChanged();
@@ -115,9 +127,43 @@ public static class MyFactionCollectionPatch
 			string result = GlobalStateChannel.SendCommand(Subsystem, FactionAuthorityCodec.Write(Request("AddReputation",
 				new object[] { playerIdentityId, factionId, delta, reason, propagate, adminChange })));
 			__result = JsonSerializer.Deserialize<bool>(result);
+			ulong sender = MyEventContext.Current.Sender.Value;
+			if (__result && reason == ReputationChangeReason.Admin && sender != 0 && !MyEventContext.Current.IsLocallyInvoked)
+				lock (PendingAdminAnswers)
+					PendingAdminAnswers.Add((sender, playerIdentityId, factionId, ClusterRuntime.LocalMilliseconds + AdminAnswerTimeoutMs));
 		}
 		catch (Exception exception) { CommandFailed("AddReputation", exception); __result = false; }
 		return false;
+	}
+
+	private static Func<IMyEventOwner, Action<long, long, int>> BindAdminReputationAnswer()
+	{
+		MethodInfo method = typeof(MyGuiScreenAdminMenu).GetMethod("RequestReputationCallback", PrivateStatic, null,
+			new[] { typeof(long), typeof(long), typeof(int) }, null)
+			?? throw new MissingMethodException(typeof(MyGuiScreenAdminMenu).FullName, "RequestReputationCallback");
+		var handler = (Action<long, long, int>)Delegate.CreateDelegate(typeof(Action<long, long, int>), method);
+		return _ => handler;
+	}
+
+	/// <summary>
+	/// Answers the admins waiting for <paramref name="player"/>'s new reputation (null: every admin, after a snapshot),
+	/// and those whose wait ran out, with what this node now knows.
+	/// </summary>
+	private static void AnswerAdmins(long? player)
+	{
+		(ulong Admin, long Player, long Faction, double Deadline)[] due;
+		lock (PendingAdminAnswers)
+		{
+			if (PendingAdminAnswers.Count == 0) return;
+			double now = ClusterRuntime.LocalMilliseconds;
+			due = PendingAdminAnswers.Where(x => player == null || x.Player == player || x.Deadline <= now).ToArray();
+			PendingAdminAnswers.RemoveAll(due.Contains);
+		}
+		foreach (var answer in due)
+		{
+			int reputation = MySession.Static.Factions.GetRelationBetweenPlayerAndFaction(answer.Player, answer.Faction).Item2;
+			MyMultiplayer.RaiseStaticEvent(AdminReputationAnswer, answer.Player, answer.Faction, reputation, new EndpointId(answer.Admin));
+		}
 	}
 
 	public static bool SeamVoidPrefix(string operation, object[] arguments)
@@ -497,6 +543,7 @@ public static class MyFactionCollectionPatch
 		{
 			ApplySnapshot(message.Snapshot);
 			ReapplyQueuedSets();
+			AnswerAdmins(player: null);
 			return;
 		}
 		if (!message.Operation.EndsWith("Success", StringComparison.Ordinal))
@@ -505,6 +552,7 @@ public static class MyFactionCollectionPatch
 		try { MyFactionCollectionSeams.ClusterApplyFactionSuccess(message.Operation, SuccessArguments(message)); }
 		finally { m_applying = false; }
 		ReapplyQueuedSets();
+		if (message.Operation == "ReputationSuccess") AnswerAdmins(message.First);
 	}
 
 	private static void ApplySnapshot(string payload)
