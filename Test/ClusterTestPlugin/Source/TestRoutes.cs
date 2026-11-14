@@ -59,6 +59,7 @@ internal static class TestRoutes
         FastTestHarness.Register();   // T-0292
         WeakRefRoutes.Register();     // T-0274 closed-entity reachability oracle
         PropertySyncRoutes.Register();  // #1376 null emotion controller Syncs in state sync
+        StaleViewRoutes.Register();   // SE-1554 what a client holds of a grid after its view moved nodes
         VoxelCarryRoutes.Register();  // T-0368 asteroid carried across a handover
         StreamHoldRoutes.Register();  // T-0396 a grid held mid-stream to one client
         BroadcastChatRoutes.Register(); // SE-943 broadcast controller chat and the chat a node relays; SE-1261 chat events

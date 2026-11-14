@@ -404,6 +404,10 @@ public static class ClusterConfig
 		// T-0265: carry each client's inventory delta counters across a handover. "false" restores the
 		// old fresh-counter adopt, only so a live A/B can earn the red on the same build.
 		["handover.inventoryCounters"] = "true",
+		// SE-1554: carry what each client holds of every inventory whose changes had not all reached it across a
+		// handover, with the deltas still unacknowledged. "false" restores the adopt that took the target's items
+		// for the client's, for the red on the same build.
+		["handover.inventoryHeld"] = "true",
 		// T-0396: before a client-view adopt re-delivers a replicable the client had not finished receiving, destroy
 		// what the client holds below it (RedeliverPolicy). "false" restores the bare destroy-and-create, which leaves
 		// a ready child (a seated character) registered on the client - only so a bench can earn the red on one build.

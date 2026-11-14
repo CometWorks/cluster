@@ -87,6 +87,7 @@ internal static partial class ClusterSelfTest
 		("network-id-lockfree", NetworkIdLockFree),
 		("gateway-pass-coalesce", GatewayPassCoalesce),
 		("inventory-message-ids", InventoryMessageIds),
+		("inventory-held", InventoryHeldItems),
 		("activate-slices", ActivateSlices),
 		("import-activation-guard", ImportActivationGuardRules),
 		("activate-pacing", ActivatePacing),
@@ -868,6 +869,113 @@ internal static partial class ClusterSelfTest
 		fresh.CreateClientData(endpoint);
 		ReplicationClientViewPatch.ExportInventoryMessageIds(new VRage.Network.IMyStateGroup[] { fresh }, endpoint, untouched);
 		Assert(untouched.Count == 0, "an inventory that never sent a delta exports nothing");
+	}
+
+	/// <summary>
+	/// SE-1554: what a client holds of an inventory whose changes had not all reached it travels with the client's
+	/// view. The codec carries it (with and without the player mirror section, and still reads a state without
+	/// it), only inventories with something undelivered are exported, the target then diffs against the client's
+	/// items instead of its own, and sends the source's unacknowledged deltas again under their message ids.
+	/// </summary>
+	private static void InventoryHeldItems()
+	{
+		InventoryHeldItem iron = new InventoryHeldItem(3, 100_000_000, 0f, "MyObjectBuilder_Ore/Iron");
+		InventoryHeldItem bottle = new InventoryHeldItem(5, 1_000_000, 0.5f, "MyObjectBuilder_GasContainerObject/HydrogenBottle");
+		ClientHandoverState state = new ClientHandoverState();
+		state.Replicables.Add(new ClientReplicableState { NetworkId = 20 });
+		ClientReplicableState cargo = new ClientReplicableState { NetworkId = 21 };
+		InventoryHeld second = new InventoryHeld { Group = 1, ItemsSaid = true };
+		second.Items.Add(iron);
+		second.Items.Add(bottle);
+		second.Unsent.Add(new byte[] { 1, 2, 3 });
+		second.Unsent.Add(Array.Empty<byte>());
+		cargo.InventoryHeld.Add(second);
+		cargo.InventoryHeld.Add(new InventoryHeld { Group = 2 });
+		state.Replicables.Add(cargo);
+		foreach (bool mirror in new[] { false, true })
+		{
+			state.MirrorHeld = mirror ? new List<MirrorHolding> { new MirrorHolding(76561198223054696UL, 0, true, false) } : null;
+			ClientHandoverState read = ClientHandoverCodec.Read(ClientHandoverCodec.Write(state));
+			List<InventoryHeld> held = read.Replicables[1].InventoryHeld;
+			Assert(read.Replicables[0].InventoryHeld.Count == 0 && held.Count == 2 && held[0].Group == 1 && held[0].ItemsSaid
+				&& held[0].Items.SequenceEqual(new[] { iron, bottle }) && held[0].Unsent.Count == 2 && held[0].Unsent[0].SequenceEqual(new byte[] { 1, 2, 3 })
+				&& held[0].Unsent[1].Length == 0 && held[1].Group == 2 && !held[1].ItemsSaid && held[1].Items.Count == 0 && held[1].Unsent.Count == 0,
+				"held inventory state survives the codec, mirror section " + mirror);
+			Assert(mirror ? read.MirrorHeld?.Count == 1 : read.MirrorHeld == null, "the mirror section stays " + (mirror ? "said" : "unsaid") + " beside held inventory state");
+		}
+		cargo.InventoryHeld.Clear();
+		state.MirrorHeld = null;
+		Assert(ClientHandoverCodec.Read(ClientHandoverCodec.Write(state)).Replicables.TrueForAll(x => x.InventoryHeld.Count == 0), "a state without held inventory state still reads");
+
+		VRage.Game.Entity.MyPhysicalInventoryItem Item(InventoryHeldItem row)
+		{
+			VRage.MyFixedPoint amount = default;
+			amount.RawValue = row.AmountRaw;
+			return new VRage.Game.Entity.MyPhysicalInventoryItem(amount, (VRage.Game.MyObjectBuilder_PhysicalObject)
+				VRage.ObjectBuilders.Private.MyObjectBuilderSerializerKeen.CreateNewObject(VRage.Game.MyDefinitionId.Parse(row.Definition))) { ItemId = row.ItemId };
+		}
+		VRage.MyFixedPoint seven = 7;
+		var sent = new Sandbox.Game.Replication.StateGroups.MyEntityInventoryStateGroup.InventoryDeltaInformation
+		{
+			HasChanges = true, MessageId = 4,
+			ChangedItems = new Dictionary<uint, KeyValuePair<VRage.MyFixedPoint, float>> { [3] = new KeyValuePair<VRage.MyFixedPoint, float>(seven, 0.25f) },
+			RemovedItems = new List<uint> { 9, 8 },
+			NewItems = new SortedDictionary<int, VRage.Game.Entity.MyPhysicalInventoryItem> { [1] = Item(bottle) },
+			SwappedItems = new Dictionary<uint, int> { [3] = 1 },
+		};
+		var wire = InventoryDeltaWire.Read(InventoryDeltaWire.Write(sent));
+		Assert(wire.HasChanges && wire.MessageId == 4 && wire.ChangedItems.Count == 1 && wire.ChangedItems[3].Key == seven && wire.ChangedItems[3].Value == 0.25f
+			&& wire.RemovedItems.SequenceEqual(new uint[] { 9, 8 }) && wire.NewItems.Count == 1 && wire.NewItems[1].ItemId == bottle.ItemId
+			&& wire.NewItems[1].Amount.RawValue == bottle.AmountRaw && wire.NewItems[1].Content.SubtypeName == "HydrogenBottle"
+			&& wire.SwappedItems.Count == 1 && wire.SwappedItems[3] == 1, "an inventory delta survives its byte form");
+		var empty = InventoryDeltaWire.Read(InventoryDeltaWire.Write(new Sandbox.Game.Replication.StateGroups.MyEntityInventoryStateGroup.InventoryDeltaInformation { MessageId = 6 }));
+		Assert(!empty.HasChanges && empty.MessageId == 6 && empty.ChangedItems == null && empty.RemovedItems == null && empty.NewItems == null && empty.SwappedItems == null,
+			"a delta without changes survives its byte form");
+
+		var endpoint = new VRage.Network.Endpoint(new VRage.Network.EndpointId(76561198223054696UL), 0);
+		Sandbox.Game.Replication.StateGroups.MyEntityInventoryStateGroup Group()
+		{
+			var group = new Sandbox.Game.Replication.StateGroups.MyEntityInventoryStateGroup(new Sandbox.Game.MyInventory(), false, null);
+			group.CreateClientData(endpoint);
+			return group;
+		}
+		var clean = Group();
+		var source = Group();
+		var sourceData = source.m_clientInventoryUpdate[endpoint];
+		sourceData.ClientItems.Add(new Sandbox.Game.Replication.StateGroups.MyEntityInventoryStateGroup.ClientInvetoryData { Item = Item(iron), Amount = Item(iron).Amount });
+		var groups = new VRage.Network.IMyStateGroup[] { clean, source };
+		var exported = new List<InventoryHeld>();
+		Assert(ReplicationClientViewPatch.ExportInventoryHeld(groups, endpoint, exported) == 0 && exported.Count == 0, "an inventory with nothing undelivered exports nothing");
+		sourceData.SendPackets[200] = sent;
+		Assert(ReplicationClientViewPatch.ExportInventoryHeld(groups, endpoint, exported) > 0 && exported.Count == 1 && exported[0].Group == 1 && !exported[0].ItemsSaid
+			&& exported[0].Items.Count == 0 && exported[0].Unsent.Count == 1, "an unacknowledged delta is exported without the items of an inventory that has no waiting change");
+		exported.Clear();
+		sourceData.Dirty = true;
+		sourceData.FailedIncompletePackets.Add(new Sandbox.Game.Replication.StateGroups.MyEntityInventoryStateGroup.InventoryDeltaInformation { MessageId = 2 });
+		Assert(ReplicationClientViewPatch.ExportInventoryHeld(groups, endpoint, exported, 0) == 0 && exported.Count == 0, "an inventory past the budget is not exported");
+		Assert(ReplicationClientViewPatch.ExportInventoryHeld(groups, endpoint, exported) > 0 && exported.Count == 1 && exported[0].Group == 1 && exported[0].ItemsSaid
+			&& exported[0].Items.SequenceEqual(new[] { iron }) && exported[0].Unsent.Count == 2
+			&& InventoryDeltaWire.Read(exported[0].Unsent[0]).MessageId == 2 && InventoryDeltaWire.Read(exported[0].Unsent[1]).MessageId == 4,
+			"the source's record of the client's items and its undelivered deltas, by message id, are exported for the inventory with a waiting change");
+
+		var targetClean = Group();
+		var target = Group();
+		var targetData = target.m_clientInventoryUpdate[endpoint];
+		Assert(targetData.ClientItems.Count == 0 && !targetData.Dirty && targetData.FailedIncompletePackets.Count == 0, "a fresh target takes its own items for the client's (the defect)");
+		var marked = new List<VRage.Network.IMyStateGroup>();
+		Assert(ReplicationClientViewPatch.ImportInventoryHeld(new VRage.Network.IMyStateGroup[] { targetClean }, endpoint, exported, marked.Add) == -1
+			&& marked.Count == 0, "groups that do not line up are left alone");
+		Assert(ReplicationClientViewPatch.ImportInventoryHeld(new VRage.Network.IMyStateGroup[] { targetClean, target }, endpoint, exported, marked.Add) == 1
+			&& marked.Count == 1 && marked[0] == target && targetData.Dirty && !targetClean.m_clientInventoryUpdate[endpoint].Dirty,
+			"the target's inventory is marked changed for the client");
+		Assert(targetData.FailedIncompletePackets.Count == 2 && targetData.FailedIncompletePackets[0].MessageId == 2 && targetData.FailedIncompletePackets[1].MessageId == 4
+			&& targetData.FailedIncompletePackets[1].NewItems.Count == 1 && target.IsStillDirty(endpoint), "the target sends the source's undelivered deltas again under their ids");
+		Assert(targetData.ClientItems.Count == 1 && targetData.ClientItems[0].Item.ItemId == iron.ItemId && targetData.ClientItems[0].Amount.RawValue == iron.AmountRaw
+			&& targetData.ClientItemsSorted.ContainsKey(iron.ItemId) && targetData.ClientItems[0].Item.Content.SubtypeName == "Iron",
+			"the target holds the source's record of the client's items");
+		var delta = target.CalculateInventoryDiff(ref targetData);
+		Assert(delta.HasChanges && delta.RemovedItems != null && delta.RemovedItems.SequenceEqual(new[] { iron.ItemId }),
+			"the target's next delta carries the difference to the client's items");
 	}
 
 	private static void StaleHomeCopy()

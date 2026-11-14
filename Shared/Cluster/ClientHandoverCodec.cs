@@ -13,6 +13,11 @@ public static class ClientHandoverCodec
 	private const int MaxStringBytes = 4096;
 	private const int MaxInventoryGroups = 64;
 	private const int MaxVoxelGroups = 8;
+	private const int MaxHeldItems = 100000;
+	private const int MaxUnsentDeltas = 1024;
+	/// <summary>SE-1554: written in place of the mirror section's count when the source did not say what the client
+	/// holds of the player mirror (MirrorHeld null) and a later section follows.</summary>
+	private const int NoMirror = -1;
 
 	public static string Write(ClientHandoverState state)
 	{
@@ -62,7 +67,10 @@ public static class ClientHandoverCodec
 		List<ClientReplicableState> withVoxel = state.Replicables.FindAll(x => x.VoxelEntityId != 0);
 		// SE-1192: the player mirror's delivered set, a third optional trailing section after the other two.
 		bool mirror = state.MirrorHeld != null;
-		if (withInventory.Count != 0 || withVoxel.Count != 0 || mirror)
+		// SE-1554: what a client holds of inventories whose changes had not all reached it, a fourth optional trailing section.
+		List<ClientReplicableState> withHeld = state.Replicables.FindAll(x => x.InventoryHeld.Count != 0);
+		bool held = withHeld.Count != 0;
+		if (withInventory.Count != 0 || withVoxel.Count != 0 || mirror || held)
 		{
 			WriteCount(writer, withInventory.Count, MaxReplicables);
 			foreach (ClientReplicableState replicable in withInventory)
@@ -72,7 +80,7 @@ public static class ClientHandoverCodec
 				foreach (uint id in replicable.InventoryMessageIds) writer.Write(id);
 			}
 		}
-		if (withVoxel.Count != 0 || mirror)
+		if (withVoxel.Count != 0 || mirror || held)
 		{
 			WriteCount(writer, withVoxel.Count, MaxReplicables);
 			foreach (ClientReplicableState replicable in withVoxel)
@@ -92,6 +100,44 @@ public static class ClientHandoverCodec
 				writer.Write(holding.SteamId);
 				writer.Write(holding.SerialId);
 				writer.Write((byte)((holding.Member ? 1 : 0) | (holding.Player ? 2 : 0)));
+			}
+		}
+		else if (held) writer.Write(NoMirror);
+		if (held)
+		{
+			List<string> definitions = new List<string>();
+			Dictionary<string, int> index = new Dictionary<string, int>();
+			foreach (ClientReplicableState replicable in withHeld)
+				foreach (InventoryHeld inventory in replicable.InventoryHeld)
+					foreach (InventoryHeldItem item in inventory.Items)
+						if (index.TryAdd(item.Definition ?? throw new InvalidDataException("Held item without a definition"), definitions.Count))
+							definitions.Add(item.Definition);
+			WriteCount(writer, definitions.Count, MaxStrings);
+			foreach (string definition in definitions) WriteString(writer, definition);
+			WriteCount(writer, withHeld.Count, MaxReplicables);
+			foreach (ClientReplicableState replicable in withHeld)
+			{
+				writer.Write(replicable.NetworkId);
+				WriteCount(writer, replicable.InventoryHeld.Count, MaxInventoryGroups);
+				foreach (InventoryHeld inventory in replicable.InventoryHeld)
+				{
+					writer.Write(inventory.Group);
+					writer.Write(inventory.ItemsSaid);
+					WriteCount(writer, inventory.Unsent.Count, MaxUnsentDeltas);
+					foreach (byte[] delta in inventory.Unsent)
+					{
+						WriteCount(writer, delta.Length, MaxPayloadBytes);
+						writer.Write(delta);
+					}
+					WriteCount(writer, inventory.Items.Count, MaxHeldItems);
+					foreach (InventoryHeldItem item in inventory.Items)
+					{
+						writer.Write(item.ItemId);
+						writer.Write(item.AmountRaw);
+						writer.Write(item.Gas);
+						writer.Write(index[item.Definition]);
+					}
+				}
 			}
 		}
 		if (stream.Length > MaxPayloadBytes) throw new InvalidDataException("Client handover state exceeds limit");
@@ -166,13 +212,52 @@ public static class ClientHandoverCodec
 					}
 				if (stream.Position != stream.Length)
 				{
-					state.MirrorHeld = new List<MirrorHolding>();
-					for (int i = ReadCount(reader, MaxStrings); i > 0; i--)
+					int mirrored = reader.ReadInt32();
+					if (mirrored != NoMirror)
 					{
-						ulong steamId = reader.ReadUInt64();
-						int serialId = reader.ReadInt32();
-						byte held = reader.ReadByte();
-						state.MirrorHeld.Add(new MirrorHolding(steamId, serialId, (held & 1) != 0, (held & 2) != 0));
+						if ((uint)mirrored > MaxStrings) throw new InvalidDataException("Invalid client handover collection count");
+						state.MirrorHeld = new List<MirrorHolding>();
+						for (int i = mirrored; i > 0; i--)
+						{
+							ulong steamId = reader.ReadUInt64();
+							int serialId = reader.ReadInt32();
+							byte held = reader.ReadByte();
+							state.MirrorHeld.Add(new MirrorHolding(steamId, serialId, (held & 1) != 0, (held & 2) != 0));
+						}
+					}
+					if (stream.Position != stream.Length)
+					{
+						string[] definitions = new string[ReadCount(reader, MaxStrings)];
+						for (int i = 0; i < definitions.Length; i++) definitions[i] = ReadString(reader);
+						for (int i = ReadCount(reader, MaxReplicables); i > 0; i--)
+						{
+							uint networkId = reader.ReadUInt32();
+							if (!byId.TryGetValue(networkId, out ClientReplicableState owner) || owner.InventoryHeld.Count != 0)
+								throw new InvalidDataException("Held inventory items for an unknown or repeated replicable " + networkId);
+							for (int j = ReadCount(reader, MaxInventoryGroups); j > 0; j--)
+							{
+								InventoryHeld inventory = new InventoryHeld { Group = reader.ReadInt32() };
+								if ((uint)inventory.Group >= MaxInventoryGroups) throw new InvalidDataException("Invalid held inventory group " + inventory.Group);
+								inventory.ItemsSaid = reader.ReadBoolean();
+								for (int k = ReadCount(reader, MaxUnsentDeltas); k > 0; k--)
+								{
+									int length = ReadCount(reader, MaxPayloadBytes);
+									byte[] delta = reader.ReadBytes(length);
+									if (delta.Length != length) throw new EndOfStreamException();
+									inventory.Unsent.Add(delta);
+								}
+								for (int k = ReadCount(reader, MaxHeldItems); k > 0; k--)
+								{
+									uint itemId = reader.ReadUInt32();
+									long amount = reader.ReadInt64();
+									float gas = reader.ReadSingle();
+									int definition = reader.ReadInt32();
+									if ((uint)definition >= definitions.Length) throw new InvalidDataException("Invalid held item definition index");
+									inventory.Items.Add(new InventoryHeldItem(itemId, amount, gas, definitions[definition]));
+								}
+								owner.InventoryHeld.Add(inventory);
+							}
+						}
 					}
 				}
 			}
