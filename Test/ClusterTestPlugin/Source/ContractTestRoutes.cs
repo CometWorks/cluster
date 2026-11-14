@@ -138,7 +138,9 @@ internal static class ContractTestRoutes
 		// block's request handler calls it, for an identity without a client. A station offer names its station.
 		TestRoutes.Add("POST", "/contract-test-accept", context =>
 		{
-			long contract = TestRoutes.Long(context, "contract"), identity = TestRoutes.Long(context, "identity"), block = TestRoutes.Long(context, "block");
+			long contract = TestRoutes.Long(context, "contract"), identity = TestRoutes.Long(context, "identity");
+			// A station offer has no block: block=0 with its station.
+			long block = long.Parse(TestRoutes.Query(context, "block"), CultureInfo.InvariantCulture);
 			TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
 			{
 				long station = long.Parse(TestRoutes.Query(context, "station", "0"), CultureInfo.InvariantCulture);
