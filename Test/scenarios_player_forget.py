@@ -1,6 +1,6 @@
 """SE-1487: the admin API removes an offline player from the cluster world (DELETE /admin/v1/players/{userId}).
 
-* ``P2-PLAYER-FORGET`` - node-1, node-2 and WA, no client. Two identities the WA maps to Steam IDs stand for old
+* ``P2-PLAYER-FORGET`` - node-1, node-2 and WA, no client, Cluster-Simple with PER_PLAYER block limits (as live). Two identities the WA maps to Steam IDs stand for old
   sebot traders. FORGET gets a bank account, founds a faction, gets a Scripter promotion through the admin API, and
   all of that reaches every role. BUILDER built an 8-block grid on node-1.
 
@@ -16,13 +16,35 @@ from __future__ import annotations
 
 import json
 import random
+import re
+import shutil
 import time
+from pathlib import Path
 
-from cluster import ClusterHttpError, wait_until
+from cluster import ClusterError, ClusterHttpError, wait_until
 from scenarios_wa_ops import _poll, _require
 
 ROLES = ("node-1", "node-2", "wa-1")
 STEAM = {"forget": 76561190000014871, "builder": 76561190000014872}
+
+
+def _per_player_template(bench) -> Path:
+    """Cluster-Simple with PER_PLAYER block limits, the only mode that counts an identity's own blocks."""
+    import bench as benchmod
+
+    source = Path(bench.cluster.config.world_template or benchmod.HOST.package / "examples/Cluster-Simple")
+    target = bench.run_root.parent / f"{bench.run_root.name}-templates" / "Cluster-Simple-per-player"
+    if target.exists():
+        shutil.rmtree(target)
+    shutil.copytree(source, target)
+    for name in ("Sandbox.sbc", "Sandbox_config.sbc"):
+        path = target / name
+        new, n = re.subn(r"<BlockLimitsEnabled>\w+</BlockLimitsEnabled>", "<BlockLimitsEnabled>PER_PLAYER</BlockLimitsEnabled>",
+                         path.read_text())
+        if n != 1:
+            raise ClusterError(f"{name}: no <BlockLimitsEnabled> to replace")
+        path.write_text(new)
+    return target
 
 
 def _admin(bench, method: str, path: str, key: str | None = None, body: dict | None = None) -> dict:
@@ -56,6 +78,7 @@ def _view(bench, role: str, identity: int, tag: str, steam: int) -> dict:
 
 
 def p2_player_forget(bench) -> None:
+    bench.cluster.config.world_template = _per_player_template(bench)
     bench.start_cluster(nodes=list(ROLES))
     tag = f"F{random.randrange(100):02d}"
     ids = {}

@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Sandbox;
 using Sandbox.Game.SessionComponents;
 using Sandbox.Game.World;
+using VRage.Game;
 
 namespace ClusterPlugin;
 
@@ -15,8 +16,8 @@ namespace ClusterPlugin;
 /// player binding, bank account, GPS, reputation), then drops what the cluster keeps for them: the
 /// promotion entry, which would otherwise keep the player on admin lists, and the character registry's
 /// record. The nodes follow through the replicated identity, faction, banking and promotion state.
-/// Refused while the player is online, and while a loaded grid still has blocks the identity built (delete its
-/// grids first, or their blocks would be left owned by nobody).
+/// Refused while the player is online, and, with PER_PLAYER block limits, while a loaded grid still has blocks the
+/// identity built (delete its grids first, or their blocks would be left owned by nobody).
 /// </summary>
 public static class PlayerForgetService
 {
@@ -54,9 +55,11 @@ public static class PlayerForgetService
 		MyIdentity identity = identityId == 0 ? null : session.Players.TryGetIdentity(identityId);
 		if (identity != null)
 		{
-			// The WA loads no grids: its own count is only the start, the PCU ledger has what the regular nodes hold.
-			// Grids in offline partitions count nowhere, so the operator deletes those first (SE-1487 runbook).
-			if (identity.BlockLimits.BlocksBuilt + PcuLedgerService.RemoteUsage(identityId).BlocksBuilt != 0)
+			// Only PER_PLAYER block limits count an identity's own blocks; the other modes count a shared pool. The WA
+			// loads no grids: its own count is only the start, the PCU ledger has what the regular nodes hold. Grids in
+			// offline partitions count nowhere, so the operator deletes those first (SE-1487 runbook).
+			if (session.BlockLimitsEnabled == MyBlockLimitsEnabledEnum.PER_PLAYER
+				&& identity.BlockLimits.BlocksBuilt + PcuLedgerService.RemoteUsage(identityId).BlocksBuilt != 0)
 				throw new InvalidOperationException("player_has_blocks");
 			MySessionComponentTrash trash = session.GetComponent<MySessionComponentTrash>()
 				?? throw new InvalidOperationException("Trash component unavailable");
