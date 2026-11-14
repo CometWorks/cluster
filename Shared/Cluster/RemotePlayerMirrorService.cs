@@ -227,14 +227,18 @@ public static class RemotePlayerMirrorService
 			.Where(pair => pair.Key != steamId && pair.Value.Members.Contains((steamId, 0)))
 			.Select(pair => pair.Key).ToList();
 		if (clients.Count == 0) return null;
+		// The cluster list first: a player mirrored here from another node has no member data on this node, and the
+		// member data's fallback is the formatted id ("[000...891]" on the bench).
+		OnlinePlayersService.OnlinePlayerEntry entry = OnlinePlayersService.Cluster
+			.FirstOrDefault(e => e.SteamId == steamId && e.SerialId == 0 && !string.IsNullOrEmpty(e.Name));
 		MyMultiplayerBase multiplayer = MyMultiplayer.Static;
 		var msg = new ConnectedClientDataMsg
 		{
 			ClientId = new EndpointId(steamId),
-			Name = multiplayer.GetMemberPlatformName(steamId),
-			IsAdmin = MySession.Static.IsUserAdmin(steamId),
+			Name = entry?.Name ?? multiplayer.GetMemberPlatformName(steamId),
+			IsAdmin = entry?.IsAdmin ?? MySession.Static.IsUserAdmin(steamId),
 			Join = false,
-			ServiceName = multiplayer.GetMemberServiceName(steamId)
+			ServiceName = entry?.ServiceName ?? multiplayer.GetMemberServiceName(steamId)
 		};
 		return () =>
 		{
