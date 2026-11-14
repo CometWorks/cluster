@@ -251,6 +251,7 @@ internal static partial class SelfTest
         ("fewest-partitions-placement", TestFewestPartitionsPlacement),
         ("node-scaling", TestNodeScaling),
         ("retiring-loading-client", TestRetiringLoadingClient),
+        ("rotation-forced-close", TestRotationForcedClose),
         ("node-control-ids", TestNodeControlIds),
         ("node-control-states", TestNodeControlStates),
         ("node-control-policy", TestNodeControlPolicy),

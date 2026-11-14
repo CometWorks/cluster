@@ -166,6 +166,8 @@ gateway-rs is then the whole Steam frontend of `SteamFrontend.cs`; C# keeps admi
   no CLIENT_CONNECTED within 5 s is a client still playing an ended session: C# force-reconnects it
   again until 15 s after the first forced reconnect, then refuses it with a synthesized
   `JOIN_RESULT{UserNotConnected}` (fatal to a vanilla client: back to the main menu).
+- SE-1553: the in-process Steam frontend follows the same two rules (the GameServer id in a forced reconnect, a
+  session without a login ended after 5 s); before, its clients ignored forced reconnects.
   `/transport/status` lists such clients under `reconnectStreaks` until they are admitted again.
 
 ### Node links

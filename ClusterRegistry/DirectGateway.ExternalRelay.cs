@@ -508,18 +508,24 @@ internal sealed partial class DirectGateway
             Volatile.Write(ref _steamServerId, serverId);
     }
 
-    /// <summary>The server id a forced reconnect names: the Steam GameServer to a Steam client of
-    /// gateway-rs once known, the Direct Transport server otherwise.</summary>
-    private ulong ReconnectServerId(ClientChannel peer)
-    {
-        ulong steam = Volatile.Read(ref _steamServerId);
-        return peer is ExternalClientChannel { Frontend: "steam" } && steam != 0 ? steam : DirectTransportConstants.ServerId;
-    }
+    /// <summary>The server id a forced reconnect names: the Steam GameServer to a Steam client once known (gateway-rs
+    /// reports its own, the in-process frontend has it), the Direct Transport server otherwise.</summary>
+    private ulong ReconnectServerId(ClientChannel peer) => ReconnectServerId(peer.Frontend,
+        peer is ExternalClientChannel ? Volatile.Read(ref _steamServerId) : _steam?.ServerId ?? 0);
+
+    /// <summary>
+    /// SE-1553: a vanilla client acts on the Disconnected control message only when it names the server it joined
+    /// (MyMultiplayerClient_ClientLeft). T-0244 named the Steam GameServer for gateway-rs sessions only; a client of
+    /// the in-process Steam frontend got the Direct Transport id, ignored it and kept playing a session the Gateway
+    /// had ended (octahedron 2026-11-14: one client force-reconnected every 10 s for 27 minutes).
+    /// </summary>
+    internal static ulong ReconnectServerId(string frontend, ulong steamServerId) =>
+        frontend == "steam" && steamServerId != 0 ? steamServerId : DirectTransportConstants.ServerId;
 
     // ---------------------------------------------------------------- T-0244: reopened Steam sessions
 
     /// <summary>
-    /// How long a gateway-rs Steam session may go without presenting CLIENT_CONNECTED. A vanilla join
+    /// How long a Steam session may go without presenting CLIENT_CONNECTED. A vanilla join
     /// sends it as its first packet (it is what opens the P2P session), so a session without one
     /// after this long is a client still playing a session the Gateway already ended: its traffic
     /// reopened the P2P session and can never be admitted (no ticket), and until T-0244 it was held
@@ -551,16 +557,21 @@ internal sealed partial class DirectGateway
     private readonly ConcurrentDictionary<ulong, ReconnectStreak> _steamReconnectStreaks = new();
     private long _steamBootsToMenu;
 
-    private static bool IsExternalSteam(ClientSession session) => session.Client is ExternalClientChannel { Frontend: "steam" };
+    /// <summary>SE-1553: either Steam frontend. The in-process one reopens a session on any packet of a client
+    /// still playing an ended session, exactly as gateway-rs does, so the same rules end it.</summary>
+    private static bool IsSteam(ClientSession session) => session.Client is { Frontend: "steam" };
 
     private static bool SteamSessionWithoutLogin(ClientSession session) =>
-        IsExternalSteam(session) && !session.LoginPresented && session.Credential == null && session.DisconnectReason == null
-        && DateTimeOffset.UtcNow - session.ConnectedAt >= SteamLoginGrace;
+        SteamSessionWithoutLogin(session.Client?.Frontend, session.LoginPresented, session.Credential != null,
+            session.DisconnectReason != null, DateTimeOffset.UtcNow - session.ConnectedAt);
+
+    internal static bool SteamSessionWithoutLogin(string? frontend, bool loginPresented, bool admitted, bool ending, TimeSpan age) =>
+        frontend == "steam" && !loginPresented && !admitted && !ending && age >= SteamLoginGrace;
 
     /// <summary>Counts a forced end of a Steam session; the log suffix for it (empty for other clients).</summary>
     private string NoteSteamForcedEnd(ClientSession session, bool boot = false)
     {
-        if (!IsExternalSteam(session)) return string.Empty;
+        if (!IsSteam(session)) return string.Empty;
         DateTimeOffset now = DateTimeOffset.UtcNow;
         ReconnectStreak streak = _steamReconnectStreaks.GetOrAdd(session.ClientId, _ => new ReconnectStreak(now));
         int forced;
