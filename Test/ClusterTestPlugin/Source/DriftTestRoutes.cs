@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Text;
+using Sandbox.Definitions;
 using Sandbox.Game;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Character;
@@ -20,13 +21,16 @@ namespace ClusterTestPlugin;
 /// <c>/drift-test?action=</c> (POST) with <c>block=</c> or <c>grid=</c>:
 /// <c>warhead-runout</c> a countdown that ran out without an explosion (CountdownMs -1, still counting down, dropped
 /// from MyWarheads), <c>empty-group</c> a block group with no blocks, <c>overfill</c> a reactor holding 0.0032 kg more
-/// uranium than the load restores, <c>pilot</c> (with <c>owner=</c>) a character of that identity
+/// uranium than the load restores, <c>overfill-ore</c> (SE-1556) a cargo container full of stone and ice, the ice
+/// 0.00076 kg over what the load restores beside the stone, <c>pilot</c> (with <c>owner=</c>) a character of that identity
 /// seated in the cockpit, <c>suit</c> (with <c>level=</c>) that pilot's suit oxygen. <c>/drift-test-state</c> (GET)
 /// reports all of it for a list of <c>blocks=</c>.
 /// </summary>
 internal static class DriftTestRoutes
 {
     private static readonly MyDefinitionId Uranium = new(typeof(MyObjectBuilder_Ingot), "Uranium");
+    private static readonly MyDefinitionId Stone = new(typeof(MyObjectBuilder_Ore), "Stone");
+    private static readonly MyDefinitionId Ice = new(typeof(MyObjectBuilder_Ore), "Ice");
 
     public static void Register()
     {
@@ -78,6 +82,20 @@ internal static class DriftTestRoutes
                     inventory.AddItemsInternal((MyFixedPoint)((double)inventory.MaxVolume / (double)fuel.FuelDefinition.Volume + 0.0032), fuel.FuelItem);
                 return State(id);
             }
+            case "overfill-ore":
+            {
+                MyInventory inventory = Entity<MyCargoContainer>(id).GetInventory();
+                inventory.Clear();
+                // SE-1556: partition 51971's harvester container, full of stone and ice, the ice 0.00076 kg over what
+                // the load restores beside the stone (ComputeAmountThatFits against the stone's volume). Neither stack
+                // is over an empty container. AddItems would refuse the ice, so it goes in past the check.
+                float volume = MyDefinitionManager.Static.GetPhysicalItemDefinition(Stone).Volume;
+                MyFixedPoint stone = (MyFixedPoint)((double)inventory.MaxVolume / (double)volume * 0.167951);
+                double fits = ((double)inventory.MaxVolume - (double)(stone * volume)) * (1.0 / (double)volume);
+                inventory.AddItemsInternal(stone, new MyObjectBuilder_Ore { SubtypeName = "Stone" });
+                inventory.AddItemsInternal((MyFixedPoint)fits + (MyFixedPoint)0.00076, new MyObjectBuilder_Ore { SubtypeName = "Ice" });
+                return State(id);
+            }
             case "pilot":
             {
                 var cockpit = Entity<MyCockpit>(id);
@@ -105,6 +123,10 @@ internal static class DriftTestRoutes
         {
             MyWarhead warhead => new { id, found = true, countdownMs = (int)warhead.m_countdownMs, isCountingDown = warhead.IsCountingDown },
             MyReactor reactor => (object)new { id, found = true, uranium = reactor.GetInventory().GetItemAmount(Uranium).ToString() },
+            MyCargoContainer cargo => new
+            {
+                id, found = true, stone = cargo.GetInventory().GetItemAmount(Stone).ToString(), ice = cargo.GetInventory().GetItemAmount(Ice).ToString(),
+            },
             MyCockpit cockpit => new
             {
                 id, found = true, pilot = cockpit.Pilot?.EntityId ?? 0, suit = cockpit.Pilot?.OxygenComponent?.SuitOxygenLevel,

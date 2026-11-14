@@ -1750,11 +1750,14 @@ internal sealed partial class ClusterControlServer
 
 	/// <summary>
 	/// SE-1155: a block inventory can hold a stack larger than the inventory loads back. MyInventory.InitItems clamps
-	/// each saved stack to what fits an empty inventory, in float arithmetic (ImportRoundTrip.LoadedAmount), while a
-	/// refill that sizes its stack as (int)((float)free / volume), as a station refuel does, overshoots it: a station
-	/// reactor held 461538.469939 kg of uranium where 461538.46674 load, and every handover of its partition failed on
-	/// that one Amount (octahedron-test 2026-11-05, partition 4519). The capture writes what the load restores, as
-	/// <see cref="ClampFuelCapacity"/> does. Only nearly full inventories are looked at: no other stack can be over.
+	/// each saved stack to what fits beside the stacks before it, in float arithmetic (ImportRoundTrip.LoadedAmounts),
+	/// while a refill that sizes its stack as (int)((float)free / volume), as a station refuel does, overshoots it: a
+	/// station reactor held 461538.469939 kg of uranium where 461538.46674 load, and every handover of its partition
+	/// failed on that one Amount (octahedron-test 2026-11-05, partition 4519). SE-1556: with several stacks it is a
+	/// later one that shrinks - a full harvester container of 21277.571304 kg stone and 105411.621303 kg ice loaded
+	/// the ice as 105411.620545, where the one-stack model of SE-1155 saw nothing to clamp (partition 51971,
+	/// 2026-11-14). The capture writes what the load restores, as <see cref="ClampFuelCapacity"/> does. Only nearly
+	/// full inventories are looked at: no other stack can be over.
 	/// </summary>
 	internal static void ClampInventoryAmounts(MyEntity entity, MyObjectBuilder_EntityBase builder)
 	{
@@ -1764,18 +1767,22 @@ internal sealed partial class ClusterControlServer
 			{
 				if (block.GetInventory(index) is not MyInventory inventory || !inventory.IsConstrained
 					|| (double)inventory.CurrentVolume < 0.999 * (double)inventory.MaxVolume && (double)inventory.CurrentMass < 0.999 * (double)inventory.MaxMass) continue;
-				foreach (MyPhysicalInventoryItem item in inventory.GetItems())
-				{
-					Sandbox.Game.Entities.Inventory.MyInventoryItemAdapter adapter = Sandbox.Game.Entities.Inventory.MyInventoryItemAdapter.Static;
-					if (item.Content == null || !adapter.TryAdapt(item.Content.GetObjectId())) continue;
-					MyFixedPoint loaded = ImportRoundTrip.LoadedAmount(item.Amount, inventory.MaxVolume, inventory.MaxMass, adapter.Volume, adapter.Mass, adapter.HasIntegralAmounts);
-					if (loaded >= item.Amount) continue;
-					MyObjectBuilder_CubeBlock saved = gridBuilder.CubeBlocks.FirstOrDefault(candidate => candidate.EntityId == block.EntityId);
-					foreach (MyObjectBuilder_InventoryItem stack in SavedInventories(saved?.ComponentContainer)
-						.SelectMany(savedInventory => savedInventory.Items ?? new List<MyObjectBuilder_InventoryItem>())
-						.Where(stack => stack.ItemId == item.ItemId && stack.Amount == item.Amount && stack.PhysicalContent?.GetObjectId() == item.Content.GetObjectId()))
-						stack.Amount = loaded;
-				}
+				List<MyPhysicalInventoryItem> items = inventory.GetItems();
+				// The saved inventory is this one when it lists the same stacks in the same order.
+				MyObjectBuilder_CubeBlock saved = gridBuilder.CubeBlocks.FirstOrDefault(candidate => candidate.EntityId == block.EntityId);
+				List<MyObjectBuilder_InventoryItem> stacks = SavedInventories(saved?.ComponentContainer)
+					.Select(savedInventory => savedInventory.Items ?? new List<MyObjectBuilder_InventoryItem>())
+					.FirstOrDefault(savedItems => savedItems.Count == items.Count && savedItems.Zip(items, (stack, item)
+						=> stack.ItemId == item.ItemId && stack.Amount == item.Amount && item.Content != null
+							&& stack.PhysicalContent?.GetObjectId() == item.Content.GetObjectId()).All(same => same));
+				if (stacks == null) continue;
+				Sandbox.Game.Entities.Inventory.MyInventoryItemAdapter adapter = Sandbox.Game.Entities.Inventory.MyInventoryItemAdapter.Static;
+				var model = new List<(MyFixedPoint, float, float, bool)>();
+				foreach (MyPhysicalInventoryItem item in items)
+					model.Add(adapter.TryAdapt(item.Content.GetObjectId()) ? (item.Amount, adapter.Volume, adapter.Mass, adapter.HasIntegralAmounts) : (0, 1f, 1f, false));
+				MyFixedPoint[] loaded = ImportRoundTrip.LoadedAmounts(model, inventory.MaxVolume, inventory.MaxMass);
+				for (int stack = 0; stack < loaded.Length; stack++)
+					if (model[stack].Item1 > 0 && loaded[stack] < stacks[stack].Amount) stacks[stack].Amount = loaded[stack];
 			}
 	}
 

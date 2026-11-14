@@ -1005,18 +1005,41 @@ internal static class ImportRoundTrip
 		=> capacity < 0f ? 0f : capacity > maximum ? maximum : capacity;
 
 	/// <summary>
-	/// SE-1155: the amount MyInventory.InitItems restores from a saved stack: at most what ComputeAmountThatFits gives
-	/// for an EMPTY inventory (the load adds with simplifiedMassAndVolumeCalculation, so the volume and mass it compares
-	/// against stay 0 until the end), in the same double arithmetic over the item's float volume and mass. The slot
-	/// limit of an inventory with a MaxItemCount is not modelled.
+	/// SE-1155, SE-1556: the amount MyInventory.InitItems restores from a saved stack: at most what
+	/// ComputeAmountThatFits gives beside the stacks loaded before it, in the same double arithmetic over the item's
+	/// float volume and mass. The load adds with simplifiedMassAndVolumeCalculation, which on a server still adds each
+	/// stack's volume and mass to the running totals (AddVolumeAndMass), so <paramref name="currentVolume"/> and
+	/// <paramref name="currentMass"/> are those of the stacks before this one. The slot limit of an inventory with a
+	/// MaxItemCount is not modelled.
 	/// </summary>
-	internal static MyFixedPoint LoadedAmount(MyFixedPoint amount, MyFixedPoint maxVolume, MyFixedPoint maxMass, float volume, float mass, bool integral)
+	internal static MyFixedPoint LoadedAmount(MyFixedPoint amount, MyFixedPoint maxVolume, MyFixedPoint maxMass, float volume, float mass, bool integral,
+		MyFixedPoint currentVolume = default, MyFixedPoint currentMass = default)
 	{
-		MyFixedPoint byVolume = MyFixedPoint.Max((MyFixedPoint)((double)maxVolume * (1.0 / (double)volume)), 0);
-		MyFixedPoint byMass = MyFixedPoint.Max((MyFixedPoint)((double)maxMass * (1.0 / (double)mass)), 0);
+		MyFixedPoint byVolume = MyFixedPoint.Max((MyFixedPoint)(((double)maxVolume - Math.Max((double)currentVolume, 0.0)) * (1.0 / (double)volume)), 0);
+		MyFixedPoint byMass = MyFixedPoint.Max((MyFixedPoint)(((double)maxMass - Math.Max((double)currentMass, 0.0)) * (1.0 / (double)mass)), 0);
 		MyFixedPoint fits = MyFixedPoint.Min(byVolume, byMass);
 		if (integral) fits = MyFixedPoint.Floor((MyFixedPoint)(Math.Round((double)fits * 1000.0) / 1000.0));
 		return MyFixedPoint.Min(fits, amount);
+	}
+
+	/// <summary>
+	/// SE-1556: what MyInventory.InitItems restores from the saved stacks of one inventory, in their saved order: each
+	/// stack is cut to what fits beside the ones before it, so in a full inventory of several stacks it is a later
+	/// stack that comes back smaller, by the rounding the live adds let through. A stack that loads as 0 is not loaded.
+	/// </summary>
+	internal static MyFixedPoint[] LoadedAmounts(IReadOnlyList<(MyFixedPoint Amount, float Volume, float Mass, bool Integral)> stacks, MyFixedPoint maxVolume, MyFixedPoint maxMass)
+	{
+		MyFixedPoint[] loaded = new MyFixedPoint[stacks.Count];
+		MyFixedPoint currentVolume = 0, currentMass = 0;
+		for (int index = 0; index < stacks.Count; index++)
+		{
+			(MyFixedPoint amount, float volume, float mass, bool integral) = stacks[index];
+			if (amount <= 0) continue;
+			loaded[index] = LoadedAmount(amount, maxVolume, maxMass, volume, mass, integral, currentVolume, currentMass);
+			currentVolume += loaded[index] * volume;
+			currentMass += loaded[index] * mass;
+		}
+		return loaded;
 	}
 
 	private static bool ValuesEqual(string left, string right, double absolute = 2e-5)

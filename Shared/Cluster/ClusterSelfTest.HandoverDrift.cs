@@ -52,6 +52,17 @@ internal static partial class ClusterSelfTest
 		Assert(uranium.ToString() == "461538.46674", "an overfull reactor's uranium must load as 461538.46674, the model gives " + uranium);
 		Assert(Loaded("461538.307238", 24, 0.052f / 1000).ToString() == "461538.307238", "a stack that fits must load unchanged");
 		Assert(Loaded("4", 0.0001, 0.00003f, integral: true).ToString() == "3", "an integral stack loads whole items only, got " + Loaded("4", 0.0001, 0.00003f, integral: true));
+		// SE-1556: partition 51971's harvester container (15.625 m³ times 3), stone then ice at 0.37 L/kg. Neither
+		// stack is over an empty container, the ice is over what the stone leaves.
+		VRage.MyFixedPoint[] ore = ImportRoundTrip.LoadedAmounts(new[]
+		{
+			(VRage.MyFixedPoint.DeserializeString("21277.571304"), 0.37f / 1000, 1f, false),
+			(VRage.MyFixedPoint.DeserializeString("105411.621303"), 0.37f / 1000, 1f, false),
+		}, (VRage.MyFixedPoint)46.875, VRage.MyFixedPoint.MaxValue);
+		Assert(ore[0].ToString() == "21277.571304" && ore[1].ToString() == "105411.620545",
+			"a full container's second stack must load as 105411.620545 beside an unchanged first, the model gives " + ore[0] + " and " + ore[1]);
+		ore = ImportRoundTrip.LoadedAmounts(new[] { (ore[0], 0.37f / 1000, 1f, false), (ore[1], 0.37f / 1000, 1f, false) }, (VRage.MyFixedPoint)46.875, VRage.MyFixedPoint.MaxValue);
+		Assert(ore[1].ToString() == "105411.620545", "a clamped stack must load unchanged the next time, got " + ore[1]);
 	}
 
 	/// <summary>
