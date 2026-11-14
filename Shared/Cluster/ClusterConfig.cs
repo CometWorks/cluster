@@ -365,12 +365,12 @@ public static class ClusterConfig
 		// Off by default: the regression scenarios' probe grids are cheap armor cubes, wreckage by this rule.
 		// SE-1316 (BotShipCleaner): ships the bots of botSteamIds (comma list of Steam IDs, first-last for a range) left
 		// behind. botShips: off (default), dryrun (log what would go) or on. A BOT SHIP is a top-level grid whose block
-		// owners are all bots; it is IN USE while someone sits in it, controls it or stands within botShipUseRadius metres
-		// of it, and the node stamps the time of that use into the grid's builder, so the stamp moves with handovers and
-		// offline partitions (a ship first seen without one counts as used then). It goes when the newest finished
-		// registry backup (the Gateway's NPC census) was taken botShipIdleMinutes or more after that use, so the backup
-		// holds it unused: right after each backup, at most botShipsMaxPerRun per node, and right before its partition
-		// goes offline. Never a ship docked or attached to a grid that is not a bot ship, and never while a human player (any
+		// owners are all bots; it is IN USE while someone sits in it, controls it, or a human or one of its owner bots stands
+		// within botShipUseRadius metres of it (other bots don't count, SE-1528), and the node stamps the time of that use
+		// into the grid's builder, so the stamp moves with handovers and offline partitions (a ship first seen without
+		// one counts as used then). It goes when the newest finished registry backup (the Gateway's NPC census) was taken
+		// botShipIdleMinutes or more after that use, so the backup holds it unused: right after each backup, at most
+		// botShipsMaxPerRun per node, and right before its partition goes offline. Never a ship docked or attached to a grid that is not a bot ship, and never while a human player (any
 		// player who is no bot, or a viewed camera) is within the sync distance of it.
 		["cleanup.botShips"] = "off",
 		["cleanup.botSteamIds"] = "",

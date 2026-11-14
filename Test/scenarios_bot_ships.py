@@ -9,13 +9,15 @@ Two identities stand for sebot traders: identities the player collection maps to
   1. After a backup. Probes, each far from the others: A1 (bot A) and A2 (bot B), unused; PLAYER (a player
      identity with a Steam ID outside the bot list); SEATED (bot A's ship with a pilot of bot B in its cockpit); NEAR
      (bot B's ship 30 m from a viewed camera, a player position); FRESH (bot A's, spawned 2 min after the others, so
-     the backups below were taken less than the idle time after its first sight). Dry run first: the backup's run
-     logs "would remove" for A1 and A2 only, and removes nothing. Then on, at most 1 per run: the next backup removes
-     one of them, the one after it the other; each removal is logged with the grid's id, name, owners with their
-     Steam IDs, position, partition and the unused and backup times; their emptied partitions are reaped. PLAYER,
-     SEATED, NEAR and FRESH stay; the last use of SEATED and NEAR keeps moving. HUMAN (bot A's, unused, 1500 m from the
-     camera: no use, but a human player within the sync distance) is kept for that reason; once the camera is no longer
-     viewed, the next backup removes it.
+     the backups below were taken less than the idle time after its first sight); OTHER (bot A's, with bot B standing
+     20 m from it, as other bots pass an abandoned ship in a station hangar all the time); OWNER (bot A's, with bot A
+     itself 20 m from it). Dry run first: the backup's run logs "would remove" for A1, A2 and OTHER only, and removes
+     nothing. Then on, at most 2 per run: the next backup removes two of them, the one after it the third; each
+     removal is logged with the grid's id, name, owners with their Steam IDs, position, partition and the unused and
+     backup times; their emptied partitions are reaped. PLAYER, SEATED, NEAR, FRESH and OWNER stay; the last use of
+     SEATED, NEAR and OWNER keeps moving. HUMAN (bot A's, unused, 1500 m from the camera: no use, but a human player
+     within the sync distance) is kept for that reason; once the camera is no longer viewed, the next backup removes
+     it. Before SE-1528 every bot near a ship kept it in use, so OTHER stayed: the red arm.
   2. Offline. OFF (bot A's) goes offline right after its first sight, before any backup could hold it unused, so it
      is saved with its stamp. A backup is taken once it is past the idle time: OFF is offline and stays there. Woken
      (a recovery load), it comes back with the stamp it was saved with (/cluster/bot-ships), and the offline sweep
@@ -61,7 +63,8 @@ def _backup(bench, n: int) -> int:
         bench.cluster._request("GET", f"/admin/v1/operations/{op['operationId']}", control)["data"]), 60, f"backup {n} done")
     _require(bench, f"backup {n}: the registry copy succeeded", done["state"] == "Succeeded", json.dumps(done)[:300])
     artifact = done["result"]["artifactId"]
-    bench.cluster._request("DELETE", f"/admin/v1/artifacts/{artifact}", control, 60,
+    # ?backup=stored, as Quasar says once it has stored the backup: only that moves the census's backupAt (SE-1351).
+    bench.cluster._request("DELETE", f"/admin/v1/artifacts/{artifact}?backup=stored", control, 60,
                            headers={"Idempotency-Key": f"se1316-release-{n}"})
     at = wait_until(lambda: (lambda c: c.get("backupAt") if (c.get("backupAt") or 0) >= started else None)(
         bench.cluster.get("/registry/npc-census")), 30, f"backup {n} in the census")
@@ -110,7 +113,7 @@ def p2_bot_ship_cleanup(bench) -> None:
     ids = {k: o["identityId"] for k, o in owners.items()}
 
     # 1. After a backup.
-    xs = {name: X + i * SPACING for i, name in enumerate(("A1", "A2", "PLAYER", "SEATED", "NEAR", "FRESH"))}
+    xs = {name: X + i * SPACING for i, name in enumerate(("A1", "A2", "PLAYER", "SEATED", "NEAR", "FRESH", "OTHER", "OWNER"))}
     camera = bench.cluster.node(NODE, f"/camera-test-spawn?x={xs['NEAR']}&y=30&z=0", "POST")
     view = bench.cluster.node(NODE, f"/camera-test-view?entityId={camera.get('camera')}&active=true", "POST")
     _require(bench, "setup: the camera beside NEAR is viewed", view.get("viewed") is True, json.dumps(view))
@@ -118,20 +121,25 @@ def p2_bot_ship_cleanup(bench) -> None:
         row.get("ClientId") == 0 and row.get("EntityId") == camera.get("camera") for row in bench.cluster.node(NODE, "/position-registry")),
         60, "camera in the position registry"))
     probes = {}
-    for name, owner in (("A1", ids["A"]), ("A2", ids["B"]), ("PLAYER", ids["player"]), ("NEAR", ids["B"]), ("HUMAN", ids["A"])):
+    for name, owner in (("A1", ids["A"]), ("A2", ids["B"]), ("PLAYER", ids["player"]), ("NEAR", ids["B"]), ("HUMAN", ids["A"]),
+                        ("OTHER", ids["A"]), ("OWNER", ids["A"])):
         x = xs["NEAR"] + HUMAN_METRES if name == "HUMAN" else xs[name]
         probes[name] = bench.cluster.node(NODE, f"/trash-test-spawn?x={x}&y=0&z=0&blocks=8&npc=true&owner={owner}", "POST")
     seated = bench.cluster.node(NODE, f"/rich-test-spawn?kind=antennaship&x={xs['SEATED']}&y=0&z=0&builtBy={ids['A']}", "POST")
     probes["SEATED"] = {"grid": seated["grids"][0]["grid"], "name": seated["grids"][0]["name"]}
     bench.record("pilot", bench.cluster.node(NODE, f"/bot-ship-test-pilot?grid={probes['SEATED']['grid']}&owner={ids['B']}", "POST"))
+    # SE-1528: bot B stands beside OTHER (bot A's ship), bot A beside its own OWNER, no client behind either.
+    people = {"other": (BOT_STEAM["B"], "OTHER"), "owner": (BOT_STEAM["A"], "OWNER")}
+    for key, (steam, near) in people.items():
+        bench.record(f"person-{key}", bench.cluster.node(NODE, f"/bot-ship-test-person?key={key}&steamId={steam}&x={xs[near]}&y=20&z=0", "POST"))
     grids = {name: int(p["grid"]) for name, p in probes.items()}
-    tracked = wait_until(lambda: (lambda s: s if all(s.get(grids[n], {}).get("lastUse") for n in ("A1", "A2", "SEATED", "NEAR", "HUMAN")) else None)(
+    tracked = wait_until(lambda: (lambda s: s if all(s.get(grids[n], {}).get("lastUse") for n in ("A1", "A2", "SEATED", "NEAR", "HUMAN", "OTHER", "OWNER")) else None)(
         _ships(bench)), 60, "the bot ships tracked")
     bench.check("node-1 tracks the bot ships, not the player's", grids["PLAYER"] not in tracked, json.dumps(tracked)[:500])
     homes = _homes(bench, {k: grids[k] for k in ("A1", "A2")})
     _require(bench, "setup: A1 and A2 each alone in a partition node-1 owns", homes and homes["A1"] != homes["A2"], json.dumps(homes))
     # Past the idle time for the first five; FRESH is first seen now.
-    time.sleep(max(0, max(tracked[grids[n]]["lastUse"] for n in ("A1", "A2", "HUMAN")) + IDLE_SECONDS + 5 - time.time()))
+    time.sleep(max(0, max(tracked[grids[n]]["lastUse"] for n in ("A1", "A2", "HUMAN", "OTHER")) + IDLE_SECONDS + 5 - time.time()))
     probes["FRESH"] = bench.cluster.node(NODE, f"/trash-test-spawn?x={xs['FRESH']}&y=0&z=0&blocks=8&npc=true&owner={ids['A']}", "POST")
     grids["FRESH"] = int(probes["FRESH"]["grid"])
     wait_until(lambda: _ships(bench).get(grids["FRESH"], {}).get("lastUse"), 30, "FRESH tracked")
@@ -142,28 +150,29 @@ def p2_bot_ship_cleanup(bench) -> None:
     bench.record("run-1", line)
     would = {name: bool(_logged(bench, "would remove", g)) for name, g in grids.items()}
     present = _members(bench)
-    bench.check("dry run: the backup's run logs A1 and A2 as 'would remove', nothing else",
-                line is not None and would == {n: n in ("A1", "A2") for n in grids}, json.dumps({"line": line, "would": would}))
+    bench.check("dry run: the backup's run logs A1, A2 and OTHER (only another bot near it) as 'would remove', nothing else",
+                line is not None and would == {n: n in ("A1", "A2", "OTHER") for n in grids}, json.dumps({"line": line, "would": would}))
     bench.check("dry run: nothing is removed", all(g in present for g in grids.values()), json.dumps(sorted(present))[:300])
 
-    bench.record("config-on", bench.cluster.handover_config({"cleanup.botShips": "on", "cleanup.botShipsMaxPerRun": "1"}))
+    bench.record("config-on", bench.cluster.handover_config({"cleanup.botShips": "on", "cleanup.botShipsMaxPerRun": "2"}))
     second = _backup(bench, 2)
     line2 = _run_line(bench, second)
     try:
-        wait_until(lambda: {grids["A1"], grids["A2"]} - _members(bench).keys(), 30, "A1 or A2 removed")
+        wait_until(lambda: len({grids["A1"], grids["A2"], grids["OTHER"]} - _members(bench).keys()) >= 2, 30, "two of A1, A2, OTHER removed")
     except ClusterError:
         pass
     gone2 = {n for n, g in grids.items() if g not in _members(bench)}
-    bench.check("on, cap 1: the next backup removes one of A1 and A2, nothing else", gone2 in ({"A1"}, {"A2"}),
+    bench.check("on, cap 2: the next backup removes two of A1, A2 and OTHER, nothing else", len(gone2) == 2 and gone2 <= {"A1", "A2", "OTHER"},
                 json.dumps({"gone": sorted(gone2), "line": line2}))
     third = _backup(bench, 3)
     line3 = _run_line(bench, third)
     try:
-        wait_until(lambda: not ({grids["A1"], grids["A2"]} & _members(bench).keys()), 30, "A1 and A2 removed")
+        wait_until(lambda: not ({grids["A1"], grids["A2"], grids["OTHER"]} & _members(bench).keys()), 30, "A1, A2 and OTHER removed")
     except ClusterError:
         pass
     gone3 = {n for n, g in grids.items() if g not in _members(bench)}
-    bench.check("the backup after it removes the other; PLAYER, SEATED, NEAR, HUMAN and FRESH stay", gone3 == {"A1", "A2"},
+    bench.check("the backup after it removes the last of them; PLAYER, SEATED, NEAR, HUMAN, FRESH and OWNER stay",
+                gone3 == {"A1", "A2", "OTHER"},
                 json.dumps({"gone": sorted(gone3), "line": line3}))
     removed = {n: (_logged(bench, "removed", grids[n]) or [None])[0] for n in ("A1", "A2")}
     bench.record("removed", removed)
@@ -172,8 +181,8 @@ def p2_bot_ship_cleanup(bench) -> None:
     bench.check("each removal is logged with its owners and Steam IDs, partition, last use, backup and cause", all(shape.values()),
                 json.dumps(removed))
     ships = _ships(bench)
-    recent = {n: ships.get(grids[n], {}).get("lastUse") for n in ("SEATED", "NEAR")}
-    bench.check("SEATED and NEAR count as in use: their last use is after the third backup",
+    recent = {n: ships.get(grids[n], {}).get("lastUse") for n in ("SEATED", "NEAR", "OWNER")}
+    bench.check("SEATED, NEAR and OWNER (its owner bot near) count as in use: their last use is after the third backup",
                 all(use and use >= third - 15 for use in recent.values()), json.dumps({"third": third, **recent}))
     bench.check("the run summaries name the capped ship", bool(line2) and "over cleanup.botShipsMaxPerRun, next backup 1" in line2, str(line2))
     bench.check("HUMAN, unused but with a human player within the sync distance, is kept for that reason",
@@ -190,9 +199,12 @@ def p2_bot_ship_cleanup(bench) -> None:
     except ClusterError:
         pass
     gone4 = {n for n, g in grids.items() if g not in _members(bench)}
-    bench.check("with nobody human in sync distance any more, the next backup removes HUMAN, nothing else", gone4 == {"A1", "A2", "HUMAN"},
+    bench.check("with nobody human in sync distance any more, the next backup removes HUMAN, nothing else",
+                gone4 == {"A1", "A2", "OTHER", "HUMAN"},
                 json.dumps({"gone": sorted(gone4), "line": line4}))
     _gone_for_good(bench, "after-backup", {k: grids[k] for k in ("A1", "A2")}, {homes["A1"], homes["A2"]})
+    for key, (steam, _) in people.items():
+        bench.cluster.node(NODE, f"/bot-ship-test-person?key={key}&steamId={steam}", "POST")
 
     # 2. Offline: the stamp rides the offline save, and the offline sweep removes the ship before it goes offline again.
     off = bench.cluster.node(NODE, f"/trash-test-spawn?x={X - SPACING}&y=0&z=0&blocks=8&npc=true&owner={ids['A']}", "POST")
@@ -288,6 +300,6 @@ def p2_bot_ship_return(bench) -> None:
 
 
 SCENARIOS_BOT_SHIPS = {
-    "P2-BOT-SHIP-CLEANUP": (p2_bot_ship_cleanup, "SE-1316: ships bots left go after a backup that holds them unused, dry run first and capped; in-use and player ships stay; offline partitions too", "3"),
+    "P2-BOT-SHIP-CLEANUP": (p2_bot_ship_cleanup, "SE-1316: ships bots left go after a backup that holds them unused, dry run first and capped; in-use and player ships stay; offline partitions too; SE-1528: another bot near a ship is no use", "3"),
     "P2-BOT-SHIP-RETURN": (p2_bot_ship_return, "SE-1419: a bot ship back on a node that remembers its old stamp arrives without one and its handover commits", "3"),
 }

@@ -29,6 +29,12 @@ internal static partial class ClusterSelfTest
 		Check(ranges.Contains(100) && ranges.Contains(250) && ranges.Contains(300) && !ranges.Contains(101) && !ranges.Contains(0),
 			"ids and ranges match, 0 (an NPC) never");
 		Check(SteamIdRanges.Parse("").IsEmpty, "an empty list has no bots");
+		// SE-1528: who near a bot ship keeps it in use. Ship owned by bot 250; bot 260 is another bot.
+		var owner = new[] { 250UL };
+		Check(BotShipCleaner.KeepsInUse(76561198000000001, ranges, owner) && BotShipCleaner.KeepsInUse(0, ranges, owner),
+			"a human, or a viewed camera, near it keeps it in use");
+		Check(BotShipCleaner.KeepsInUse(250, ranges, owner), "its owner bot near it keeps it in use");
+		Check(!BotShipCleaner.KeepsInUse(260, ranges, owner), "another bot passing by does not");
 		bool refused = false;
 		try { ClusterConfig.Normalize("cleanup.botSteamIds", "x"); } catch (ArgumentException) { refused = true; }
 		Check(refused && ClusterConfig.Normalize("cleanup.botShips", "DryRun") == "dryrun", "the knobs validate");
