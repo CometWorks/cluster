@@ -23,6 +23,10 @@
   at the first block through the block's own request handler and gets the package. Then the blocks and A
   move to B's node, where the contract screen lists the contract and A delivers the package at the second
   block. The reward and the collateral reach A once, and the posting node's mod callbacks fire.
+* ``P3-CON-STATION`` - SE-1511, clientless. Mod contracts offered at a faction station (no start block) on the
+  World Authority, the way Octahedron posts its station contracts, show at that station on both regular nodes.
+  Accepted on node-1, the offer leaves both nodes and the contract is active on the World Authority; a second offer
+  the World Authority withdraws leaves both nodes too. Red (before SE-1511): no node lists the station offers.
 
 The request handlers run on the server for the attached player (the headless client has no contract
 screen to drive), with the player's endpoint as the event sender.
@@ -517,9 +521,59 @@ def p3_con_clients(bench) -> None:
 p3_con_clients.administrators = [CLIENT2_ID]  # the vanilla admin teleport takes B away from A
 
 
+def p3_con_station(bench) -> None:
+    """SE-1511 - a station offer posted on the World Authority shows on every regular node."""
+    bench.start_cluster()
+    bench.quiesce()
+    bench.cluster.post("/automatic/pause")
+    ledger = _Ledger(bench)
+    acceptor = _identity(bench, f"se-1511-acceptor-{random.randrange(10 ** 6)}")
+
+    def post(minutes: int = 60) -> tuple[int, int]:
+        posted = ledger.node(ledger.wa, f"/contract-test-post-station?reward={REWARD}&minutes={minutes}", "POST")
+        bench.record(f"posted-station-{posted.get('contractId')}", posted)
+        _require(bench, "the World Authority posted a station contract", bool(posted.get("success")), json.dumps(posted))
+        return int(posted["station"]), int(posted["contractId"])
+
+    def offered(node: str, station: int) -> list[int]:
+        return _try(lambda: ledger.node(node, f"/contract-test-station-offers?station={station}")).get("contracts") or []
+
+    def wait_offered(label: str, station: int, contract: int, listed: bool) -> bool:
+        seen = _poll(lambda: all((contract in offered(node, station)) == listed for node in REGULAR) or None,
+                     HANDOVER_TIMEOUT, interval=2)
+        return bench.check(label, seen is not None, json.dumps({node: offered(node, station) for node in REGULAR}))
+
+    try:
+        station, taken = post()
+        _, withdrawn = post()
+        wait_offered("post: both nodes list the station offer", station, taken, True)
+        wait_offered("post: both nodes list the second station offer", station, withdrawn, True)
+
+        answer = ledger.node("node-1", f"/contract-test-accept?contract={taken}&identity={acceptor}&block=0&station={station}", "POST")
+        bench.record("accepted-station", answer)
+        _require(bench, "node-1 accepted the station offer", bool(answer.get("accepted")), json.dumps(answer))
+        active = _poll(lambda: ledger.active(ledger.wa, taken, acceptor).get("active") or None, HANDOVER_TIMEOUT, interval=2)
+        bench.check("accept: the World Authority holds the station contract as active", active is not None,
+                    json.dumps(ledger.active(ledger.wa, taken, acceptor)))
+        wait_offered("accept: no node offers the accepted contract any more", station, taken, False)
+        ledger.wait_listed("accept: both nodes and the World Authority list it for the acceptor", taken, acceptor, True)
+
+        removed = ledger.node(ledger.wa, f"/contract-test-remove?contract={withdrawn}", "POST")
+        bench.check("withdraw: the World Authority removed the second offer", bool(removed.get("removed")), json.dumps(removed))
+        wait_offered("withdraw: no node offers the withdrawn contract any more", station, withdrawn, False)
+
+        answer = ledger.node("node-2", f"/contract-test-abandon?contract={taken}&identity={acceptor}", "POST")
+        bench.check("abandon: node-2 abandoned the station contract", answer.get("result") == "Success", json.dumps(answer))
+        ledger.wait_listed("abandon: no node lists the abandoned contract any more", taken, acceptor, False)
+    finally:
+        _try(lambda: bench.cluster.post("/automatic/resume"))
+    bench.exercised(station=station, contracts=[taken, withdrawn], legs="post on the WA, offered on both nodes, accept, withdraw")
+
+
 SCENARIOS_CONTRACTS = {
     "P3-CON-LEDGER": (p3_con_ledger, "SE1-0247: accepted contracts on the WA, settled once (clientless)", "3"),
     "P3-CON-ROLLBACK": (p3_con_rollback, "#1272: a settled contract is not offered again after a partition rollback", "3"),
     "P3-CON-LOST": (p3_con_lost, "#1271: an admitted settlement whose answers were lost is paid once", "3"),
+    "P3-CON-STATION": (p3_con_station, "SE-1511: station offers posted on the WA show on every node", "3"),
     "P3-CON-CLIENTS": (p3_con_clients, "SE1-0247: accept on one node, deliver on another (two clients)", "3"),
 }

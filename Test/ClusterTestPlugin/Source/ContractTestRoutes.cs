@@ -78,6 +78,40 @@ internal static class ContractTestRoutes
 			TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => Post(block,
 				new Sandbox.ModAPI.Contracts.MyContractHauling(block, reward, collateral, minutes, end))));
 		});
+		// SE-1511: POST /contract-test-post-station?station=&reward=&minutes= - a mod contract offered at a faction
+		// station (no start block), as Octahedron posts its station contracts on the World Authority. station=0 takes
+		// the world's first station.
+		TestRoutes.Add("POST", "/contract-test-post-station", context =>
+		{
+			long station = long.Parse(TestRoutes.Query(context, "station", "0"), CultureInfo.InvariantCulture);
+			int reward = Int(context, "reward", 1000), minutes = Int(context, "minutes", 60);
+			TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+			{
+				if (station == 0)
+					station = MySession.Static.Factions.Select(entry => entry.Value).SelectMany(faction => faction.Stations)
+						.Select(entry => entry.Id).OrderBy(id => id).FirstOrDefault();
+				var result = MyAPIGateway.ContractSystem.AddContract(new Sandbox.ModAPI.Contracts.MyContractCustom(
+					ContractType(), 0, reward, 0, minutes, "SE-1511 station contract", "cluster bench", 0, 0, null), station);
+				return (object)new { station, success = result.Success, contractId = result.ContractId };
+			}));
+		});
+		// SE-1511: POST /contract-test-remove?contract= - the contract system's RemoveContract, as a mod withdraws an offer.
+		TestRoutes.Add("POST", "/contract-test-remove", context =>
+		{
+			long contract = TestRoutes.Long(context, "contract");
+			TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => (object)new { contract, removed = System().RemoveContract(contract) }));
+		});
+		// SE-1511: GET /contract-test-station-offers?station= - the offers a contract block of that station lists on this node.
+		TestRoutes.Add("GET", "/contract-test-station-offers", context =>
+		{
+			long station = TestRoutes.Long(context, "station");
+			TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+			{
+				long[] offered = System().m_inactiveContractsForStation.TryGetValue(station, out var offers)
+					? offers.OfType<MyContract>().Select(offer => offer.Id).OrderBy(id => id).ToArray() : Array.Empty<long>();
+				return (object)new { station, contracts = offered };
+			}));
+		});
 		// POST /contract-test-trash?enabled=0|1 - this node's trash removal, which takes an unpowered test grid away from
 		// the players within minutes.
 		TestRoutes.Add("POST", "/contract-test-trash", context =>
@@ -100,14 +134,15 @@ internal static class ContractTestRoutes
 					succeeded = received?.Succeeded ?? 0, failed = received?.Failed ?? 0 };
 			}));
 		});
-		// POST /contract-test-accept?contract=&identity=&block= - the contract system's activation, as the block's
-		// request handler calls it, for an identity without a client.
+		// POST /contract-test-accept?contract=&identity=&block=[&station=] - the contract system's activation, as the
+		// block's request handler calls it, for an identity without a client. A station offer names its station.
 		TestRoutes.Add("POST", "/contract-test-accept", context =>
 		{
 			long contract = TestRoutes.Long(context, "contract"), identity = TestRoutes.Long(context, "identity"), block = TestRoutes.Long(context, "block");
 			TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
 			{
-				var result = System().ActivateContract(identity, contract, 0, block);
+				long station = long.Parse(TestRoutes.Query(context, "station", "0"), CultureInfo.InvariantCulture);
+				var result = System().ActivateContract(identity, contract, station, block);
 				return (object)new { contract, identity, result = result.ToString(), accepted = result == MyContractResults.Success };
 			}));
 		});
