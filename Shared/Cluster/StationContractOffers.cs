@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
-using System.Text;
 using Sandbox.Game.Contracts;
 using Sandbox.Game.SessionComponents;
 using Sandbox.Game.World;
@@ -136,17 +136,23 @@ internal static class StationContractOffers
 	{
 		var builder = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_SessionComponentContractSystem>();
 		builder.InactiveContracts = new MySerializableList<MyObjectBuilder_Contract>(contracts);
-		using var stream = new MemoryStream();
-		if (!MyObjectBuilderSerializerKeen.SerializeXML(stream, builder))
+		using var xml = new MemoryStream();
+		if (!MyObjectBuilderSerializerKeen.SerializeXML(xml, builder))
 			throw new InvalidDataException("Station contract offers did not serialize");
-		return Encoding.UTF8.GetString(stream.ToArray());
+		// Deflated: a few hundred offers are half a megabyte of XML.
+		using var packed = new MemoryStream();
+		using (var deflate = new DeflateStream(packed, CompressionLevel.Optimal, leaveOpen: true)) xml.WriteTo(deflate);
+		return Convert.ToBase64String(packed.ToArray());
 	}
 
 	private static List<MyObjectBuilder_Contract> Parse(string value)
 	{
 		if (string.IsNullOrEmpty(value)) return new List<MyObjectBuilder_Contract>();
-		using var stream = new MemoryStream(Encoding.UTF8.GetBytes(value), writable: false);
-		if (!MyObjectBuilderSerializerKeen.DeserializeXML(stream, out MyObjectBuilder_SessionComponentContractSystem builder))
+		using var xml = new MemoryStream();
+		using (var deflate = new DeflateStream(new MemoryStream(Convert.FromBase64String(value)), CompressionMode.Decompress))
+			deflate.CopyTo(xml);
+		xml.Position = 0;
+		if (!MyObjectBuilderSerializerKeen.DeserializeXML(xml, out MyObjectBuilder_SessionComponentContractSystem builder))
 			throw new InvalidDataException("Unreadable station contract offers");
 		return builder.InactiveContracts?.ToList() ?? new List<MyObjectBuilder_Contract>();
 	}
