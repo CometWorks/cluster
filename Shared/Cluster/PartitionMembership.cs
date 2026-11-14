@@ -21,11 +21,17 @@ internal sealed class PartitionMembership
 	/// as assigned, and the layout holding it takes no part in splits, merges or nearest-adoption
 	/// until the pin resolves. <see cref="PinnedUntil"/> bounds the wait: an entity that never
 	/// materializes (init crashed, content superseded) unpins there and leaves normally.
+	/// SE-1552: the fast pass is the one exception. A fast group leaves a pinned layout at once and the
+	/// pinned members stay with the rest. A bot ship that took a trade lane out of a pinned layout stayed
+	/// its member 165 km away (octahedron, 2026-11-14) and stretched the partition sphere to 103 km.
+	/// <see cref="PinCover"/> is where the present members were when the layout was adopted, as
+	/// (x, y, z, radius): the only place a pinned member can be, see PartitionManager.MemberSpheresJson.
 	/// </summary>
 	internal sealed record Layout(ulong Id, long[] Members, double CreatedAt)
 	{
 		public long[] Pending { get; init; } = Array.Empty<long>();
 		public double PinnedUntil { get; init; }
+		public (double X, double Y, double Z, double Radius)? PinCover { get; init; }
 	}
 	/// <summary><paramref name="Why"/>: the trigger and the values compared, for the commit log (T-0073).</summary>
 	internal sealed record Change(bool Split, ulong[] Inputs, Layout[] Outputs, string Why = "")
@@ -365,7 +371,7 @@ internal sealed class PartitionMembership
 	/// </summary>
 	public void SetMargin(double margin) => m_margin = margin;
 	public void Adopt(ulong id, IEnumerable<long> members, double now, bool mature,
-		IEnumerable<long> pending = null)
+		IEnumerable<long> pending = null, (double X, double Y, double Z, double Radius)? cover = null)
 	{
 		long[] pinned = (pending ?? Array.Empty<long>()).Distinct().Order().ToArray();
 		long[] adopted = members.Concat(pinned).Distinct().Order().ToArray();
@@ -374,7 +380,7 @@ internal sealed class PartitionMembership
 		if (mature) m_layouts = m_layouts.Select(x => x with { CreatedAt = double.NegativeInfinity }).ToList();
 		m_layouts.RemoveAll(x => x.Id == id);
 		m_layouts.Add(new Layout(id, adopted, mature ? double.NegativeInfinity : now)
-			{ Pending = pinned, PinnedUntil = pinned.Length == 0 ? 0 : now + PinSeconds });
+			{ Pending = pinned, PinnedUntil = pinned.Length == 0 ? 0 : now + PinSeconds, PinCover = pinned.Length == 0 ? null : cover });
 	}
 	public void Remove(ulong id) => m_layouts.RemoveAll(x => x.Id == id);
 
@@ -480,7 +486,7 @@ internal sealed class PartitionMembership
 			return x with {
 				Members = x.Members.Where(id => byId.ContainsKey(id) || pending.Contains(id))
 					.OrderBy(y => y).ToArray(),
-				Pending = pending };
+				Pending = pending, PinCover = pending.Length == 0 ? null : x.PinCover };
 		}).Where(x => x.Members.Length != 0).OrderBy(x => x.Id).ToList();
 		HashSet<long> assigned = m_layouts.SelectMany(x => x.Members).ToHashSet();
 		// T-0292: a fast member makes its whole atomic group fast (attached grids move together). A
@@ -590,13 +596,17 @@ internal sealed class PartitionMembership
 		{
 			foreach (Layout layout in m_layouts.OrderBy(x => x.Id).ToArray())
 			{
-				if (m_locked(layout.Id) || layout.Pending.Length != 0 || !HasFast(layout)) continue;
+				// SE-1552: a pinned layout is split here too. Its pinned members are not fast (they are not in the
+				// census), so they stay in the slow part, which keeps the pin.
+				if (m_locked(layout.Id) || !HasFast(layout)) continue;
 				long[][] parts = layout.Members.GroupBy(id => IsFast(id) ? byId[id].AtomicGroup : long.MinValue)
 					.OrderBy(g => g.Key).Select(g => g.Order().ToArray()).ToArray();
 				if (parts.Length < 2) continue;
 				ulong[] ids = m_allocate(parts.Length);
 				if (ids == null) continue;
-				Layout[] children = parts.Select((x, i) => new Layout(ids[i], x, now)).ToArray();
+				Layout[] children = parts.Select((x, i) => layout.Pending.Length != 0 && !IsFast(x[0])
+					? new Layout(ids[i], x, now) { Pending = layout.Pending, PinnedUntil = layout.PinnedUntil, PinCover = layout.PinCover }
+					: new Layout(ids[i], x, now)).ToArray();
 				m_layouts.Remove(layout);
 				m_layouts.AddRange(children);
 				changes.Add(new Change(true, new[] { layout.Id }, children,
