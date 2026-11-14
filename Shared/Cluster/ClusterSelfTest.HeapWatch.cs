@@ -19,5 +19,13 @@ internal static partial class ClusterSelfTest
 		Expect(HeapWatch.Step.Exit, 30000, 6144, 24576, false);
 		Expect(HeapWatch.Step.None, 30000, 0, 0, false);
 		Expect(HeapWatch.Step.Dump, 30000, 6144, 0, false);
+		// SE-1561: the facts line names the collector's numbers and the node link's queues, with and without a collection.
+		foreach (bool collect in new[] { false, true })
+		{
+			string facts = HeapWatch.Facts(collect);
+			foreach (string part in new[] { "heap=", "gen2=", "loh=", "collections=", "linkQueue=" })
+				if (!facts.Contains(part)) throw new InvalidOperationException("heap-watch: facts lack " + part + ": " + facts);
+			if (facts.Contains(" live=") != collect) throw new InvalidOperationException("heap-watch: live only after a collection: " + facts);
+		}
 	}
 }

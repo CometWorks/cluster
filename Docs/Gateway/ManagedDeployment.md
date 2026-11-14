@@ -93,7 +93,9 @@ writes one heap dump, `heap-<pid>-<MB>MB.dmp`, next to the crash dumps or in its
 `heap watch: ... heap dump <path> written in <s> s`. The process stands still while the dump is written. Read it with
 `dotnet-dump analyze` (`dumpheap -stat`, `gcroot`). Past `wa.heapLimitMb` (24 GB) it writes the dump if it has none yet and exits with code 6 and Host
 restarts it, before it can take the host's memory and every node on the host with it. Its heap is 1.2-1.7 GB in a
-100-trader soak.
+100-trader soak. After the dump and before the exit it logs `heap watch: facts: ...`: the collector's heap, generation and
+large-object sizes, collection counts, the working set and the node link's send queue depths; before the exit also
+`live=`, the heap left after a full collection (SE-1561).
 
 ### Hot spares
 

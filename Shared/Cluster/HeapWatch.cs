@@ -46,14 +46,48 @@ internal static class HeapWatch
 				case Step.Dump:
 					dumped = true;
 					Log("managed heap " + heapMb + " MB passed wa.heapDumpMb; " + WriteDump(heapMb));
+					Log(Facts(collect: false));
 					break;
 				case Step.Exit:
 					// A heap that jumped past both marks between two checks still leaves its dump.
 					if (!dumped) Log("managed heap " + heapMb + " MB passed wa.heapLimitMb; " + WriteDump(heapMb));
+					Log(Facts(collect: true));
 					ClusterRuntime.ExitProcess(ExitCode, "managed heap " + heapMb + " MB passed wa.heapLimitMb");
 					return;
 			}
 		}
+	}
+
+	/// <summary>
+	/// SE-1561: the dump of the second runaway heap was deleted before anyone read it, and the log said nothing about what
+	/// the heap held. These numbers stay in the log: what the collector sees, and the node link's send queues, which have
+	/// no cap. With <paramref name="collect"/> the heap is collected first, so "live" tells kept memory from garbage the
+	/// collector had not reached; that pause is only taken right before the exit.
+	/// </summary>
+	internal static string Facts(bool collect)
+	{
+		try
+		{
+			string live = collect ? " live=" + GC.GetTotalMemory(true) / MB + "MB" : string.Empty;
+#if NET5_0_OR_GREATER
+			GCMemoryInfo info = GC.GetGCMemoryInfo();
+			var generations = new System.Text.StringBuilder();
+			ReadOnlySpan<GCGenerationInfo> sizes = info.GenerationInfo;
+			string[] names = { "gen0", "gen1", "gen2", "loh", "poh" };
+			for (int i = 0; i < sizes.Length && i < names.Length; i++)
+				generations.Append(' ').Append(names[i]).Append('=').Append(sizes[i].SizeAfterBytes / MB).Append("MB");
+			return "facts:" + live + " heap=" + info.HeapSizeBytes / MB + "MB committed=" + info.TotalCommittedBytes / MB
+				+ "MB fragmented=" + info.FragmentedBytes / MB + "MB" + generations
+				+ " collections=" + GC.CollectionCount(0) + "/" + GC.CollectionCount(1) + "/" + GC.CollectionCount(2)
+				+ " workingSet=" + Environment.WorkingSet / MB + "MB linkQueue="
+				+ System.Text.Json.JsonSerializer.Serialize(DirectTransportNodeLinkPatch.GlobalQueueDepths());
+#else
+			return "facts:" + live + " heap=" + GC.GetTotalMemory(false) / MB + "MB gen2= loh= collections=" + GC.CollectionCount(0) + "/"
+				+ GC.CollectionCount(1) + "/" + GC.CollectionCount(2) + " linkQueue="
+				+ System.Text.Json.JsonSerializer.Serialize(DirectTransportNodeLinkPatch.GlobalQueueDepths());
+#endif
+		}
+		catch (Exception exception) { return "facts: unavailable (" + exception.GetType().Name + "): " + exception.Message; }
 	}
 
 	private static void Log(string text) => MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] heap watch: " + text);
