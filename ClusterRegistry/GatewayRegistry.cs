@@ -2076,6 +2076,36 @@ internal sealed partial class GatewayRegistry : IDisposable
         }
     }
 
+    /// <summary>SE-1487 forget player: drops the client's character home once the World Authority has removed the player.
+    /// Kept while a character reap is pending, so the reap's executor still finds its permit.</summary>
+    public bool ForgetCharacterHome(ulong client)
+    {
+        lock (_lock)
+        {
+            if (!_state.CharacterHomes.TryGetValue(client, out CharacterHome? home) || home.PendingReap != null) return false;
+            _state.CharacterHomes.Remove(client);
+            Persist();
+            Flush();
+            return true;
+        }
+    }
+
+    /// <summary>Reconcile an unconfirmed forget under its original WA ledger GUID.</summary>
+    internal bool ResumePlayerForget(string operationId)
+    {
+        lock (_lock)
+        {
+            if (!_state.AdminOperations.TryGetValue(operationId, out var record) || record.Kind != "player-forget"
+                || record.State != AdminOperationPhase.Failed || record.ErrorCode != "forget_uncertain") return false;
+            record.State = AdminOperationPhase.Running;
+            record.ErrorCode = record.ErrorMessage = null;
+            record.UpdatedAt = _clock();
+            Emit("operation.resumed", operationId, new Dictionary<string, string> { ["kind"] = record.Kind, ["actor"] = record.Actor });
+            Persist();
+            return true;
+        }
+    }
+
     public CharacterHome? GetCharacterHome(ulong client)
     {
         lock (_lock) return _state.CharacterHomes.GetValueOrDefault(client);

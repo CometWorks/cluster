@@ -30,6 +30,7 @@ internal static class Program
                    | kick CLIENTID [--reconnect] | ban USERID | unban USERID
                    | player-promotion USERID None|Scripter|Moderator|SpaceMaster|Admin EXPECTED_REVISION
                    | clear-kick-cooldown USERID
+                   | player-forget USERID (remove an offline player, #1487)
                    | chat MESSAGE --sender STEAMID
                    | ship-storage-settle SHIPID TAKEID release|consume (a stranded take, #1316)
                    | world-export [--ttl-hours H] | registry-backup [--ttl-hours H] | artifact-release ID
@@ -96,6 +97,7 @@ internal static class Program
         ("player-moderation", "GET /admin/v1/players/moderation", []),
         ("player-promotion {userId} Admin 0", "PUT /admin/v1/players/{userId}/promotion", []),
         ("clear-kick-cooldown {userId}", "DELETE /admin/v1/admission/kicks/{userId}", []),
+        ("player-forget {userId}", "DELETE /admin/v1/players/{userId}", []),
         ("kick {id}", "POST /admin/v1/clients/{id}/kick", []),
         ("bans", "GET /admin/v1/admission/bans", []),
         ("ban {userId}", "POST /admin/v1/admission/bans", []),
@@ -432,7 +434,7 @@ internal static class Program
                     or "rotation" or "rotation-set" or "client-diagnostics" or "handover-config" or "handover-config-set" or "config" or "clients" or "bans" or "chat-history" or "ship-storage-takes" or "artifacts" or "events"
                     or "operations" or "diag" or "shutdown" or "gateway-restart" or "save-all"
                     or "config-set" or "node-close" or "node-kill" or "wa-move" or "trigger" or "kick"
-                    or "ban" or "unban" or "player-moderation" or "player-promotion" or "clear-kick-cooldown" or "chat" or "ship-storage-settle" or "world-export" or "registry-backup" or "artifact-release"
+                    or "ban" or "unban" or "player-moderation" or "player-promotion" or "player-forget" or "clear-kick-cooldown" or "chat" or "ship-storage-settle" or "world-export" or "registry-backup" or "artifact-release"
                     or "node-control" or "node-control-history" or "node-control-set" or "node-control-remove"
                     or "node-control-recycle" or "node-control-hosts-file")
                     command = args[i];
@@ -542,6 +544,11 @@ internal static class Program
                         || !Enum.GetNames<Admin.PlayerPromotionLevel>().Contains(positional[1]))
                         throw new ArgumentException(Usage);
                     (method, command, body) = ("PUT", $"players/{promoteId}/promotion", JsonSerializer.Serialize(new Admin.SetPlayerPromotionRequest(level, expectedRevision), JsonOptions));
+                    break;
+                case "player-forget":
+                    if (positional.Count != 1 || !ulong.TryParse(positional[0], out ulong forgetId) || forgetId == 0)
+                        throw new ArgumentException(Usage);
+                    (method, command, body) = ("DELETE", $"players/{forgetId}", "{}");
                     break;
                 case "clear-kick-cooldown":
                     if (positional.Count != 1 || !ulong.TryParse(positional[0], out ulong cooldownId) || cooldownId == 0)

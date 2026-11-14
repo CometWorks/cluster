@@ -107,6 +107,19 @@ public static class PromotionService
 		return completion.Task.GetAwaiter().GetResult();
 	}
 
+	/// <summary>SE-1487 forget player, World Authority: drops the player's entry, so the nodes demote them and admin
+	/// lists stop naming them. True if there was one.</summary>
+	internal static bool Forget(ulong steamId)
+	{
+		lock (SyncRoot)
+		{
+			if (!Levels.Remove(steamId)) return false;
+			PublishMerged();
+		}
+		Update();
+		return true;
+	}
+
 	internal static bool Ready => m_seeded;
 	internal static string PersistedRecord() => Snapshot();
 
