@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 
 namespace ClusterRegistry;
 
@@ -21,14 +22,22 @@ internal sealed partial class DirectGateway
         { WriteJson(context, 403, new { error = "node credential required" }); return; }
         if (context.Request.ContentLength64 is <= 0 or > 256 * 1024)
         { WriteJson(context, 413, new { error = "skin check exceeds limit" }); return; }
-        SkinCheckRequest request = ReadJson<SkinCheckRequest>(context);
-        if (_steam == null)
+        SkinCheckRequest? request = ReadJson<SkinCheckRequest>(context);
+        if (request == null)
+        { WriteJson(context, 400, new { error = "inventory request required" }); return; }
+        if (!SteamEnabled)
         { WriteJson(context, 503, new { error = "no Steam frontend in this Gateway" }); return; }
         // Only a client the Steam frontend admitted: its blob is checked against its own Steam id.
         if (!_clients.TryGetValue(request.UserId, out ClientSession? session) || session.Client?.Frontend != "steam"
             || session.Credential == null)
         { WriteJson(context, 404, new { error = "no Steam session for this player" }); return; }
-        Task<string[]?> check = _steam.CheckSkins(request.UserId, Convert.FromBase64String(request.Data));
+        byte[] data;
+        try { data = Convert.FromBase64String(request.Data); }
+        catch (Exception error) when (error is FormatException or ArgumentNullException)
+        { WriteJson(context, 400, new { error = "invalid inventory data" }); return; }
+        if (data.Length == 0)
+        { WriteJson(context, 400, new { error = "empty inventory data" }); return; }
+        Task<string[]?> check = CheckSteamSkins(session, data);
         string[]? skins = check.Wait(TimeSpan.FromSeconds(8)) ? check.Result : null;
         if (skins == null)
         {
@@ -36,8 +45,31 @@ internal sealed partial class DirectGateway
             WriteJson(context, 422, new { error = "Steam refused the inventory" });
             return;
         }
+        // A reconnect during Steam's asynchronous check must not lend this result to a new session.
+        if (!_clients.TryGetValue(request.UserId, out ClientSession? current) || !ReferenceEquals(current, session)
+            || session.Credential == null)
+        { WriteJson(context, 409, new { error = "Steam session changed" }); return; }
         session.Skins = skins;
         Console.WriteLine($"Steam inventory of {request.UserId}: {skins.Length} skins");
         WriteJson(context, 200, new { skins }, redact: false);
+    }
+
+    private async Task<string[]?> CheckSteamSkins(ClientSession session, byte[] data)
+    {
+        if (_relay == null) return _steam == null ? null : await _steam.CheckSkins(session.ClientId, data);
+        if (session.Client is not ExternalClientChannel client) return null;
+        try
+        {
+            RelayIpcMessage answer = await _relay.RequestAsync(RelayIpcType.SteamSkins,
+                new { clientId = session.ClientId, session = client.Session, data = Convert.ToBase64String(data) },
+                TimeSpan.FromSeconds(7));
+            return answer.Type == RelayIpcType.SteamSkins && answer.Json.TryGetProperty("skins", out JsonElement skins)
+                ? skins.Deserialize<string[]>() : null;
+        }
+        catch (Exception error) when (error is IOException or TimeoutException or System.Text.Json.JsonException)
+        {
+            Console.WriteLine($"Steam inventory check unavailable for {session.ClientId}: {error.Message}");
+            return null;
+        }
     }
 }

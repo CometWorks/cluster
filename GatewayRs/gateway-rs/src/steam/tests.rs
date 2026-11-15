@@ -26,6 +26,13 @@ struct State {
     named: Vec<(u64, String)>,
     bots: Vec<i32>,
     queued: usize,
+    inventory_data: Vec<Vec<u8>>,
+    inventory_status: Option<steamworks_sys::EResult>,
+    inventory_owner: Option<u64>,
+    inventory_items: Vec<steamworks_sys::SteamItemDetails_t>,
+    inventory_definitions: HashMap<i32, (String, String)>,
+    inventory_destroyed: Vec<i32>,
+    inventory_refused: bool,
 }
 
 #[derive(Clone, Default)]
@@ -38,6 +45,24 @@ impl Fake {
 }
 
 impl SteamApi for Fake {
+    fn inventory_start(&mut self, data: &[u8]) -> Option<i32> {
+        self.with(|s| { s.inventory_data.push(data.to_vec()); (!s.inventory_refused).then_some(42) })
+    }
+    fn inventory_status(&self, _handle: i32) -> steamworks_sys::EResult {
+        self.with(|s| s.inventory_status.unwrap_or(steamworks_sys::EResult::k_EResultPending))
+    }
+    fn inventory_owner(&self, _handle: i32, user: u64) -> bool {
+        self.with(|s| s.inventory_owner == Some(user))
+    }
+    fn inventory_items(&self, _handle: i32) -> Option<Vec<steamworks_sys::SteamItemDetails_t>> {
+        Some(self.with(|s| s.inventory_items.clone()))
+    }
+    fn inventory_definition(&self, definition: i32) -> Option<(String, String)> {
+        self.with(|s| s.inventory_definitions.get(&definition).cloned())
+    }
+    fn inventory_destroy(&mut self, handle: i32) {
+        self.with(|s| s.inventory_destroyed.push(handle));
+    }
     fn callbacks(&mut self, out: &mut Vec<SteamCallback>) {
         out.append(&mut self.0.lock().unwrap().callbacks);
     }
@@ -471,4 +496,123 @@ fn a_held_join_that_runs_out_closes_the_accepted_session() {
     assert_eq!(fake.with(|s| s.closed.clone()), vec![USER], "the 5 s hold limit refused the join");
     assert!(registry.drain(types::CLIENT_MESSAGE, Duration::from_millis(200)).is_empty());
     assert_eq!(shared.owner(USER), None);
+}
+
+
+fn inventory_item(definition: i32, quantity: u16, flags: u16) -> steamworks_sys::SteamItemDetails_t {
+    steamworks_sys::SteamItemDetails_t { m_itemId: definition as u64, m_iDefinition: definition, m_unQuantity: quantity, m_unFlags: flags }
+}
+
+fn request(session: u64, correlation: u32) -> WorkerCmd {
+    WorkerCmd::SteamSkins { correlation, request: ipc::SteamSkins { client_id: USER, session, data: BASE64.encode(b"signed inventory") } }
+}
+
+#[test]
+fn skins_wait_for_steam_and_definitions_then_answer_owned_armor_and_blocks() {
+    let (registry, mut worker, mailbox, fake, _) = setup("skins-success");
+    let now = Instant::now();
+    let session = join(&registry, &mut worker, &mailbox, &fake, now);
+    mailbox.send(request(session, 91));
+    worker.step(now);
+    assert_eq!(fake.with(|s| s.inventory_data.clone()), vec![b"signed inventory".to_vec()]);
+    assert_eq!(worker.skin_checks.len(), 1);
+    fake.with(|s| {
+        s.inventory_status = Some(steamworks_sys::EResult::k_EResultOK);
+        s.inventory_owner = Some(USER);
+        s.inventory_items = vec![inventory_item(1, 1, 0), inventory_item(2, 1, 0), inventory_item(3, 1, 0),
+            inventory_item(1, 1, 0), inventory_item(4, 0, 0), inventory_item(5, 1, 256), inventory_item(6, 1, 512)];
+    });
+    worker.step(now + Duration::from_millis(1));
+    assert_eq!(worker.skin_checks.len(), 1, "definitions must arrive before an empty answer can be trusted");
+    fake.with(|s| {
+        s.inventory_definitions.insert(1, ("Armor".into(), "Battered_Armor".into()));
+        s.inventory_definitions.insert(2, ("Block".into(), "Test_Block".into()));
+        s.inventory_definitions.insert(3, ("Helmet".into(), "Not_Armor".into()));
+    });
+    worker.step(now + Duration::from_millis(2));
+    let (correlation, answer) = registry.expect(types::STEAM_SKINS).unwrap();
+    assert_eq!(correlation, 91);
+    assert_eq!(answer["skins"], json!(["Battered_Armor", "Test_Block"]));
+    assert!(worker.skin_checks.is_empty());
+    assert_eq!(fake.with(|s| s.inventory_destroyed.clone()), vec![42]);
+}
+
+#[test]
+fn skins_refuse_invalid_expired_and_other_players_results() {
+    for (name, status, owner, refused) in [
+        ("invalid", steamworks_sys::EResult::k_EResultFail, USER, false),
+        ("expired", steamworks_sys::EResult::k_EResultExpired, USER, false),
+        ("other-owner", steamworks_sys::EResult::k_EResultOK, USER + 1, false),
+        ("deserialize-refused", steamworks_sys::EResult::k_EResultOK, USER, true),
+    ] {
+        let (registry, mut worker, mailbox, fake, _) = setup(name);
+        let now = Instant::now();
+        let session = join(&registry, &mut worker, &mailbox, &fake, now);
+        fake.with(|s| { s.inventory_status = Some(status); s.inventory_owner = Some(owner); s.inventory_refused = refused; });
+        mailbox.send(request(session, 92));
+        worker.step(now);
+        let (correlation, answer) = registry.expect(types::STEAM_SKINS).unwrap();
+        assert_eq!(correlation, 92);
+        assert!(answer["skins"].is_null(), "{name}");
+        assert_eq!(fake.with(|s| s.inventory_destroyed.len()), usize::from(!refused));
+    }
+}
+
+#[test]
+fn skins_bound_work_and_release_results_on_timeout_disconnect_and_ipc_loss() {
+    for mode in ["timeout", "disconnect", "ipc-loss"] {
+        let (registry, mut worker, mailbox, fake, _) = setup(&format!("skins-{mode}"));
+        let now = Instant::now();
+        let session = join(&registry, &mut worker, &mailbox, &fake, now);
+        mailbox.send(request(session + 1, 93));
+        worker.step(now);
+        assert!(registry.expect(types::STEAM_SKINS).unwrap().1["skins"].is_null());
+        assert!(fake.with(|s| s.inventory_data.is_empty()), "a stale session must not reach Steam");
+        mailbox.send(request(session, 94));
+        mailbox.send(request(session, 95));
+        worker.step(now);
+        assert_eq!(registry.expect(types::STEAM_SKINS).unwrap().0, 95, "one active check per client");
+        assert_eq!(fake.with(|s| s.inventory_data.len()), 1);
+        match mode {
+            "timeout" => worker.step(now + Duration::from_secs(5)),
+            "disconnect" => worker.drop_client(USER, "test".into()),
+            _ => { mailbox.send(WorkerCmd::IpcLost); worker.step(now); },
+        }
+        assert!(worker.skin_checks.is_empty());
+        assert_eq!(fake.with(|s| s.inventory_destroyed.clone()), vec![42]);
+        if mode != "ipc-loss" {
+            let (correlation, answer) = registry.expect(types::STEAM_SKINS).unwrap();
+            assert_eq!(correlation, 94);
+            assert!(answer["skins"].is_null());
+        } else {
+            assert!(registry.drain(types::STEAM_SKINS, Duration::from_millis(110)).is_empty());
+        }
+    }
+}
+
+#[test]
+fn skins_empty_verified_inventory_is_success() {
+    let (registry, mut worker, mailbox, fake, _) = setup("skins-empty");
+    let now = Instant::now();
+    let session = join(&registry, &mut worker, &mailbox, &fake, now);
+    fake.with(|s| { s.inventory_status = Some(steamworks_sys::EResult::k_EResultOK); s.inventory_owner = Some(USER); });
+    mailbox.send(request(session, 96));
+    worker.step(now);
+    assert_eq!(registry.expect(types::STEAM_SKINS).unwrap().1["skins"], json!([]));
+}
+
+#[test]
+fn skins_reject_malformed_empty_and_oversized_requests_before_steam() {
+    let (registry, mut worker, mailbox, fake, _) = setup("skins-bad-data");
+    let now = Instant::now();
+    let session = join(&registry, &mut worker, &mailbox, &fake, now);
+    for data in [String::new(), "invalid base64!".into(), BASE64.encode(vec![0; 192 * 1024 + 1])] {
+        mailbox.send(WorkerCmd::SteamSkins { correlation: 97, request: ipc::SteamSkins { client_id: USER, session, data } });
+        worker.step(now);
+        assert!(registry.expect(types::STEAM_SKINS).unwrap().1["skins"].is_null());
+    }
+    assert!(fake.with(|s| s.inventory_data.is_empty()));
+    let parsed = ipc::parse(types::STEAM_SKINS, 98,
+        format!(r#"{{"clientId":{USER},"session":{session},"data":"AQID"}}"#).as_bytes()).unwrap();
+    assert!(matches!(parsed, ipc::Inbound::SteamSkins { correlation: 98, request } if request.client_id == USER && request.session == session && request.data == "AQID"));
 }

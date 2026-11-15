@@ -11,7 +11,7 @@ internal static class RelayIpcType
     public const ushort Hello = 1, Heartbeat = 2, Config = 3, Paused = 5;
     public const ushort JoinRequest = 10, JoinAnswer = 11, ClientMessage = 12, ClientEvent = 15, Disconnect = 16,
         ForceReconnect = 17, SessionUpdate = 18, ReplayConnect = 19;
-    public const ushort SteamAuth = 20, SteamEvent = 21, SteamPublish = 22;
+    public const ushort SteamAuth = 20, SteamEvent = 21, SteamPublish = 22, SteamSkins = 23;
     public const ushort Status = 30;
     public const ushort EnsureLink = 40, DropLink = 41, LinkState = 42, NodeControl = 43, NodeFrame = 44;
     public const ushort NodeGlobal = 100, NodePlugin = 101, ClientSend = 102;
