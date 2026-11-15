@@ -27,6 +27,9 @@ use crate::node::NodeCmd;
 use crate::shared::{Inbox, JoinAsks, Mailbox, Owner, Shared};
 use crate::worker::{WorkerCmd, report};
 
+mod inventory;
+use inventory::SkinCheck;
+
 pub const APP_ID: u32 = 244850;
 const WAKE: Token = Token(0);
 /// The C# pump sleeps 1 ms between passes; P2P has no readiness to wait on.
@@ -73,6 +76,13 @@ pub struct Identity {
 
 /// The Steamworks calls the frontend makes; the real one is [`RealSteam`], tests use a fake.
 pub trait SteamApi {
+    fn inventory_start(&mut self, data: &[u8]) -> Option<i32>;
+    fn inventory_status(&self, handle: i32) -> steamworks_sys::EResult;
+    fn inventory_owner(&self, handle: i32, user: u64) -> bool;
+    fn inventory_items(&self, handle: i32) -> Option<Vec<steamworks_sys::SteamItemDetails_t>>;
+    /// None while Steam has not loaded the definition; only Armor and Block slots grant skins.
+    fn inventory_definition(&self, definition: i32) -> Option<(String, String)>;
+    fn inventory_destroy(&mut self, handle: i32);
     fn callbacks(&mut self, out: &mut Vec<SteamCallback>);
     /// Reads one waiting P2P packet on `channel` into `buffer`: (sender, length).
     fn read(&mut self, channel: u8, buffer: &mut Vec<u8>) -> Option<(u64, usize)>;
@@ -143,6 +153,8 @@ impl RealSteam {
         // SAFETY: Init succeeded, so the accessor returns the live interface.
         let raw = unsafe { steamworks_sys::SteamAPI_SteamGameServer_v015() };
         let networking = server.networking();
+        // Definitions may only arrive after logon; ask again on SteamServersConnected below.
+        unsafe { steamworks_sys::SteamAPI_ISteamInventory_LoadItemDefinitions(steamworks_sys::SteamAPI_SteamGameServerInventory_v003()) };
         Ok((Self { server: server.clone(), raw, networking }, server))
     }
 }
@@ -165,6 +177,26 @@ fn auth_response(response: &Result<(), steamworks::AuthSessionValidateError>) ->
 }
 
 impl SteamApi for RealSteam {
+    fn inventory_start(&mut self, data: &[u8]) -> Option<i32> {
+        inventory::start(data)
+    }
+    fn inventory_status(&self, handle: i32) -> steamworks_sys::EResult {
+        unsafe { steamworks_sys::SteamAPI_ISteamInventory_GetResultStatus(inventory::api(), handle) }
+    }
+    fn inventory_owner(&self, handle: i32, user: u64) -> bool {
+        unsafe { steamworks_sys::SteamAPI_ISteamInventory_CheckResultSteamID(inventory::api(), handle, user) }
+    }
+    fn inventory_items(&self, handle: i32) -> Option<Vec<steamworks_sys::SteamItemDetails_t>> {
+        inventory::items(handle)
+    }
+    fn inventory_definition(&self, definition: i32) -> Option<(String, String)> {
+        let slot = inventory::property(definition, c"item_slot")?;
+        let skin = if matches!(slot.as_str(), "Armor" | "Block") { inventory::property(definition, c"asset_modifier_id")? } else { String::new() };
+        Some((slot, skin))
+    }
+    fn inventory_destroy(&mut self, handle: i32) {
+        unsafe { steamworks_sys::SteamAPI_ISteamInventory_DestroyResult(inventory::api(), handle) };
+    }
     fn callbacks(&mut self, out: &mut Vec<SteamCallback>) {
         use steamworks::CallbackResult as C;
         self.server.process_callbacks(|callback| {
@@ -177,7 +209,10 @@ impl SteamApi for RealSteam {
                     owner: verdict.owner_steam_id.raw(),
                 },
                 C::GSClientGroupStatus(status) => SteamCallback::Group { user: status.user.raw(), member: status.member || status.officer },
-                C::SteamServersConnected(_) => SteamCallback::Log("Steam GameServer connected".into()),
+                C::SteamServersConnected(_) => {
+                    unsafe { steamworks_sys::SteamAPI_ISteamInventory_LoadItemDefinitions(inventory::api()) };
+                    SteamCallback::Log("Steam GameServer connected".into())
+                },
                 C::SteamServersDisconnected(lost) => SteamCallback::Log(format!("WARNING: Steam GameServer disconnected: {:?}", lost.reason)),
                 C::SteamServerConnectFailure(failure) => SteamCallback::Log(format!(
                     "WARNING: Steam GameServer logon failed: {:?} retrying={}",
@@ -437,6 +472,7 @@ pub struct SteamWorker<A: SteamApi> {
     p2p: HashMap<u64, Option<Instant>>,
     pending: HashMap<u32, Pending>,
     pending_by_user: HashMap<u64, u32>,
+    skin_checks: HashMap<u64, SkinCheck>,
     asks: JoinAsks,
     force_disconnects: Vec<(Instant, u64, u64)>,
     publish: Option<SteamPublish>,
@@ -471,6 +507,7 @@ impl<A: SteamApi> SteamWorker<A> {
                 p2p: HashMap::new(),
                 pending: HashMap::new(),
                 pending_by_user: HashMap::new(),
+                skin_checks: HashMap::new(),
                 asks: JoinAsks::default(),
                 force_disconnects: Vec::new(),
                 publish: None,
@@ -543,6 +580,7 @@ impl<A: SteamApi> SteamWorker<A> {
         while let Ok(command) = self.inbox.rx.try_recv() {
             self.command(command, now);
         }
+        self.poll_skin_checks(now);
         if now.duration_since(self.last_maintenance) >= MAINTENANCE {
             self.last_maintenance = now;
             self.maintain(now);
@@ -817,6 +855,7 @@ impl<A: SteamApi> SteamWorker<A> {
 
     /// Removes the relay session and tells C#.
     fn drop_client(&mut self, user: u64, detail: String) {
+        self.cancel_skin_check(user);
         self.force_disconnects.retain(|(_, pending, _)| *pending != user);
         let Some(client) = self.clients.remove(&user) else { return };
         let session = client.session.session;
@@ -917,6 +956,10 @@ impl<A: SteamApi> SteamWorker<A> {
                 }
             }
             WorkerCmd::IpcLost => {
+                // Correlations belong to the old IPC connection. Release handles without answering a new one.
+                for (_, check) in self.skin_checks.drain() {
+                    self.api.inventory_destroy(check.handle);
+                }
                 let ids: Vec<u64> = self.clients.keys().copied().collect();
                 for client_id in ids {
                     self.force_reconnect(client_id, now);
@@ -935,6 +978,7 @@ impl<A: SteamApi> SteamWorker<A> {
                 let _ = reply.send(sessions);
             }
             WorkerCmd::SteamAuth(auth) => self.auth(auth),
+            WorkerCmd::SteamSkins { correlation, request } => self.start_skin_check(correlation, request, now),
             WorkerCmd::SteamPublish(publish) => {
                 self.publish = Some(*publish);
                 self.publish_dirty = true;

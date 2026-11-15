@@ -109,6 +109,10 @@ pub fn run(shared: Arc<Shared>, inbound: Receiver<Inbound>, options: Options) {
                 Some(steam) => steam.send(WorkerCmd::SteamAuth(auth)),
                 None => eprintln!("WARNING: SteamAuth for {} without a Steam frontend", auth.client_id),
             },
+            Inbound::SteamSkins { correlation, request } => match shared.steam.get() {
+                Some(steam) => steam.send(WorkerCmd::SteamSkins { correlation, request }),
+                None => { shared.ipc.send_json(types::STEAM_SKINS, correlation, &json!({ "skins": null })); },
+            },
             Inbound::SteamPublish(publish) => {
                 if let Some(steam) = shared.steam.get() {
                     steam.send(WorkerCmd::SteamPublish(publish));

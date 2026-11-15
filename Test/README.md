@@ -1,5 +1,16 @@
 # Cluster scenario suite
 
+Steam skin ownership can be checked without a game process or Steam login:
+`dotnet run -c Release --project Test/PlayerSkins/PlayerSkins.csproj` patches a stand-in game
+with the production Harmony patch and runs the production ownership service against a scripted HTTP
+handler. It checks forwarding, owned/unowned skins, handover bindings, stale replies and retry suppression.
+`dotnet run -c Release --project ClusterRegistry -- --self-test steam-skins` checks authenticated node
+HTTP through real relay IPC, including the external Steam frontend and reconnect-stale replies.
+From `GatewayRs/`, `cargo test -p gateway-rs skins` checks signed-result status and owner validation,
+item filtering, delayed definitions, timeout, disconnect and IPC-loss cleanup against a fake Steam API.
+A live Steam check still requires a player with owned skins: place and repaint armor, hand over to
+another node, then place and repaint again; inspect `/test-entitlements?steamId=...` with the test plugin.
+
 Player moderation can be checked without game processes or Steam:
 `dotnet run --project Test/PlayerModeration/PlayerModeration.csproj` exercises the
 production promotion owner, command ledger and global-save section codec using

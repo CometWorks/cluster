@@ -53,6 +53,7 @@ pub mod types {
     pub const STEAM_AUTH: u16 = 20;
     pub const STEAM_EVENT: u16 = 21;
     pub const STEAM_PUBLISH: u16 = 22;
+    pub const STEAM_SKINS: u16 = 23;
     pub const STATUS: u16 = 30;
     pub const ENSURE_LINK: u16 = 40;
     pub const DROP_LINK: u16 = 41;
@@ -222,6 +223,16 @@ pub struct SteamAuth {
     pub group_id: u64,
 }
 
+/// A signed inventory blob for this exact Steam relay session. The correlated answer is `{skins}`,
+/// with null on refusal or timeout and an array (possibly empty) on successful verification.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SteamSkins {
+    pub client_id: u64,
+    pub session: u64,
+    pub data: String,
+}
+
 /// `SteamPublish`: the browser row (SteamFrontend.Publish), re-applied every 5 s by gateway-rs.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -382,6 +393,7 @@ pub enum Inbound {
     Tunnel { plugin: bool, delivery: u8, endpoint: String, payload: Vec<u8> },
     ClientSend { client_id: u64, session: u64, channel: u8, delivery: u8, payload: Vec<u8> },
     SteamAuth(SteamAuth),
+    SteamSkins { correlation: u32, request: SteamSkins },
     SteamPublish(Box<SteamPublish>),
 }
 
@@ -428,6 +440,7 @@ pub fn parse(ty: u16, correlation: u32, body: &[u8]) -> Result<Inbound, DecodeEr
         REPLAY_CONNECT => Inbound::ReplayConnect { correlation, client: json(body)? },
         STATUS => Inbound::Status { correlation },
         STEAM_AUTH => Inbound::SteamAuth(json(body)?),
+        STEAM_SKINS => Inbound::SteamSkins { correlation, request: json(body)? },
         STEAM_PUBLISH => Inbound::SteamPublish(Box::new(json(body)?)),
         ENSURE_LINK => Inbound::EnsureLink(json::<Endpoint>(body)?.endpoint),
         DROP_LINK => Inbound::DropLink(json::<Endpoint>(body)?.endpoint),

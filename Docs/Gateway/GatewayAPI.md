@@ -125,7 +125,9 @@ pass; a scenario can cite exactly the section it owns.
   skins their inventory blob holds (`/registry/steam/skins`). Both go to the nodes in the attach binding
   (`PlayerReady.MissingDlcs`, `PlayerReady.Skins`); the DLCs also travel in the online list. A node's Direct
   Transport game server would say yes to every DLC and no to every skin. With the external relay, gateway-rs checks
-  the DLCs and sends them with the `ticket` SteamEvent (`missingDlcs`); it doesn't check skins yet (503).
+  the DLCs and sends them with the `ticket` SteamEvent (`missingDlcs`), and verifies signed skin inventories through
+  the correlated `SteamSkins` IPC request. Only a current Steam session and a valid blob for that player can grant
+  skins. A pending check waits for Steam and its item definitions for up to 5 seconds; refusal or timeout grants nothing.
 - `--eos` — EOS P2P frontend.
 
 See `Docs/EnvVars.md` for every `--flag` ⇔ `CLUSTER_*` equivalence.

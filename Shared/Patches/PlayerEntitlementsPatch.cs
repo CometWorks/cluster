@@ -6,6 +6,7 @@ using Sandbox.Game;
 using Sandbox.Game.Multiplayer;
 using Sandbox.Game.SessionComponents;
 using VRage.Utils;
+using VRage.Network;
 
 namespace Shared.Patches;
 
@@ -40,7 +41,13 @@ public static class PlayerEntitlementsPatch
 	}
 
 	[HarmonyPrefix]
-	[HarmonyPatch(typeof(MySessionComponentGameInventory), "UpdateClientGameInventory")]
-	private static bool UpdateClientGameInventoryPrefix(ulong steamId, byte[] checkData)
-		=> !PlayerEntitlements.CheckSkins(steamId, checkData);
+	[HarmonyPatch(typeof(MySessionComponentGameInventory), nameof(MySessionComponentGameInventory.RequestUpdateClientGameInventory))]
+	private static bool RequestUpdateClientGameInventoryPrefix(byte[] checkData)
+	{
+		if (!ClusterRuntime.IsClustered) return true;
+		PlayerEntitlements.CheckSkins(MyEventContext.Current.Sender.Value, checkData);
+		// The node has no Steam inventory service. Never enter vanilla's retry loop, including when the
+		// Gateway refuses a blob or is unavailable: a false response makes the client resend immediately.
+		return false;
+	}
 }

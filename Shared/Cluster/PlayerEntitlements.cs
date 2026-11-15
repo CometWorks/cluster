@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Sandbox;
 using Sandbox.Engine.Multiplayer;
@@ -34,17 +35,15 @@ namespace ClusterPlugin;
 /// </summary>
 public static class PlayerEntitlements
 {
-	private sealed record Entry(uint[] MissingDlcs, HashSet<MyStringHash> Skins);
+	private sealed class Entry(uint[] missingDlcs, HashSet<MyStringHash> skins)
+	{
+		public readonly uint[] MissingDlcs = missingDlcs;
+		public volatile HashSet<MyStringHash> Skins = skins;
+		public int Checking;
+	}
 
 	/// <summary>Players attached to this node. They leave on detach; another node or the online list knows them then.</summary>
 	private static readonly ConcurrentDictionary<ulong, Entry> Attached = new ConcurrentDictionary<ulong, Entry>();
-
-	/// <summary>Skins the Gateway confirmed while the player was here, newer than the ones in the attach binding.</summary>
-	private static readonly ConcurrentDictionary<ulong, HashSet<MyStringHash>> Confirmed = new ConcurrentDictionary<ulong, HashSet<MyStringHash>>();
-
-	/// <summary>Players whose skins are being checked, so a client that resends its blob doesn't start a second check.</summary>
-	private static readonly ConcurrentDictionary<ulong, byte> Checking = new ConcurrentDictionary<ulong, byte>();
-
 	private static readonly HttpClient Gateway = ClusterHttp.Client(TimeSpan.FromSeconds(10));
 	private static readonly string GatewayUrl = Environment.GetEnvironmentVariable("CLUSTER_GATEWAY_REGISTRY")?.TrimEnd('/');
 
@@ -58,7 +57,6 @@ public static class PlayerEntitlements
 
 	internal static void Attach(PlayerReady ready)
 	{
-		Confirmed.TryRemove(ready.UserId, out _);
 		Attached[ready.UserId] = new Entry(ready.MissingDlcs,
 			ready.Skins == null ? null : new HashSet<MyStringHash>(ready.Skins.Select(MyStringHash.GetOrCompute)));
 	}
@@ -66,7 +64,6 @@ public static class PlayerEntitlements
 	internal static void Detach(ulong clientId)
 	{
 		Attached.TryRemove(clientId, out _);
-		Confirmed.TryRemove(clientId, out _);
 	}
 
 	/// <summary>For this node's online report: null when the Gateway didn't say.</summary>
@@ -95,20 +92,20 @@ public static class PlayerEntitlements
 	public static bool? HasSkin(MyStringHash skin, ulong steamId)
 	{
 		if (!ClusterRuntime.IsClustered || steamId == 0) return null;
-		if (Confirmed.TryGetValue(steamId, out HashSet<MyStringHash> confirmed)) return confirmed.Contains(skin);
 		if (Attached.TryGetValue(steamId, out Entry local) && local.Skins != null) return local.Skins.Contains(skin);
 		return null;
 	}
 
 	/// <summary>
 	/// Sends the client's inventory blob to the Gateway, which deserializes it with Steam, and answers the client
-	/// the way the game does once the skins are known. False when the cluster can't check it: the game goes on as
-	/// before (and fails).
+	/// the way the game does once the skins are known. False when no check can be started; the request patch
+	/// still suppresses vanilla's retry loop on a cluster node.
 	/// </summary>
 	public static bool CheckSkins(ulong steamId, byte[] checkData)
 	{
-		if (!ClusterRuntime.IsClustered || string.IsNullOrEmpty(GatewayUrl) || checkData == null || checkData.Length == 0) return false;
-		if (!Checking.TryAdd(steamId, 0)) return true;
+		if (!ClusterRuntime.IsClustered || string.IsNullOrEmpty(GatewayUrl) || checkData == null || checkData.Length is 0 or > 192 * 1024) return false;
+		if (!Attached.TryGetValue(steamId, out Entry entry)) return false;
+		if (Interlocked.Exchange(ref entry.Checking, 1) != 0) return true;
 		_ = Task.Run(async () =>
 		{
 			try
@@ -126,8 +123,8 @@ public static class PlayerEntitlements
 				Console.WriteLine($"[ClusterPlugin] skins_check client={steamId} skins={names.Length}");
 				MySandboxGame.Static.Invoke(() =>
 				{
-					if (!Attached.ContainsKey(steamId)) return;
-					Confirmed[steamId] = new HashSet<MyStringHash>(names.Select(MyStringHash.GetOrCompute));
+					if (!Attached.TryGetValue(steamId, out Entry current) || !ReferenceEquals(current, entry)) return;
+					entry.Skins = new HashSet<MyStringHash>(names.Select(MyStringHash.GetOrCompute));
 					MyMultiplayer.RaiseStaticEvent(_ => MySessionComponentGameInventory.UpdateClientGameInventoryResult, true,
 						new EndpointId(steamId));
 				}, "SE-1158 skins");
@@ -136,7 +133,7 @@ public static class PlayerEntitlements
 			{
 				Console.WriteLine($"[ClusterPlugin] skins_check client={steamId} error={error.Message}");
 			}
-			finally { Checking.TryRemove(steamId, out _); }
+			finally { Interlocked.Exchange(ref entry.Checking, 0); }
 		});
 		return true;
 	}

@@ -345,6 +345,7 @@ internal static partial class SelfTest
         ("archive-retention-knob", TestArchiveRetentionKnob),
         ("archive-retention-node-held", TestArchiveRetentionNodeHeld),
         ("relay-ipc", TestRelayIpc),
+        ("steam-skins", TestSteamSkins),
         ("relay-ipc-stale-answer", TestRelayIpcStaleAnswer),
         ("relay-ipc-dispose-mid-send", TestRelayIpcDisposeMidSend),
         ("stranded-partition", TestStrandedPartition),
