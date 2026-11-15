@@ -90,6 +90,8 @@ def p3_hnd_drift(bench) -> None:
     print(f"  [INFO] blocks={blocks} pilot={pilot} partitions={partitions}")
 
     bench.record("25-suit", _act(bench, "suit", f"block={blocks['seat']}&level={ONE_BREATH_UNDER}"))
+    for node in ("node-1", "node-2"):  # survival's character inventory limit, which the creative bench world lacks
+        bench.cluster.node(node, "/drift-test?action=constrain-inventories", "POST")
     bottles = _act(bench, "overfill-pilot", f"block={blocks['seat']}")
     bench.record("26-bottles", bottles)
     fits = int(bottles.get("fits") or 0)

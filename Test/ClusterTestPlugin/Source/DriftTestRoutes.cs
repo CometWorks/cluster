@@ -25,7 +25,8 @@ namespace ClusterTestPlugin;
 /// uranium than the load restores, <c>overfill-ore</c> (SE-1556) a cargo container full of stone and ice, the ice
 /// 0.00076 kg over what the load restores beside the stone, <c>pilot</c> (with <c>owner=</c>) a character of that identity
 /// seated in the cockpit, <c>suit</c> (with <c>level=</c>) that pilot's suit oxygen, <c>overfill-pilot</c> (SE-1557) that pilot's
-/// inventory holding hydrogen bottles and then three oxygen bottles more than the load restores beside them. <c>/drift-test-state</c> (GET)
+/// inventory holding hydrogen bottles and then three oxygen bottles more than the load restores beside them, which needs
+/// <c>constrain-inventories</c> (no id) on every node first: survival's inventory limits in the creative bench world. <c>/drift-test-state</c> (GET)
 /// reports all of it for a list of <c>blocks=</c>.
 /// </summary>
 internal static class DriftTestRoutes
@@ -40,7 +41,7 @@ internal static class DriftTestRoutes
         TestRoutes.Add("POST", "/drift-test", context =>
         {
             string action = context.Request.QueryString["action"] ?? throw new ArgumentException("Missing action");
-            long id = TestRoutes.Long(context, action == "empty-group" ? "grid" : "block");
+            long id = action == "constrain-inventories" ? 0 : TestRoutes.Long(context, action == "empty-group" ? "grid" : "block");
             long owner = action == "pilot" ? TestRoutes.Long(context, "owner") : 0;
             float level = action == "suit" ? float.Parse(context.Request.QueryString["level"], System.Globalization.CultureInfo.InvariantCulture) : 0;
             TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => Act(action, id, owner, level)));
@@ -113,6 +114,13 @@ internal static class DriftTestRoutes
                 MyDefinitionId oxygen = MyCharacterOxygenComponent.OxygenId;
                 pilot.OxygenComponent.UpdateStoredGasLevel(ref oxygen, level);
                 return State(id);
+            }
+            case "constrain-inventories":
+            {
+                // SE-1557: the bench world is creative, where a character's inventory has no limit (MyInventory.IsConstrained
+                // is MyPerGameSettings.ConstrainInventory, the survival flag, for a character). The live world is survival.
+                MyPerGameSettings.ConstrainInventory = () => true;
+                return new { constrained = true };
             }
             case "overfill-pilot":
             {
