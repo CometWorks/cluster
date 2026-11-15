@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Text;
+using Sandbox.Common.ObjectBuilders.Definitions;
 using Sandbox.Definitions;
 using Sandbox.Game;
 using Sandbox.Game.Entities;
