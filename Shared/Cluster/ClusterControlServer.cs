@@ -1761,29 +1761,84 @@ internal sealed partial class ClusterControlServer
 	/// </summary>
 	internal static void ClampInventoryAmounts(MyEntity entity, MyObjectBuilder_EntityBase builder)
 	{
+		if (entity is MyCharacter character && builder is MyObjectBuilder_Character characterBuilder)
+		{
+			ClampCharacterInventory(character, characterBuilder);
+			return;
+		}
 		if (entity is not MyCubeGrid grid || builder is not MyObjectBuilder_CubeGrid gridBuilder || gridBuilder.CubeBlocks == null) return;
 		foreach (MyCubeBlock block in grid.GetFatBlocks())
+		{
+			MyObjectBuilder_CubeBlock saved = null;
 			for (int index = 0; index < block.InventoryCount; index++)
 			{
-				if (block.GetInventory(index) is not MyInventory inventory || !inventory.IsConstrained
-					|| (double)inventory.CurrentVolume < 0.999 * (double)inventory.MaxVolume && (double)inventory.CurrentMass < 0.999 * (double)inventory.MaxMass) continue;
-				List<MyPhysicalInventoryItem> items = inventory.GetItems();
-				// The saved inventory is this one when it lists the same stacks in the same order.
-				MyObjectBuilder_CubeBlock saved = gridBuilder.CubeBlocks.FirstOrDefault(candidate => candidate.EntityId == block.EntityId);
-				List<MyObjectBuilder_InventoryItem> stacks = SavedInventories(saved?.ComponentContainer)
-					.Select(savedInventory => savedInventory.Items ?? new List<MyObjectBuilder_InventoryItem>())
-					.FirstOrDefault(savedItems => savedItems.Count == items.Count && savedItems.Zip(items, (stack, item)
-						=> stack.ItemId == item.ItemId && stack.Amount == item.Amount && item.Content != null
-							&& stack.PhysicalContent?.GetObjectId() == item.Content.GetObjectId()).All(same => same));
-				if (stacks == null) continue;
+				if (block.GetInventory(index) is not MyInventory inventory || !NearlyFull(inventory)) continue;
+				saved ??= gridBuilder.CubeBlocks.FirstOrDefault(candidate => candidate.EntityId == block.EntityId);
+				ClampSavedStacks(inventory, SavedInventories(saved?.ComponentContainer).Select(savedInventory => savedInventory.Items), everyCopy: false);
+			}
+			// SE-1557: a seated character is saved inside its seat, twice (Pilot and the seat's hierarchy child), and its
+			// inventory loads through the same InitItems. A sebot pilot carrying 34 bottles in a 4 m³ suit loaded its last
+			// OxygenBottle stack as 6 where the capture said 9, and every handover of the ship failed on it (Bot Trader
+			// Steven's Cargo Shuttle, octahedron-test 2026-11-15, 163 HandoverBlocked alarms).
+			if (block is MyCockpit cockpit && cockpit.Pilot != null)
+			{
+				saved ??= gridBuilder.CubeBlocks.FirstOrDefault(candidate => candidate.EntityId == block.EntityId);
+				if (saved is MyObjectBuilder_Cockpit cockpitBuilder)
+					foreach (MyObjectBuilder_Character copy in SeatedCopies(cockpitBuilder, cockpit.Pilot.EntityId))
+						ClampCharacterInventory(cockpit.Pilot, copy);
+			}
+		}
+	}
+
+	private static bool NearlyFull(MyInventory inventory)
+		=> inventory.IsConstrained
+			&& ((double)inventory.CurrentVolume >= 0.999 * (double)inventory.MaxVolume || (double)inventory.CurrentMass >= 0.999 * (double)inventory.MaxMass);
+
+	/// <summary>A character's builder carries its inventory twice: the legacy Inventory field and the component container.</summary>
+	private static void ClampCharacterInventory(MyCharacter character, MyObjectBuilder_Character builder)
+	{
+		if (character.GetInventory() is not MyInventory inventory || !NearlyFull(inventory)) return;
+		IEnumerable<List<MyObjectBuilder_InventoryItem>> copies = SavedInventories(builder.ComponentContainer).Select(saved => saved.Items);
+		if (builder.Inventory != null) copies = copies.Append(builder.Inventory.Items);
+		ClampSavedStacks(inventory, copies, everyCopy: true);
+	}
+
+	private static IEnumerable<MyObjectBuilder_Character> SeatedCopies(MyObjectBuilder_Cockpit cockpit, long pilotId)
+	{
+		if (cockpit.Pilot is MyObjectBuilder_Character pilot && pilot.EntityId == pilotId) yield return pilot;
+		foreach (MyObjectBuilder_ComponentContainer.ComponentData data in cockpit.ComponentContainer?.Components ?? new List<MyObjectBuilder_ComponentContainer.ComponentData>())
+			if (data.Component is VRage.Game.ObjectBuilders.Components.MyObjectBuilder_HierarchyComponentBase hierarchy && hierarchy.Children != null)
+				foreach (MyObjectBuilder_EntityBase child in hierarchy.Children)
+					if (child is MyObjectBuilder_Character seated && seated.EntityId == pilotId && !ReferenceEquals(seated, cockpit.Pilot))
+						yield return seated;
+	}
+
+	/// <summary>
+	/// Writes the amounts InitItems restores into the saved stack lists that are this inventory: the same stacks in the
+	/// same order. The first such list, or with <paramref name="everyCopy"/> each of them.
+	/// </summary>
+	private static void ClampSavedStacks(MyInventory inventory, IEnumerable<List<MyObjectBuilder_InventoryItem>> copies, bool everyCopy)
+	{
+		List<MyPhysicalInventoryItem> items = inventory.GetItems();
+		MyFixedPoint[] loaded = null;
+		List<(MyFixedPoint, float, float, bool)> model = null;
+		foreach (List<MyObjectBuilder_InventoryItem> stacks in copies)
+		{
+			if (stacks == null || stacks.Count != items.Count || !stacks.Zip(items, (stack, item)
+				=> stack.ItemId == item.ItemId && stack.Amount == item.Amount && item.Content != null
+					&& stack.PhysicalContent?.GetObjectId() == item.Content.GetObjectId()).All(same => same)) continue;
+			if (loaded == null)
+			{
 				Sandbox.Game.Entities.Inventory.MyInventoryItemAdapter adapter = Sandbox.Game.Entities.Inventory.MyInventoryItemAdapter.Static;
-				var model = new List<(MyFixedPoint, float, float, bool)>();
+				model = new List<(MyFixedPoint, float, float, bool)>();
 				foreach (MyPhysicalInventoryItem item in items)
 					model.Add(adapter.TryAdapt(item.Content.GetObjectId()) ? (item.Amount, adapter.Volume, adapter.Mass, adapter.HasIntegralAmounts) : (0, 1f, 1f, false));
-				MyFixedPoint[] loaded = ImportRoundTrip.LoadedAmounts(model, inventory.MaxVolume, inventory.MaxMass);
-				for (int stack = 0; stack < loaded.Length; stack++)
-					if (model[stack].Item1 > 0 && loaded[stack] < stacks[stack].Amount) stacks[stack].Amount = loaded[stack];
+				loaded = ImportRoundTrip.LoadedAmounts(model, inventory.MaxVolume, inventory.MaxMass);
 			}
+			for (int stack = 0; stack < loaded.Length; stack++)
+				if (model[stack].Item1 > 0 && loaded[stack] < stacks[stack].Amount) stacks[stack].Amount = loaded[stack];
+			if (!everyCopy) return;
+		}
 	}
 
 	private static IEnumerable<MyObjectBuilder_Inventory> SavedInventories(MyObjectBuilder_ComponentContainer container)

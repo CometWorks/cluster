@@ -19,6 +19,7 @@ internal static partial class ClusterSelfTest
 		HandoverDriftInventoryLoad();
 		HandoverDriftComponentOrder();
 		HandoverDriftStatorLimits();
+		HandoverResidualsSe1557();
 	}
 
 	/// <summary>

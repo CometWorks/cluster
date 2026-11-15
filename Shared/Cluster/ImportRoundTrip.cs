@@ -162,7 +162,9 @@ internal static class ImportRoundTrip
 	/// </summary>
 	private static void StripDisplacedPilots(XDocument left, XDocument right, HashSet<long> displacedPilots)
 	{
-		string[] pilotFields = { "Pilot", "PilotJetpackEnabled", "PilotRelativeWorld", "PilotGunDefinition", "IsInFirstPersonView", "OxygenLevel" };
+		// SitAnimation too: NormalizeDocument keeps it only on a seat with a Pilot, so the source still had it here and
+		// the unseated target did not (SE-1557).
+		string[] pilotFields = { "Pilot", "PilotJetpackEnabled", "PilotRelativeWorld", "PilotGunDefinition", "IsInFirstPersonView", "OxygenLevel", "SitAnimation" };
 		XDocument[] both = { left, right };
 		var seats = new HashSet<long>();
 		// The seat is named by the legacy Pilot element OR by the cockpit's hierarchy Children - the
@@ -185,6 +187,21 @@ internal static class ImportRoundTrip
 			foreach (XElement child in document.Descendants("Children").Elements("MyObjectBuilder_EntityBase").ToList())
 				if (long.TryParse(child.Element("EntityId")?.Value, out long childId) && displacedPilots.Contains(childId))
 					child.Remove();
+			// SE-1557: a hierarchy component with no children is not serialised, so the unseated target re-emits the
+			// seat without it. The source's entry that the strip left empty goes too, and with it a container that held
+			// nothing else (octahedron-test 2026-11-15: 96 of 222 failed validations, sebot pilots whose saved body
+			// StripStaleSeatedBodies had dropped).
+			foreach (XElement cockpit in document.Descendants("MyObjectBuilder_CubeBlock").ToList())
+			{
+				if (!long.TryParse(cockpit.Element("EntityId")?.Value, out long cockpitId) || !seats.Contains(cockpitId)) continue;
+				XElement container = cockpit.Element("ComponentContainer");
+				if (container == null) continue;
+				container.Element("Components")?.Elements("ComponentData")
+					.Where(data => data.Element("TypeId")?.Value == "MyHierarchyComponentBase"
+						&& data.Element("Component")?.Element("Children")?.HasElements != true)
+					.Remove();
+				if (container.Element("Components")?.HasElements != true) container.Remove();
+			}
 		}
 	}
 
@@ -295,12 +312,18 @@ internal static class ImportRoundTrip
 	/// </summary>
 	private static void CanonicalizeProjectedGridIds(XDocument document)
 	{
-		foreach (XElement projection in document.Descendants("ProjectedGrids").Where(element => !element.Ancestors("ProjectedGrids").Any()).ToList())
+		// SE-1557: each ProjectedGrids is numbered on its own, innermost first. A projector inside a blueprint carries its
+		// own blueprint, and the source's copy of it reused the outer blueprint's ids while the target's was remapped to
+		// fresh ones, so one numbering over both shifted every later ordinal (octahedron-test 2026-11-15, partition
+		// 61204: "-26 != -87" on 38 blocks). An id in an inner projection that points outside it is "external" there.
+		foreach (XElement projection in document.Descendants("ProjectedGrids").OrderByDescending(element => element.Ancestors("ProjectedGrids").Count()).ToList())
 		{
+			IEnumerable<XElement> Own(Func<XElement, bool> predicate)
+				=> projection.Descendants().Where(element => predicate(element) && element.Ancestors("ProjectedGrids").First() == projection);
+			PrepareProjection(projection);
 			var ordinals = new Dictionary<string, string>(StringComparer.Ordinal);
 			var multiBlocks = new Dictionary<string, string>(StringComparer.Ordinal);
-			List<XElement> owners = projection.Descendants()
-				.Where(element => element.Name == "MyObjectBuilder_CubeGrid" || element.Name == "MyObjectBuilder_CubeBlock").ToList();
+			List<XElement> owners = Own(element => element.Name == "MyObjectBuilder_CubeGrid" || element.Name == "MyObjectBuilder_CubeBlock").ToList();
 			foreach (XElement owner in owners)
 			{
 				string id = owner.Element("EntityId")?.Value;
@@ -308,7 +331,7 @@ internal static class ImportRoundTrip
 					ordinals.Add(id, (-(ordinals.Count + 1)).ToString(CultureInfo.InvariantCulture));
 				owner.Elements("Name").Remove();
 			}
-			foreach (XElement leaf in projection.Descendants().Where(element => !element.HasElements).ToList())
+			foreach (XElement leaf in Own(element => !element.HasElements).ToList())
 			{
 				if (ordinals.TryGetValue(leaf.Value, out string ordinal))
 					leaf.Value = ordinal;
@@ -322,6 +345,35 @@ internal static class ImportRoundTrip
 					&& long.TryParse(leaf.Value, out long reference) && reference != 0)
 					leaf.Value = "external";
 			}
+		}
+	}
+
+	/// <summary>
+	/// SE-1557: what the projector's clipboard does to a blueprint. MyProjectorBase.Remap (OnRegisteredToGridSystems) calls
+	/// SetNewBlueprint, which hands the projector's own builders to MyGridClipboard.SetGridFromBuilders, and that edits
+	/// them in place: CreatePhysics = false, every block's BuiltBy = 0 unless KeepOwnership, and each grid's position made
+	/// relative to the first grid's. So one side can hold the blueprint as it was set and the other as the clipboard left
+	/// it (octahedron-test 2026-11-14/15, partitions 53173, 61276, 61295: BuiltBy on every block, CreatePhysics and the
+	/// first grid's world position). None of it is state: a welded block takes the welder's BuiltBy
+	/// (MyProjectorBase.BuildInternal) and the projection is placed by the projector's offset and rotation. Every other
+	/// field stays compared.
+	/// </summary>
+	private static void PrepareProjection(XElement projection)
+	{
+		string[] axes = { "x", "y", "z" };
+		double[] origin = null;
+		foreach (XElement grid in projection.Elements("MyObjectBuilder_CubeGrid"))
+		{
+			grid.Elements("CreatePhysics").Remove();
+			grid.Element("CubeBlocks")?.Elements().Elements("BuiltBy").Remove();
+			XElement position = grid.Element("PositionAndOrientation")?.Element("Position");
+			if (position == null) continue;
+			double[] value = new double[3];
+			for (int axis = 0; axis < 3; axis++)
+				if (!double.TryParse(position.Attribute(axes[axis])?.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out value[axis])) value[axis] = 0;
+			origin ??= value;
+			for (int axis = 0; axis < 3; axis++)
+				position.SetAttributeValue(axes[axis], (value[axis] - origin[axis]).ToString("R", CultureInfo.InvariantCulture));
 		}
 	}
 
@@ -591,8 +643,30 @@ internal static class ImportRoundTrip
 		// pending across a freeze is the entire purpose of FrozenUpdatePatch, so an imported timer
 		// truthfully answers yes where the source, which had already run its tick, answers no.
 		document.Descendants().Where(element => element.Parent?.Name == "MyObjectBuilder_CubeBlock"
-			&& (element.Name == "Target" || element.Name == "IsShooting"
+			&& (element.Name == "Target" || element.Name == "IsShooting" || element.Name == "IsPotentialTarget"
 				|| element.Name == "JustTriggered")).Remove();
+		// SE-1557: IsPotentialTarget is the same lock's "not yet confirmed" flag (MyLargeTurretTargetingSystem). Init restores
+		// it, but the lock it qualifies only arrives with the deferred m_targetToSet, and four gatling turrets came back true
+		// against false (octahedron-test 2026-11-15, partitions 54809 and 55340).
+		// SE-1557: a jump drive's GPS target is pending the same way. MyJumpDrive.Init parks it in m_storedJumpTarget; only
+		// UpdateOnceBeforeFrame looks the GPS up and sets m_targetSync, which GetObjectBuilderCubeBlock writes back, so an
+		// imported drive re-emits nil (43 of 222 failed validations on octahedron-test, 2026-11-14/15).
+		document.Descendants("JumpTarget")
+			.Where(element => (string)element.Parent?.Attribute(XsiType) == "MyObjectBuilder_JumpDrive").Remove();
+		// SE-1557: an assembler's other-mode queue does not survive any load. GetObjectBuilderCubeBlock writes each item's
+		// blueprint id (m_otherQueue[i].Blueprint.Id), and Init looks it up with TryGetBlueprintDefinitionByResultId, which
+		// takes a result item id, finds nothing and drops the item; a world reload loses it the same way (13 failed
+		// validations on octahedron-test, 2026-11-14). Model the load: the items it cannot find go, then an empty queue.
+		document.Descendants("OtherQueue").Elements("Item")
+			.Where(item => item.Element("Id")?.Attribute("Type")?.Value == "MyObjectBuilder_BlueprintDefinition").Remove();
+		document.Descendants("OtherQueue").Where(queue => !queue.HasElements).Remove();
+		// SE-1557: a character's build planner is its identity's. MyCharacter.GetObjectBuilder writes GetIdentity().BuildPlanner
+		// and Init loads the builder's only when it has one, so each node emits the planner of its own copy of the identity:
+		// bot pilots came back with a planner the source did not write, or without the one it did (17 failed validations on
+		// octahedron-test, 2026-11-15). Everything else about the character stays compared.
+		document.Descendants().Where(element => element.Name.LocalName == "Pilot"
+				|| (string)element.Attribute(XsiType) == "MyObjectBuilder_Character")
+			.Elements("BuildPlanner").Remove();
 		// A character's relative dampening reference is resolved late by design, same family as
 		// ParentEntityId above. MyCharacter.Init parks the id in m_relativeDampeningEntityInit
 		// (MyCharacter.cs:3386); the only thing that turns it back into RelativeDampeningEntity -
@@ -969,6 +1043,19 @@ internal static class ImportRoundTrip
 	/// </summary>
 	private const double SuitGasEpsilon = 0.005;
 
+	/// <summary>
+	/// SE-1247, SE-1557: a gas tank's fill ratio. A tank feeding thrusters or an engine keeps draining on the target between
+	/// the import's activation and the validation, a few parts in 100 000 (0.96691 against 0.96686, octahedron-test
+	/// 2026-11-15). 5e-4 is ten times the largest drift seen; a lost or reset tank differs by the whole fill.
+	/// </summary>
+	private const double FilledRatioEpsilon = 5e-4;
+
+	/// <summary>
+	/// SE-1557: a thruster's override is a float, and came back one float step apart (63774.547 against 63774.543,
+	/// octahedron-test 2026-11-15). One part in a million covers a few steps; a changed override differs by more.
+	/// </summary>
+	private const double ThrustOverrideRelative = 1e-6;
+
 	private static bool IsCharacterSuitGas(string path)
 	{
 		if (path.EndsWith("/FillLevel", StringComparison.Ordinal)) return path.Contains("/StoredGases/StoredGas", StringComparison.Ordinal);
@@ -998,6 +1085,7 @@ internal static class ImportRoundTrip
 				? SafeZoneClockEpsilon
 			: IsBlockField(path, "OxygenLevel") ? SeatOxygenEpsilon
 			: IsBlockField(path, "CountdownMs") ? WarheadClockEpsilon
+			: IsBlockField(path, "FilledRatio") ? FilledRatioEpsilon
 			: IsCharacterSuitGas(path) ? SuitGasEpsilon : 2e-5;
 
 	/// <summary>T-0363: the value MyFueledPowerProducer.Init restores from a saved capacity (MathHelper.Clamp to [0, max]).</summary>
@@ -1042,13 +1130,15 @@ internal static class ImportRoundTrip
 		return loaded;
 	}
 
-	private static bool ValuesEqual(string left, string right, double absolute = 2e-5)
+	private static bool ValuesEqual(string left, string right, double absolute = 2e-5, double relative = 1e-9)
 	{
 		if (left == right) return true;
 		return double.TryParse(left, NumberStyles.Float, CultureInfo.InvariantCulture, out double a)
 			&& double.TryParse(right, NumberStyles.Float, CultureInfo.InvariantCulture, out double b)
-			&& Math.Abs(a - b) <= Math.Max(absolute, 1e-9 * Math.Max(Math.Abs(a), Math.Abs(b)));
+			&& Math.Abs(a - b) <= Math.Max(absolute, relative * Math.Max(Math.Abs(a), Math.Abs(b)));
 	}
+
+	private static double RelativeFor(string path) => IsBlockField(path, "ThrustOverride") ? ThrustOverrideRelative : 1e-9;
 
 	// The recursive comparison, collecting residual entries instead of answering a bare bool: the
 	// abort log and the P3-HND scenarios both assert on the entries themselves. Capped - a structural
@@ -1077,11 +1167,12 @@ internal static class ImportRoundTrip
 	/// normalisation and walk as Residuals, without needing live object builders. Lets a
 	/// normalisation rule be pinned against the exact XML of the handover-diff dump it came from.
 	/// </summary>
-	internal static List<string> ResidualsOfXml(string leftXml, string rightXml)
+	internal static List<string> ResidualsOfXml(string leftXml, string rightXml, HashSet<long> displacedPilots = null)
 	{
 		XDocument a = XDocument.Parse(leftXml), b = XDocument.Parse(rightXml);
 		NormalizeDocument(a);
 		NormalizeDocument(b);
+		if (displacedPilots != null && displacedPilots.Count > 0) StripDisplacedPilots(a, b, displacedPilots);
 		List<string> found = new List<string>();
 		Collect(a.Root, b.Root, a.Root?.Name.LocalName ?? "?", found);
 		return found;
@@ -1103,7 +1194,7 @@ internal static class ImportRoundTrip
 		{
 			if (found.Count >= Cap) return;
 			XAttribute other = right.Attribute(attribute.Name);
-			if (other == null || !ValuesEqual(attribute.Value, other.Value, EpsilonFor(path)))
+			if (other == null || !ValuesEqual(attribute.Value, other.Value, EpsilonFor(path), RelativeFor(path)))
 				found.Add(path + "/@" + attribute.Name.LocalName + ": " + Clip(attribute.Value) + " != " + (other == null ? "(absent)" : Clip(other.Value)));
 		}
 		foreach (XAttribute attribute in right.Attributes())
@@ -1114,7 +1205,7 @@ internal static class ImportRoundTrip
 		}
 		if (!left.HasElements && !right.HasElements)
 		{
-			if (!ValuesEqual(left.Value, right.Value, EpsilonFor(path))) found.Add(path + ": " + Clip(left.Value) + " != " + Clip(right.Value));
+			if (!ValuesEqual(left.Value, right.Value, EpsilonFor(path), RelativeFor(path))) found.Add(path + ": " + Clip(left.Value) + " != " + Clip(right.Value));
 			return;
 		}
 		XElement[] leftChildren = left.Elements().ToArray(), rightChildren = right.Elements().ToArray();

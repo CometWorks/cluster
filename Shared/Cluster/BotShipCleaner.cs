@@ -272,6 +272,12 @@ internal static class BotShipCleaner
 		{
 			if (seen.Contains(id)) { m_missingSince.Remove(id); continue; }
 			bool present = MyEntities.TryGetEntityById(id, out MyEntity entity) && entity is MyCubeGrid grid && !grid.Closed;
+			// SE-1557: a grid that is frozen or just arrived keeps the stamp it carried. A staged import adds its grids over
+			// several frames, and a pass between them saw a carried bot ship that was no bot ship root yet and dropped the
+			// stamp, so the handover gate read the grid's Storage one entry short of the frozen source (octahedron-test
+			// 2026-11-15: four Taxis and a Cargo Shuttle, "dictionary: 2 != 1"). The first pass after the import judges it
+			// like any other grid.
+			if (present && (ClusterRuntime.IsFrozen(id) || MySessionComponentTrashPatch.InImportGrace(id))) continue;
 			if (!present && !m_missingSince.ContainsKey(id)) m_missingSince[id] = now;
 			if (present || now - m_missingSince[id] > MissingSeconds)
 			{
