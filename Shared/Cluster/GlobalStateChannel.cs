@@ -807,6 +807,16 @@ public static class GlobalStateChannel
 		return (waitedMs, handledWhileRunning, ReceiveAtAuthority(command, fromQueue: true));
 	}
 
+	/// <summary>
+	/// SE-1577 self-test: <paramref name="count"/> Resync requests for <paramref name="subsystem"/> from
+	/// <paramref name="origin"/>, as a replica sends one every second while its snapshot has not arrived.
+	/// </summary>
+	internal static void SelfTestResync(string subsystem, string origin, int count)
+	{
+		for (int i = 0; i < count; i++)
+			ReceiveAtAuthority(new Envelope("Resync", ClusterRuntime.AuthorityGeneration, subsystem, 0, origin, null, string.Empty));
+	}
+
 	private static long m_testPartitionUntil;
 	private static long m_testDroppedFrames;
 

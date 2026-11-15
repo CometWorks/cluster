@@ -3212,9 +3212,30 @@ def p1_wa_cmd_inflight(bench) -> None:
     bench.exercised(waSelfTestSections=["command-in-flight"])
 
 
+def p1_wa_resync_backlog(bench) -> None:
+    """SE-1577: replicas ask for a subsystem's snapshot again every second until it arrives. On the live cluster the
+    World Authority answered every request with a fresh 2-3 MB snapshot behind the ones still queued on its ordered
+    Gateway channel, so restarted nodes got their snapshot set queued up to 137 times and the heap grew to its limit.
+    The WA self-test `resync-backlog` sends 30 requests for a 2 MB snapshot while the first answer is queued (one
+    snapshot built) and one more once the queue drained (one more built)."""
+    bench.start_cluster(nodes=["node-1", "wa-1"])
+    try:
+        result = _node(bench, "wa-1", "/self-test?section=resync-backlog", timeout=180)
+    except Exception as error:  # noqa: BLE001
+        result = {"ok": False, "error": str(error)[:600]}
+    bench.record("wa-self-test-resync-backlog", result)
+    bench.check("WA self-test resync-backlog: one queued snapshot per node and subsystem, a new one once it left the queue",
+                result.get("ok") is True and "resync-backlog" in (result.get("ran") or []), json.dumps(result)[:600])
+    status = _try(bench, "wa-1", "/self-test?section=heap-watch") or {}
+    bench.check("the World Authority still answers its control requests", status.get("ok") is True, json.dumps(status)[:200])
+    bench.exercised(waSelfTestSections=["resync-backlog"])
+
+
 SCENARIOS_WA = {
     "P1-WA-CMD-INFLIGHT": (p1_wa_cmd_inflight, "SE-1561: the game thread does not wait for a command another thread "
                            "is still running (the World Authority hang)", "1"),
+    "P1-WA-RESYNC-BACKLOG": (p1_wa_resync_backlog, "SE-1577: repeated snapshot requests from a node queue one snapshot, "
+                             "not one per request (the World Authority heap runaway)", "1"),
     "P2-WA-00": (p2_wa_00, "World Authority role, clock and replacement", "3"),
     "P2-WA-GPS": (p2_wa_gps, "#1405: GPS add, modify and delete from any node on three identities converge on every node, "
                              "also after a modify burst and a node restart", "3"),

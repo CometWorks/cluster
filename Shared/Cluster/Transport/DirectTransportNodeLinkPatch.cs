@@ -96,6 +96,12 @@ public static class DirectTransportNodeLinkPatch
 		};
 	}
 
+	/// <summary>Packets LiteNetLib still holds on the ordered global channel; 0 without a link.</summary>
+	public static int GlobalOrderedDepth()
+	{
+		lock (GlobalSync) return m_globalPeer?.GetPacketsCountInReliableQueue(0, true) ?? 0;
+	}
+
 	public static bool SendPrefix(object __instance, ulong remoteUser, byte[] data, int byteCount,
 		MyP2PMessageEnum msgType, int channel, ref bool result)
 	{
