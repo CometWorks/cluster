@@ -107,6 +107,7 @@ internal static partial class ClusterSelfTest
 		("mod-message-to-server", ModMessageToServer),
 		("ledger-replay", LedgerReplay),
 		("handover-diff-budget", HandoverDiffBudget),
+		("character-without-identity", CharacterWithoutIdentity),
 		("store-payment-settle", StorePaymentSettle),
 	};
 

@@ -6979,11 +6979,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // (the dead source's lease expiry released it, a recovery claimed it) neither Activate/Commit nor Abort can
         // pass RequireOwner: completing is impossible, and the target's copy belongs to nobody.
         bool sourceGenerationCurrent = registry.OwnedAt(handover.Partition, handover.SourceNode, handover.SourceEpoch, handover.SourceGeneration);
+        bool targetNodeLive = registry.HasLiveNode(handover.TargetNode, handover.TargetEpoch);
         ReconciliationAction action = DecideReconciliation(handover, source, target, sourceOwnerLive, targetOwnerLive,
-            registry.HasLiveNode(handover.SourceNode, handover.SourceEpoch), registry.HasLiveNode(handover.TargetNode, handover.TargetEpoch),
-            sourceGenerationCurrent);
+            registry.HasLiveNode(handover.SourceNode, handover.SourceEpoch), targetNodeLive, sourceGenerationCurrent);
         if (action == ReconciliationAction.Wait)
             return;
+        if (TargetDiedMidHandover(handover, action, targetNodeLive))
+            registry.RecordValidationAbort(handover.Partition, TargetDiedSignature,
+                $"target {handover.TargetNode} died during the uncommitted handover {handover.Id}");
 
         if (action == ReconciliationAction.Abort)
         {
@@ -7014,6 +7017,19 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         }
         LogTransfer(handover.Id, handover.Partition, "restart-" + action.ToString().ToLowerInvariant());
     }
+
+    /// <summary>SE-1583: the HandoverBlocked signature of a target that died while it held the partition's uncommitted import.</summary>
+    internal const string TargetDiedSignature = "target-died";
+
+    /// <summary>
+    /// SE-1583: whether an unfinished handover is being given up because its target incarnation died. An import that
+    /// kills its target kills the next one too (2026-11-15: one partition stopped seven nodes in five minutes), so each
+    /// such death counts toward HandoverBlocked like a same-signature validation abort: the partition stays on its source
+    /// and backs off instead of being offered to the next node. A committed handover is the target's own business.
+    /// </summary>
+    internal static bool TargetDiedMidHandover(HandoverRecord handover, ReconciliationAction action, bool targetNodeLive)
+        => !targetNodeLive && handover.State != HandoverState.Committed
+            && action is ReconciliationAction.Abort or ReconciliationAction.Recover;
 
     internal static ReconciliationAction DecideReconciliation(HandoverRecord handover, TransferProbe source, TransferProbe target,
         bool sourceOwnerLive, bool targetOwnerLive, bool sourceNodeLive, bool targetNodeLive, bool sourceGenerationCurrent = true)

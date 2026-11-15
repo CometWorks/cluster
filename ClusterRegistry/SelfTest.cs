@@ -300,6 +300,7 @@ internal static partial class SelfTest
         ("network-id-cold-start-reclaim", TestNetworkIdColdStartReclaim),
         ("character-home-lineage", TestCharacterHomeFollowsLineage),
         ("restart-reconciliation", TestRestartReconciliationDecision),
+        ("handover-target-died", TestHandoverTargetDied),
         ("handover-adopt-ready-transport-failure", TestHandoverAdoptReadyTransportFailure),
         ("handover-balance-readiness-budget", TestHandoverBalanceReadinessBudget),
         ("handover-abort-readopts-on-source", TestHandoverAbortReadoptsOnSource),
@@ -4323,6 +4324,40 @@ internal static partial class SelfTest
         Assert(DirectGateway.DecideReconciliation(committed, missing, missing, false, true, false, true) == DirectGateway.ReconciliationAction.Complete);
         Assert(DirectGateway.DecideReconciliation(committed, missing, missing, false, false, false, true) == DirectGateway.ReconciliationAction.Recover);
         Assert(DirectGateway.DecideReconciliation(committed, missing, missing, false, false, false, false) == DirectGateway.ReconciliationAction.Recover);
+    }
+
+    /// <summary>
+    /// SE-1583: a partition whose import kills its target is HandoverBlocked after the second dead target instead of being
+    /// offered to every node in turn (2026-11-15: partition 61113 stopped seven nodes in five minutes). The reconciliation
+    /// of a handover whose target incarnation is gone counts as one same-signature abort; a live target, a committed
+    /// handover or a Wait does not.
+    /// </summary>
+    private static void TestHandoverTargetDied()
+    {
+        var begun = new HandoverRecord("h", 7, "source", 1, 4, "target", 1, HandoverState.Begun, null);
+        var active = begun with { State = HandoverState.Active };
+        var committed = begun with { State = HandoverState.Committed, CommittedGeneration = 5 };
+        Assert(DirectGateway.TargetDiedMidHandover(begun, DirectGateway.ReconciliationAction.Abort, targetNodeLive: false));
+        Assert(DirectGateway.TargetDiedMidHandover(active, DirectGateway.ReconciliationAction.Recover, targetNodeLive: false));
+        Assert(!DirectGateway.TargetDiedMidHandover(begun, DirectGateway.ReconciliationAction.Abort, targetNodeLive: true));
+        Assert(!DirectGateway.TargetDiedMidHandover(begun, DirectGateway.ReconciliationAction.Wait, targetNodeLive: false));
+        Assert(!DirectGateway.TargetDiedMidHandover(begun, DirectGateway.ReconciliationAction.Complete, targetNodeLive: false));
+        Assert(!DirectGateway.TargetDiedMidHandover(committed, DirectGateway.ReconciliationAction.Recover, targetNodeLive: false));
+
+        string directory = Path.Combine(Path.GetTempPath(), "cluster-gateway-self-test-" + Guid.NewGuid());
+        try
+        {
+            DateTimeOffset now = DateTimeOffset.UnixEpoch.AddDays(20000);
+            using var registry = new GatewayRegistry(directory, Admission, () => now, TimeSpan.FromHours(1));
+            NodeRegistration source = Register(registry, "n1", "127.0.0.1:27016", Guid.NewGuid());
+            registry.ClaimPartition(7, source.Node, source.Epoch, 0);
+            registry.RecordValidationAbort(7, DirectGateway.TargetDiedSignature, "target n2 died");
+            Assert(!registry.HandoverScheduleBlocked(7));            // one dead target may be a coincidence: retry
+            registry.RecordValidationAbort(7, DirectGateway.TargetDiedSignature, "target n3 died");
+            Assert(registry.HandoverScheduleBlocked(7));             // the second one blocks: no third node is offered it
+            Assert(registry.HandoverBlocks().Single().Signature == DirectGateway.TargetDiedSignature);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
     }
 
     private static void TestMultiplexing() => RunMultiplexing(gatewayRs: null);
