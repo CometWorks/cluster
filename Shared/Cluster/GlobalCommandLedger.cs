@@ -24,9 +24,11 @@ internal static class GlobalCommandLedger
 	/// <summary>
 	/// <paramref name="order"/> is the result's place in the ledger (0 for a refusal the ledger does not keep): the
 	/// result is in a recoverable global save once <see cref="IsDurable"/> says so (#1270).
+	/// With <paramref name="waitInFlight"/> off, an operation another thread is still running gives null instead of
+	/// waiting for it: the game thread must not wait, as that handler may be waiting for the game thread (SE-1561).
 	/// </summary>
 	public static GlobalCommandResult Execute(string subsystem, Guid operationId, string payload, Func<GlobalCommandResult> handler,
-		out long order)
+		out long order, bool waitInFlight = true)
 	{
 		order = 0;
 		if (string.IsNullOrWhiteSpace(subsystem) || operationId == Guid.Empty || payload == null || handler == null)
@@ -59,6 +61,7 @@ internal static class GlobalCommandLedger
 		}
 		if (!owner)
 		{
+			if (!waitInFlight) return null;
 			GlobalCommandResult shared = pending.Task.GetAwaiter().GetResult();
 			lock (Sync) order = Results.TryGetValue(key, out Stored done) ? done.Order : 0;
 			return shared;

@@ -366,7 +366,13 @@ public static class GlobalStateChannel
 		}
 	}
 
-	private static void ReceiveAtAuthority(Envelope envelope)
+	/// <summary>
+	/// False (only with <paramref name="fromQueue"/>): the command is still running on another thread, so it was not
+	/// handled and the caller keeps it for a later frame. SE-1561: the game thread waited here for the node-link thread
+	/// that ran a retry of the same operation, whose handler waited for the game thread, and the World Authority hung
+	/// until Host killed it.
+	/// </summary>
+	private static bool ReceiveAtAuthority(Envelope envelope, bool fromQueue = false)
 	{
 		if (envelope.Kind == "Command")
 		{
@@ -399,7 +405,8 @@ public static class GlobalStateChannel
 				}
 			}
 			long order = 0;
-			GlobalCommandResult result = query ? Run() : GlobalCommandLedger.Execute(envelope.Subsystem, envelope.OperationId, envelope.Payload, Run, out order);
+			GlobalCommandResult result = query ? Run() : GlobalCommandLedger.Execute(envelope.Subsystem, envelope.OperationId, envelope.Payload, Run, out order, waitInFlight: !fromQueue);
+			if (result == null) return false;
 			var response = new Envelope("Response", envelope.Generation, envelope.Subsystem, envelope.Sequence, m_node, envelope.Origin,
 				GlobalCommandCodec.Write(result), envelope.OperationId);
 			// #1270 persist before answer: the asking node acts on the answer at once (closes the stored grids, pastes
@@ -417,7 +424,7 @@ public static class GlobalStateChannel
 				Console.WriteLine("[ClusterPlugin] global_command_held subsystem=" + envelope.Subsystem
 					+ " target=" + envelope.Origin + " sequence=" + envelope.Sequence + " order=" + order
 					+ " success=" + result.Success);
-				return;
+				return true;
 			}
 			// #1318 write-ahead: the same rule for the frequent commands, at the cost of one registry round trip. A
 			// handler that threw changed nothing, so its answer is not journaled.
@@ -429,7 +436,7 @@ public static class GlobalStateChannel
 				lock (Sync) HeldResponses.Add(new HeldResponse(order, response, entry, ClusterRuntime.LocalMilliseconds));
 				// The append may have landed before the hold was registered.
 				ReleaseHeldResponses();
-				return;
+				return true;
 			}
 			// The other half of the T-0140 question: if the command arrives and this line is reached
 			// promptly, the loss is on the way BACK and the gateway relay is the next suspect.
@@ -437,7 +444,7 @@ public static class GlobalStateChannel
 				+ " target=" + envelope.Origin + " sequence=" + envelope.Sequence
 				+ " success=" + result.Success);
 			Send(response);
-			return;
+			return true;
 		}
 		if (envelope.Kind == "Request")
 		{
@@ -445,7 +452,7 @@ public static class GlobalStateChannel
 			lock (Sync) AuthorityHandlers.TryGetValue(envelope.Subsystem, out handler);
 			if (handler == null) throw new InvalidOperationException("No World Authority handler for " + envelope.Subsystem);
 			handler(envelope.Origin, envelope.Payload);
-			return;
+			return true;
 		}
 		if (envelope.Kind != "Resync") throw new InvalidOperationException("World Authority received an invalid global-state direction");
 		long sequence;
@@ -461,6 +468,7 @@ public static class GlobalStateChannel
 		string payload = provider != null ? provider() : fallback;
 		if (payload != null)
 			Send(new Envelope("Snapshot", envelope.Generation, envelope.Subsystem, sequence, m_node, envelope.Origin, payload));
+		return true;
 	}
 
 	private static void ReceiveAtReplica(Envelope envelope)
@@ -547,17 +555,24 @@ public static class GlobalStateChannel
 
 	private static void ApplyAuthorityQueue()
 	{
+		// Commands another thread is still running: back in the queue once this pass is over, answered by the ledger later.
+		List<Envelope> inFlight = null;
 		while (true)
 		{
 			Envelope envelope;
 			lock (Sync)
 			{
-				if (AuthorityQueue.Count == 0) return;
+				if (AuthorityQueue.Count == 0)
+				{
+					if (inFlight != null) foreach (Envelope kept in inFlight) AuthorityQueue.Enqueue(kept);
+					return;
+				}
 				envelope = AuthorityQueue.Dequeue();
 			}
 			try
 			{
-				if (ClusterRuntime.AcceptAuthorityMessage(envelope.Generation)) ReceiveAtAuthority(envelope);
+				if (ClusterRuntime.AcceptAuthorityMessage(envelope.Generation) && !ReceiveAtAuthority(envelope, fromQueue: true))
+					(inFlight ??= new List<Envelope>()).Add(envelope);
 			}
 			catch (Exception exception)
 			{
@@ -765,6 +780,31 @@ public static class GlobalStateChannel
 			long until = Interlocked.Read(ref m_testPartitionUntil);
 			return until != 0 && ClusterRuntime.LocalMilliseconds < until;
 		}
+	}
+
+	/// <summary>
+	/// SE-1561 self-test: a command of <paramref name="subsystem"/> runs on another thread and its handler waits for
+	/// <paramref name="release"/>, as a banking command waits for the game thread, while this thread handles a queued
+	/// copy of the same operation the way the game thread's queue drain does. Returns how long that took, whether the
+	/// copy was handled while the command still ran, and whether it was handled once the command was done.
+	/// </summary>
+	internal static (long WaitedMs, bool HandledWhileRunning, bool HandledAfter) SelfTestQueuedCopyOfRunningCommand(string subsystem,
+		ManualResetEventSlim handlerEntered, ManualResetEventSlim release)
+	{
+		var command = new Envelope("Command", ClusterRuntime.AuthorityGeneration, subsystem, 0, m_node, null, "{}", Guid.NewGuid());
+		var owner = new Thread(() =>
+		{
+			try { ReceiveAtAuthority(command); }
+			catch (Exception) { /* the answer has nowhere to go in a self-test */ }
+		}) { IsBackground = true, Name = "ClusterSelfTestCommandOwner" };
+		owner.Start();
+		if (!handlerEntered.Wait(5000)) throw new InvalidOperationException("the command handler did not start");
+		long started = Environment.TickCount64;
+		bool handledWhileRunning = ReceiveAtAuthority(command, fromQueue: true);
+		long waitedMs = Environment.TickCount64 - started;
+		release.Set();
+		owner.Join(5000);
+		return (waitedMs, handledWhileRunning, ReceiveAtAuthority(command, fromQueue: true));
 	}
 
 	private static long m_testPartitionUntil;

@@ -3192,7 +3192,29 @@ def p2_wa_gps(bench) -> None:
     bench.exercised(identities=identities, tag=tag, ops="add x4, modify x3, delete x2, burst x50, node-2 restart, add+modify after")
 
 
+def p1_wa_cmd_inflight(bench) -> None:
+    """SE-1561: on the live cluster a node retried a banking command while the restarted World Authority was loading.
+    The first copy was queued, the retry ran on the node-link thread and its handler waited for the game thread,
+    then the game thread drained the queued copy and waited for the running one: the World Authority hung until Host
+    killed it ten minutes later. The WA self-test `command-in-flight` runs a command whose handler waits on another
+    thread and handles a queued copy of it: the copy must not wait, stays queued, and is answered once the command is
+    done. The WA still answers afterwards."""
+    bench.start_cluster(nodes=["node-1", "wa-1"])
+    try:
+        result = _node(bench, "wa-1", "/self-test?section=command-in-flight")
+    except Exception as error:  # noqa: BLE001
+        result = {"ok": False, "error": str(error)[:400]}
+    bench.record("wa-self-test-command-in-flight", result)
+    bench.check("WA self-test command-in-flight: a queued copy of a running command does not wait for it",
+                result.get("ok") is True and "command-in-flight" in (result.get("ran") or []), json.dumps(result)[:400])
+    status = _try(bench, "wa-1", "/self-test?section=heap-watch") or {}
+    bench.check("the World Authority still answers its control requests", status.get("ok") is True, json.dumps(status)[:200])
+    bench.exercised(waSelfTestSections=["command-in-flight"])
+
+
 SCENARIOS_WA = {
+    "P1-WA-CMD-INFLIGHT": (p1_wa_cmd_inflight, "SE-1561: the game thread does not wait for a command another thread "
+                           "is still running (the World Authority hang)", "1"),
     "P2-WA-00": (p2_wa_00, "World Authority role, clock and replacement", "3"),
     "P2-WA-GPS": (p2_wa_gps, "#1405: GPS add, modify and delete from any node on three identities converge on every node, "
                              "also after a modify burst and a node restart", "3"),
