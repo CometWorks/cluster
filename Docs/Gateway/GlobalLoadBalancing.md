@@ -177,6 +177,12 @@ from node to node.
   backoff (`handover backoff kept ... residual entity ... is still in it`); only one that
   takes them out releases it. A block without entities (an older node) is released as
   before.
+- **A target that dies importing** (SE-1583). When reconciliation gives up an uncommitted
+  handover because its target incarnation is gone, it counts as one abort with the
+  signature `target-died`. The second one in a row blocks the partition like any
+  same-signature abort, so it stays on its source with the usual backoff instead of
+  being offered to the next node. On 2026-11-15 one partition stopped seven nodes in
+  five minutes this way.
 
 Both knobs are 0 in `new CostModel()` (every decision as before) and live-tunable through
 `POST /balance/cost-model`. `--balance-replay --decisions LOG` re-decides a gateway log's
