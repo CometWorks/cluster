@@ -23,7 +23,8 @@ namespace ClusterTestPlugin;
 /// from MyWarheads), <c>empty-group</c> a block group with no blocks, <c>overfill</c> a reactor holding 0.0032 kg more
 /// uranium than the load restores, <c>overfill-ore</c> (SE-1556) a cargo container full of stone and ice, the ice
 /// 0.00076 kg over what the load restores beside the stone, <c>pilot</c> (with <c>owner=</c>) a character of that identity
-/// seated in the cockpit, <c>suit</c> (with <c>level=</c>) that pilot's suit oxygen. <c>/drift-test-state</c> (GET)
+/// seated in the cockpit, <c>suit</c> (with <c>level=</c>) that pilot's suit oxygen, <c>overfill-pilot</c> (SE-1557) that pilot's
+/// inventory holding hydrogen bottles and then three oxygen bottles more than the load restores beside them. <c>/drift-test-state</c> (GET)
 /// reports all of it for a list of <c>blocks=</c>.
 /// </summary>
 internal static class DriftTestRoutes
@@ -31,6 +32,7 @@ internal static class DriftTestRoutes
     private static readonly MyDefinitionId Uranium = new(typeof(MyObjectBuilder_Ingot), "Uranium");
     private static readonly MyDefinitionId Stone = new(typeof(MyObjectBuilder_Ore), "Stone");
     private static readonly MyDefinitionId Ice = new(typeof(MyObjectBuilder_Ore), "Ice");
+    private static readonly MyDefinitionId OxygenBottle = new(typeof(MyObjectBuilder_OxygenContainerObject), "OxygenBottle");
 
     public static void Register()
     {
@@ -111,6 +113,21 @@ internal static class DriftTestRoutes
                 pilot.OxygenComponent.UpdateStoredGasLevel(ref oxygen, level);
                 return State(id);
             }
+            case "overfill-pilot":
+            {
+                MyCharacter pilot = Entity<MyCockpit>(id).Pilot ?? throw new InvalidOperationException($"Cockpit {id} has no pilot");
+                MyInventory inventory = pilot.GetInventory();
+                inventory.Clear();
+                // SE-1557: Bot Trader Steven's pilot carried 1 + 24 + 9 bottles in a 4 m³ suit and the load kept 6 of the last
+                // 9. Here: hydrogen bottles filling half the suit, then the oxygen bottles that fit beside them and three more.
+                // AddItems would refuse the extra bottles, so they go in past the check.
+                float volume = MyDefinitionManager.Static.GetPhysicalItemDefinition(OxygenBottle).Volume;
+                int hydrogen = (int)((double)inventory.MaxVolume / 2 / volume);
+                inventory.AddItemsInternal(hydrogen, new MyObjectBuilder_GasContainerObject { SubtypeName = "HydrogenBottle", GasLevel = 1f });
+                int fits = (int)(((double)inventory.MaxVolume - (double)inventory.CurrentVolume) / volume);
+                inventory.AddItemsInternal(fits + 3, new MyObjectBuilder_OxygenContainerObject { SubtypeName = "OxygenBottle", GasLevel = 1f });
+                return new { id, pilot = pilot.EntityId, hydrogen, fits, oxygen = inventory.GetItemAmount(OxygenBottle).ToString() };
+            }
             default:
                 throw new ArgumentException($"Unknown drift action '{action}'");
         }
@@ -130,7 +147,7 @@ internal static class DriftTestRoutes
             MyCockpit cockpit => new
             {
                 id, found = true, pilot = cockpit.Pilot?.EntityId ?? 0, suit = cockpit.Pilot?.OxygenComponent?.SuitOxygenLevel,
-                groups = cockpit.CubeGrid.BlockGroups.Count,
+                groups = cockpit.CubeGrid.BlockGroups.Count, oxygenBottles = cockpit.Pilot?.GetInventory()?.GetItemAmount(OxygenBottle).ToString(),
             },
             MyCubeBlock block => new { id, found = true, groups = block.CubeGrid.BlockGroups.Count },
             _ => new { id, found = true },

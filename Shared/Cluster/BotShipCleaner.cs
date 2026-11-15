@@ -243,6 +243,16 @@ internal static class BotShipCleaner
 		Run(ships, backupAt, partitions, persistence);
 	}
 
+	/// <summary>
+	/// Whether the stamp of a grid that is no bot ship root goes. SE-1557: not while the grid is frozen or has just arrived.
+	/// A staged import adds its grids over several frames, and a pass between them saw a carried bot ship that was no bot
+	/// ship root yet and dropped its stamp, so the handover gate read the grid's Storage one entry short of the frozen source
+	/// (octahedron-test 2026-11-15: four Taxis and a Cargo Shuttle, "dictionary: 2 != 1"). A grid not in the entity list may
+	/// be an import still being built, so it goes only after <see cref="MissingSeconds"/>.
+	/// </summary>
+	internal static bool Forgets(bool present, bool settling, long missingSeconds)
+		=> present ? !settling : missingSeconds > MissingSeconds;
+
 	/// <summary>Stamps the bot ships in use (or first seen) and forgets every other grid. Returns this node's bot ship roots.</summary>
 	private static List<MyCubeGrid> Track()
 	{
@@ -272,14 +282,9 @@ internal static class BotShipCleaner
 		{
 			if (seen.Contains(id)) { m_missingSince.Remove(id); continue; }
 			bool present = MyEntities.TryGetEntityById(id, out MyEntity entity) && entity is MyCubeGrid grid && !grid.Closed;
-			// SE-1557: a grid that is frozen or just arrived keeps the stamp it carried. A staged import adds its grids over
-			// several frames, and a pass between them saw a carried bot ship that was no bot ship root yet and dropped the
-			// stamp, so the handover gate read the grid's Storage one entry short of the frozen source (octahedron-test
-			// 2026-11-15: four Taxis and a Cargo Shuttle, "dictionary: 2 != 1"). The first pass after the import judges it
-			// like any other grid.
-			if (present && (ClusterRuntime.IsFrozen(id) || MySessionComponentTrashPatch.InImportGrace(id))) continue;
+			bool settling = present && (ClusterRuntime.IsFrozen(id) || MySessionComponentTrashPatch.InImportGrace(id));
 			if (!present && !m_missingSince.ContainsKey(id)) m_missingSince[id] = now;
-			if (present || now - m_missingSince[id] > MissingSeconds)
+			if (Forgets(present, settling, present ? 0 : now - m_missingSince[id]))
 			{
 				m_lastUse.TryRemove(id, out _);
 				m_missingSince.Remove(id);

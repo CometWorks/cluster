@@ -50,5 +50,10 @@ internal static partial class ClusterSelfTest
 		BotShipCleaner.SetLastUse(returned, use);
 		BotShipCleaner.Arrived(returned, "not a number");
 		Check(BotShipCleaner.LastUse(returned) == null, "an unreadable stamp counts as none");
+		// SE-1557: a grid that is no bot ship root right now keeps its stamp while it is frozen or has just arrived.
+		Check(!BotShipCleaner.Forgets(present: true, settling: true, 0), "a grid mid-import keeps its stamp");
+		Check(BotShipCleaner.Forgets(present: true, settling: false, 0), "a settled grid that is no bot ship root loses it");
+		Check(!BotShipCleaner.Forgets(present: false, settling: false, 600) && BotShipCleaner.Forgets(present: false, settling: false, 601),
+			"a grid gone from the entity list loses it after 600 s");
 	}
 }
