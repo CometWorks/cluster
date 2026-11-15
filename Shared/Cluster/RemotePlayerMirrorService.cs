@@ -280,9 +280,10 @@ public static class RemotePlayerMirrorService
 
 	/// <summary>
 	/// How long a player must stay absent from the merged list before its phantom is withdrawn.
-	/// CLUSTER_MIRROR_GRACE, seconds, default 5 - the same default and the same reasoning as
-	/// <c>ClusterPresenceAnnouncer.GraceSeconds</c>: a real logout means re-loading the world, tens
-	/// of seconds, never the sub-second gap a traversal leaves.
+	/// CLUSTER_MIRROR_GRACE, seconds, default 5: a real logout means re-loading the world, tens
+	/// of seconds, never the sub-second gap a traversal leaves. <c>ClusterPresenceAnnouncer.GraceSeconds</c>
+	/// holds longer (SE-1590) because a chat line cannot be taken back; a phantom row that drops out
+	/// during a failed respawn switch comes back on the next pass.
 	/// </summary>
 	private static readonly double GraceSeconds = ParseGrace();
 

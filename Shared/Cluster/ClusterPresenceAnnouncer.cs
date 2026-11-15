@@ -33,7 +33,7 @@ namespace ClusterPlugin;
 /// SO A DEPARTURE IS HELD for <see cref="GraceSeconds"/> before it is announced, and cancelled if
 /// the same (SteamId, SerialId) reappears within it; the arrival that cancels it is not announced
 /// either, since nobody was told about the departure. A real logout cannot be confused with this:
-/// re-entering means loading the world, tens of seconds, never the sub-second gaps measured here.
+/// re-entering means loading the world, minutes on a live cluster, never the gaps measured here.
 /// The hold also cannot invent a departure - <see cref="Flush"/> re-checks the merged list at the
 /// moment it would speak, so a player still online is dropped silently however the hold was armed.
 ///
@@ -76,19 +76,27 @@ public static class ClusterPresenceAnnouncer
 		Environment.GetEnvironmentVariable("CLUSTER_PRESENCE_DIRECT") == "1";
 
 	/// <summary>
-	/// How long a departure is held before it is spoken, so a handover gap can cancel it.
-	/// Five seconds is two orders of magnitude above the gaps measured (67 ms - 1.03 s) and two
-	/// orders below a genuine re-entry, which has to load the world first. CLUSTER_PRESENCE_GRACE=0
-	/// announces immediately, restoring the pre-fix behaviour for a bisect.
+	/// How long a departure is held before it is spoken, so a gap in the merged list can cancel it.
+	/// A handover leaves gaps of 67 ms - 1.03 s. SE-1590: a respawn switch leaves far longer ones. A
+	/// dead player previewing a medbay on another node is moved there and drops off its node's report;
+	/// when the target never adopts it, the Gateway gives up after its 10 s ready deadline (20 s for a
+	/// respawn ship, each poll bounded by its 10 s node-call timeout) and moves the client back.
+	/// octahedron-test 2026-11-15 12:48-12:57 CET: a Steam player clicking through spawn points left
+	/// and rejoined the cluster in chat every ~10 s. 45 s covers the longest switch with margin and
+	/// stays below a genuine re-entry, which has to load the world first (2-3 min on that cluster).
+	/// The cost is that a real logout is announced 45 s late. CLUSTER_PRESENCE_GRACE=0 announces
+	/// immediately, restoring the pre-fix behaviour for a bisect.
 	/// </summary>
 	private static readonly double GraceSeconds = ParseGrace();
+
+	private const double DefaultGraceSeconds = 45.0;
 
 	private static double ParseGrace()
 	{
 		string raw = Environment.GetEnvironmentVariable("CLUSTER_PRESENCE_GRACE");
-		if (string.IsNullOrWhiteSpace(raw)) return 5.0;
+		if (string.IsNullOrWhiteSpace(raw)) return DefaultGraceSeconds;
 		return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed)
-			&& parsed >= 0.0 ? parsed : 5.0;
+			&& parsed >= 0.0 ? parsed : DefaultGraceSeconds;
 	}
 
 	private static readonly object SyncRoot = new object();
