@@ -56,7 +56,9 @@ import time
 from cluster import ClusterError, ClusterHttpError, wait_until
 from scenarios_core import CLIENT_ID, _client_partition, _handover_url, _lines, _nodes, _partitions
 from scenarios_core import _owners, _wait_line
+from scenarios_spawn_preview import _reselect
 from scenarios_wa import CLIENT2_ID, CLIENT2_PORT, CLIENT3_ID, CLIENT3_PORT, _session, start_second_client
+from scenarios_wa_ops import _medical_click, _points
 
 #: Waited out before concluding that a traversal announced nothing. Must exceed the announcer's
 #: CLUSTER_PRESENCE_GRACE (default 45 s since SE-1590), or the silence proves only that we asked too early.
@@ -66,7 +68,7 @@ GRACE_MARGIN_SECONDS = 50
 #: timeout, so every switch fails the way it did live: by the Gateway giving up and moving the client back.
 STALL_SECONDS = 12
 
-#: P2-PRS-06: failed switches to see before reading the chat. Each leaves the client off every node's list for ~10 s.
+#: P2-PRS-06: clicked previews that must fail, after the automatic one. Each leaves the client off every node's list for ~10 s.
 STALLED_SWITCHES = 3
 
 #: A departure may not be announced before the grace has run; anything faster is the hold missing.
@@ -787,35 +789,50 @@ def p2_prs_06(bench) -> None:
         record["stall"] = bench.cluster.node(
             kit_node, f"/respawn-execute-fault?mode=stall&count=1000&seconds={STALL_SECONDS}", "POST")
 
-        # Client 3 stays unspawned on the other node: its medical screen previews the kit's row, the Gateway moves it to
-        # the kit's node, which stalls, and the Gateway moves it back.
-        start_second_client(bench, route_node=other_node, client_id=CLIENT3_ID, remote_port=CLIENT3_PORT)
+        # Client 3 stays unspawned on the other node: its medical screen previews the kit's row at once, the Gateway
+        # moves it to the kit's node, which stalls, and the Gateway moves it back. Later previews are clicked.
+        api3 = start_second_client(bench, route_node=other_node, client_id=CLIENT3_ID, remote_port=CLIENT3_PORT)
         name = wait_until(lambda: row(CLIENT3_ID), 120, "client 3 in the cluster player list")["name"]
         messages, cursor = wait_until(
             lambda: (lambda page: page if _presence(page[0], name) else None)(_chat(bench, "wa-1", cursor)),
             90, f"the cluster to announce {name} joining")
         lines = _presence(messages, name)
         bench.check("the login is announced once", lines == ["joined"], json.dumps(lines))
+        kit = wait_until(lambda: next((p for p in _points(bench, "wa-1").get("points") or []
+                                       if p.get("Origin") == kit_node and p.get("Working")), None),
+                         120, f"a working spawn point on {kit_node}")
+
+        def stalls() -> int:
+            return len(bench.cluster.node(kit_node, "/respawn-execute-fault").get("faulted") or [])
+
+        def switch_round(want: int) -> None:
+            """Wait for stall number WANT to be given up and the client back, timing its absence from the WA's list."""
+            missing_since, deadline = None, time.monotonic() + 120
+            while time.monotonic() < deadline:
+                done, present = stalls() >= want, row(CLIENT3_ID) is not None
+                now = time.monotonic()
+                if not present:
+                    missing_since = missing_since or now
+                elif missing_since is not None:
+                    record["absences"].append(round(now - missing_since, 1))
+                    missing_since = None
+                if done and present and missing_since is None and len(record["absences"]) >= want - 1:
+                    return
+                time.sleep(0.25)
 
         # COVERAGE: the switches must fail AND take the player off the merged list, or the silence below proves nothing.
-        missing_since = None
-        deadline = time.monotonic() + 300
-        while time.monotonic() < deadline:
-            stalled = len(bench.cluster.node(kit_node, "/respawn-execute-fault").get("faulted") or [])
-            now = time.monotonic()
-            if row(CLIENT3_ID) is None:
-                missing_since = missing_since or now
-            elif missing_since is not None:
-                record["absences"].append(round(now - missing_since, 1))
-                missing_since = None
-            if stalled >= STALLED_SWITCHES and len(record["absences"]) >= STALLED_SWITCHES:
-                break
-            time.sleep(0.5)
+        switch_round(1)  # the automatic preview, which started while the client was still logging in
+        record["absences"].clear()
+        for want in range(2, STALLED_SWITCHES + 2):
+            _reselect(bench, api3)
+            _medical_click(bench, api3, kit["Name"])
+            switch_round(want)
+        stalled = stalls()
         record["stalled"] = stalled
-        bench.check(f"{STALLED_SWITCHES}+ spawn preview switches stalled and were given up", stalled >= STALLED_SWITCHES,
-                    json.dumps(record))
+        bench.check(f"{STALLED_SWITCHES + 1} spawn preview switches stalled and were given up",
+                    stalled >= STALLED_SWITCHES + 1, json.dumps(record))
         longest = max(record["absences"], default=0)
-        bench.check("each failed switch took the player off the cluster list for longer than the old 5 s grace",
+        bench.check("each clicked switch took the player off the cluster list for longer than the old 5 s grace",
                     len(record["absences"]) >= STALLED_SWITCHES and min(record["absences"]) > 5, json.dumps(record))
 
         bench.cluster.node(kit_node, "/respawn-execute-fault?mode=off", "POST")
