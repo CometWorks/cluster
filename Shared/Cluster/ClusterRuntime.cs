@@ -397,6 +397,13 @@ public static class ClusterRuntime
     private const long LongFrameStackIntervalMilliseconds = 30 * 60_000;
 
     /// <summary>
+    /// SE-1606: a frame stuck this long gets its stacks even inside that interval. A node is fenced about 60 s into a
+    /// hang, and the third of three fenced nodes on octahedron-test left none, because a 3 s frame ten minutes
+    /// earlier had used up its capture.
+    /// </summary>
+    private const long StuckFrameStackMilliseconds = 20_000;
+
+    /// <summary>
     /// SE-1228: the hitch line says how long a frame took, not what it waited on. While the game thread is stuck in one
     /// frame for hitch.stackMs, every thread's stack is logged once. The World Authority's 5-10 s stalls on octahedron-test
     /// had no stack, and reading the code did not find the wait. Not before the session is ready: loading the world takes
@@ -416,7 +423,7 @@ public static class ClusterRuntime
                 threshold <= 0
                 || now - frame < threshold
                 || frame == capturedFrame
-                || now < nextCapture
+                || (now < nextCapture && now - frame < StuckFrameStackMilliseconds)
                 || MySession.Static?.Ready != true
             )
                 continue;

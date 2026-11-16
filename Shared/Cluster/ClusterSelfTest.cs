@@ -70,6 +70,7 @@ internal static partial class ClusterSelfTest
         ("game-thread-stacks", GameThreadStacksRender),
         ("heap-watch", HeapWatchDecide),
         ("command-in-flight", CommandInFlight),
+        ("string-hash-collision", StringHashCollision),
         ("resync-backlog", ResyncBacklog),
         ("global-scrub", GlobalScrub),
         ("retention-deletes", RetentionDeletes),
