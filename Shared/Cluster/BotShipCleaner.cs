@@ -283,7 +283,8 @@ internal static class BotShipCleaner
 			if (seen.Contains(id)) { m_missingSince.Remove(id); continue; }
 			bool present = MyEntities.TryGetEntityById(id, out MyEntity entity) && entity is MyCubeGrid grid && !grid.Closed;
 			bool settling = present && (ClusterRuntime.IsFrozen(id) || MySessionComponentTrashPatch.InImportGrace(id));
-			if (!present && !m_missingSince.ContainsKey(id)) m_missingSince[id] = now;
+			if (present) m_missingSince.Remove(id);
+			else if (!m_missingSince.ContainsKey(id)) m_missingSince[id] = now;
 			if (Forgets(present, settling, present ? 0 : now - m_missingSince[id]))
 			{
 				m_lastUse.TryRemove(id, out _);
