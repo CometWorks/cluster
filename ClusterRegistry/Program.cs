@@ -7,19 +7,29 @@ using ClusterRegistry;
 AppDomain.CurrentDomain.AssemblyResolve += (_, resolveArgs) =>
 {
     string? bin64 = Environment.GetEnvironmentVariable("SPACE_ENGINEERS_BIN64");
-    if (string.IsNullOrWhiteSpace(bin64)) return null;
-    string path = Path.Combine(Path.GetFullPath(bin64), new AssemblyName(resolveArgs.Name).Name + ".dll");
-    if (!File.Exists(path)) return null;
+    if (string.IsNullOrWhiteSpace(bin64))
+        return null;
+    string path = Path.Combine(
+        Path.GetFullPath(bin64),
+        new AssemblyName(resolveArgs.Name).Name + ".dll"
+    );
+    if (!File.Exists(path))
+        return null;
     var assembly = Assembly.LoadFrom(path);
     // Native imports of a Bin64-loaded assembly probe beside Bin64, not beside the gateway;
     // point them at the bundled Linux natives (e.g. EOSSDK-Shipping.dll) in the gateway directory.
     try
     {
-        System.Runtime.InteropServices.NativeLibrary.SetDllImportResolver(assembly, (libraryName, _, _) =>
-        {
-            string bundled = Path.Combine(AppContext.BaseDirectory, libraryName);
-            return File.Exists(bundled) ? System.Runtime.InteropServices.NativeLibrary.Load(bundled) : IntPtr.Zero;
-        });
+        System.Runtime.InteropServices.NativeLibrary.SetDllImportResolver(
+            assembly,
+            (libraryName, _, _) =>
+            {
+                string bundled = Path.Combine(AppContext.BaseDirectory, libraryName);
+                return File.Exists(bundled)
+                    ? System.Runtime.InteropServices.NativeLibrary.Load(bundled)
+                    : IntPtr.Zero;
+            }
+        );
     }
     catch (InvalidOperationException)
     {
@@ -30,8 +40,16 @@ AppDomain.CurrentDomain.AssemblyResolve += (_, resolveArgs) =>
 
 if (args.Length == 2 && args[0] == "--check-plugin-sdk")
 {
-    try { PluginSdkRequirement.CheckFile(args[1]); Console.WriteLine("PluginSdk requirement satisfied."); }
-    catch (Exception error) { Console.Error.WriteLine(error.Message); Environment.ExitCode = 2; }
+    try
+    {
+        PluginSdkRequirement.CheckFile(args[1]);
+        Console.WriteLine("PluginSdk requirement satisfied.");
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine(error.Message);
+        Environment.ExitCode = 2;
+    }
     return;
 }
 
@@ -50,7 +68,11 @@ if (args.Length > 1 && args[0] == "--balance-replay")
 }
 
 AppDomain.CurrentDomain.UnhandledException += (_, fatal) =>
-    DiagnosticReports.Write("unhandled_exception", "Unhandled registry exception", fatal.ExceptionObject as Exception);
+    DiagnosticReports.Write(
+        "unhandled_exception",
+        "Unhandled registry exception",
+        fatal.ExceptionObject as Exception
+    );
 SecretRedactor.ConfigureFromEnvironment();
 Console.SetOut(new TimestampedWriter(SecretRedactor.Wrap(Console.Out)));
 Console.SetError(new TimestampedWriter(SecretRedactor.Wrap(Console.Error)));
@@ -63,7 +85,10 @@ Console.SetError(new TimestampedWriter(SecretRedactor.Wrap(Console.Error)));
 int benchCollapse = Array.IndexOf(args, "--bench-collapse");
 if (benchCollapse >= 0)
 {
-    int records = benchCollapse + 1 < args.Length && int.TryParse(args[benchCollapse + 1], out int parsed) ? parsed : 400;
+    int records =
+        benchCollapse + 1 < args.Length && int.TryParse(args[benchCollapse + 1], out int parsed)
+            ? parsed
+            : 400;
     SelfTest.BenchmarkCollapse(records);
     return;
 }
@@ -72,7 +97,8 @@ if (benchCollapse >= 0)
 int abandonedAllocation = Array.IndexOf(args, "--self-test-abandon-allocation");
 if (abandonedAllocation >= 0)
 {
-    if (abandonedAllocation + 1 >= args.Length) throw new ArgumentException("Allocation fixture directory required");
+    if (abandonedAllocation + 1 >= args.Length)
+        throw new ArgumentException("Allocation fixture directory required");
     SelfTest.AllocateAndAbandon(args[abandonedAllocation + 1]);
     return;
 }
@@ -81,7 +107,8 @@ if (abandonedAllocation >= 0)
 int sigtermFixture = Array.IndexOf(args, "--self-test-sigterm");
 if (sigtermFixture >= 0)
 {
-    if (sigtermFixture + 2 >= args.Length) throw new ArgumentException("SIGTERM fixture directory and lock mode required");
+    if (sigtermFixture + 2 >= args.Length)
+        throw new ArgumentException("SIGTERM fixture directory and lock mode required");
     SelfTest.AwaitSigterm(args[sigtermFixture + 1], args[sigtermFixture + 2] == "locked");
     return;
 }
@@ -90,7 +117,10 @@ int selfTest = Array.IndexOf(args, "--self-test");
 if (selfTest >= 0)
 {
     // `--self-test [section]` so a test scenario can run and cite exactly the section it owns.
-    string? section = selfTest + 1 < args.Length && !args[selfTest + 1].StartsWith('-') ? args[selfTest + 1] : null;
+    string? section =
+        selfTest + 1 < args.Length && !args[selfTest + 1].StartsWith('-')
+            ? args[selfTest + 1]
+            : null;
     try
     {
         SelfTest.Run(section);

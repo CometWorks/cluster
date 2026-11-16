@@ -38,90 +38,132 @@ namespace ClusterPlugin;
 /// </summary>
 public static class GridStopService
 {
-	public static object Stop(long entityId, bool aiOnly = false, bool force = false)
-	{
-		if (!MyEntities.TryGetEntityById(entityId, out MyEntity entity) || entity is not MyCubeGrid grid)
-			return new { stopped = false, entityId, reason = "not a grid on this node" };
-		if (grid.Closed || grid.MarkedForClose)
-			return new { stopped = false, entityId, reason = "grid is closing" };
-		if (grid.IsStatic)
-			return new { stopped = false, entityId, reason = "static grid; stations do not move" };
-		if (ClusterRuntime.IsFrozen(grid.EntityId))
-			return new { stopped = false, entityId, reason = "frozen for a handover in progress" };
-		long[] pilots = grid.GetFatBlocks<MyCockpit>()
-			.Where(cockpit => cockpit.Pilot != null)
-			.Select(cockpit => cockpit.Pilot.EntityId).ToArray();
-		if (aiOnly)
-		{
-			float speed = grid.Physics?.LinearVelocity.Length() ?? 0f;
-			long[] deactivated = DeactivateAi(grid);
-			bool dampenersWereOn = grid.DampenersEnabled;
-			if (!dampenersWereOn)
-				grid.EnableDampingInternal(true, updateProxy: true);
-			return new { stopped = false, aiOnly = true, entityId, speedBefore = speed, aiDeactivated = deactivated, dampenersWereOn, pilots };
-		}
-		if (pilots.Length > 0 && !force)
-			return new { stopped = false, entityId, reason = "a cockpit holds a pilot", pilots };
+    public static object Stop(long entityId, bool aiOnly = false, bool force = false)
+    {
+        if (
+            !MyEntities.TryGetEntityById(entityId, out MyEntity entity)
+            || entity is not MyCubeGrid grid
+        )
+            return new
+            {
+                stopped = false,
+                entityId,
+                reason = "not a grid on this node",
+            };
+        if (grid.Closed || grid.MarkedForClose)
+            return new
+            {
+                stopped = false,
+                entityId,
+                reason = "grid is closing",
+            };
+        if (grid.IsStatic)
+            return new
+            {
+                stopped = false,
+                entityId,
+                reason = "static grid; stations do not move",
+            };
+        if (ClusterRuntime.IsFrozen(grid.EntityId))
+            return new
+            {
+                stopped = false,
+                entityId,
+                reason = "frozen for a handover in progress",
+            };
+        long[] pilots = grid.GetFatBlocks<MyCockpit>()
+            .Where(cockpit => cockpit.Pilot != null)
+            .Select(cockpit => cockpit.Pilot.EntityId)
+            .ToArray();
+        if (aiOnly)
+        {
+            float speed = grid.Physics?.LinearVelocity.Length() ?? 0f;
+            long[] deactivated = DeactivateAi(grid);
+            bool dampenersWereOn = grid.DampenersEnabled;
+            if (!dampenersWereOn)
+                grid.EnableDampingInternal(true, updateProxy: true);
+            return new
+            {
+                stopped = false,
+                aiOnly = true,
+                entityId,
+                speedBefore = speed,
+                aiDeactivated = deactivated,
+                dampenersWereOn,
+                pilots,
+            };
+        }
+        if (pilots.Length > 0 && !force)
+            return new
+            {
+                stopped = false,
+                entityId,
+                reason = "a cockpit holds a pilot",
+                pilots,
+            };
 
-		float speedBefore = grid.Physics?.LinearVelocity.Length() ?? 0f;
-		int overridesCleared = 0;
-		int thrustersEnabled = 0;
-		foreach (MyThrust thrust in grid.GetFatBlocks<MyThrust>())
-		{
-			if (thrust.ThrustOverride > 0f)
-			{
-				thrust.ThrustOverride = 0f;
-				overridesCleared++;
-			}
-			if (!thrust.Enabled)
-			{
-				thrust.Enabled = true;
-				thrustersEnabled++;
-			}
-		}
-		long[] aiDeactivated = DeactivateAi(grid);
-		bool dampenersBefore = grid.DampenersEnabled;
-		if (!dampenersBefore)
-			grid.EnableDampingInternal(true, updateProxy: true);
-		grid.Physics?.ClearSpeed();
-		float speedAfter = grid.Physics?.LinearVelocity.Length() ?? 0f;
-		var position = grid.PositionComp.GetPosition();
-		return new
-		{
-			stopped = true,
-			entityId,
-			blocks = grid.BlocksCount,
-			speedBefore,
-			speedAfter,
-			overridesCleared,
-			thrustersEnabled,
-			dampenersWereOn = dampenersBefore,
-			aiDeactivated,
-			forcedWithPilots = force ? pilots : null,
-			position = new[] { position.X, position.Y, position.Z },
-		};
-	}
+        float speedBefore = grid.Physics?.LinearVelocity.Length() ?? 0f;
+        int overridesCleared = 0;
+        int thrustersEnabled = 0;
+        foreach (MyThrust thrust in grid.GetFatBlocks<MyThrust>())
+        {
+            if (thrust.ThrustOverride > 0f)
+            {
+                thrust.ThrustOverride = 0f;
+                overridesCleared++;
+            }
+            if (!thrust.Enabled)
+            {
+                thrust.Enabled = true;
+                thrustersEnabled++;
+            }
+        }
+        long[] aiDeactivated = DeactivateAi(grid);
+        bool dampenersBefore = grid.DampenersEnabled;
+        if (!dampenersBefore)
+            grid.EnableDampingInternal(true, updateProxy: true);
+        grid.Physics?.ClearSpeed();
+        float speedAfter = grid.Physics?.LinearVelocity.Length() ?? 0f;
+        var position = grid.PositionComp.GetPosition();
+        return new
+        {
+            stopped = true,
+            entityId,
+            blocks = grid.BlocksCount,
+            speedBefore,
+            speedAfter,
+            overridesCleared,
+            thrustersEnabled,
+            dampenersWereOn = dampenersBefore,
+            aiDeactivated,
+            forcedWithPilots = force ? pilots : null,
+            position = new[] { position.X, position.Y, position.Z },
+        };
+    }
 
-	private static long[] DeactivateAi(MyCubeGrid grid)
-	{
-		var aiDeactivated = new List<long>();
-		foreach (MyFlightMovementBlock flight in grid.GetFatBlocks<MyFlightMovementBlock>())
-		{
-			if (flight.Components.TryGet<IMyAiBlockComponent>(out IMyAiBlockComponent component)
-				&& component.IsActivated && component is MyAiBlockComponent ai)
-			{
-				// Through the synced property, never MyAiBlockComponent.Deactivate(): that one is the
-				// AI system's own internal path - it skips the ValueChanged handler, so
-				// MyAiBlockSystem.DeactivateComponent never runs and the grid's AI system keeps this
-				// block registered as the active Movement component. The next ActivateBehavior=true
-				// then finds the stale entry IS this component, calls Deactivate() on it and the
-				// block switches straight back off: 121 "AI behaviour did not activate" rounds on
-				// 2b91c18 in one afternoon. The property setter runs the handler, unregisters the
-				// component and replicates the value to every client.
-				ai.IsActivated = false;
-				aiDeactivated.Add(flight.EntityId);
-			}
-		}
-		return aiDeactivated.ToArray();
-	}
+    private static long[] DeactivateAi(MyCubeGrid grid)
+    {
+        var aiDeactivated = new List<long>();
+        foreach (MyFlightMovementBlock flight in grid.GetFatBlocks<MyFlightMovementBlock>())
+        {
+            if (
+                flight.Components.TryGet<IMyAiBlockComponent>(out IMyAiBlockComponent component)
+                && component.IsActivated
+                && component is MyAiBlockComponent ai
+            )
+            {
+                // Through the synced property, never MyAiBlockComponent.Deactivate(): that one is the
+                // AI system's own internal path - it skips the ValueChanged handler, so
+                // MyAiBlockSystem.DeactivateComponent never runs and the grid's AI system keeps this
+                // block registered as the active Movement component. The next ActivateBehavior=true
+                // then finds the stale entry IS this component, calls Deactivate() on it and the
+                // block switches straight back off: 121 "AI behaviour did not activate" rounds on
+                // 2b91c18 in one afternoon. The property setter runs the handler, unregisters the
+                // component and replicates the value to every client.
+                ai.IsActivated = false;
+                aiDeactivated.Add(flight.EntityId);
+            }
+        }
+        return aiDeactivated.ToArray();
+    }
 }

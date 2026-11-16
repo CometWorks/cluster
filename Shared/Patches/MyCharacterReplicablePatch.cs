@@ -12,9 +12,9 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyCharacterReplicable), "OnHook")]
 public static class MyCharacterReplicablePatch
 {
-	[HarmonyPostfix]
-	private static void OnHookPostfix(MyCharacterReplicable __instance)
-	{
-		MyCharacterReplicableSeams.HookRadioReceiver(__instance);
-	}
+    [HarmonyPostfix]
+    private static void OnHookPostfix(MyCharacterReplicable __instance)
+    {
+        MyCharacterReplicableSeams.HookRadioReceiver(__instance);
+    }
 }

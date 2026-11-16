@@ -4,7 +4,16 @@ namespace CometWorks.ClusterGateway.AdminContract.V1;
 
 public enum RotationState : byte
 {
-    Unknown, Assigned, PolicyEstimate, Disabled, HotSpare, NotRotated, Draining, NotServing, Stopped, ForceDrainArmed
+    Unknown,
+    Assigned,
+    PolicyEstimate,
+    Disabled,
+    HotSpare,
+    NotRotated,
+    Draining,
+    NotServing,
+    Stopped,
+    ForceDrainArmed,
 }
 
 public sealed class NodeDiagnostics

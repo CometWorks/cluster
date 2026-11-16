@@ -35,106 +35,165 @@ namespace ClusterPlugin;
 /// </summary>
 public static class PlayerEntitlements
 {
-	private sealed class Entry(uint[] missingDlcs, HashSet<MyStringHash> skins)
-	{
-		public readonly uint[] MissingDlcs = missingDlcs;
-		public volatile HashSet<MyStringHash> Skins = skins;
-		public int Checking;
-	}
+    private sealed class Entry(uint[] missingDlcs, HashSet<MyStringHash> skins)
+    {
+        public readonly uint[] MissingDlcs = missingDlcs;
+        public volatile HashSet<MyStringHash> Skins = skins;
+        public int Checking;
+    }
 
-	/// <summary>Players attached to this node. They leave on detach; another node or the online list knows them then.</summary>
-	private static readonly ConcurrentDictionary<ulong, Entry> Attached = new ConcurrentDictionary<ulong, Entry>();
-	private static readonly HttpClient Gateway = ClusterHttp.Client(TimeSpan.FromSeconds(10));
-	private static readonly string GatewayUrl = Environment.GetEnvironmentVariable("CLUSTER_GATEWAY_REGISTRY")?.TrimEnd('/');
+    /// <summary>Players attached to this node. They leave on detach; another node or the online list knows them then.</summary>
+    private static readonly ConcurrentDictionary<ulong, Entry> Attached =
+        new ConcurrentDictionary<ulong, Entry>();
+    private static readonly HttpClient Gateway = ClusterHttp.Client(TimeSpan.FromSeconds(10));
+    private static readonly string GatewayUrl = Environment
+        .GetEnvironmentVariable("CLUSTER_GATEWAY_REGISTRY")
+        ?.TrimEnd('/');
 
-	/// <summary>The Gateway route that deserializes a client's inventory blob with its Steam game server.</summary>
-	public const string SkinCheckRoute = "/registry/steam/skins";
+    /// <summary>The Gateway route that deserializes a client's inventory blob with its Steam game server.</summary>
+    public const string SkinCheckRoute = "/registry/steam/skins";
 
-	public sealed record SkinCheckRequest(ulong UserId, string Data);
-	public sealed record SkinCheckAnswer(string[] Skins);
+    public sealed record SkinCheckRequest(ulong UserId, string Data);
 
-	internal static void Install() => ClusterRuntime.AuthorizeRegistryClient(Gateway);
+    public sealed record SkinCheckAnswer(string[] Skins);
 
-	internal static void Attach(PlayerReady ready)
-	{
-		Attached[ready.UserId] = new Entry(ready.MissingDlcs,
-			ready.Skins == null ? null : new HashSet<MyStringHash>(ready.Skins.Select(MyStringHash.GetOrCompute)));
-	}
+    internal static void Install() => ClusterRuntime.AuthorizeRegistryClient(Gateway);
 
-	internal static void Detach(ulong clientId)
-	{
-		Attached.TryRemove(clientId, out _);
-	}
+    internal static void Attach(PlayerReady ready)
+    {
+        Attached[ready.UserId] = new Entry(
+            ready.MissingDlcs,
+            ready.Skins == null
+                ? null
+                : new HashSet<MyStringHash>(ready.Skins.Select(MyStringHash.GetOrCompute))
+        );
+    }
 
-	/// <summary>For this node's online report: null when the Gateway didn't say.</summary>
-	internal static uint[] MissingDlcs(ulong steamId) => Attached.TryGetValue(steamId, out Entry entry) ? entry.MissingDlcs : null;
+    internal static void Detach(ulong clientId)
+    {
+        Attached.TryRemove(clientId, out _);
+    }
 
-	/// <summary>Whether the player owns the DLC; null leaves it to the game.</summary>
-	public static bool? HasDlc(uint appId, ulong steamId)
-	{
-		if (!ClusterRuntime.IsClustered || steamId == 0) return null;
-		bool attached = Attached.TryGetValue(steamId, out Entry local);
-		return HasDlc(appId, steamId, attached, local?.MissingDlcs, OnlinePlayersService.Cluster);
-	}
+    /// <summary>For this node's online report: null when the Gateway didn't say.</summary>
+    internal static uint[] MissingDlcs(ulong steamId) =>
+        Attached.TryGetValue(steamId, out Entry entry) ? entry.MissingDlcs : null;
 
-	/// <summary><see cref="HasDlc(uint, ulong)"/> from what this node knows: the player's attach binding if they are here, else the online list.</summary>
-	internal static bool? HasDlc(uint appId, ulong steamId, bool attached, uint[] attachedMissing, OnlinePlayersService.OnlinePlayerEntry[] cluster)
-	{
-		if (attached) return attachedMissing == null ? null : !attachedMissing.Contains(appId);
-		foreach (OnlinePlayersService.OnlinePlayerEntry player in cluster)
-			if (player.SteamId == steamId)
-				return player.MissingDlcs == null ? null : !player.MissingDlcs.Contains(appId);
-		// Online nowhere. Until the first online list arrives nothing is known about anyone, so the game decides.
-		return cluster.Length == 0 ? null : false;
-	}
+    /// <summary>Whether the player owns the DLC; null leaves it to the game.</summary>
+    public static bool? HasDlc(uint appId, ulong steamId)
+    {
+        if (!ClusterRuntime.IsClustered || steamId == 0)
+            return null;
+        bool attached = Attached.TryGetValue(steamId, out Entry local);
+        return HasDlc(appId, steamId, attached, local?.MissingDlcs, OnlinePlayersService.Cluster);
+    }
 
-	/// <summary>Whether the player owns the skin; null leaves it to the game.</summary>
-	public static bool? HasSkin(MyStringHash skin, ulong steamId)
-	{
-		if (!ClusterRuntime.IsClustered || steamId == 0) return null;
-		if (Attached.TryGetValue(steamId, out Entry local) && local.Skins != null) return local.Skins.Contains(skin);
-		return null;
-	}
+    /// <summary><see cref="HasDlc(uint, ulong)"/> from what this node knows: the player's attach binding if they are here, else the online list.</summary>
+    internal static bool? HasDlc(
+        uint appId,
+        ulong steamId,
+        bool attached,
+        uint[] attachedMissing,
+        OnlinePlayersService.OnlinePlayerEntry[] cluster
+    )
+    {
+        if (attached)
+            return attachedMissing == null ? null : !attachedMissing.Contains(appId);
+        foreach (OnlinePlayersService.OnlinePlayerEntry player in cluster)
+            if (player.SteamId == steamId)
+                return player.MissingDlcs == null ? null : !player.MissingDlcs.Contains(appId);
+        // Online nowhere. Until the first online list arrives nothing is known about anyone, so the game decides.
+        return cluster.Length == 0 ? null : false;
+    }
 
-	/// <summary>
-	/// Sends the client's inventory blob to the Gateway, which deserializes it with Steam, and answers the client
-	/// the way the game does once the skins are known. False when no check can be started; the request patch
-	/// still suppresses vanilla's retry loop on a cluster node.
-	/// </summary>
-	public static bool CheckSkins(ulong steamId, byte[] checkData)
-	{
-		if (!ClusterRuntime.IsClustered || string.IsNullOrEmpty(GatewayUrl) || checkData == null || checkData.Length is 0 or > 192 * 1024) return false;
-		if (!Attached.TryGetValue(steamId, out Entry entry)) return false;
-		if (Interlocked.Exchange(ref entry.Checking, 1) != 0) return true;
-		_ = Task.Run(async () =>
-		{
-			try
-			{
-				string body = JsonSerializer.Serialize(new SkinCheckRequest(steamId, Convert.ToBase64String(checkData)));
-				using var content = new StringContent(body, Encoding.UTF8, "application/json");
-				using HttpResponseMessage response = await Gateway.PostAsync(GatewayUrl + SkinCheckRoute, content).ConfigureAwait(false);
-				string text = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-				if (!response.IsSuccessStatusCode)
-				{
-					Console.WriteLine($"[ClusterPlugin] skins_check client={steamId} status={(int)response.StatusCode} answer={text}");
-					return;
-				}
-				string[] names = JsonSerializer.Deserialize<SkinCheckAnswer>(text, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })?.Skins ?? Array.Empty<string>();
-				Console.WriteLine($"[ClusterPlugin] skins_check client={steamId} skins={names.Length}");
-				MySandboxGame.Static.Invoke(() =>
-				{
-					if (!Attached.TryGetValue(steamId, out Entry current) || !ReferenceEquals(current, entry)) return;
-					entry.Skins = new HashSet<MyStringHash>(names.Select(MyStringHash.GetOrCompute));
-					MyMultiplayer.RaiseStaticEvent(_ => MySessionComponentGameInventory.UpdateClientGameInventoryResult, true,
-						new EndpointId(steamId));
-				}, "SE-1158 skins");
-			}
-			catch (Exception error)
-			{
-				Console.WriteLine($"[ClusterPlugin] skins_check client={steamId} error={error.Message}");
-			}
-			finally { Interlocked.Exchange(ref entry.Checking, 0); }
-		});
-		return true;
-	}
+    /// <summary>Whether the player owns the skin; null leaves it to the game.</summary>
+    public static bool? HasSkin(MyStringHash skin, ulong steamId)
+    {
+        if (!ClusterRuntime.IsClustered || steamId == 0)
+            return null;
+        if (Attached.TryGetValue(steamId, out Entry local) && local.Skins != null)
+            return local.Skins.Contains(skin);
+        return null;
+    }
+
+    /// <summary>
+    /// Sends the client's inventory blob to the Gateway, which deserializes it with Steam, and answers the client
+    /// the way the game does once the skins are known. False when no check can be started; the request patch
+    /// still suppresses vanilla's retry loop on a cluster node.
+    /// </summary>
+    public static bool CheckSkins(ulong steamId, byte[] checkData)
+    {
+        if (
+            !ClusterRuntime.IsClustered
+            || string.IsNullOrEmpty(GatewayUrl)
+            || checkData == null
+            || checkData.Length is 0 or > 192 * 1024
+        )
+            return false;
+        if (!Attached.TryGetValue(steamId, out Entry entry))
+            return false;
+        if (Interlocked.Exchange(ref entry.Checking, 1) != 0)
+            return true;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                string body = JsonSerializer.Serialize(
+                    new SkinCheckRequest(steamId, Convert.ToBase64String(checkData))
+                );
+                using var content = new StringContent(body, Encoding.UTF8, "application/json");
+                using HttpResponseMessage response = await Gateway
+                    .PostAsync(GatewayUrl + SkinCheckRoute, content)
+                    .ConfigureAwait(false);
+                string text = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode)
+                {
+                    Console.WriteLine(
+                        $"[ClusterPlugin] skins_check client={steamId} status={(int)response.StatusCode} answer={text}"
+                    );
+                    return;
+                }
+                string[] names =
+                    JsonSerializer
+                        .Deserialize<SkinCheckAnswer>(
+                            text,
+                            new JsonSerializerOptions { PropertyNameCaseInsensitive = true }
+                        )
+                        ?.Skins
+                    ?? Array.Empty<string>();
+                Console.WriteLine(
+                    $"[ClusterPlugin] skins_check client={steamId} skins={names.Length}"
+                );
+                MySandboxGame.Static.Invoke(
+                    () =>
+                    {
+                        if (
+                            !Attached.TryGetValue(steamId, out Entry current)
+                            || !ReferenceEquals(current, entry)
+                        )
+                            return;
+                        entry.Skins = new HashSet<MyStringHash>(
+                            names.Select(MyStringHash.GetOrCompute)
+                        );
+                        MyMultiplayer.RaiseStaticEvent(
+                            _ => MySessionComponentGameInventory.UpdateClientGameInventoryResult,
+                            true,
+                            new EndpointId(steamId)
+                        );
+                    },
+                    "SE-1158 skins"
+                );
+            }
+            catch (Exception error)
+            {
+                Console.WriteLine(
+                    $"[ClusterPlugin] skins_check client={steamId} error={error.Message}"
+                );
+            }
+            finally
+            {
+                Interlocked.Exchange(ref entry.Checking, 0);
+            }
+        });
+        return true;
+    }
 }

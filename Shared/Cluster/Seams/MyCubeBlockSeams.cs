@@ -6,9 +6,9 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyCubeBlockSeams
 {
-	/// <summary>
-	/// Cluster nodes keep a block's Owner even when the identity is not (yet) known locally; see the
-	/// comment at the ownership restore in MyCubeBlockPatch. Off = vanilla (unknown owner is zeroed).
-	/// </summary>
-	public static bool ClusterPreserveUnknownOwner;
+    /// <summary>
+    /// Cluster nodes keep a block's Owner even when the identity is not (yet) known locally; see the
+    /// comment at the ownership restore in MyCubeBlockPatch. Off = vanilla (unknown owner is zeroed).
+    /// </summary>
+    public static bool ClusterPreserveUnknownOwner;
 }

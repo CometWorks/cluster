@@ -21,47 +21,61 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyAntennaSystem))]
 public static class MyAntennaSystemPatch
 {
-	[HarmonyPostfix]
-	[HarmonyPatch(nameof(MyAntennaSystem.RegisterAntenna), typeof(MyDataBroadcaster))]
-	private static void RegisterAntennaPostfix(MyDataBroadcaster broadcaster)
-	{
-		MyAntennaSystemSeams.ClusterRegisterPostfix?.Invoke(broadcaster);
-	}
+    [HarmonyPostfix]
+    [HarmonyPatch(nameof(MyAntennaSystem.RegisterAntenna), typeof(MyDataBroadcaster))]
+    private static void RegisterAntennaPostfix(MyDataBroadcaster broadcaster)
+    {
+        MyAntennaSystemSeams.ClusterRegisterPostfix?.Invoke(broadcaster);
+    }
 
-	[HarmonyPostfix]
-	[HarmonyPatch(nameof(MyAntennaSystem.UnregisterAntenna), typeof(MyDataBroadcaster))]
-	private static void UnregisterAntennaPostfix(MyDataBroadcaster broadcaster)
-	{
-		MyAntennaSystemSeams.ClusterUnregisterPostfix?.Invoke(broadcaster);
-	}
+    [HarmonyPostfix]
+    [HarmonyPatch(nameof(MyAntennaSystem.UnregisterAntenna), typeof(MyDataBroadcaster))]
+    private static void UnregisterAntennaPostfix(MyDataBroadcaster broadcaster)
+    {
+        MyAntennaSystemSeams.ClusterUnregisterPostfix?.Invoke(broadcaster);
+    }
 
-	[HarmonyPrefix]
-	[HarmonyPatch(nameof(MyAntennaSystem.AddLaser))]
-	private static bool AddLaserPrefix(MyAntennaSystem __instance, long id, MyLaserBroadcaster laser, bool register)
-	{
-		if (!ClusterRuntime.IsClustered || !__instance.m_laserAntennas.TryGetValue(id, out MyLaserBroadcaster existing))
-		{
-			return true;
-		}
-		if (register)
-		{
-			__instance.RegisterAntenna(laser);
-		}
-		// A stale entry under this id (a leaked proxy broadcaster, or a duplicate incarnation) must
-		// not throw out of the game loop and take the node down; the newest broadcaster wins.
-		if (!ReferenceEquals(existing, laser))
-		{
-			MyLog.Default?.WriteLineAndConsole("Laser antenna " + id + " re-registered; replacing the stale broadcaster");
-			__instance.m_laserAntennas[id] = laser;
-		}
-		return false;
-	}
+    [HarmonyPrefix]
+    [HarmonyPatch(nameof(MyAntennaSystem.AddLaser))]
+    private static bool AddLaserPrefix(
+        MyAntennaSystem __instance,
+        long id,
+        MyLaserBroadcaster laser,
+        bool register
+    )
+    {
+        if (
+            !ClusterRuntime.IsClustered
+            || !__instance.m_laserAntennas.TryGetValue(id, out MyLaserBroadcaster existing)
+        )
+        {
+            return true;
+        }
+        if (register)
+        {
+            __instance.RegisterAntenna(laser);
+        }
+        // A stale entry under this id (a leaked proxy broadcaster, or a duplicate incarnation) must
+        // not throw out of the game loop and take the node down; the newest broadcaster wins.
+        if (!ReferenceEquals(existing, laser))
+        {
+            MyLog.Default?.WriteLineAndConsole(
+                "Laser antenna " + id + " re-registered; replacing the stale broadcaster"
+            );
+            __instance.m_laserAntennas[id] = laser;
+        }
+        return false;
+    }
 
-	[HarmonyPostfix]
-	[HarmonyPatch(nameof(MyAntennaSystem.AddLaser))]
-	private static void AddLaserPostfix(MyLaserBroadcaster laser)
-	{
-		if (ClusterRuntime.IsClustered && !ClusterRuntime.IsWorldAuthority && laser.RealAntenna != null)
-			LaserCallUpService.TargetAvailable(laser.RealAntenna);
-	}
+    [HarmonyPostfix]
+    [HarmonyPatch(nameof(MyAntennaSystem.AddLaser))]
+    private static void AddLaserPostfix(MyLaserBroadcaster laser)
+    {
+        if (
+            ClusterRuntime.IsClustered
+            && !ClusterRuntime.IsWorldAuthority
+            && laser.RealAntenna != null
+        )
+            LaserCallUpService.TargetAvailable(laser.RealAntenna);
+    }
 }

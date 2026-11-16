@@ -16,31 +16,46 @@ internal static partial class SelfTest
     /// </summary>
     private sealed class ScriptedHandover : IDisposable
     {
-        public const ulong Client = 76561199500000023, Partition = 303693, RelaySession = 7;
+        public const ulong Client = 76561199500000023,
+            Partition = 303693,
+            RelaySession = 7;
         public const string ClientState = "view-of-23";
+
         /// <summary>Every node control request in arrival order: "source adopt-ready", "target commit", ...</summary>
         public readonly ConcurrentQueue<string> Calls = new();
+
         /// <summary>The same requests with their query string, for the assertions on what was asked.</summary>
-        public readonly ConcurrentQueue<(string Call, System.Collections.Specialized.NameValueCollection Query)> Requests = new();
+        public readonly ConcurrentQueue<(
+            string Call,
+            System.Collections.Specialized.NameValueCollection Query
+        )> Requests = new();
         public readonly GatewayRegistry Registry;
         public volatile bool ClientDisconnected;
+
         /// <summary>T-0373: the source's /cluster/partitions answer (JSON); null answers like any other action.</summary>
         public volatile string? SourcePartitions;
-        private readonly string _directory = Directory.CreateTempSubdirectory("handover-abort-selftest-").FullName;
+        private readonly string _directory = Directory
+            .CreateTempSubdirectory("handover-abort-selftest-")
+            .FullName;
         private readonly DirectGateway _gateway;
         private readonly ScriptedRelay _relay;
         private readonly HttpListener[] _listeners;
-        private readonly string _sourceControl, _targetControl, _sourceEndpoint, _targetEndpoint;
+        private readonly string _sourceControl,
+            _targetControl,
+            _sourceEndpoint,
+            _targetEndpoint;
         private volatile bool _stop;
         private volatile string _attachedTo = "";
 
         public ScriptedHandover(Func<string, int, int?> respond)
         {
-            int sourcePort = FreeTcpPort(), targetPort = FreeTcpPort();
+            int sourcePort = FreeTcpPort(),
+                targetPort = FreeTcpPort();
             _sourceControl = "127.0.0.1:" + sourcePort;
             _targetControl = "127.0.0.1:" + targetPort;
             _sourceEndpoint = "127.0.0.1:" + FreeUdpPort();
-            do _targetEndpoint = "127.0.0.1:" + FreeUdpPort(); while (_targetEndpoint == _sourceEndpoint);
+            do _targetEndpoint = "127.0.0.1:" + FreeUdpPort();
+            while (_targetEndpoint == _sourceEndpoint);
             var seen = new ConcurrentDictionary<string, int>();
             _listeners = [Serve("source", sourcePort), Serve("target", targetPort)];
             HttpListener Serve(string node, int port)
@@ -53,12 +68,22 @@ internal static partial class SelfTest
                     while (listener.IsListening)
                     {
                         HttpListenerContext context;
-                        try { context = listener.GetContext(); } catch (Exception) { return; }
+                        try
+                        {
+                            context = listener.GetContext();
+                        }
+                        catch (Exception)
+                        {
+                            return;
+                        }
                         string action = context.Request.Url!.AbsolutePath["/cluster/".Length..];
                         string call = node + " " + action;
                         Calls.Enqueue(call);
                         Requests.Enqueue((call, context.Request.QueryString));
-                        int? status = respond(call, seen.AddOrUpdate(call, 1, (_, count) => count + 1));
+                        int? status = respond(
+                            call,
+                            seen.AddOrUpdate(call, 1, (_, count) => count + 1)
+                        );
                         if (status == null)
                         {
                             // The connection dies inside the answer: the gateway's request fails with an HttpRequestException
@@ -73,9 +98,15 @@ internal static partial class SelfTest
                             context.Response.Abort();
                             continue;
                         }
-                        byte[] body = action == "capture" ? CaptureBytes(context.Request.QueryString["clientless"] == "true")
-                            : action == "partitions" && node == "source" && SourcePartitions is { } partitions ? System.Text.Encoding.UTF8.GetBytes(partitions)
-                            : action == "tee-status" ? "{\"known\":false}"u8.ToArray() : "ok\n"u8.ToArray();
+                        byte[] body =
+                            action == "capture"
+                                ? CaptureBytes(context.Request.QueryString["clientless"] == "true")
+                            : action == "partitions"
+                            && node == "source"
+                            && SourcePartitions is { } partitions
+                                ? System.Text.Encoding.UTF8.GetBytes(partitions)
+                            : action == "tee-status" ? "{\"known\":false}"u8.ToArray()
+                            : "ok\n"u8.ToArray();
                         try
                         {
                             context.Response.StatusCode = status.Value;
@@ -84,24 +115,65 @@ internal static partial class SelfTest
                         }
                         catch (Exception) { }
                     }
-                }) { IsBackground = true, Name = "Scripted-Handover-" + node }.Start();
+                })
+                {
+                    IsBackground = true,
+                    Name = "Scripted-Handover-" + node,
+                }.Start();
                 return listener;
             }
 
             string path = Path.Combine(_directory, "gateway-relay.sock");
             Environment.SetEnvironmentVariable("CLUSTER_ALLOW_TEST_ACCEPT_ALL", "true");
-            var options = new GatewayOptions(new(IPAddress.Loopback, FreeUdpPort()), IPEndPoint.Parse(_sourceEndpoint), null,
-                false, null, null, null, Path.Combine(_directory, "registry"), TimeSpan.FromMinutes(10), Admission, null, [],
-                DirectFrontend: true, ExternalRelay: true, RelaySocket: path);
+            var options = new GatewayOptions(
+                new(IPAddress.Loopback, FreeUdpPort()),
+                IPEndPoint.Parse(_sourceEndpoint),
+                null,
+                false,
+                null,
+                null,
+                null,
+                Path.Combine(_directory, "registry"),
+                TimeSpan.FromMinutes(10),
+                Admission,
+                null,
+                [],
+                DirectFrontend: true,
+                ExternalRelay: true,
+                RelaySocket: path
+            );
             _gateway = new DirectGateway(options);
             new Thread(() =>
             {
-                try { _gateway.Run(); }
-                catch (Exception e) { Console.Error.WriteLine("handover-abort gateway failed: " + e); }
-            }) { IsBackground = true, Name = "Gateway-Handover-Abort-Self-Test" }.Start();
-            Registry = (GatewayRegistry)typeof(DirectGateway).GetField("_registry", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(_gateway)!;
-            NodeRegistration source = Registry.RegisterNode(Join("source", _sourceEndpoint, Guid.NewGuid()) with { ControlEndpoint = _sourceControl });
-            Registry.RegisterNode(Join("target", _targetEndpoint, Guid.NewGuid()) with { ControlEndpoint = _targetControl });
+                try
+                {
+                    _gateway.Run();
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine("handover-abort gateway failed: " + e);
+                }
+            })
+            {
+                IsBackground = true,
+                Name = "Gateway-Handover-Abort-Self-Test",
+            }.Start();
+            Registry = (GatewayRegistry)
+                typeof(DirectGateway)
+                    .GetField("_registry", BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .GetValue(_gateway)!;
+            NodeRegistration source = Registry.RegisterNode(
+                Join("source", _sourceEndpoint, Guid.NewGuid()) with
+                {
+                    ControlEndpoint = _sourceControl,
+                }
+            );
+            Registry.RegisterNode(
+                Join("target", _targetEndpoint, Guid.NewGuid()) with
+                {
+                    ControlEndpoint = _targetControl,
+                }
+            );
             Registry.ClaimPartition(Partition, source.Node, source.Epoch, 0);
 
             _relay = new ScriptedRelay(path);
@@ -110,29 +182,94 @@ internal static partial class SelfTest
                 if (message.Type == RelayIpcType.NodeFrame)
                 {
                     System.Text.Json.JsonElement frame = message.Json;
-                    string kind = frame.GetProperty("kind").GetString()!, endpoint = frame.GetProperty("endpoint").GetString()!;
-                    if (kind is not ("attach" or "detach")) return;
-                    if (kind == "attach") _attachedTo = endpoint;
-                    _relay!.Send(RelayIpcType.NodeControl, 0, new { clientId = Client, session = RelaySession, endpoint, kind = kind + "Ack" });
+                    string kind = frame.GetProperty("kind").GetString()!,
+                        endpoint = frame.GetProperty("endpoint").GetString()!;
+                    if (kind is not ("attach" or "detach"))
+                        return;
+                    if (kind == "attach")
+                        _attachedTo = endpoint;
+                    _relay!.Send(
+                        RelayIpcType.NodeControl,
+                        0,
+                        new
+                        {
+                            clientId = Client,
+                            session = RelaySession,
+                            endpoint,
+                            kind = kind + "Ack",
+                        }
+                    );
                 }
                 // gateway-rs replays the client's connect to the link it is now on; the node's first answer is the target traffic.
                 else if (message.Type == RelayIpcType.ReplayConnect)
-                    _relay!.Send(RelayIpcType.ClientEvent, 0, new { clientId = Client, session = RelaySession, @event = "targetReady", detail = _attachedTo });
-                else if (message.Type == RelayIpcType.Disconnect && message.Json.GetProperty("clientId").GetUInt64() == Client)
+                    _relay!.Send(
+                        RelayIpcType.ClientEvent,
+                        0,
+                        new
+                        {
+                            clientId = Client,
+                            session = RelaySession,
+                            @event = "targetReady",
+                            detail = _attachedTo,
+                        }
+                    );
+                else if (
+                    message.Type == RelayIpcType.Disconnect
+                    && message.Json.GetProperty("clientId").GetUInt64() == Client
+                )
                     ClientDisconnected = true;
             };
             _relay.Read(RelayIpcType.Config);
-            _relay.Send(RelayIpcType.JoinRequest, 0x900, new { clientId = Client, session = RelaySession, service = "DirectTransport", name = "Pilot-023", remote = "127.0.0.1:1" });
-            Assert(_relay.Read(RelayIpcType.JoinAnswer, m => m.Correlation == 0x900).Json.GetProperty("decision").GetString() == "accept");
-            _relay.Send(RelayIpcType.ClientMessage, 0, new { clientId = Client, session = RelaySession, messageId = 14, channel = 2, packet = Convert.ToBase64String(ClientConnectedFixture) });
-            _relay.Read(RelayIpcType.SessionUpdate, m => m.Json.GetProperty("clientId").GetUInt64() == Client
-                && m.Json.TryGetProperty("attached", out System.Text.Json.JsonElement attached) && attached.ValueKind == System.Text.Json.JsonValueKind.True);
+            _relay.Send(
+                RelayIpcType.JoinRequest,
+                0x900,
+                new
+                {
+                    clientId = Client,
+                    session = RelaySession,
+                    service = "DirectTransport",
+                    name = "Pilot-023",
+                    remote = "127.0.0.1:1",
+                }
+            );
+            Assert(
+                _relay
+                    .Read(RelayIpcType.JoinAnswer, m => m.Correlation == 0x900)
+                    .Json.GetProperty("decision")
+                    .GetString() == "accept"
+            );
+            _relay.Send(
+                RelayIpcType.ClientMessage,
+                0,
+                new
+                {
+                    clientId = Client,
+                    session = RelaySession,
+                    messageId = 14,
+                    channel = 2,
+                    packet = Convert.ToBase64String(ClientConnectedFixture),
+                }
+            );
+            _relay.Read(
+                RelayIpcType.SessionUpdate,
+                m =>
+                    m.Json.GetProperty("clientId").GetUInt64() == Client
+                    && m.Json.TryGetProperty("attached", out System.Text.Json.JsonElement attached)
+                    && attached.ValueKind == System.Text.Json.JsonValueKind.True
+            );
             new Thread(() =>
             {
                 while (!_stop)
-                    try { _relay.Read(ushort.MaxValue); }
+                    try
+                    {
+                        _relay.Read(ushort.MaxValue);
+                    }
                     catch (Exception) { }
-            }) { IsBackground = true, Name = "Scripted-Handover-Relay" }.Start();
+            })
+            {
+                IsBackground = true,
+                Name = "Scripted-Handover-Relay",
+            }.Start();
         }
 
         /// <param name="clientless">T-0354b: a clientless capture carries no client state.</param>
@@ -165,35 +302,80 @@ internal static partial class SelfTest
         /// T-0354b: the client-bearing handover of <paramref name="partition"/>, and with <paramref name="delay"/> set as a
         /// requested move does it (DirectGateway.WhenRegistryApplied, its waits replaced by <paramref name="delay"/>).
         /// </summary>
-        public Exception? Handover(ulong partition, Func<TimeSpan, Task>? delay, TimeSpan? readinessBudget = null)
+        public Exception? Handover(
+            ulong partition,
+            Func<TimeSpan, Task>? delay,
+            TimeSpan? readinessBudget = null
+        )
         {
             const BindingFlags Private = BindingFlags.NonPublic | BindingFlags.Instance;
-            object session = ((IDictionary)typeof(DirectGateway).GetField("_clients", Private)!.GetValue(_gateway)!)[Client]
-                ?? throw new InvalidOperationException("self-test: the client has no gateway session");
+            object session =
+                (
+                    (IDictionary)
+                        typeof(DirectGateway).GetField("_clients", Private)!.GetValue(_gateway)!
+                )[Client]
+                ?? throw new InvalidOperationException(
+                    "self-test: the client has no gateway session"
+                );
             Array sessions = Array.CreateInstance(session.GetType(), 1);
             sessions.SetValue(session, 0);
-            Task Once() => (Task)typeof(DirectGateway).GetMethod("FencedHandover", Private)!
-                .Invoke(_gateway, [sessions, _sourceControl, _targetControl, IPEndPoint.Parse(_targetEndpoint), partition, false, readinessBudget])!;
-            return Wait(delay == null ? Once() : DirectGateway.WhenRegistryApplied(partition, Once, delay));
+            Task Once() =>
+                (Task)
+                    typeof(DirectGateway)
+                        .GetMethod("FencedHandover", Private)!
+                        .Invoke(
+                            _gateway,
+                            [
+                                sessions,
+                                _sourceControl,
+                                _targetControl,
+                                IPEndPoint.Parse(_targetEndpoint),
+                                partition,
+                                false,
+                                readinessBudget,
+                            ]
+                        )!;
+            return Wait(
+                delay == null ? Once() : DirectGateway.WhenRegistryApplied(partition, Once, delay)
+            );
         }
 
         /// <summary>T-0354b: the clientless handover of <paramref name="partition"/>, plain or as a requested move (see <see cref="Handover(ulong, Func{TimeSpan, Task}?)"/>).</summary>
         public Exception? Clientless(ulong partition, Func<TimeSpan, Task>? delay)
         {
             const BindingFlags Private = BindingFlags.NonPublic | BindingFlags.Instance;
-            Task Once() => (Task)typeof(DirectGateway).GetMethod("FencedClientlessHandover", Private)!
-                .Invoke(_gateway, [_sourceControl, _targetControl, IPEndPoint.Parse(_targetEndpoint), partition, false, false])!;
-            return Wait(delay == null ? Once() : DirectGateway.WhenRegistryApplied(partition, Once, delay));
+            Task Once() =>
+                (Task)
+                    typeof(DirectGateway)
+                        .GetMethod("FencedClientlessHandover", Private)!
+                        .Invoke(
+                            _gateway,
+                            [
+                                _sourceControl,
+                                _targetControl,
+                                IPEndPoint.Parse(_targetEndpoint),
+                                partition,
+                                false,
+                                false,
+                            ]
+                        )!;
+            return Wait(
+                delay == null ? Once() : DirectGateway.WhenRegistryApplied(partition, Once, delay)
+            );
         }
 
         private static Exception? Wait(Task handover)
         {
             try
             {
-                if (!handover.Wait(TimeSpan.FromSeconds(60))) throw new TimeoutException("self-test: the handover did not finish in 60 s");
+                if (!handover.Wait(TimeSpan.FromSeconds(60)))
+                    throw new TimeoutException("self-test: the handover did not finish in 60 s");
                 return null;
             }
-            catch (AggregateException e) { return e.InnerExceptions.Count == 1 ? e.InnerException : e; }
+            catch (AggregateException e)
+            {
+                return e.InnerExceptions.Count == 1 ? e.InnerException : e;
+            }
         }
 
         /// <summary>
@@ -203,38 +385,80 @@ internal static partial class SelfTest
         public Exception? DrainClosedSource()
         {
             const BindingFlags Private = BindingFlags.NonPublic | BindingFlags.Instance;
-            object session = ((IDictionary)typeof(DirectGateway).GetField("_clients", Private)!.GetValue(_gateway)!)[Client]
-                ?? throw new InvalidOperationException("self-test: the client has no gateway session");
-            session.GetType().GetField("WorldReadyAt")!.SetValue(session, DateTimeOffset.UtcNow.AddMinutes(-1));
+            object session =
+                (
+                    (IDictionary)
+                        typeof(DirectGateway).GetField("_clients", Private)!.GetValue(_gateway)!
+                )[Client]
+                ?? throw new InvalidOperationException(
+                    "self-test: the client has no gateway session"
+                );
+            session
+                .GetType()
+                .GetField("WorldReadyAt")!
+                .SetValue(session, DateTimeOffset.UtcNow.AddMinutes(-1));
             session.GetType().GetField("WorldReady")!.SetValue(session, true);
-            NodeRegistration source = Registry.Nodes().Single(x => x.Node == "source"), target = Registry.Nodes().Single(x => x.Node == "target");
+            NodeRegistration source = Registry.Nodes().Single(x => x.Node == "source"),
+                target = Registry.Nodes().Single(x => x.Node == "target");
             Registry.CloseNode(source.Node, source.Epoch);
-            Type servedType = typeof(DirectGateway).GetNestedType("ServedNode", BindingFlags.NonPublic)!;
-            object served = Activator.CreateInstance(servedType, target.Node, target.Epoch, _targetControl, IPEndPoint.Parse(_targetEndpoint))!;
+            Type servedType = typeof(DirectGateway).GetNestedType(
+                "ServedNode",
+                BindingFlags.NonPublic
+            )!;
+            object served = Activator.CreateInstance(
+                servedType,
+                target.Node,
+                target.Epoch,
+                _targetControl,
+                IPEndPoint.Parse(_targetEndpoint)
+            )!;
             Type pair = typeof(ValueTuple<,>).MakeGenericType(servedType, typeof(PartitionReport));
             Array active = Array.CreateInstance(pair, 1);
-            active.SetValue(Activator.CreateInstance(pair, served, new PartitionReport(3000, 100, [], 0)), 0);
+            active.SetValue(
+                Activator.CreateInstance(pair, served, new PartitionReport(3000, 100, [], 0)),
+                0
+            );
             try
             {
-                typeof(DirectGateway).GetMethod("DrainClosedNodes", Private)!.Invoke(_gateway, [active]);
+                typeof(DirectGateway)
+                    .GetMethod("DrainClosedNodes", Private)!
+                    .Invoke(_gateway, [active]);
                 return null;
             }
-            catch (TargetInvocationException e) { return e.InnerException; }
+            catch (TargetInvocationException e)
+            {
+                return e.InnerException;
+            }
         }
 
         public string Owner => Registry.GetPartitionOwner(Partition).Node ?? "none";
+
         public int Count(string call) => Calls.Count(x => x == call);
+
         public int IndexOf(string call) => Calls.ToList().IndexOf(call);
 
         public void Dispose()
         {
             _stop = true;
-            try { _gateway.Stop(); } catch (Exception) { }
-            foreach (HttpListener listener in _listeners) try { listener.Close(); } catch (Exception) { }
+            try
+            {
+                _gateway.Stop();
+            }
+            catch (Exception) { }
+            foreach (HttpListener listener in _listeners)
+                try
+                {
+                    listener.Close();
+                }
+                catch (Exception) { }
             _relay.Dispose();
             _gateway.Dispose();
             Environment.SetEnvironmentVariable("CLUSTER_ALLOW_TEST_ACCEPT_ALL", null);
-            try { Directory.Delete(_directory, recursive: true); } catch (IOException) { }
+            try
+            {
+                Directory.Delete(_directory, recursive: true);
+            }
+            catch (IOException) { }
         }
     }
 
@@ -246,18 +470,47 @@ internal static partial class SelfTest
     /// </summary>
     private static void TestHandoverAdoptReadyTransportFailure()
     {
-        static void Check(bool value, string what) { if (!value) throw new InvalidOperationException("handover-adopt-ready-transport-failure: " + what); }
-        using var scripted = new ScriptedHandover((call, nth) =>
-            call is "target adopt-ready" or "target adopt" or "source tee-status" && nth == 1 ? null : 200);
+        static void Check(bool value, string what)
+        {
+            if (!value)
+                throw new InvalidOperationException(
+                    "handover-adopt-ready-transport-failure: " + what
+                );
+        }
+        using var scripted = new ScriptedHandover(
+            (call, nth) =>
+                call is "target adopt-ready" or "target adopt" or "source tee-status" && nth == 1
+                    ? null
+                    : 200
+        );
         Exception? failure = scripted.Handover();
-        Console.WriteLine($"handover-adopt-ready-transport-failure: failure={failure?.GetType().Name ?? "none"}"
-            + (failure == null ? "" : $" ({failure.Message})") + $" owner={scripted.Owner} calls=[{string.Join(", ", scripted.Calls)}]");
-        Check(failure == null, "a dropped adopt-ready connection aborted the handover: " + failure?.Message);
-        Check(scripted.Owner == "target", "the partition is owned by " + scripted.Owner + ", not the target");
-        Check(scripted.Count("target adopt-ready") == 2 && scripted.Count("target adopt") == 2 && scripted.Count("source tee-status") == 2,
-            "the dropped requests were not retried once each");
-        Check(scripted.Count("target commit") == 1 && scripted.Count("source release") == 1, "no target commit or source release");
-        Check(scripted.Count("source thaw") == 0 && scripted.Count("target discard") == 0, "a committed handover was cleaned up as aborted");
+        Console.WriteLine(
+            $"handover-adopt-ready-transport-failure: failure={failure?.GetType().Name ?? "none"}"
+                + (failure == null ? "" : $" ({failure.Message})")
+                + $" owner={scripted.Owner} calls=[{string.Join(", ", scripted.Calls)}]"
+        );
+        Check(
+            failure == null,
+            "a dropped adopt-ready connection aborted the handover: " + failure?.Message
+        );
+        Check(
+            scripted.Owner == "target",
+            "the partition is owned by " + scripted.Owner + ", not the target"
+        );
+        Check(
+            scripted.Count("target adopt-ready") == 2
+                && scripted.Count("target adopt") == 2
+                && scripted.Count("source tee-status") == 2,
+            "the dropped requests were not retried once each"
+        );
+        Check(
+            scripted.Count("target commit") == 1 && scripted.Count("source release") == 1,
+            "no target commit or source release"
+        );
+        Check(
+            scripted.Count("source thaw") == 0 && scripted.Count("target discard") == 0,
+            "a committed handover was cleaned up as aborted"
+        );
         Check(!scripted.ClientDisconnected, "the client was disconnected");
     }
 
@@ -269,17 +522,41 @@ internal static partial class SelfTest
     /// </summary>
     private static void TestHandoverBalanceReadinessBudget()
     {
-        static void Check(bool value, string what) { if (!value) throw new InvalidOperationException("handover-balance-readiness-budget: " + what); }
-        using var scripted = new ScriptedHandover((call, _) => call == "target adopt-ready" ? 500 : 200);
+        static void Check(bool value, string what)
+        {
+            if (!value)
+                throw new InvalidOperationException("handover-balance-readiness-budget: " + what);
+        }
+        using var scripted = new ScriptedHandover(
+            (call, _) => call == "target adopt-ready" ? 500 : 200
+        );
         Stopwatch watch = Stopwatch.StartNew();
-        Exception? failure = scripted.Handover(ScriptedHandover.Partition, null, TimeSpan.FromSeconds(2));
+        Exception? failure = scripted.Handover(
+            ScriptedHandover.Partition,
+            null,
+            TimeSpan.FromSeconds(2)
+        );
         watch.Stop();
-        Console.WriteLine($"handover-balance-readiness-budget: failure={failure?.GetType().Name ?? "none"} after {watch.Elapsed.TotalSeconds:F1}s"
-            + $" owner={scripted.Owner} adoptReadyPolls={scripted.Count("target adopt-ready")}");
-        Check(failure is TimeoutException, "the handover did not time out on readiness: " + (failure?.Message ?? "it committed"));
-        Check(watch.Elapsed < TimeSpan.FromSeconds(10), $"the readiness wait took {watch.Elapsed.TotalSeconds:F1}s, not the 2 s budget");
-        Check(scripted.Owner == "source", "the partition is owned by " + scripted.Owner + " after the abort");
-        Check(scripted.Count("target discard") == 1 && scripted.Count("source thaw") == 1, "the abort did not discard the target copy and thaw the source");
+        Console.WriteLine(
+            $"handover-balance-readiness-budget: failure={failure?.GetType().Name ?? "none"} after {watch.Elapsed.TotalSeconds:F1}s"
+                + $" owner={scripted.Owner} adoptReadyPolls={scripted.Count("target adopt-ready")}"
+        );
+        Check(
+            failure is TimeoutException,
+            "the handover did not time out on readiness: " + (failure?.Message ?? "it committed")
+        );
+        Check(
+            watch.Elapsed < TimeSpan.FromSeconds(10),
+            $"the readiness wait took {watch.Elapsed.TotalSeconds:F1}s, not the 2 s budget"
+        );
+        Check(
+            scripted.Owner == "source",
+            "the partition is owned by " + scripted.Owner + " after the abort"
+        );
+        Check(
+            scripted.Count("target discard") == 1 && scripted.Count("source thaw") == 1,
+            "the abort did not discard the target copy and thaw the source"
+        );
     }
 
     /// <summary>
@@ -294,33 +571,78 @@ internal static partial class SelfTest
     /// </summary>
     private static void TestHandoverAbortReadoptsOnSource()
     {
-        static void Check(bool value, string what) { if (!value) throw new InvalidOperationException("handover-abort-readopts-on-source: " + what); }
+        static void Check(bool value, string what)
+        {
+            if (!value)
+                throw new InvalidOperationException("handover-abort-readopts-on-source: " + what);
+        }
         using (var scripted = new ScriptedHandover((call, _) => call == "target adopt" ? 500 : 200))
         {
             Exception? failure = scripted.Handover();
-            Console.WriteLine($"handover-abort-readopts-on-source: failure={failure?.GetType().Name ?? "none"} owner={scripted.Owner} "
-                + $"disconnected={scripted.ClientDisconnected} calls=[{string.Join(", ", scripted.Calls)}]");
+            Console.WriteLine(
+                $"handover-abort-readopts-on-source: failure={failure?.GetType().Name ?? "none"} owner={scripted.Owner} "
+                    + $"disconnected={scripted.ClientDisconnected} calls=[{string.Join(", ", scripted.Calls)}]"
+            );
             Check(failure != null, "the handover did not abort");
-            Check(scripted.Owner == "source", "the partition is owned by " + scripted.Owner + " after the abort");
-            Check(scripted.Count("target discard") == 1 && scripted.Count("source thaw") == 1, "the abort did not discard the target copy and thaw the source");
-            Check(scripted.Count("source adopt-ready") >= 1 && scripted.Count("source adopt") == 1,
-                "the source was not asked to adopt the client it got back (it stops reporting the client on the partition)");
-            Check(scripted.IndexOf("source adopt") < scripted.IndexOf("source thaw"), "the source was thawed before it re-adopted its client");
-            foreach ((string call, System.Collections.Specialized.NameValueCollection query) in scripted.Requests.Where(x => x.Call is "source adopt-ready" or "source adopt"))
-                Check(query["client"] == ScriptedHandover.Client.ToString() && query["state"] == ScriptedHandover.ClientState && query["transferId"] == null,
-                    call + " did not carry the client's captured view unfenced");
+            Check(
+                scripted.Owner == "source",
+                "the partition is owned by " + scripted.Owner + " after the abort"
+            );
+            Check(
+                scripted.Count("target discard") == 1 && scripted.Count("source thaw") == 1,
+                "the abort did not discard the target copy and thaw the source"
+            );
+            Check(
+                scripted.Count("source adopt-ready") >= 1 && scripted.Count("source adopt") == 1,
+                "the source was not asked to adopt the client it got back (it stops reporting the client on the partition)"
+            );
+            Check(
+                scripted.IndexOf("source adopt") < scripted.IndexOf("source thaw"),
+                "the source was thawed before it re-adopted its client"
+            );
+            foreach (
+                (
+                    string call,
+                    System.Collections.Specialized.NameValueCollection query
+                ) in scripted.Requests.Where(x => x.Call is "source adopt-ready" or "source adopt")
+            )
+                Check(
+                    query["client"] == ScriptedHandover.Client.ToString()
+                        && query["state"] == ScriptedHandover.ClientState
+                        && query["transferId"] == null,
+                    call + " did not carry the client's captured view unfenced"
+                );
             Check(!scripted.ClientDisconnected, "the re-adopted client was disconnected");
-            Check(scripted.Registry.Incomplete().Length == 0, "the handover record was left incomplete");
+            Check(
+                scripted.Registry.Incomplete().Length == 0,
+                "the handover record was left incomplete"
+            );
         }
-        using (var scripted = new ScriptedHandover((call, _) => call is "target adopt" or "source adopt" ? 500 : 200))
+        using (
+            var scripted = new ScriptedHandover(
+                (call, _) => call is "target adopt" or "source adopt" ? 500 : 200
+            )
+        )
         {
             Exception? failure = scripted.Handover();
-            for (int waited = 0; waited < 50 && !scripted.ClientDisconnected; waited++) Thread.Sleep(100);
-            Console.WriteLine($"handover-abort-readopts-on-source: source refuses: failure={failure?.GetType().Name ?? "none"} owner={scripted.Owner} "
-                + $"disconnected={scripted.ClientDisconnected} calls=[{string.Join(", ", scripted.Calls)}]");
-            Check(failure != null && scripted.Owner == "source", "the handover did not abort back to the source");
-            Check(scripted.ClientDisconnected, "a client the source could not re-adopt kept its session (routed, attached, reported by no node)");
-            Check(scripted.Count("source thaw") == 1 && scripted.Registry.Incomplete().Length == 0, "a failed re-adoption kept the cleanup from thawing and aborting");
+            for (int waited = 0; waited < 50 && !scripted.ClientDisconnected; waited++)
+                Thread.Sleep(100);
+            Console.WriteLine(
+                $"handover-abort-readopts-on-source: source refuses: failure={failure?.GetType().Name ?? "none"} owner={scripted.Owner} "
+                    + $"disconnected={scripted.ClientDisconnected} calls=[{string.Join(", ", scripted.Calls)}]"
+            );
+            Check(
+                failure != null && scripted.Owner == "source",
+                "the handover did not abort back to the source"
+            );
+            Check(
+                scripted.ClientDisconnected,
+                "a client the source could not re-adopt kept its session (routed, attached, reported by no node)"
+            );
+            Check(
+                scripted.Count("source thaw") == 1 && scripted.Registry.Incomplete().Length == 0,
+                "a failed re-adoption kept the cleanup from thawing and aborting"
+            );
         }
     }
 }

@@ -12,7 +12,10 @@ namespace Shared.Patches;
 /// delegate, so gated on <see cref="ClusterRuntime.IsClustered"/> like the other
 /// frozen-body crash guards.
 /// </summary>
-[HarmonyPatch(typeof(MyEntityComponentUpdater), nameof(MyEntityComponentUpdater.AddEntityComponents))]
+[HarmonyPatch(
+    typeof(MyEntityComponentUpdater),
+    nameof(MyEntityComponentUpdater.AddEntityComponents)
+)]
 public static class MyEntityComponentUpdaterPatch
 {
     [HarmonyPrefix]

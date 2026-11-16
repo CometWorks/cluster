@@ -8,6 +8,6 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MySessionComponentContractSystemSeams
 {
-	// ClusterPlugin seam adapter for MySessionComponentContractSystemPatch.UpdateAfterSimulationPrefix
-	public static Func<bool> ClusterUpdatePrefix;
+    // ClusterPlugin seam adapter for MySessionComponentContractSystemPatch.UpdateAfterSimulationPrefix
+    public static Func<bool> ClusterUpdatePrefix;
 }

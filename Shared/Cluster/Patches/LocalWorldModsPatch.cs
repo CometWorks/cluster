@@ -37,10 +37,14 @@ namespace ClusterPlugin;
 internal static class LocalWorldModsPatch
 {
     [HarmonyPrepare]
-    private static bool Prepare() => Environment.GetEnvironmentVariable("CLUSTER_LOCAL_WORLD_MODS") != "0";
+    private static bool Prepare() =>
+        Environment.GetEnvironmentVariable("CLUSTER_LOCAL_WORLD_MODS") != "0";
 
     [HarmonyPrefix]
-    private static bool Prefix(List<MyObjectBuilder_Checkpoint.ModItem> mods, ref MyWorkshop.ResultData __result)
+    private static bool Prefix(
+        List<MyObjectBuilder_Checkpoint.ModItem> mods,
+        ref MyWorkshop.ResultData __result
+    )
     {
         if (!Sandbox.Engine.Platform.Game.IsDedicated)
             return true;
@@ -55,28 +59,37 @@ internal static class LocalWorldModsPatch
             if (mod.PublishedFileId == 0)
             {
                 // vanilla refuses local mods on a DS; keep that verdict
-                Log($"cluster_local_world_mods refused: local mod '{mod.Name}' (PublishedFileId 0) is not allowed in multiplayer");
+                Log(
+                    $"cluster_local_world_mods refused: local mod '{mod.Name}' (PublishedFileId 0) is not allowed in multiplayer"
+                );
                 __result = default;
                 return false;
             }
             string path = mod.GetPath();
-            bool present = Directory.Exists(path) && Directory.EnumerateFileSystemEntries(path).Any();
+            bool present =
+                Directory.Exists(path) && Directory.EnumerateFileSystemEntries(path).Any();
             if (present)
             {
                 mod.SetModData(LocalItem(mod, path));
                 mods[i] = mod;
             }
-            Log($"cluster_local_world_mods {(present ? "local" : "MISSING")} id={mod.PublishedFileId} name={mod.Name} path={path}");
+            Log(
+                $"cluster_local_world_mods {(present ? "local" : "MISSING")} id={mod.PublishedFileId} name={mod.Name} path={path}"
+            );
             if (!present)
                 missing.Add(path);
         }
         if (missing.Count > 0)
         {
-            Log($"cluster_local_world_mods FAILED: {missing.Count} of {mods.Count} mod folder(s) missing; the load fails instead of downloading: {string.Join(", ", missing)}");
+            Log(
+                $"cluster_local_world_mods FAILED: {missing.Count} of {mods.Count} mod folder(s) missing; the load fails instead of downloading: {string.Join(", ", missing)}"
+            );
             __result = new MyWorkshop.ResultData(MyGameServiceCallResult.Fail, false);
             return false;
         }
-        Log($"cluster_local_world_mods ok: {mods.Count} mod(s) from {MyFileSystem.ModsPath}, no download");
+        Log(
+            $"cluster_local_world_mods ok: {mods.Count} mod(s) from {MyFileSystem.ModsPath}, no download"
+        );
         return false;
     }
 
@@ -86,12 +99,24 @@ internal static class LocalWorldModsPatch
     /// GetPath() is unchanged; no tags, as for a script mod the DS runs.</summary>
     private static MyWorkshopItem LocalItem(MyObjectBuilder_Checkpoint.ModItem mod, string path)
     {
-        var item = new MyWorkshopItem { Id = mod.PublishedFileId, Title = mod.FriendlyName ?? mod.Name };
-        AccessTools.PropertySetter(typeof(MyWorkshopItem), nameof(MyWorkshopItem.Folder)).Invoke(item, new object[] { path });
-        ulong size = (ulong)new DirectoryInfo(path).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length);
-        AccessTools.PropertySetter(typeof(MyWorkshopItem), nameof(MyWorkshopItem.Size)).Invoke(item, new object[] { size });
+        var item = new MyWorkshopItem
+        {
+            Id = mod.PublishedFileId,
+            Title = mod.FriendlyName ?? mod.Name,
+        };
+        AccessTools
+            .PropertySetter(typeof(MyWorkshopItem), nameof(MyWorkshopItem.Folder))
+            .Invoke(item, new object[] { path });
+        ulong size = (ulong)
+            new DirectoryInfo(path)
+                .EnumerateFiles("*", SearchOption.AllDirectories)
+                .Sum(f => f.Length);
+        AccessTools
+            .PropertySetter(typeof(MyWorkshopItem), nameof(MyWorkshopItem.Size))
+            .Invoke(item, new object[] { size });
         return item;
     }
 
-    private static void Log(string line) => MySandboxGame.Log.WriteLineAndConsole("[ClusterPlugin] " + line);
+    private static void Log(string line) =>
+        MySandboxGame.Log.WriteLineAndConsole("[ClusterPlugin] " + line);
 }

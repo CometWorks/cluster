@@ -25,42 +25,53 @@ namespace ClusterPlugin;
 /// </summary>
 internal sealed class VoxelOutbox
 {
-	private readonly string m_directory;
-	private long m_lastId;
+    private readonly string m_directory;
+    private long m_lastId;
 
-	public VoxelOutbox(string directory)
-	{
-		m_directory = directory;
-		Directory.CreateDirectory(directory);
-		// A tmp file is an entry whose Add never completed, and its edit was never reported as journalled: the
-		// enqueue threw, loudly. Replaying it could resurrect a half-written envelope, so clear rather than adopt.
-		foreach (string stale in Directory.EnumerateFiles(directory, "*.tmp")) File.Delete(stale);
-		m_lastId = Directory.EnumerateFiles(directory, "*.vjr").Select(Id).DefaultIfEmpty(0L).Max();
-	}
+    public VoxelOutbox(string directory)
+    {
+        m_directory = directory;
+        Directory.CreateDirectory(directory);
+        // A tmp file is an entry whose Add never completed, and its edit was never reported as journalled: the
+        // enqueue threw, loudly. Replaying it could resurrect a half-written envelope, so clear rather than adopt.
+        foreach (string stale in Directory.EnumerateFiles(directory, "*.tmp"))
+            File.Delete(stale);
+        m_lastId = Directory.EnumerateFiles(directory, "*.vjr").Select(Id).DefaultIfEmpty(0L).Max();
+    }
 
-	private static long Id(string path) => long.Parse(Path.GetFileNameWithoutExtension(path), CultureInfo.InvariantCulture);
+    private static long Id(string path) =>
+        long.Parse(Path.GetFileNameWithoutExtension(path), CultureInfo.InvariantCulture);
 
-	public int Count => Directory.EnumerateFiles(m_directory, "*.vjr").Count();
+    public int Count => Directory.EnumerateFiles(m_directory, "*.vjr").Count();
 
-	/// <summary>Persists an envelope at the tail of the queue and returns its id. Throws on any storage failure.</summary>
-	public long Add(byte[] envelope)
-	{
-		long id = Interlocked.Increment(ref m_lastId);
-		string path = Path.Combine(m_directory, id.ToString("D20", CultureInfo.InvariantCulture) + ".vjr");
-		string temporary = path + ".tmp";
-		File.WriteAllBytes(temporary, envelope);
-		File.Move(temporary, path, overwrite: true);
-		return id;
-	}
+    /// <summary>Persists an envelope at the tail of the queue and returns its id. Throws on any storage failure.</summary>
+    public long Add(byte[] envelope)
+    {
+        long id = Interlocked.Increment(ref m_lastId);
+        string path = Path.Combine(
+            m_directory,
+            id.ToString("D20", CultureInfo.InvariantCulture) + ".vjr"
+        );
+        string temporary = path + ".tmp";
+        File.WriteAllBytes(temporary, envelope);
+        File.Move(temporary, path, overwrite: true);
+        return id;
+    }
 
-	/// <summary>Pending envelopes in id order, oldest first. Ids from a previous session sort before this one's.</summary>
-	public IEnumerable<(long Id, byte[] Envelope)> Pending()
-	{
-		foreach (string path in Directory.EnumerateFiles(m_directory, "*.vjr").OrderBy(value => value, StringComparer.Ordinal))
-			yield return (Id(path), File.ReadAllBytes(path));
-	}
+    /// <summary>Pending envelopes in id order, oldest first. Ids from a previous session sort before this one's.</summary>
+    public IEnumerable<(long Id, byte[] Envelope)> Pending()
+    {
+        foreach (
+            string path in Directory
+                .EnumerateFiles(m_directory, "*.vjr")
+                .OrderBy(value => value, StringComparer.Ordinal)
+        )
+            yield return (Id(path), File.ReadAllBytes(path));
+    }
 
-	/// <summary>Removes an acknowledged entry. Missing files are fine: acknowledging twice loses nothing.</summary>
-	public void Acknowledge(long id)
-		=> File.Delete(Path.Combine(m_directory, id.ToString("D20", CultureInfo.InvariantCulture) + ".vjr"));
+    /// <summary>Removes an acknowledged entry. Missing files are fine: acknowledging twice loses nothing.</summary>
+    public void Acknowledge(long id) =>
+        File.Delete(
+            Path.Combine(m_directory, id.ToString("D20", CultureInfo.InvariantCulture) + ".vjr")
+        );
 }

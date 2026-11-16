@@ -10,10 +10,10 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyVoxelMapSeams
 {
-	/// <summary>
-	/// Runs before <c>MyVoxelMap.Init(MyObjectBuilder_EntityBase)</c>, the overload a world load uses for a
-	/// saved asteroid. Returning false means the seam initialised the voxel map itself (from the newest
-	/// verified catalogued native base) and the vanilla body, which loads the world's own file, must be skipped.
-	/// </summary>
-	public static Func<MyVoxelMap, MyObjectBuilder_EntityBase, bool> ClusterStorageInit;
+    /// <summary>
+    /// Runs before <c>MyVoxelMap.Init(MyObjectBuilder_EntityBase)</c>, the overload a world load uses for a
+    /// saved asteroid. Returning false means the seam initialised the voxel map itself (from the newest
+    /// verified catalogued native base) and the vanilla body, which loads the world's own file, must be skipped.
+    /// </summary>
+    public static Func<MyVoxelMap, MyObjectBuilder_EntityBase, bool> ClusterStorageInit;
 }

@@ -47,6 +47,7 @@ internal sealed partial class GatewayRegistry
     /// <summary>Gone node ids an archived save still names (cached: a scan of the archive per id is ~0.3 s on w33).
     /// Cleared when a partition comes back from the archive, the only way an archived reference can go away.</summary>
     private readonly HashSet<string> _archiveReferenced = new(StringComparer.Ordinal);
+
     /// <summary>Self-test switch that restores the df fc5d693 cache handling, to earn the red of gone-holder-archive-cache:
     /// any rehydrate clears the whole cache, and a pass deferred by a rehydrate still caches what its scan found.</summary>
     internal static bool RehydrateClearsArchiveCache;
@@ -56,8 +57,10 @@ internal sealed partial class GatewayRegistry
     /// still named by a row that stays archived: archived rows go away only by a rehydrate of their own partition.</summary>
     private void UncacheArchiveReferences(HashSet<string> named)
     {
-        if (RehydrateClearsArchiveCache) _archiveReferenced.Clear();
-        else _archiveReferenced.ExceptWith(named);
+        if (RehydrateClearsArchiveCache)
+            _archiveReferenced.Clear();
+        else
+            _archiveReferenced.ExceptWith(named);
     }
 
     /// <summary>Every node id a save row carries, i.e. every string field the archive scan's quoted-id match can hit: the
@@ -72,15 +75,22 @@ internal sealed partial class GatewayRegistry
 
     internal int ReleasedRows { get; private set; }
     internal int DroppedGoneLocations { get; private set; }
+
     /// <summary>Settable for the self-test only: its fixtures name their hosts, and must not depend on the machine they run on.</summary>
     internal static string MachineHost = Environment.MachineName.Split('.')[0];
+
     /// <summary>Self-test switches that restore the pre-T-0323 behaviour, to earn each red: no proxy for a gone holder,
     /// no release pass, a release that does not look at the archive.</summary>
-    internal static bool ProxyGoneHolders = true, ReleaseGoneRowsEnabled = true, ReleaseChecksArchive = true;
+    internal static bool ProxyGoneHolders = true,
+        ReleaseGoneRowsEnabled = true,
+        ReleaseChecksArchive = true;
+
     /// <summary>Self-test switch that restores the pre-T-0348 rule (only an Empty gone holder's files are servable), to earn the red.</summary>
     internal static bool ServeDeadGoneHolders = true;
+
     /// <summary>Self-test switch that restores the pre-#1210 rule (no row is gone in managed mode), to earn the red.</summary>
     internal static bool ManagedRemovedSlotsGone = true;
+
     /// <summary>Self-test switch: the managed release pass asks the archive again (the first #1210 change), to earn the red.</summary>
     internal static bool ManagedReleaseChecksArchive;
 
@@ -88,21 +98,35 @@ internal sealed partial class GatewayRegistry
     /// #1210: in managed mode, not in the current inventory (a later generation dropped its slot, e.g. a hot spare
     /// count lowered): the Host never starts that node id again, so its row would otherwise stay Empty forever.</summary>
     private bool IsGone(string node, NodeRegistration row) =>
-        row.Role == NodeRole.Regular && row.State is NodeState.Empty or NodeState.Dead
-        && (NodeControlActive ? !Control.Live.ContainsKey(node)
-            : ManagedRemovedSlotsGone && _state.ManagedDeployment is { } managed && !managed.Slots.Any(slot => slot.Node == node))
+        row.Role == NodeRole.Regular
+        && row.State is NodeState.Empty or NodeState.Dead
+        && (
+            NodeControlActive
+                ? !Control.Live.ContainsKey(node)
+                : ManagedRemovedSlotsGone
+                    && _state.ManagedDeployment is { } managed
+                    && !managed.Slots.Any(slot => slot.Node == node)
+        )
         // T-0340: with the host store in force a host's row is a store, judged by its state, never a stopped node.
         && !(_hostStore && IsHostHolder(node));
 
     /// <summary>The row of a gone holder whose catalogued files a proxy may serve, else null. Empty: it drained and exited
     /// cleanly. Dead (T-0348): what it registered is on disk all the same, and the requester's checksum catches a torn file.</summary>
     private NodeRegistration? GoneHolder(string holder) =>
-        _state.Nodes.TryGetValue(holder, out NodeRegistration? row) && (row.State == NodeState.Empty || ServeDeadGoneHolders) && IsGone(holder, row) ? row : null;
+        _state.Nodes.TryGetValue(holder, out NodeRegistration? row)
+        && (row.State == NodeState.Empty || ServeDeadGoneHolders)
+        && IsGone(holder, row)
+            ? row
+            : null;
 
     /// <summary>T-0348: a Dead holder counts as usable (<see cref="HolderUsable"/>) exactly while it is gone and a live node on
     /// its host can serve its files. No proxy (a host cut, or no node on that host yet): unusable, as every Dead holder was.</summary>
     private bool DeadHolderServed(NodeRegistration row) =>
-        ServeDeadGoneHolders && ProxyGoneHolders && row.State == NodeState.Dead && IsGone(row.Node, row) && ProxyFor(row) != null;
+        ServeDeadGoneHolders
+        && ProxyGoneHolders
+        && row.State == NodeState.Dead
+        && IsGone(row.Node, row)
+        && ProxyFor(row) != null;
 
     /// <summary>The host a node's files live on. A row from before T-0320 has none: every such save was written on the gateway host.</summary>
     private string HostKey(NodeRegistration row) => row.Host ?? GatewayHost ?? MachineHost;
@@ -115,21 +139,34 @@ internal sealed partial class GatewayRegistry
         NodeRegistration? best = null;
         foreach (NodeRegistration row in _state.Nodes.Values)
         {
-            if (row.Role != NodeRole.Regular || row.State is not (NodeState.Active or NodeState.Closed) || row.LeaseExpires <= now
-                || string.IsNullOrWhiteSpace(row.ControlEndpoint) || !string.Equals(HostKey(row), host, StringComparison.OrdinalIgnoreCase))
+            if (
+                row.Role != NodeRole.Regular
+                || row.State is not (NodeState.Active or NodeState.Closed)
+                || row.LeaseExpires <= now
+                || string.IsNullOrWhiteSpace(row.ControlEndpoint)
+                || !string.Equals(HostKey(row), host, StringComparison.OrdinalIgnoreCase)
+            )
                 continue;
-            if (best == null) best = row;
-            else if ((row.State == NodeState.Active) != (best.State == NodeState.Active)) { if (row.State == NodeState.Active) best = row; }
-            else if (string.CompareOrdinal(row.Node, best.Node) < 0) best = row;
+            if (best == null)
+                best = row;
+            else if ((row.State == NodeState.Active) != (best.State == NodeState.Active))
+            {
+                if (row.State == NodeState.Active)
+                    best = row;
+            }
+            else if (string.CompareOrdinal(row.Node, best.Node) < 0)
+                best = row;
         }
         return best;
     }
 
     // T-0340: a host holder's files are served by a node of that host, named to the current node plugin as a proxy.
     private HolderProxy? ProxyOf(string holder) =>
-        _hostStore && IsHostHolder(holder) ? HostServers(HostOfHolder(holder)!).FirstOrDefault() :
-        ReleasedHolderHost(holder) is { } released ? HostServers(released).FirstOrDefault() :
-        ProxyGoneHolders && GoneHolder(holder) is { } gone && ProxyFor(gone) is { } proxy ? new HolderProxy(proxy.Node, proxy.ControlEndpoint!) : null;
+        _hostStore && IsHostHolder(holder) ? HostServers(HostOfHolder(holder)!).FirstOrDefault()
+        : ReleasedHolderHost(holder) is { } released ? HostServers(released).FirstOrDefault()
+        : ProxyGoneHolders && GoneHolder(holder) is { } gone && ProxyFor(gone) is { } proxy
+            ? new HolderProxy(proxy.Node, proxy.ControlEndpoint!)
+        : null;
 
     /// <summary>A snapshot for a node that will fetch the save: <see cref="Snapshot(SaveRegistration)"/> plus the proxy of every gone holder.</summary>
     private SaveRegistration Served(SaveRegistration save)
@@ -137,7 +174,11 @@ internal sealed partial class GatewayRegistry
         SaveRegistration copy = Snapshot(save);
         foreach (string holder in save.LocationHolders.Values.Distinct(StringComparer.Ordinal))
             if (ProxyOf(holder) is { } proxy)
-                (copy.HolderProxies ??= new Dictionary<string, HolderProxy>(StringComparer.Ordinal))[holder] = proxy;
+                (
+                    copy.HolderProxies ??= new Dictionary<string, HolderProxy>(
+                        StringComparer.Ordinal
+                    )
+                )[holder] = proxy;
         return copy;
     }
 
@@ -149,10 +190,14 @@ internal sealed partial class GatewayRegistry
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach ((string location, string holder) in save.LocationHolders)
         {
-            if (!seen.Add(holder) || save.CorruptHolders.Contains(holder) || !HolderUsable(holder)) continue;
+            if (!seen.Add(holder) || save.CorruptHolders.Contains(holder) || !HolderUsable(holder))
+                continue;
             if (ProxyOf(holder) is { } proxy)
                 proxied.Add(new HolderSource(holder, proxy.Endpoint, proxy.Node, location));
-            else if (GoneHolder(holder) == null && save.HolderEndpoints.TryGetValue(holder, out string? endpoint))
+            else if (
+                GoneHolder(holder) == null
+                && save.HolderEndpoints.TryGetValue(holder, out string? endpoint)
+            )
                 live.Add(new HolderSource(holder, endpoint));
         }
         return [.. live, .. proxied];
@@ -167,11 +212,22 @@ internal sealed partial class GatewayRegistry
         foreach (string holder in save.LocationHolders.Values.Distinct(StringComparer.Ordinal))
         {
             // T-0340 step 6: a released holder's copy is a stopped node's too, row or no row - never a live copy.
-            if (save.CorruptHolders.Contains(holder) || !HolderUsable(holder) || GoneHolder(holder) != null || ReleasedHolderHost(holder) != null) continue;
-            string host = _state.Nodes.TryGetValue(holder, out NodeRegistration? row) ? HostKey(row) : "#" + holder;
-            if (++count == 1) firstHost = host;
-            else if (!string.Equals(host, firstHost, StringComparison.OrdinalIgnoreCase)) spread = true;
-            if (count >= 2 && spread) return true;
+            if (
+                save.CorruptHolders.Contains(holder)
+                || !HolderUsable(holder)
+                || GoneHolder(holder) != null
+                || ReleasedHolderHost(holder) != null
+            )
+                continue;
+            string host = _state.Nodes.TryGetValue(holder, out NodeRegistration? row)
+                ? HostKey(row)
+                : "#" + holder;
+            if (++count == 1)
+                firstHost = host;
+            else if (!string.Equals(host, firstHost, StringComparison.OrdinalIgnoreCase))
+                spread = true;
+            if (count >= 2 && spread)
+                return true;
         }
         return false;
     }
@@ -179,7 +235,11 @@ internal sealed partial class GatewayRegistry
     /// <summary>Drops every Location of <paramref name="save"/> held by a node in <paramref name="gone"/>. Caller holds _lock.</summary>
     private int DropGoneLocations(SaveRegistration save, HashSet<string> gone)
     {
-        string[] locations = save.Locations.Where(location => gone.Contains(save.LocationHolders.GetValueOrDefault(location, save.Node))).ToArray();
+        string[] locations = save
+            .Locations.Where(location =>
+                gone.Contains(save.LocationHolders.GetValueOrDefault(location, save.Node))
+            )
+            .ToArray();
         foreach (string location in locations)
         {
             string holder = save.LocationHolders.GetValueOrDefault(location, save.Node);
@@ -191,7 +251,8 @@ internal sealed partial class GatewayRegistry
                 save.CorruptHolders.Remove(holder);
             }
         }
-        if (locations.Length != 0) Touch(save);
+        if (locations.Length != 0)
+            Touch(save);
         return locations.Length;
     }
 
@@ -199,13 +260,20 @@ internal sealed partial class GatewayRegistry
     internal static TimeSpan ArchiveScanTestDelay = TimeSpan.Zero;
     internal static Action? ArchiveScanTestHook;
     internal static bool ReleaseScanUnderLock;
+
     /// <summary>The last release pass: its longest single registry-lock hold, and how long its archive scan took.</summary>
     internal double LastReleaseLockMs { get; private set; }
     internal double LastReleaseScanMs { get; private set; }
+
     /// <summary>How many ids the last release pass scanned the archive for (each up to ~0.3 s on w33).</summary>
     internal int LastReleaseScannedIds { get; private set; }
+
     /// <summary>Self-test: the gone ids cached as named by the archive.</summary>
-    internal string[] ArchiveReferencedIds() { lock (_lock) return [.. _archiveReferenced.Order(StringComparer.Ordinal)]; }
+    internal string[] ArchiveReferencedIds()
+    {
+        lock (_lock)
+            return [.. _archiveReferenced.Order(StringComparer.Ordinal)];
+    }
 
     /// <summary>
     /// Drops what no longer needs a gone holder and removes the rows of gone nodes that nothing names (see the class
@@ -226,14 +294,17 @@ internal sealed partial class GatewayRegistry
     /// </summary>
     internal string[] ReleaseGoneRows()
     {
-        if (!ReleaseGoneRowsEnabled) return [];
+        if (!ReleaseGoneRowsEnabled)
+            return [];
         var clock = System.Diagnostics.Stopwatch.StartNew();
         double longest = 0;
         string[] candidates;
         HashSet<string> archived;
         long rehydrations;
-        int dropped, goneCount;
-        bool stale, archive;
+        int dropped,
+            goneCount;
+        bool stale,
+            archive;
         lock (_lock)
         {
             clock.Restart();
@@ -255,14 +326,22 @@ internal sealed partial class GatewayRegistry
                     archived.UnionWith(ScanArchive(scan));
                     longest = Math.Max(longest, timer.Elapsed.TotalMilliseconds);
                 }
-            else archived.UnionWith(ScanArchive(scan));
+            else
+                archived.UnionWith(ScanArchive(scan));
             LastReleaseScanMs = timer.Elapsed.TotalMilliseconds;
         }
         string[] released;
         lock (_lock)
         {
             clock.Restart();
-            released = FinishGoneRowRelease(candidates, archived, rehydrations, dropped, goneCount, cacheable: !stale);
+            released = FinishGoneRowRelease(
+                candidates,
+                archived,
+                rehydrations,
+                dropped,
+                goneCount,
+                cacheable: !stale
+            );
             longest = Math.Max(longest, clock.Elapsed.TotalMilliseconds);
         }
         LastReleaseLockMs = longest;
@@ -277,13 +356,16 @@ internal sealed partial class GatewayRegistry
     /// through that host (<see cref="ReleasedHolderHost"/>). In store mode, and in managed mode (#1210): there no
     /// location a node id holds is ever re-keyed or deleted, so an archived save would keep a removed slot's row forever
     /// (the live 2 -> 0 spare check: two archived copies on the removed slot kept it).</summary>
-    private bool ReleaseByHost => _hostStore ? !HostStoreReleaseChecksArchive
-        : _state.ManagedDeployment is not null && !ManagedReleaseChecksArchive;
+    private bool ReleaseByHost =>
+        _hostStore
+            ? !HostStoreReleaseChecksArchive
+            : _state.ManagedDeployment is not null && !ManagedReleaseChecksArchive;
 
     private HashSet<string> ScanArchive(string[] ids)
     {
         HashSet<string> found = _store.ArchiveMentionsReadOnly(ids);
-        if (ArchiveScanTestDelay > TimeSpan.Zero) Thread.Sleep(ArchiveScanTestDelay);
+        if (ArchiveScanTestDelay > TimeSpan.Zero)
+            Thread.Sleep(ArchiveScanTestDelay);
         ArchiveScanTestHook?.Invoke();
         return found;
     }
@@ -293,24 +375,46 @@ internal sealed partial class GatewayRegistry
     {
         var named = new HashSet<string>(StringComparer.Ordinal);
         foreach (SaveRegistration save in _state.Saves.Values)
-            foreach (string location in save.Locations) named.Add(save.LocationHolders.GetValueOrDefault(location, save.Node));
+        foreach (string location in save.Locations)
+            named.Add(save.LocationHolders.GetValueOrDefault(location, save.Node));
         foreach (GlobalSaveRegistration global in _state.GlobalSaves.Values)
-            foreach (string location in global.Locations) named.Add(global.LocationHolders.GetValueOrDefault(location, global.Node));
-        foreach (VoxelBaseRegistration voxel in _state.VoxelBases.Values) named.Add(voxel.Node);
-        foreach (VoxelJournalRegistration journal in _state.VoxelJournals.Values) named.Add(journal.Node);
-        foreach (PartitionOwnership owner in _state.Partitions.Values) if (owner.Node != null) named.Add(owner.Node);
+        foreach (string location in global.Locations)
+            named.Add(global.LocationHolders.GetValueOrDefault(location, global.Node));
+        foreach (VoxelBaseRegistration voxel in _state.VoxelBases.Values)
+            named.Add(voxel.Node);
+        foreach (VoxelJournalRegistration journal in _state.VoxelJournals.Values)
+            named.Add(journal.Node);
+        foreach (PartitionOwnership owner in _state.Partitions.Values)
+            if (owner.Node != null)
+                named.Add(owner.Node);
         foreach (HandoverRecord handover in _state.Handovers.Values)
-            if (handover.State is HandoverState.Begun or HandoverState.Active) { named.Add(handover.SourceNode); named.Add(handover.TargetNode); }
-        foreach (OfflinePartition row in _state.OfflinePartitions.Values) if (row.LoadRequestedNode != null) named.Add(row.LoadRequestedNode);
+            if (handover.State is HandoverState.Begun or HandoverState.Active)
+            {
+                named.Add(handover.SourceNode);
+                named.Add(handover.TargetNode);
+            }
+        foreach (OfflinePartition row in _state.OfflinePartitions.Values)
+            if (row.LoadRequestedNode != null)
+                named.Add(row.LoadRequestedNode);
         return named;
     }
 
     /// <summary>Step 1 (caller holds _lock): drop the locations nothing needs; the gone ids no in-memory state names, and
     /// those of them that an archive write still queued names (the scan reads only what is committed).</summary>
-    private (string[] Candidates, HashSet<string> Archived, long Rehydrations, int Dropped, int Gone) PrepareGoneRowRelease()
+    private (
+        string[] Candidates,
+        HashSet<string> Archived,
+        long Rehydrations,
+        int Dropped,
+        int Gone
+    ) PrepareGoneRowRelease()
     {
-        var gone = new HashSet<string>(_state.Nodes.Where(x => IsGone(x.Key, x.Value)).Select(x => x.Key), StringComparer.Ordinal);
-        if (gone.Count == 0) return ([], [], RehydratedPartitions, 0, 0);
+        var gone = new HashSet<string>(
+            _state.Nodes.Where(x => IsGone(x.Key, x.Value)).Select(x => x.Key),
+            StringComparer.Ordinal
+        );
+        if (gone.Count == 0)
+            return ([], [], RehydratedPartitions, 0, 0);
         bool multiHost = MultiHost(CurrentHolderStates());
         int dropped = 0;
         foreach ((string key, SaveRegistration save) in _state.Saves.ToArray())
@@ -318,111 +422,207 @@ internal sealed partial class GatewayRegistry
             // SE-1347: a trimmed copy on a gone holder is dropped like any other location of it: nothing would delete it.
             if (save.TrimmedLocations is { } trimmed && trimmed.Values.Any(gone.Contains))
             {
-                foreach (string location in trimmed.Where(x => gone.Contains(x.Value)).Select(x => x.Key).ToArray()) { CancelTrim(save, location); dropped++; }
+                foreach (
+                    string location in trimmed
+                        .Where(x => gone.Contains(x.Value))
+                        .Select(x => x.Key)
+                        .ToArray()
+                )
+                {
+                    CancelTrim(save, location);
+                    dropped++;
+                }
                 Touch(save);
-                if (save.PendingDelete && save.Locations.Count == 0 && save.TrimmedLocations == null) { RemoveSave(key); continue; }
+                if (
+                    save.PendingDelete
+                    && save.Locations.Count == 0
+                    && save.TrimmedLocations == null
+                )
+                {
+                    RemoveSave(key);
+                    continue;
+                }
             }
-            if (!save.LocationHolders.Values.Any(gone.Contains)) continue;
+            if (!save.LocationHolders.Values.Any(gone.Contains))
+                continue;
             // A save being deleted is never offered to recovery; a covered save keeps its live copies.
-            if (!save.PendingDelete && !CoveredByLiveHolders(save, multiHost)) continue;
+            if (!save.PendingDelete && !CoveredByLiveHolders(save, multiHost))
+                continue;
             dropped += DropGoneLocations(save, gone);
-            if (save.PendingDelete && save.Locations.Count == 0 && save.TrimmedLocations == null) RemoveSave(key);
+            if (save.PendingDelete && save.Locations.Count == 0 && save.TrimmedLocations == null)
+                RemoveSave(key);
         }
         foreach (GlobalSaveRegistration global in _state.GlobalSaves.Values.ToArray())
         {
-            if (!global.LocationHolders.Values.Any(gone.Contains)) continue;
+            if (!global.LocationHolders.Values.Any(gone.Contains))
+                continue;
             // (A released holder serves no global save - there is no proxied global fetch - so it covers none.)
-            if (!global.PendingDelete && !global.LocationHolders.Values.Any(holder => !gone.Contains(holder) && ReleasedHolderHost(holder) == null && HolderUsable(holder))) continue;
-            string[] locations = global.Locations.Where(location => gone.Contains(global.LocationHolders.GetValueOrDefault(location, global.Node))).ToArray();
+            if (
+                !global.PendingDelete
+                && !global.LocationHolders.Values.Any(holder =>
+                    !gone.Contains(holder)
+                    && ReleasedHolderHost(holder) == null
+                    && HolderUsable(holder)
+                )
+            )
+                continue;
+            string[] locations = global
+                .Locations.Where(location =>
+                    gone.Contains(global.LocationHolders.GetValueOrDefault(location, global.Node))
+                )
+                .ToArray();
             foreach (string location in locations)
             {
                 string holder = global.LocationHolders.GetValueOrDefault(location, global.Node);
                 global.Locations.Remove(location);
                 global.LocationHolders.Remove(location);
-                if (!global.LocationHolders.ContainsValue(holder)) global.HolderEndpoints.Remove(holder);
+                if (!global.LocationHolders.ContainsValue(holder))
+                    global.HolderEndpoints.Remove(holder);
             }
-            if (locations.Length != 0) { Touch(global); dropped += locations.Length; }
+            if (locations.Length != 0)
+            {
+                Touch(global);
+                dropped += locations.Length;
+            }
             // SE-1346: a global retention released whose last copy was on a gone holder is done.
-            if (global.PendingDelete && global.Locations.Count == 0) RemoveGlobal(global.SaveId);
+            if (global.PendingDelete && global.Locations.Count == 0)
+                RemoveGlobal(global.SaveId);
         }
         DroppedGoneLocations += dropped;
-        if (dropped != 0) Persist();
+        if (dropped != 0)
+            Persist();
         HashSet<string> named = NamedInMemory();
         // Never below the id counter: a released id must stay unallocatable (AllocateNodeId floors on the rows too).
         // Managed ids are the inventory's, never allocated: a later inventory that names one again starts a fresh row.
-        bool archive = ReleaseAsksArchive, managed = _state.ManagedDeployment is not null;
-        string[] candidates = gone.Where(node => !named.Contains(node) && !(archive && _archiveReferenced.Contains(node))
-            && (managed || NodeNumber(node) == 0 || NodeNumber(node) < Control.NextNodeNumber)).Order(StringComparer.Ordinal).ToArray();
-        HashSet<string> queued = candidates.Length == 0 || !archive ? [] : _store.QueuedArchiveMentions(candidates);
+        bool archive = ReleaseAsksArchive,
+            managed = _state.ManagedDeployment is not null;
+        string[] candidates = gone.Where(node =>
+                !named.Contains(node)
+                && !(archive && _archiveReferenced.Contains(node))
+                && (managed || NodeNumber(node) == 0 || NodeNumber(node) < Control.NextNodeNumber)
+            )
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        HashSet<string> queued =
+            candidates.Length == 0 || !archive ? [] : _store.QueuedArchiveMentions(candidates);
         return (candidates, queued, RehydratedPartitions, dropped, gone.Count);
     }
 
     /// <summary>Step 3 (caller holds _lock): release the candidates the archive does not name and nothing named since.
     /// Anything archived after step 1 came from memory, where no candidate was named; only a partition brought BACK
     /// from the archive in between can carry a reference the scan did not see, so then everything waits a pass.</summary>
-    private string[] FinishGoneRowRelease(string[] candidates, HashSet<string> archived, long rehydrations, int dropped, int goneCount, bool cacheable)
+    private string[] FinishGoneRowRelease(
+        string[] candidates,
+        HashSet<string> archived,
+        long rehydrations,
+        int dropped,
+        int goneCount,
+        bool cacheable
+    )
     {
         string[] released = [];
         // Store mode (step 6): no scan, so nothing a rehydrate could have hidden from it - what came back is in memory
         // and NamedInMemory below sees it.
         bool storeRelease = ReleaseByHost;
-        bool deferred = !storeRelease && candidates.Length != 0 && RehydratedPartitions != rehydrations;
+        bool deferred =
+            !storeRelease && candidates.Length != 0 && RehydratedPartitions != rehydrations;
         // T-0296: a pass that a rehydrate overlapped may have found a row that is in memory now; caching that id would keep
         // its row forever (nothing uncaches an id whose rows have left the archive). The next pass scans it again.
-        if (!deferred && cacheable || RehydrateClearsArchiveCache) _archiveReferenced.UnionWith(archived);
+        if (!deferred && cacheable || RehydrateClearsArchiveCache)
+            _archiveReferenced.UnionWith(archived);
         if (candidates.Length != 0 && !deferred)
         {
             HashSet<string> named = NamedInMemory();
-            released = candidates.Where(node => !archived.Contains(node) && !named.Contains(node)
-                && _state.Nodes.TryGetValue(node, out NodeRegistration? row) && IsGone(node, row)
-                // Step 6: the row goes only once its host is in the alias map - what an archived save's location is served by.
-                && (!storeRelease || FreezeReleasedHost(node))).ToArray();
+            released = candidates
+                .Where(node =>
+                    !archived.Contains(node)
+                    && !named.Contains(node)
+                    && _state.Nodes.TryGetValue(node, out NodeRegistration? row)
+                    && IsGone(node, row)
+                    // Step 6: the row goes only once its host is in the alias map - what an archived save's location is served by.
+                    && (!storeRelease || FreezeReleasedHost(node))
+                )
+                .ToArray();
         }
         foreach (string node in released)
         {
             NodeRegistration row = _state.Nodes[node];
             _state.Nodes.Remove(node);
-            foreach (string key in _state.VoxelReplicas.Where(x => x.Value.Node == node).Select(x => x.Key).ToArray())
+            foreach (
+                string key in _state
+                    .VoxelReplicas.Where(x => x.Value.Node == node)
+                    .Select(x => x.Key)
+                    .ToArray()
+            )
                 _state.VoxelReplicas.Remove(key);
             ReleasedRows++;
-            Emit("node.row-released", node, new Dictionary<string, string>
-            {
-                ["state"] = row.State.ToString(), ["host"] = HostKey(row), ["epoch"] = row.Epoch.ToString(CultureInfo.InvariantCulture),
-            });
+            Emit(
+                "node.row-released",
+                node,
+                new Dictionary<string, string>
+                {
+                    ["state"] = row.State.ToString(),
+                    ["host"] = HostKey(row),
+                    ["epoch"] = row.Epoch.ToString(CultureInfo.InvariantCulture),
+                }
+            );
         }
         if (dropped != 0 || released.Length != 0 || deferred)
         {
-            Console.WriteLine($"registry: gone holders: dropped {dropped} location(s) no recovery needs, released {released.Length} row(s)"
-                + (released.Length == 0 ? "" : $" ({string.Join(",", released)})") + $"; {goneCount - released.Length} gone row(s) kept"
-                + (archived.Count == 0 ? "" : $", {archived.Count} named by the archive")
-                + (deferred ? "; a partition came back from the archive during the scan, release deferred to the next pass" : ""));
+            Console.WriteLine(
+                $"registry: gone holders: dropped {dropped} location(s) no recovery needs, released {released.Length} row(s)"
+                    + (released.Length == 0 ? "" : $" ({string.Join(",", released)})")
+                    + $"; {goneCount - released.Length} gone row(s) kept"
+                    + (archived.Count == 0 ? "" : $", {archived.Count} named by the archive")
+                    + (
+                        deferred
+                            ? "; a partition came back from the archive during the scan, release deferred to the next pass"
+                            : ""
+                    )
+            );
         }
-        if (released.Length != 0) Persist();
+        if (released.Length != 0)
+            Persist();
         return released;
     }
 
     /// <summary>Self-test and diag: the gone rows the registry still keeps, and why (the first thing that names each).</summary>
     internal string[] GoneRowIds()
     {
-        lock (_lock) return [.. _state.Nodes.Where(x => IsGone(x.Key, x.Value)).Select(x => x.Key).Order(StringComparer.Ordinal)];
+        lock (_lock)
+            return
+            [
+                .. _state
+                    .Nodes.Where(x => IsGone(x.Key, x.Value))
+                    .Select(x => x.Key)
+                    .Order(StringComparer.Ordinal),
+            ];
     }
 
     /// <summary>Self-test: the naive fix - delete a gone node's row whatever still names it.</summary>
     internal void RemoveRowNaively(string node)
     {
-        lock (_lock) { _state.Nodes.Remove(node); Persist(); }
+        lock (_lock)
+        {
+            _state.Nodes.Remove(node);
+            Persist();
+        }
     }
 
     /// <summary>Whether the registry can offer this save to recovery (Newest()'s holder test).</summary>
     internal bool SaveReachable(SaveId id)
     {
-        lock (_lock) return TryGetSave(Key(id), out SaveRegistration? save) && Reachable(save);
+        lock (_lock)
+            return TryGetSave(Key(id), out SaveRegistration? save) && Reachable(save);
     }
 
     /// <summary>Self-test: the save as a recovery claim hands it to a node (proxies included).</summary>
     internal SaveRegistration ServedForTest(SaveId id)
     {
-        lock (_lock) return TryGetSave(Key(id), out SaveRegistration? save) ? Served(save) : throw new ArgumentException($"no save {id}");
+        lock (_lock)
+            return TryGetSave(Key(id), out SaveRegistration? save)
+                ? Served(save)
+                : throw new ArgumentException($"no save {id}");
     }
 
     /// <summary>The release pass on demand (self-test; production runs it after each retention pass).</summary>

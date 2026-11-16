@@ -18,21 +18,27 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyProxyAntenna), "Closing")]
 public static class MyProxyAntennaPatch
 {
-	[HarmonyPrefix]
-	private static bool ClosingPrefix(MyProxyAntenna __instance)
-	{
-		if (!ClusterRuntime.IsClustered)
-		{
-			return true;
-		}
-		MyAntennaSystem antennas = MyAntennaSystem.Static;
-		// Remove the entry only if it is still ours: the real antenna may have replaced it.
-		if (antennas != null && __instance.Broadcaster is MyLaserBroadcaster
-			&& antennas.LaserAntennas.TryGetValue(__instance.AntennaEntityId, out MyLaserBroadcaster registered)
-			&& ReferenceEquals(registered, __instance.Broadcaster))
-		{
-			antennas.RemoveLaser(__instance.AntennaEntityId, register: false);
-		}
-		return true;
-	}
+    [HarmonyPrefix]
+    private static bool ClosingPrefix(MyProxyAntenna __instance)
+    {
+        if (!ClusterRuntime.IsClustered)
+        {
+            return true;
+        }
+        MyAntennaSystem antennas = MyAntennaSystem.Static;
+        // Remove the entry only if it is still ours: the real antenna may have replaced it.
+        if (
+            antennas != null
+            && __instance.Broadcaster is MyLaserBroadcaster
+            && antennas.LaserAntennas.TryGetValue(
+                __instance.AntennaEntityId,
+                out MyLaserBroadcaster registered
+            )
+            && ReferenceEquals(registered, __instance.Broadcaster)
+        )
+        {
+            antennas.RemoveLaser(__instance.AntennaEntityId, register: false);
+        }
+        return true;
+    }
 }

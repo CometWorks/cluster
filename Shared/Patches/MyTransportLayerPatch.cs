@@ -21,7 +21,8 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyTransportLayer), "ProcessMessage")]
 public static class MyTransportLayerPatch
 {
-    public static readonly bool RpcTrace = Environment.GetEnvironmentVariable("CLUSTER_RPC_TRACE") == "1";
+    public static readonly bool RpcTrace =
+        Environment.GetEnvironmentVariable("CLUSTER_RPC_TRACE") == "1";
 
     [HarmonyPrefix]
     private static void ProcessMessagePrefix(MyTransportLayer __instance, MyPacket p)
@@ -37,12 +38,30 @@ public static class MyTransportLayerPatch
             stream.SetBitPositionRead(position);
             if (messageId != MyMessageId.RPC)
                 return;
-            if (!__instance.m_handlers.TryGetValue(new MyTransportLayer.HandlerId { messageId = messageId, receiverIndex = receiverIndex }, out Action<MyPacket> handler))
+            if (
+                !__instance.m_handlers.TryGetValue(
+                    new MyTransportLayer.HandlerId
+                    {
+                        messageId = messageId,
+                        receiverIndex = receiverIndex,
+                    },
+                    out Action<MyPacket> handler
+                )
+            )
             {
-                __instance.m_handlers.TryGetValue(new MyTransportLayer.HandlerId { messageId = messageId, receiverIndex = byte.MaxValue }, out handler);
+                __instance.m_handlers.TryGetValue(
+                    new MyTransportLayer.HandlerId
+                    {
+                        messageId = messageId,
+                        receiverIndex = byte.MaxValue,
+                    },
+                    out handler
+                );
             }
-            MyLog.Default?.WriteLine($"rpc_msg index={receiverIndex} bytes={stream.ByteLength} "
-                + $"handler={handler != null} buffering={__instance.IsBuffering} source={p.Sender.Id.Value}");
+            MyLog.Default?.WriteLine(
+                $"rpc_msg index={receiverIndex} bytes={stream.ByteLength} "
+                    + $"handler={handler != null} buffering={__instance.IsBuffering} source={p.Sender.Id.Value}"
+            );
         }
         catch (Exception)
         {

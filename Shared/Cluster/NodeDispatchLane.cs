@@ -13,11 +13,12 @@ namespace ClusterPlugin;
 /// </summary>
 internal sealed class NodeDispatchLane
 {
-	private Task m_tail = Task.CompletedTask;
+    private Task m_tail = Task.CompletedTask;
 
-	/// <summary>A call queued earlier has not finished: the node it waits on may be stuck.</summary>
-	public bool Busy => !m_tail.IsCompleted;
+    /// <summary>A call queued earlier has not finished: the node it waits on may be stuck.</summary>
+    public bool Busy => !m_tail.IsCompleted;
 
-	/// <summary>Runs <paramref name="call"/> after the calls queued before it. It must catch its own exceptions.</summary>
-	public void Run(Action call) => m_tail = m_tail.ContinueWith(_ => call(), TaskScheduler.Default);
+    /// <summary>Runs <paramref name="call"/> after the calls queued before it. It must catch its own exceptions.</summary>
+    public void Run(Action call) =>
+        m_tail = m_tail.ContinueWith(_ => call(), TaskScheduler.Default);
 }

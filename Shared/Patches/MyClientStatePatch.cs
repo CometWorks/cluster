@@ -20,29 +20,42 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyClientState), "Read", new[] { typeof(BitStream), typeof(bool) })]
 public static class MyClientStatePatch
 {
-	[HarmonyPrefix]
-	private static void ReadPrefix(MyClientState __instance)
-	{
-		MyClientStateSeams.BeginRead(__instance);
-	}
+    [HarmonyPrefix]
+    private static void ReadPrefix(MyClientState __instance)
+    {
+        MyClientStateSeams.BeginRead(__instance);
+    }
 
-	[HarmonyTranspiler]
-	private static IEnumerable<CodeInstruction> ReadTranspiler(IEnumerable<CodeInstruction> instructions)
-	{
-		const string method = "MyClientState.Read";
-		List<CodeInstruction> code = instructions.ToList();
-		MethodInfo getControllingPlayer = AccessTools.Method(typeof(MyPlayerCollection), nameof(MyPlayerCollection.GetControllingPlayer), new[] { typeof(MyEntity) });
-		MethodInfo gate = AccessTools.Method(typeof(MyClientStateSeams), nameof(MyClientStateSeams.GateControllingPlayer));
-		int call = PlayersTranspilerHelpers.IndexOfSingle(code, c => PlayersTranspilerHelpers.CallsMethod(c, getControllingPlayer),
-			"GetControllingPlayer call", method);
-		// stack: [players, entity] -> [players, entity, this] -> gate(players, entity, this) -> [player]
-		CodeInstruction original = code[call];
-		CodeInstruction loadThis = new CodeInstruction(OpCodes.Ldarg_0);
-		loadThis.labels.AddRange(original.labels);
-		original.labels.Clear();
-		original.opcode = OpCodes.Call;
-		original.operand = gate;
-		code.Insert(call, loadThis);
-		return code;
-	}
+    [HarmonyTranspiler]
+    private static IEnumerable<CodeInstruction> ReadTranspiler(
+        IEnumerable<CodeInstruction> instructions
+    )
+    {
+        const string method = "MyClientState.Read";
+        List<CodeInstruction> code = instructions.ToList();
+        MethodInfo getControllingPlayer = AccessTools.Method(
+            typeof(MyPlayerCollection),
+            nameof(MyPlayerCollection.GetControllingPlayer),
+            new[] { typeof(MyEntity) }
+        );
+        MethodInfo gate = AccessTools.Method(
+            typeof(MyClientStateSeams),
+            nameof(MyClientStateSeams.GateControllingPlayer)
+        );
+        int call = PlayersTranspilerHelpers.IndexOfSingle(
+            code,
+            c => PlayersTranspilerHelpers.CallsMethod(c, getControllingPlayer),
+            "GetControllingPlayer call",
+            method
+        );
+        // stack: [players, entity] -> [players, entity, this] -> gate(players, entity, this) -> [player]
+        CodeInstruction original = code[call];
+        CodeInstruction loadThis = new CodeInstruction(OpCodes.Ldarg_0);
+        loadThis.labels.AddRange(original.labels);
+        original.labels.Clear();
+        original.opcode = OpCodes.Call;
+        original.operand = gate;
+        code.Insert(call, loadThis);
+        return code;
+    }
 }

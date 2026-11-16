@@ -27,58 +27,85 @@ namespace ClusterPlugin;
 /// </summary>
 internal static class AsteroidStorageWarmup
 {
-	private static int s_started;
+    private static int s_started;
 
-	public static void Update()
-	{
-		if (Volatile.Read(ref s_started) != 0 || ClusterRuntime.IsWorldAuthority || MySession.Static?.Ready != true) return;
-		if (Interlocked.Exchange(ref s_started, 1) != 0) return;
-		if (Environment.GetEnvironmentVariable("CLUSTER_ASTEROID_WARMUP") == "0")
-		{
-			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] asteroid storage warm-up disabled (CLUSTER_ASTEROID_WARMUP=0)");
-			return;
-		}
-		MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] asteroid storage warm-up started (background)");
-		new Thread(Run) { IsBackground = true, Name = "ClusterAsteroidWarmup", Priority = ThreadPriority.BelowNormal }.Start();
-	}
+    public static void Update()
+    {
+        if (
+            Volatile.Read(ref s_started) != 0
+            || ClusterRuntime.IsWorldAuthority
+            || MySession.Static?.Ready != true
+        )
+            return;
+        if (Interlocked.Exchange(ref s_started, 1) != 0)
+            return;
+        if (Environment.GetEnvironmentVariable("CLUSTER_ASTEROID_WARMUP") == "0")
+        {
+            MyLog.Default?.WriteLineAndConsole(
+                "[ClusterPlugin] asteroid storage warm-up disabled (CLUSTER_ASTEROID_WARMUP=0)"
+            );
+            return;
+        }
+        MyLog.Default?.WriteLineAndConsole(
+            "[ClusterPlugin] asteroid storage warm-up started (background)"
+        );
+        new Thread(Run)
+        {
+            IsBackground = true,
+            Name = "ClusterAsteroidWarmup",
+            Priority = ThreadPriority.BelowNormal,
+        }.Start();
+    }
 
-	private static void Run()
-	{
-		var watch = Stopwatch.StartNew();
-		long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-		int loaded = 0, failed = 0;
-		try
-		{
-			var definitions = MyDefinitionManager.Static;
-			foreach (var list in new[]
-			{
-				definitions.GetVoxelMapStorageDefinitionsForProceduralPrimaryAdditions(),
-				definitions.GetVoxelMapStorageDefinitionsForProceduralAdditions(),
-				definitions.GetVoxelMapStorageDefinitionsForProceduralRemovals(),
-			})
-			{
-				foreach (MyVoxelMapStorageDefinition definition in list)
-				{
-					if (definition == null) continue;
-					try
-					{
-						if (MyCompositeShapes.CreateAsteroidStorage(definition) != null) loaded++;
-						else failed++;
-					}
-					catch (Exception exception)
-					{
-						failed++;
-						MyLog.Default?.WriteLineAndConsole($"[ClusterPlugin] asteroid storage warm-up: {definition.StorageFile} failed: {exception.GetType().Name}: {exception.Message}");
-					}
-				}
-			}
-		}
-		catch (Exception exception)
-		{
-			// Diagnostics-grade helper: never able to take a node down; the generator still loads on demand.
-			MyLog.Default?.WriteLineAndConsole($"[ClusterPlugin] asteroid storage warm-up aborted: {exception}");
-		}
-		MyLog.Default?.WriteLineAndConsole($"[ClusterPlugin] asteroid storage warm-up: {loaded} storage(s) cached, {failed} failed, {watch.ElapsedMilliseconds} ms (background), "
-			+ $"{(GC.GetAllocatedBytesForCurrentThread() - allocatedBefore) / 1048576.0:F0} MB allocated by the warm-up thread");
-	}
+    private static void Run()
+    {
+        var watch = Stopwatch.StartNew();
+        long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        int loaded = 0,
+            failed = 0;
+        try
+        {
+            var definitions = MyDefinitionManager.Static;
+            foreach (
+                var list in new[]
+                {
+                    definitions.GetVoxelMapStorageDefinitionsForProceduralPrimaryAdditions(),
+                    definitions.GetVoxelMapStorageDefinitionsForProceduralAdditions(),
+                    definitions.GetVoxelMapStorageDefinitionsForProceduralRemovals(),
+                }
+            )
+            {
+                foreach (MyVoxelMapStorageDefinition definition in list)
+                {
+                    if (definition == null)
+                        continue;
+                    try
+                    {
+                        if (MyCompositeShapes.CreateAsteroidStorage(definition) != null)
+                            loaded++;
+                        else
+                            failed++;
+                    }
+                    catch (Exception exception)
+                    {
+                        failed++;
+                        MyLog.Default?.WriteLineAndConsole(
+                            $"[ClusterPlugin] asteroid storage warm-up: {definition.StorageFile} failed: {exception.GetType().Name}: {exception.Message}"
+                        );
+                    }
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            // Diagnostics-grade helper: never able to take a node down; the generator still loads on demand.
+            MyLog.Default?.WriteLineAndConsole(
+                $"[ClusterPlugin] asteroid storage warm-up aborted: {exception}"
+            );
+        }
+        MyLog.Default?.WriteLineAndConsole(
+            $"[ClusterPlugin] asteroid storage warm-up: {loaded} storage(s) cached, {failed} failed, {watch.ElapsedMilliseconds} ms (background), "
+                + $"{(GC.GetAllocatedBytesForCurrentThread() - allocatedBefore) / 1048576.0:F0} MB allocated by the warm-up thread"
+        );
+    }
 }

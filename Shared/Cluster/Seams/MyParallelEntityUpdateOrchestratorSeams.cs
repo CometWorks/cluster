@@ -9,10 +9,10 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyParallelEntityUpdateOrchestratorSeams
 {
-	/// <summary>
-	/// Cluster seam: true when an entity belongs to a partition frozen for a transfer, so its
-	/// once-before-frame work must wait for the thaw instead of running against a grid whose physics is
-	/// disabled. Deferred, not dropped - see the re-registration at the end of DispatchOnceBeforeFrame.
-	/// </summary>
-	public static Func<MyEntity, bool> ClusterDeferOnceBeforeFrame;
+    /// <summary>
+    /// Cluster seam: true when an entity belongs to a partition frozen for a transfer, so its
+    /// once-before-frame work must wait for the thaw instead of running against a grid whose physics is
+    /// disabled. Deferred, not dropped - see the re-registration at the end of DispatchOnceBeforeFrame.
+    /// </summary>
+    public static Func<MyEntity, bool> ClusterDeferOnceBeforeFrame;
 }

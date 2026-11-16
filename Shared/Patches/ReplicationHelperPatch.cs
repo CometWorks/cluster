@@ -24,7 +24,12 @@ namespace Shared.Patches;
 public static class ReplicationHelperPatch
 {
     [HarmonyPostfix]
-    private static void CheckMedicalRoomPostfix(long medicalRoom, MyPlayer player, MyCubeGridReplicable grid, bool __result)
+    private static void CheckMedicalRoomPostfix(
+        long medicalRoom,
+        MyPlayer player,
+        MyCubeGridReplicable grid,
+        bool __result
+    )
     {
         if (__result || !ClusterRuntime.IsClustered)
             return;
@@ -33,31 +38,51 @@ public static class ReplicationHelperPatch
             return;
         if (!(MyEntities.GetEntityById(medicalRoom) is IMySpawnBlock spawnBlock))
         {
-            log.WriteLine($"medical_room_rights_drop reason=no-spawn-block block={medicalRoom} grid={grid.EntityId}");
+            log.WriteLine(
+                $"medical_room_rights_drop reason=no-spawn-block block={medicalRoom} grid={grid.EntityId}"
+            );
             return;
         }
         if (!spawnBlock.Components.TryGet<IMyRespawnComponent>(out var component))
         {
-            log.WriteLine($"medical_room_rights_drop reason=no-respawn-component block={medicalRoom} grid={grid.EntityId} identity={player.Identity.IdentityId}");
+            log.WriteLine(
+                $"medical_room_rights_drop reason=no-respawn-component block={medicalRoom} grid={grid.EntityId} identity={player.Identity.IdentityId}"
+            );
             return;
         }
         if (!component.CanPlayerSpawn(player.Identity.IdentityId, acceptPublicRespawn: true))
         {
             MyTerminalBlock spawnTerminal = spawnBlock as MyTerminalBlock;
             bool access = spawnTerminal?.HasPlayerAccess(player.Identity.IdentityId) ?? false;
-            MyRelationsBetweenPlayerAndBlock relation = spawnTerminal == null
-                ? MyRelationsBetweenPlayerAndBlock.NoOwnership
-                : MyIDModule.GetRelationPlayerBlock(spawnTerminal.IDModule.Owner, player.Identity.IdentityId, spawnTerminal.IDModule.ShareMode);
-            bool playerFound = MySession.Static.Players.TryGetPlayer(player.Identity.IdentityId) != null;
-            log.WriteLine($"medical_room_rights_drop reason=cannot-spawn block={medicalRoom} grid={grid.EntityId} identity={player.Identity.IdentityId} access={access} relation={relation} playerFound={playerFound}");
+            MyRelationsBetweenPlayerAndBlock relation =
+                spawnTerminal == null
+                    ? MyRelationsBetweenPlayerAndBlock.NoOwnership
+                    : MyIDModule.GetRelationPlayerBlock(
+                        spawnTerminal.IDModule.Owner,
+                        player.Identity.IdentityId,
+                        spawnTerminal.IDModule.ShareMode
+                    );
+            bool playerFound =
+                MySession.Static.Players.TryGetPlayer(player.Identity.IdentityId) != null;
+            log.WriteLine(
+                $"medical_room_rights_drop reason=cannot-spawn block={medicalRoom} grid={grid.EntityId} identity={player.Identity.IdentityId} access={access} relation={relation} playerFound={playerFound}"
+            );
             return;
         }
         if (spawnBlock.CubeGrid.EntityId != grid.EntityId)
         {
             bool found = false;
-            (spawnBlock.CubeGrid as MyCubeGrid)?.GetConnectedGrids(GridLinkTypeEnum.Logical, x => { found |= x.EntityId == grid.EntityId; });
+            (spawnBlock.CubeGrid as MyCubeGrid)?.GetConnectedGrids(
+                GridLinkTypeEnum.Logical,
+                x =>
+                {
+                    found |= x.EntityId == grid.EntityId;
+                }
+            );
             if (!found)
-                log.WriteLine($"medical_room_rights_drop reason=grid-mismatch block={medicalRoom} blockGrid={spawnBlock.CubeGrid.EntityId} grid={grid.EntityId}");
+                log.WriteLine(
+                    $"medical_room_rights_drop reason=grid-mismatch block={medicalRoom} blockGrid={spawnBlock.CubeGrid.EntityId} grid={grid.EntityId}"
+                );
         }
     }
 }

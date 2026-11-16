@@ -20,23 +20,49 @@ internal static class PluginHandoverRoutes
         {
             lock (Sync)
             {
-                if (Events.Count >= 512) Events.RemoveAt(0);
-                Events.Add(new { hook, grid, state = state == null ? null : Encoding.UTF8.GetString(state),
-                    gameThread = Sandbox.MySandboxGame.Static?.UpdateThread == System.Threading.Thread.CurrentThread });
+                if (Events.Count >= 512)
+                    Events.RemoveAt(0);
+                Events.Add(
+                    new
+                    {
+                        hook,
+                        grid,
+                        state = state == null ? null : Encoding.UTF8.GetString(state),
+                        gameThread = Sandbox.MySandboxGame.Static?.UpdateThread
+                            == System.Threading.Thread.CurrentThread,
+                    }
+                );
             }
         }
+
         public byte[] Leaving(long gridId)
         {
-            string state, failure;
-            lock (Sync) { States.TryGetValue(gridId, out state); Failures.TryGetValue(gridId, out failure); }
-            if (failure == "throw") { Record("LeavingThrow", gridId); throw new InvalidOperationException("injected optional hint failure"); }
-            if (failure == "oversize") { Record("LeavingOversize", gridId); return new byte[PluginGridHandover.MaxStateBytes + 1]; }
+            string state,
+                failure;
+            lock (Sync)
+            {
+                States.TryGetValue(gridId, out state);
+                Failures.TryGetValue(gridId, out failure);
+            }
+            if (failure == "throw")
+            {
+                Record("LeavingThrow", gridId);
+                throw new InvalidOperationException("injected optional hint failure");
+            }
+            if (failure == "oversize")
+            {
+                Record("LeavingOversize", gridId);
+                return new byte[PluginGridHandover.MaxStateBytes + 1];
+            }
             byte[] bytes = state == null ? null : Encoding.UTF8.GetBytes(state);
             Record("Leaving", gridId, bytes);
             return bytes;
         }
+
         public void Left(long gridId) => Record("Left", gridId);
+
         public void Stayed(long gridId) => Record("Stayed", gridId);
+
         public void Arrived(long gridId, byte[] state) => Record("Arrived", gridId, state);
     }
 
@@ -44,33 +70,51 @@ internal static class PluginHandoverRoutes
     {
         // GET /plugin-handover[?grid=ID&state=TEXT] - register the hooks (idempotent), optionally set the state
         // Leaving returns for a grid, and list the hook calls seen here: {node, registered, events:[{hook, grid, state, gameThread}]}.
-        TestRoutes.Add("GET", "/plugin-handover", context =>
-        {
-            string id = PluginStorageRoutes.OwnId();
-            string error = null;
-            lock (Sync)
+        TestRoutes.Add(
+            "GET",
+            "/plugin-handover",
+            context =>
             {
-                if (registration == null)
-                    try { registration = PluginCluster.ForPlugin(id).RegisterGridHandover(new Hooks()); }
-                    catch (Exception failure) { error = failure.GetType().Name + ": " + failure.Message; }
-                if (long.TryParse(context.Request.QueryString["grid"], out long grid))
+                string id = PluginStorageRoutes.OwnId();
+                string error = null;
+                lock (Sync)
                 {
-                    States[grid] = context.Request.QueryString["state"];
-                    string failure = context.Request.QueryString["failure"];
-                    if (failure is not (null or "" or "throw" or "oversize")) throw new ArgumentException("failure is throw or oversize");
-                    Failures[grid] = failure;
+                    if (registration == null)
+                        try
+                        {
+                            registration = PluginCluster
+                                .ForPlugin(id)
+                                .RegisterGridHandover(new Hooks());
+                        }
+                        catch (Exception failure)
+                        {
+                            error = failure.GetType().Name + ": " + failure.Message;
+                        }
+                    if (long.TryParse(context.Request.QueryString["grid"], out long grid))
+                    {
+                        States[grid] = context.Request.QueryString["state"];
+                        string failure = context.Request.QueryString["failure"];
+                        if (failure is not (null or "" or "throw" or "oversize"))
+                            throw new ArgumentException("failure is throw or oversize");
+                        Failures[grid] = failure;
+                    }
                 }
+                object[] events;
+                lock (Sync)
+                    events = Events.ToArray();
+                TestRoutes.Json(
+                    context,
+                    200,
+                    new
+                    {
+                        node = Environment.GetEnvironmentVariable("CLUSTER_NODE_ID"),
+                        pluginId = id,
+                        registered = registration != null,
+                        error,
+                        events,
+                    }
+                );
             }
-            object[] events;
-            lock (Sync) events = Events.ToArray();
-            TestRoutes.Json(context, 200, new
-            {
-                node = Environment.GetEnvironmentVariable("CLUSTER_NODE_ID"),
-                pluginId = id,
-                registered = registration != null,
-                error,
-                events,
-            });
-        });
+        );
     }
 }

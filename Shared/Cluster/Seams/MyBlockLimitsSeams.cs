@@ -12,17 +12,32 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyBlockLimitsSeams
 {
-	// ClusterPlugin seam: raises the vanilla confirm dialog to a locally attached client on behalf of the node
-	// that holds the grid and the transfer transaction.
-	public static void ClusterRaiseTransferOffer(long gridEntityId, string gridName, long oldOwner, long newOwner,
-		int blocksCount, int pcu, ulong targetSteamId)
-	{
-		MyMultiplayer.RaiseStaticEvent((IMyEventOwner x) => MyBlockLimits.ReceiveTransferRequestMessage, new MyBlockLimits.TransferMessageData
-		{
-			EntityId = gridEntityId,
-			GridName = gridName,
-			BlocksBuilt = blocksCount,
-			PCUBuilt = pcu
-		}, oldOwner, newOwner, blocksCount, pcu, new EndpointId(targetSteamId));
-	}
+    // ClusterPlugin seam: raises the vanilla confirm dialog to a locally attached client on behalf of the node
+    // that holds the grid and the transfer transaction.
+    public static void ClusterRaiseTransferOffer(
+        long gridEntityId,
+        string gridName,
+        long oldOwner,
+        long newOwner,
+        int blocksCount,
+        int pcu,
+        ulong targetSteamId
+    )
+    {
+        MyMultiplayer.RaiseStaticEvent(
+            (IMyEventOwner x) => MyBlockLimits.ReceiveTransferRequestMessage,
+            new MyBlockLimits.TransferMessageData
+            {
+                EntityId = gridEntityId,
+                GridName = gridName,
+                BlocksBuilt = blocksCount,
+                PCUBuilt = pcu,
+            },
+            oldOwner,
+            newOwner,
+            blocksCount,
+            pcu,
+            new EndpointId(targetSteamId)
+        );
+    }
 }

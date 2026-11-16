@@ -27,8 +27,29 @@ internal sealed class SteamFrontend : IDisposable
     /// </summary>
     internal static readonly uint[] DlcAppIds =
     [
-        573160, 999999990, 999999991, 1049790, 1084680, 1135960, 1167910, 1241550, 1307680, 1374610, 1475830, 1676100,
-        1783760, 1958640, 2504720, 2569770, 2914120, 3066290, 3601770, 3858380, 4116960, 4502100, 4835530,
+        573160,
+        999999990,
+        999999991,
+        1049790,
+        1084680,
+        1135960,
+        1167910,
+        1241550,
+        1307680,
+        1374610,
+        1475830,
+        1676100,
+        1783760,
+        1958640,
+        2504720,
+        2569770,
+        2914120,
+        3066290,
+        3601770,
+        3858380,
+        4116960,
+        4502100,
+        4835530,
     ];
 
     /// <summary>How long a Steam inventory blob may stay pending before the check gives up.</summary>
@@ -41,10 +62,13 @@ internal sealed class SteamFrontend : IDisposable
     private readonly bool _acceptAllTag;
     private readonly ConcurrentQueue<Outgoing> _outgoing = new();
     private readonly ConcurrentQueue<SkinCheck> _skinChecks = new();
+
     /// <summary>Inventory blobs Steam is still deserializing; pump thread only.</summary>
     private readonly List<SkinCheck> _pendingSkinChecks = [];
+
     /// <summary>asset_modifier_id of each Steam item definition that is an armor or block skin, "" for the rest; pump thread only.</summary>
     private readonly Dictionary<int, string> _skinOfItem = [];
+
     /// <summary>Steam sent the item definitions; until then a blob's items can't be named.</summary>
     private bool _definitionsLoaded;
     private readonly ConcurrentDictionary<ulong, SteamSession> _sessions = new();
@@ -54,9 +78,15 @@ internal sealed class SteamFrontend : IDisposable
     private Thread? _queryThread;
     private volatile bool _running;
     private volatile bool _publishDirty = true;
+
     /// <summary>Players already reported as unpublishable, so the log says it once each.</summary>
     private readonly HashSet<ulong> _unnamedReported = [];
-    private long _sentPackets, _receivedPackets, _queries, _authRequests, _authRejections;
+    private long _sentPackets,
+        _receivedPackets,
+        _queries,
+        _authRequests,
+        _authRejections;
+
     /// <summary>The Workshop size query of the world's mods (#1529): started once logged on, null when done or not needed.</summary>
     private CallResult<SteamUGCQueryCompleted_t>? _modSizes;
     private bool _modSizesAsked;
@@ -65,14 +95,17 @@ internal sealed class SteamFrontend : IDisposable
     public Func<ulong, bool> SessionRequested = _ => false;
     public Action<ulong, GatewayPacket> Received = (_, _) => { };
     public Action<ulong, string> SessionFailed = (_, _) => { };
+
     /// <summary>The Gateway closed the session; Steam P2P has no disconnect event of its own.</summary>
     public Action<ulong> SessionClosed = _ => { };
+
     /// <summary>
     /// Ticket verdict, also fired for mid-session revocations (§2.6). The last argument is the DLC app ids of
     /// <see cref="DlcAppIds"/> the player has no license for (SE-1158), null unless the verdict is OK.
     /// </summary>
     public Action<ulong, JoinResult, ulong, uint[]?> TicketValidated = (_, _, _, _) => { };
     public Action<ulong, bool> GroupStatus = (_, _) => { };
+
     /// <summary>Cluster-wide player list for the browser row: id and display name.</summary>
     /// <summary>
     /// The cluster's live players. <c>Steam</c> is false for a client admitted without a Steam
@@ -86,7 +119,12 @@ internal sealed class SteamFrontend : IDisposable
     public bool Secure { get; private set; }
     public IPAddress PublicAddress { get; private set; } = IPAddress.Any;
 
-    public SteamFrontend(IPEndPoint endpoint, string version, AdmissionBook admission, bool acceptAllTag)
+    public SteamFrontend(
+        IPEndPoint endpoint,
+        string version,
+        AdmissionBook admission,
+        bool acceptAllTag
+    )
     {
         _endpoint = endpoint;
         _version = version;
@@ -101,33 +139,56 @@ internal sealed class SteamFrontend : IDisposable
         // SetEnvironmentVariable - the app id has to go through setenv or Init fails.
         SetNativeEnvironment("SteamAppId", SpaceEngineersAppId.ToString());
         SetNativeEnvironment("SteamGameId", SpaceEngineersAppId.ToString());
-        uint address = _endpoint.Address.Equals(IPAddress.Any) ? 0
+        uint address = _endpoint.Address.Equals(IPAddress.Any)
+            ? 0
             : BitConverter.ToUInt32(_endpoint.Address.GetAddressBytes().Reverse().ToArray());
-        if (!GameServer.Init(address, (ushort)_endpoint.Port, ushort.MaxValue,
-            EServerMode.eServerModeAuthenticationAndSecure, AdmissionBook.BuildNumber(_version)))
+        if (
+            !GameServer.Init(
+                address,
+                (ushort)_endpoint.Port,
+                ushort.MaxValue,
+                EServerMode.eServerModeAuthenticationAndSecure,
+                AdmissionBook.BuildNumber(_version)
+            )
+        )
             throw new InvalidOperationException($"Steam GameServer.Init failed on {_endpoint}");
 
-        _callbacks.Add(Callback<ValidateAuthTicketResponse_t>.CreateGameServer(OnValidateAuthTicket));
+        _callbacks.Add(
+            Callback<ValidateAuthTicketResponse_t>.CreateGameServer(OnValidateAuthTicket)
+        );
         _callbacks.Add(Callback<P2PSessionRequest_t>.CreateGameServer(OnSessionRequest));
         _callbacks.Add(Callback<P2PSessionConnectFail_t>.CreateGameServer(OnSessionConnectFail));
         _callbacks.Add(Callback<GSClientGroupStatus_t>.CreateGameServer(OnGroupStatus));
-        _callbacks.Add(Callback<SteamServersConnected_t>.CreateGameServer(_ =>
-        {
-            LoggedOn = true;
-            Console.WriteLine($"Steam GameServer connected as {SteamGameServer.GetSteamID()}");
-            // As MySteamInventoryServer: the item definitions name the skin each inventory item is (SE-1158).
-            // Asked before the logon, Steam sent them only with the first inventory blob, too late for it.
-            SteamGameServerInventory.LoadItemDefinitions();
-        }));
-        _callbacks.Add(Callback<SteamServersDisconnected_t>.CreateGameServer(result =>
-        {
-            LoggedOn = false;
-            Console.Error.WriteLine("Steam GameServer disconnected: " + result.m_eResult);
-        }));
-        _callbacks.Add(Callback<SteamServerConnectFailure_t>.CreateGameServer(result =>
-            Console.Error.WriteLine($"Steam GameServer logon failed: {result.m_eResult} retrying={result.m_bStillRetrying}")));
-        _callbacks.Add(Callback<GSPolicyResponse_t>.CreateGameServer(result => Secure = result.m_bSecure != 0));
-        _callbacks.Add(Callback<SteamInventoryDefinitionUpdate_t>.CreateGameServer(_ => LoadSkinDefinitions()));
+        _callbacks.Add(
+            Callback<SteamServersConnected_t>.CreateGameServer(_ =>
+            {
+                LoggedOn = true;
+                Console.WriteLine($"Steam GameServer connected as {SteamGameServer.GetSteamID()}");
+                // As MySteamInventoryServer: the item definitions name the skin each inventory item is (SE-1158).
+                // Asked before the logon, Steam sent them only with the first inventory blob, too late for it.
+                SteamGameServerInventory.LoadItemDefinitions();
+            })
+        );
+        _callbacks.Add(
+            Callback<SteamServersDisconnected_t>.CreateGameServer(result =>
+            {
+                LoggedOn = false;
+                Console.Error.WriteLine("Steam GameServer disconnected: " + result.m_eResult);
+            })
+        );
+        _callbacks.Add(
+            Callback<SteamServerConnectFailure_t>.CreateGameServer(result =>
+                Console.Error.WriteLine(
+                    $"Steam GameServer logon failed: {result.m_eResult} retrying={result.m_bStillRetrying}"
+                )
+            )
+        );
+        _callbacks.Add(
+            Callback<GSPolicyResponse_t>.CreateGameServer(result => Secure = result.m_bSecure != 0)
+        );
+        _callbacks.Add(
+            Callback<SteamInventoryDefinitionUpdate_t>.CreateGameServer(_ => LoadSkinDefinitions())
+        );
 
         SteamGameServer.SetProduct("Space Engineers");
         SteamGameServer.SetGameDescription("Space Engineers");
@@ -154,8 +215,10 @@ internal sealed class SteamFrontend : IDisposable
 
         for (int attempt = 0; attempt < 300 && ServerId == 0; attempt++)
             Thread.Sleep(100);
-        Console.WriteLine($"Steam frontend listening on {_endpoint} as {ServerId}, public address {PublicAddress},"
-            + $" secure {Secure}, tags '{_admission.GameTags(_version, _acceptAllTag)}'");
+        Console.WriteLine(
+            $"Steam frontend listening on {_endpoint} as {ServerId}, public address {PublicAddress},"
+                + $" secure {Secure}, tags '{_admission.GameTags(_version, _acceptAllTag)}'"
+        );
         if (ServerId == 0)
             throw new InvalidOperationException("Steam GameServer did not obtain an identity");
     }
@@ -163,16 +226,41 @@ internal sealed class SteamFrontend : IDisposable
     public void Dispose()
     {
         _running = false;
-        try { _query?.Close(); } catch { }
-        try { _pump?.Join(2000); } catch { }
-        try { _queryThread?.Join(2000); } catch { }
-        foreach (IDisposable callback in _callbacks) callback.Dispose();
+        try
+        {
+            _query?.Close();
+        }
+        catch { }
+        try
+        {
+            _pump?.Join(2000);
+        }
+        catch { }
+        try
+        {
+            _queryThread?.Join(2000);
+        }
+        catch { }
+        foreach (IDisposable callback in _callbacks)
+            callback.Dispose();
         if (ServerId != 0)
         {
-            try { SteamGameServer.SetAdvertiseServerActive(false); } catch { }
-            try { SteamGameServer.LogOff(); } catch { }
+            try
+            {
+                SteamGameServer.SetAdvertiseServerActive(false);
+            }
+            catch { }
+            try
+            {
+                SteamGameServer.LogOff();
+            }
+            catch { }
         }
-        try { GameServer.Shutdown(); } catch { }
+        try
+        {
+            GameServer.Shutdown();
+        }
+        catch { }
     }
 
     public ClientChannel Channel(ulong userId) => new SteamClientChannel(this, userId);
@@ -181,11 +269,13 @@ internal sealed class SteamFrontend : IDisposable
     {
         if (!_sessions.ContainsKey(userId))
             return;
-        _outgoing.Enqueue(new Outgoing(userId, checked((byte)packet.Channel), packet.Payload, packet.Delivery));
+        _outgoing.Enqueue(
+            new Outgoing(userId, checked((byte)packet.Channel), packet.Payload, packet.Delivery)
+        );
     }
 
-    public bool Active(ulong userId) => _sessions.TryGetValue(userId, out SteamSession? session)
-        && session.DetachedAt == 0;
+    public bool Active(ulong userId) =>
+        _sessions.TryGetValue(userId, out SteamSession? session) && session.DetachedAt == 0;
 
     public int QueuedPackets(ulong userId) =>
         _sessions.TryGetValue(userId, out SteamSession? session) ? session.QueuedPackets : 0;
@@ -193,15 +283,26 @@ internal sealed class SteamFrontend : IDisposable
     public void BeginAuth(ulong userId, byte[] token)
     {
         Interlocked.Increment(ref _authRequests);
-        _outgoing.Enqueue(new Outgoing(userId, 0, token, DeliveryMethod.ReliableOrdered, OutgoingKind.BeginAuth));
+        _outgoing.Enqueue(
+            new Outgoing(userId, 0, token, DeliveryMethod.ReliableOrdered, OutgoingKind.BeginAuth)
+        );
     }
 
     public void EndAuth(ulong userId) =>
-        _outgoing.Enqueue(new Outgoing(userId, 0, [], DeliveryMethod.ReliableOrdered, OutgoingKind.EndAuth));
+        _outgoing.Enqueue(
+            new Outgoing(userId, 0, [], DeliveryMethod.ReliableOrdered, OutgoingKind.EndAuth)
+        );
 
     public void RequestGroupStatus(ulong userId, ulong groupId) =>
-        _outgoing.Enqueue(new Outgoing(userId, 0, BitConverter.GetBytes(groupId), DeliveryMethod.ReliableOrdered,
-            OutgoingKind.GroupStatus));
+        _outgoing.Enqueue(
+            new Outgoing(
+                userId,
+                0,
+                BitConverter.GetBytes(groupId),
+                DeliveryMethod.ReliableOrdered,
+                OutgoingKind.GroupStatus
+            )
+        );
 
     /// <summary>
     /// Ends the auth session and detaches the client, but leaves the Steam P2P session itself open
@@ -214,7 +315,9 @@ internal sealed class SteamFrontend : IDisposable
     {
         if (_sessions.TryGetValue(userId, out SteamSession? session))
             session.DetachedAt = Environment.TickCount64;
-        _outgoing.Enqueue(new Outgoing(userId, 0, [], DeliveryMethod.ReliableOrdered, OutgoingKind.EndAuth));
+        _outgoing.Enqueue(
+            new Outgoing(userId, 0, [], DeliveryMethod.ReliableOrdered, OutgoingKind.EndAuth)
+        );
         // Ending the auth session takes the player off Steam's active list, so the browser row is
         // stale from this moment: republish rather than wait for the 5 s tick or the 30 s hard close.
         _publishDirty = true;
@@ -223,16 +326,25 @@ internal sealed class SteamFrontend : IDisposable
 
     public void PublishDirty() => _publishDirty = true;
 
-    public object Status() => new
-    {
-        endpoint = _endpoint.ToString(), serverId = ServerId, loggedOn = LoggedOn, secure = Secure,
-        publicAddress = PublicAddress.ToString(), sessions = _sessions.Count,
-        sentPackets = Interlocked.Read(ref _sentPackets), receivedPackets = Interlocked.Read(ref _receivedPackets),
-        queries = Interlocked.Read(ref _queries), authRequests = Interlocked.Read(ref _authRequests),
-        authRejections = Interlocked.Read(ref _authRejections),
-        serverName = _admission.Settings.ServerName, worldName = _admission.Settings.WorldName,
-        maxPlayers = _admission.Settings.MemberLimit, tags = _admission.GameTags(_version, _acceptAllTag),
-    };
+    public object Status() =>
+        new
+        {
+            endpoint = _endpoint.ToString(),
+            serverId = ServerId,
+            loggedOn = LoggedOn,
+            secure = Secure,
+            publicAddress = PublicAddress.ToString(),
+            sessions = _sessions.Count,
+            sentPackets = Interlocked.Read(ref _sentPackets),
+            receivedPackets = Interlocked.Read(ref _receivedPackets),
+            queries = Interlocked.Read(ref _queries),
+            authRequests = Interlocked.Read(ref _authRequests),
+            authRejections = Interlocked.Read(ref _authRejections),
+            serverName = _admission.Settings.ServerName,
+            worldName = _admission.Settings.WorldName,
+            maxPlayers = _admission.Settings.MemberLimit,
+            tags = _admission.GameTags(_version, _acceptAllTag),
+        };
 
     private void PumpLoop()
     {
@@ -254,22 +366,44 @@ internal sealed class SteamFrontend : IDisposable
                 DrainOutgoing();
                 PumpSkinChecks();
                 foreach (byte channel in VanillaChannels)
-                    while (SteamGameServerNetworking.IsP2PPacketAvailable(out uint size, channel) && size <= MaximumPacket)
+                    while (
+                        SteamGameServerNetworking.IsP2PPacketAvailable(out uint size, channel)
+                        && size <= MaximumPacket
+                    )
                     {
-                        if (!SteamGameServerNetworking.ReadP2PPacket(buffer, (uint)buffer.Length, out uint read,
-                            out CSteamID remote, channel))
+                        if (
+                            !SteamGameServerNetworking.ReadP2PPacket(
+                                buffer,
+                                (uint)buffer.Length,
+                                out uint read,
+                                out CSteamID remote,
+                                channel
+                            )
+                        )
                             break;
                         Interlocked.Increment(ref _receivedPackets);
                         byte[] payload = buffer[..(int)read];
                         // Traffic means the peer is there: adopt the session whether it was
                         // detached by a forced disconnect or never announced by a request.
-                        _sessions.GetOrAdd((ulong)remote, id => new SteamSession(id)).DetachedAt = 0;
-                        Received((ulong)remote, new GatewayPacket((ulong)remote, channel, payload,
-                            DeliveryMethod.ReliableOrdered));
+                        _sessions.GetOrAdd((ulong)remote, id => new SteamSession(id)).DetachedAt =
+                            0;
+                        Received(
+                            (ulong)remote,
+                            new GatewayPacket(
+                                (ulong)remote,
+                                channel,
+                                payload,
+                                DeliveryMethod.ReliableOrdered
+                            )
+                        );
                     }
                 foreach (SteamSession session in _sessions.Values)
-                    session.QueuedPackets = SteamGameServerNetworking.GetP2PSessionState((CSteamID)session.UserId,
-                        out P2PSessionState_t state) ? state.m_nPacketsQueuedForSend : 0;
+                    session.QueuedPackets = SteamGameServerNetworking.GetP2PSessionState(
+                        (CSteamID)session.UserId,
+                        out P2PSessionState_t state
+                    )
+                        ? state.m_nPacketsQueuedForSend
+                        : 0;
                 ReapDetachedSessions();
                 long now = Environment.TickCount64;
                 if (_publishDirty || now >= nextPublish)
@@ -279,7 +413,10 @@ internal sealed class SteamFrontend : IDisposable
                     Publish(published);
                 }
             }
-            catch (Exception e) { Console.Error.WriteLine("Steam pump failed: " + e); }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("Steam pump failed: " + e);
+            }
             Thread.Sleep(1);
         }
     }
@@ -321,19 +458,33 @@ internal sealed class SteamFrontend : IDisposable
             switch (message.Kind)
             {
                 case OutgoingKind.Packet:
-                    EP2PSend send = message.Delivery == DeliveryMethod.Unreliable
-                        ? EP2PSend.k_EP2PSendUnreliable : EP2PSend.k_EP2PSendReliable;
-                    if (SteamGameServerNetworking.SendP2PPacket(user, message.Payload, (uint)message.Payload.Length,
-                        send, message.Channel))
+                    EP2PSend send =
+                        message.Delivery == DeliveryMethod.Unreliable
+                            ? EP2PSend.k_EP2PSendUnreliable
+                            : EP2PSend.k_EP2PSendReliable;
+                    if (
+                        SteamGameServerNetworking.SendP2PPacket(
+                            user,
+                            message.Payload,
+                            (uint)message.Payload.Length,
+                            send,
+                            message.Channel
+                        )
+                    )
                         Interlocked.Increment(ref _sentPackets);
                     break;
                 case OutgoingKind.BeginAuth:
-                    EBeginAuthSessionResult result = SteamGameServer.BeginAuthSession(message.Payload,
-                        message.Payload.Length, user);
+                    EBeginAuthSessionResult result = SteamGameServer.BeginAuthSession(
+                        message.Payload,
+                        message.Payload.Length,
+                        user
+                    );
                     if (result != EBeginAuthSessionResult.k_EBeginAuthSessionResultOK)
                     {
                         Interlocked.Increment(ref _authRejections);
-                        Console.Error.WriteLine($"Steam BeginAuthSession for {message.UserId} failed: {result}");
+                        Console.Error.WriteLine(
+                            $"Steam BeginAuthSession for {message.UserId} failed: {result}"
+                        );
                         TicketValidated(message.UserId, JoinResult.TicketInvalid, 0, null);
                     }
                     break;
@@ -341,7 +492,10 @@ internal sealed class SteamFrontend : IDisposable
                     SteamGameServer.EndAuthSession(user);
                     break;
                 case OutgoingKind.GroupStatus:
-                    SteamGameServer.RequestUserGroupStatus(user, (CSteamID)BitConverter.ToUInt64(message.Payload));
+                    SteamGameServer.RequestUserGroupStatus(
+                        user,
+                        (CSteamID)BitConverter.ToUInt64(message.Payload)
+                    );
                     break;
             }
         }
@@ -385,12 +539,19 @@ internal sealed class SteamFrontend : IDisposable
             if (published.Remove(userId) || !_unnamedReported.Contains(userId))
             {
                 _unnamedReported.Add(userId);
-                Console.WriteLine($"Steam would not publish player {userId} ({name}, "
-                    + (steam ? "Steam" : "Direct Transport") + "); counting it in the bot slot");
+                Console.WriteLine(
+                    $"Steam would not publish player {userId} ({name}, "
+                        + (steam ? "Steam" : "Direct Transport")
+                        + "); counting it in the bot slot"
+                );
             }
         }
         _unnamedReported.RemoveWhere(id => players.All(player => player.UserId != id));
-        foreach (ulong gone in published.Keys.Where(id => players.All(player => player.UserId != id)).ToArray())
+        foreach (
+            ulong gone in published
+                .Keys.Where(id => players.All(player => player.UserId != id))
+                .ToArray()
+        )
             published.Remove(gone);
         SteamGameServer.SetBotPlayerCount(unnamed);
         SteamGameServer.SetMapName(_admission.Settings.WorldName);
@@ -417,37 +578,56 @@ internal sealed class SteamFrontend : IDisposable
         if (ids.Length == 0 || _admission.Settings.ModsTotalSize > 0)
             return;
         ulong total = 0;
-        int answered = 0, offset = 0;
+        int answered = 0,
+            offset = 0;
         void Next()
         {
-            PublishedFileId_t[] page = [.. ids.Skip(offset).Take(50).Select(id => new PublishedFileId_t(id))];
-            UGCQueryHandle_t query = SteamGameServerUGC.CreateQueryUGCDetailsRequest(page, (uint)page.Length);
-            _modSizes = CallResult<SteamUGCQueryCompleted_t>.Create((result, failed) =>
-            {
-                if (!failed && result.m_eResult == EResult.k_EResultOK)
+            PublishedFileId_t[] page =
+            [
+                .. ids.Skip(offset).Take(50).Select(id => new PublishedFileId_t(id)),
+            ];
+            UGCQueryHandle_t query = SteamGameServerUGC.CreateQueryUGCDetailsRequest(
+                page,
+                (uint)page.Length
+            );
+            _modSizes = CallResult<SteamUGCQueryCompleted_t>.Create(
+                (result, failed) =>
                 {
-                    for (uint i = 0; i < result.m_unNumResultsReturned; i++)
-                        if (SteamGameServerUGC.GetQueryUGCResult(result.m_handle, i, out SteamUGCDetails_t details)
-                            && details.m_eResult == EResult.k_EResultOK)
-                        {
-                            total += (ulong)Math.Max(0, details.m_nFileSize);
-                            answered++;
-                        }
+                    if (!failed && result.m_eResult == EResult.k_EResultOK)
+                    {
+                        for (uint i = 0; i < result.m_unNumResultsReturned; i++)
+                            if (
+                                SteamGameServerUGC.GetQueryUGCResult(
+                                    result.m_handle,
+                                    i,
+                                    out SteamUGCDetails_t details
+                                )
+                                && details.m_eResult == EResult.k_EResultOK
+                            )
+                            {
+                                total += (ulong)Math.Max(0, details.m_nFileSize);
+                                answered++;
+                            }
+                    }
+                    else
+                        Console.Error.WriteLine(
+                            $"Steam mod size query failed: {(failed ? "IO failure" : result.m_eResult)}"
+                        );
+                    SteamGameServerUGC.ReleaseQueryUGCRequest(result.m_handle);
+                    offset += 50;
+                    if (offset < ids.Length)
+                    {
+                        Next();
+                        return;
+                    }
+                    _modSizes = null;
+                    _admission.ModsTotalSize = total;
+                    _publishDirty = true;
+                    Console.WriteLine(
+                        $"Steam mods: {ids.Length} world mods, {answered} with Workshop details, modsTotalSize {total}"
+                    );
                 }
-                else
-                    Console.Error.WriteLine($"Steam mod size query failed: {(failed ? "IO failure" : result.m_eResult)}");
-                SteamGameServerUGC.ReleaseQueryUGCRequest(result.m_handle);
-                offset += 50;
-                if (offset < ids.Length)
-                {
-                    Next();
-                    return;
-                }
-                _modSizes = null;
-                _admission.ModsTotalSize = total;
-                _publishDirty = true;
-                Console.WriteLine($"Steam mods: {ids.Length} world mods, {answered} with Workshop details, modsTotalSize {total}");
-            });
+            );
             _modSizes.Set(SteamGameServerUGC.SendQueryUGCRequest(query));
         }
         Next();
@@ -463,8 +643,14 @@ internal sealed class SteamFrontend : IDisposable
         {
             EndPoint remote = new IPEndPoint(IPAddress.Any, 0);
             int size;
-            try { size = socket.ReceiveFrom(buffer, ref remote); }
-            catch (Exception) { return; }
+            try
+            {
+                size = socket.ReceiveFrom(buffer, ref remote);
+            }
+            catch (Exception)
+            {
+                return;
+            }
             if (size < 4 || BitConverter.ToUInt32(buffer, 0) != uint.MaxValue)
                 continue;
             var from = (IPEndPoint)remote;
@@ -473,14 +659,40 @@ internal sealed class SteamFrontend : IDisposable
             // pump thread drives RunCallbacks.
             try
             {
-                SteamGameServer.HandleIncomingPacket(buffer, size, HostOrder(from.Address), (ushort)from.Port);
-                while ((size = SteamGameServer.GetNextOutgoingPacket(buffer, buffer.Length, out uint address,
-                    out ushort port)) > 0)
-                    socket.SendTo(buffer, size, SocketFlags.None,
-                        new IPEndPoint(new IPAddress(BitConverter.GetBytes(
-                            (uint)IPAddress.HostToNetworkOrder((int)address))), port));
+                SteamGameServer.HandleIncomingPacket(
+                    buffer,
+                    size,
+                    HostOrder(from.Address),
+                    (ushort)from.Port
+                );
+                while (
+                    (
+                        size = SteamGameServer.GetNextOutgoingPacket(
+                            buffer,
+                            buffer.Length,
+                            out uint address,
+                            out ushort port
+                        )
+                    ) > 0
+                )
+                    socket.SendTo(
+                        buffer,
+                        size,
+                        SocketFlags.None,
+                        new IPEndPoint(
+                            new IPAddress(
+                                BitConverter.GetBytes(
+                                    (uint)IPAddress.HostToNetworkOrder((int)address)
+                                )
+                            ),
+                            port
+                        )
+                    );
             }
-            catch (Exception e) { Console.Error.WriteLine("Steam query failed: " + e); }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("Steam query failed: " + e);
+            }
         }
     }
 
@@ -513,20 +725,29 @@ internal sealed class SteamFrontend : IDisposable
     }
 
     /// <summary>Security.md §9 item 1: the JoinResult vanilla shows for each Steam verdict.</summary>
-    internal static JoinResult Verdict(EAuthSessionResponse response) => response switch
-    {
-        EAuthSessionResponse.k_EAuthSessionResponseOK => JoinResult.OK,
-        EAuthSessionResponse.k_EAuthSessionResponseUserNotConnectedToSteam => JoinResult.UserNotConnected,
-        EAuthSessionResponse.k_EAuthSessionResponseNoLicenseOrExpired => JoinResult.NoLicenseOrExpired,
-        EAuthSessionResponse.k_EAuthSessionResponseVACBanned => JoinResult.VACBanned,
-        EAuthSessionResponse.k_EAuthSessionResponseLoggedInElseWhere => JoinResult.LoggedInElseWhere,
-        EAuthSessionResponse.k_EAuthSessionResponseVACCheckTimedOut => JoinResult.VACCheckTimedOut,
-        EAuthSessionResponse.k_EAuthSessionResponseAuthTicketCanceled => JoinResult.TicketCanceled,
-        EAuthSessionResponse.k_EAuthSessionResponseAuthTicketInvalidAlreadyUsed => JoinResult.TicketAlreadyUsed,
-        EAuthSessionResponse.k_EAuthSessionResponseAuthTicketInvalid => JoinResult.TicketInvalid,
-        EAuthSessionResponse.k_EAuthSessionResponsePublisherIssuedBan => JoinResult.BannedByAdmins,
-        _ => JoinResult.TicketInvalid,
-    };
+    internal static JoinResult Verdict(EAuthSessionResponse response) =>
+        response switch
+        {
+            EAuthSessionResponse.k_EAuthSessionResponseOK => JoinResult.OK,
+            EAuthSessionResponse.k_EAuthSessionResponseUserNotConnectedToSteam =>
+                JoinResult.UserNotConnected,
+            EAuthSessionResponse.k_EAuthSessionResponseNoLicenseOrExpired =>
+                JoinResult.NoLicenseOrExpired,
+            EAuthSessionResponse.k_EAuthSessionResponseVACBanned => JoinResult.VACBanned,
+            EAuthSessionResponse.k_EAuthSessionResponseLoggedInElseWhere =>
+                JoinResult.LoggedInElseWhere,
+            EAuthSessionResponse.k_EAuthSessionResponseVACCheckTimedOut =>
+                JoinResult.VACCheckTimedOut,
+            EAuthSessionResponse.k_EAuthSessionResponseAuthTicketCanceled =>
+                JoinResult.TicketCanceled,
+            EAuthSessionResponse.k_EAuthSessionResponseAuthTicketInvalidAlreadyUsed =>
+                JoinResult.TicketAlreadyUsed,
+            EAuthSessionResponse.k_EAuthSessionResponseAuthTicketInvalid =>
+                JoinResult.TicketInvalid,
+            EAuthSessionResponse.k_EAuthSessionResponsePublisherIssuedBan =>
+                JoinResult.BannedByAdmins,
+            _ => JoinResult.TicketInvalid,
+        };
 
     private void OnValidateAuthTicket(ValidateAuthTicketResponse_t response)
     {
@@ -534,17 +755,31 @@ internal sealed class SteamFrontend : IDisposable
         if (result != JoinResult.OK)
             Interlocked.Increment(ref _authRejections);
         uint[]? missingDlcs = result == JoinResult.OK ? MissingDlcs(response.m_SteamID) : null;
-        Console.WriteLine($"Steam ticket verdict for {(ulong)response.m_SteamID}: {result}"
-            + $" owner {(ulong)response.m_OwnerSteamID}"
-            + (missingDlcs == null ? "" : $" DLCs {DlcAppIds.Length - missingDlcs.Length}/{DlcAppIds.Length}"));
-        TicketValidated((ulong)response.m_SteamID, result, (ulong)response.m_OwnerSteamID, missingDlcs);
+        Console.WriteLine(
+            $"Steam ticket verdict for {(ulong)response.m_SteamID}: {result}"
+                + $" owner {(ulong)response.m_OwnerSteamID}"
+                + (
+                    missingDlcs == null
+                        ? ""
+                        : $" DLCs {DlcAppIds.Length - missingDlcs.Length}/{DlcAppIds.Length}"
+                )
+        );
+        TicketValidated(
+            (ulong)response.m_SteamID,
+            result,
+            (ulong)response.m_OwnerSteamID,
+            missingDlcs
+        );
     }
 
     /// <summary>SE-1158: what MySessionComponentDLC.UpdateClientDLC asks a vanilla DS's game server, for the nodes.</summary>
-    private static uint[] MissingDlcs(CSteamID user) => DlcAppIds
-        .Where(app => SteamGameServer.UserHasLicenseForApp(user, (AppId_t)app)
-            != EUserHasLicenseForAppResult.k_EUserHasLicenseResultHasLicense)
-        .ToArray();
+    private static uint[] MissingDlcs(CSteamID user) =>
+        DlcAppIds
+            .Where(app =>
+                SteamGameServer.UserHasLicenseForApp(user, (AppId_t)app)
+                != EUserHasLicenseForAppResult.k_EUserHasLicenseResultHasLicense
+            )
+            .ToArray();
 
     /// <summary>
     /// SE-1158: the armor and block skins in a client's Steam inventory blob, the one the client sends a vanilla DS
@@ -562,7 +797,13 @@ internal sealed class SteamFrontend : IDisposable
     {
         while (_skinChecks.TryDequeue(out SkinCheck? check))
         {
-            if (!SteamGameServerInventory.DeserializeResult(out check.Handle, check.Data, (uint)check.Data.Length))
+            if (
+                !SteamGameServerInventory.DeserializeResult(
+                    out check.Handle,
+                    check.Data,
+                    (uint)check.Data.Length
+                )
+            )
             {
                 check.Result.TrySetResult(null);
                 continue;
@@ -573,8 +814,13 @@ internal sealed class SteamFrontend : IDisposable
         _pendingSkinChecks.RemoveAll(check =>
         {
             EResult status = SteamGameServerInventory.GetResultStatus(check.Handle);
-            if ((status == EResult.k_EResultPending || status == EResult.k_EResultOK && !_definitionsLoaded)
-                && Environment.TickCount64 < check.Deadline)
+            if (
+                (
+                    status == EResult.k_EResultPending
+                    || status == EResult.k_EResultOK && !_definitionsLoaded
+                )
+                && Environment.TickCount64 < check.Deadline
+            )
                 return false;
             check.Result.TrySetResult(status == EResult.k_EResultOK ? SkinsOf(check) : null);
             SteamGameServerInventory.DestroyResult(check.Handle);
@@ -593,7 +839,11 @@ internal sealed class SteamFrontend : IDisposable
         var items = new SteamItemDetails_t[count];
         if (count > 0 && !SteamGameServerInventory.GetResultItems(check.Handle, items, ref count))
             return null;
-        return items.Select(item => SkinOf(item.m_iDefinition)).Where(skin => skin.Length > 0).Distinct().ToArray();
+        return items
+            .Select(item => SkinOf(item.m_iDefinition))
+            .Where(skin => skin.Length > 0)
+            .Distinct()
+            .ToArray();
     }
 
     /// <summary>Steam sent the item definitions (MySteamInventoryServer.OnSteamInventoryDefinitionUpdate): learn the skins now.</summary>
@@ -607,7 +857,9 @@ internal sealed class SteamFrontend : IDisposable
             return;
         int skins = definitions.Count(definition => SkinOf(definition).Length > 0);
         _definitionsLoaded = true;
-        Console.WriteLine($"Steam inventory definitions: {definitions.Length} items, {skins} armor and block skins");
+        Console.WriteLine(
+            $"Steam inventory definitions: {definitions.Length} items, {skins} armor and block skins"
+        );
     }
 
     /// <summary>MySessionComponentGameInventory keeps only the Armor and Block slot items, by asset_modifier_id.</summary>
@@ -618,7 +870,9 @@ internal sealed class SteamFrontend : IDisposable
         string slot = DefinitionProperty(definition, "item_slot");
         if (slot.Length == 0)
             return ""; // definitions not loaded yet: ask again next time
-        skin = slot is "Armor" or "Block" ? DefinitionProperty(definition, "asset_modifier_id") : "";
+        skin = slot is "Armor" or "Block"
+            ? DefinitionProperty(definition, "asset_modifier_id")
+            : "";
         _skinOfItem[definition.m_SteamItemDef] = skin;
         return skin;
     }
@@ -626,7 +880,14 @@ internal sealed class SteamFrontend : IDisposable
     private static string DefinitionProperty(SteamItemDef_t definition, string name)
     {
         uint size = 2048;
-        return SteamGameServerInventory.GetItemDefinitionProperty(definition, name, out string value, ref size) ? value : "";
+        return SteamGameServerInventory.GetItemDefinitionProperty(
+            definition,
+            name,
+            out string value,
+            ref size
+        )
+            ? value
+            : "";
     }
 
     private void OnGroupStatus(GSClientGroupStatus_t status) =>
@@ -655,10 +916,16 @@ internal sealed class SteamFrontend : IDisposable
                 File.Move(staging, target, overwrite: true);
             }
         }
-        catch (IOException) { /* ponytail: a concurrent instance already staged it; good enough */ }
+        catch (IOException)
+        { /* ponytail: a concurrent instance already staged it; good enough */
+        }
         finally
         {
-            try { File.Delete(staging); } catch (IOException) { }
+            try
+            {
+                File.Delete(staging);
+            }
+            catch (IOException) { }
         }
     }
 
@@ -672,16 +939,29 @@ internal sealed class SteamFrontend : IDisposable
     [DllImport("libc", SetLastError = true)]
     private static extern int setenv(string name, string value, int overwrite);
 
-    private enum OutgoingKind { Packet, BeginAuth, EndAuth, GroupStatus }
+    private enum OutgoingKind
+    {
+        Packet,
+        BeginAuth,
+        EndAuth,
+        GroupStatus,
+    }
 
-    private readonly record struct Outgoing(ulong UserId, byte Channel, byte[] Payload, DeliveryMethod Delivery,
-        OutgoingKind Kind = OutgoingKind.Packet);
+    private readonly record struct Outgoing(
+        ulong UserId,
+        byte Channel,
+        byte[] Payload,
+        DeliveryMethod Delivery,
+        OutgoingKind Kind = OutgoingKind.Packet
+    );
 
     private sealed class SkinCheck(ulong userId, byte[] data)
     {
         public readonly ulong UserId = userId;
         public readonly byte[] Data = data;
-        public readonly TaskCompletionSource<string[]?> Result = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource<string[]?> Result = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         public SteamInventoryResult_t Handle;
         public long Deadline;
     }
@@ -689,6 +969,7 @@ internal sealed class SteamFrontend : IDisposable
     private sealed class SteamSession(ulong userId)
     {
         public readonly ulong UserId = userId;
+
         /// <summary>Tick count when the client was detached, 0 while it is attached.</summary>
         public long DetachedAt;
         public volatile int QueuedPackets;
@@ -700,7 +981,9 @@ internal sealed class SteamFrontend : IDisposable
         public override string Remote => "steam:" + userId;
         public override bool Connected => frontend.Active(userId);
         public override int ReliableBacklogPackets => frontend.QueuedPackets(userId);
+
         public override void Send(GatewayPacket packet) => frontend.Send(userId, packet);
+
         public override void Disconnect() => frontend.Close(userId);
     }
 }

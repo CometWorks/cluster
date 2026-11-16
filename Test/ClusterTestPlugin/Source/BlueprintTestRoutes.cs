@@ -23,44 +23,90 @@ internal static class BlueprintTestRoutes
     {
         // POST /blueprint-test-spawn?path=&x=&y=&z=[&owner=][&static=][&name=] - every grid of the blueprint's first
         // ship, moved together so its first grid sits at (x, y, z) in the blueprint's own orientation.
-        TestRoutes.Add("POST", "/blueprint-test-spawn", context =>
-        {
-            string path = TestRoutes.Query(context, "path");
-            Vector3D position = new(TestRoutes.Double(context, "x"), TestRoutes.Double(context, "y"), TestRoutes.Double(context, "z"));
-            long owner = long.TryParse(context.Request.QueryString["owner"], NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsedOwner) ? parsedOwner : 0;
-            bool isStatic = bool.TryParse(context.Request.QueryString["static"], out bool parsedStatic) && parsedStatic;
-            string name = context.Request.QueryString["name"];
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => Spawn(path, position, owner, isStatic, name)));
-        });
+        TestRoutes.Add(
+            "POST",
+            "/blueprint-test-spawn",
+            context =>
+            {
+                string path = TestRoutes.Query(context, "path");
+                Vector3D position = new(
+                    TestRoutes.Double(context, "x"),
+                    TestRoutes.Double(context, "y"),
+                    TestRoutes.Double(context, "z")
+                );
+                long owner = long.TryParse(
+                    context.Request.QueryString["owner"],
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out long parsedOwner
+                )
+                    ? parsedOwner
+                    : 0;
+                bool isStatic =
+                    bool.TryParse(context.Request.QueryString["static"], out bool parsedStatic)
+                    && parsedStatic;
+                string name = context.Request.QueryString["name"];
+                TestRoutes.Json(
+                    context,
+                    200,
+                    TestRoutes.OnGameThread(() => Spawn(path, position, owner, isStatic, name))
+                );
+            }
+        );
     }
 
-    private static object Spawn(string path, Vector3D position, long owner, bool isStatic, string name)
+    private static object Spawn(
+        string path,
+        Vector3D position,
+        long owner,
+        bool isStatic,
+        string name
+    )
     {
-        if (!MyObjectBuilderSerializerKeen.DeserializeXML(path, out MyObjectBuilder_Definitions definitions)
-            || definitions?.ShipBlueprints == null || definitions.ShipBlueprints.Length == 0)
+        if (
+            !MyObjectBuilderSerializerKeen.DeserializeXML(
+                path,
+                out MyObjectBuilder_Definitions definitions
+            )
+            || definitions?.ShipBlueprints == null
+            || definitions.ShipBlueprints.Length == 0
+        )
             throw new InvalidOperationException("Could not read blueprint " + path);
         MyObjectBuilder_CubeGrid[] grids = definitions.ShipBlueprints[0].CubeGrids;
-        if (grids == null || grids.Length == 0) throw new InvalidOperationException("Blueprint " + path + " has no grid");
+        if (grids == null || grids.Length == 0)
+            throw new InvalidOperationException("Blueprint " + path + " has no grid");
         Vector3D origin = grids[0].PositionAndOrientation?.Position ?? Vector3D.Zero;
         MyEntities.RemapObjectBuilderCollection(grids);
         foreach (MyObjectBuilder_CubeGrid grid in grids)
         {
-            MyPositionAndOrientation placed = grid.PositionAndOrientation ?? new MyPositionAndOrientation(origin, Vector3.Forward, Vector3.Up);
-            grid.PositionAndOrientation = new MyPositionAndOrientation(position + ((Vector3D)placed.Position - origin), placed.Forward, placed.Up);
+            MyPositionAndOrientation placed =
+                grid.PositionAndOrientation
+                ?? new MyPositionAndOrientation(origin, Vector3.Forward, Vector3.Up);
+            grid.PositionAndOrientation = new MyPositionAndOrientation(
+                position + ((Vector3D)placed.Position - origin),
+                placed.Forward,
+                placed.Up
+            );
             grid.IsStatic = isStatic;
             grid.CreatePhysics = true;
-            grid.PersistentFlags = MyPersistentEntityFlags2.InScene | MyPersistentEntityFlags2.CastShadows;
+            grid.PersistentFlags =
+                MyPersistentEntityFlags2.InScene | MyPersistentEntityFlags2.CastShadows;
             grid.LinearVelocity = new SerializableVector3(0, 0, 0);
             grid.AngularVelocity = new SerializableVector3(0, 0, 0);
-            if (!string.IsNullOrEmpty(name)) grid.DisplayName = name;
+            if (!string.IsNullOrEmpty(name))
+                grid.DisplayName = name;
             foreach (MyObjectBuilder_CubeBlock block in grid.CubeBlocks)
             {
                 block.Owner = owner;
                 block.BuiltBy = owner;
             }
         }
-        MyCubeGrid[] spawned = grids.Select(grid => MyEntities.CreateFromObjectBuilderAndAdd(grid, fadeIn: false) as MyCubeGrid
-            ?? throw new InvalidOperationException("Could not spawn a grid of " + path)).ToArray();
+        MyCubeGrid[] spawned = grids
+            .Select(grid =>
+                MyEntities.CreateFromObjectBuilderAndAdd(grid, fadeIn: false) as MyCubeGrid
+                ?? throw new InvalidOperationException("Could not spawn a grid of " + path)
+            )
+            .ToArray();
         // blocks = the runtime count (what GridAddTrace's >= 10 floor reads), builderBlocks = the file's.
         return new
         {

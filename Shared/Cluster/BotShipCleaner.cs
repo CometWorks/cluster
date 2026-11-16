@@ -3,13 +3,13 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using Sandbox.Game.Entities;
 using Sandbox.Engine.Physics;
+using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Cube;
 using Sandbox.Game.Multiplayer;
 using Sandbox.Game.World;
-using VRage.Network;
 using VRage.Game.Entity;
+using VRage.Network;
 using VRage.ObjectBuilders;
 using VRageMath;
 
@@ -46,423 +46,701 @@ namespace ClusterPlugin;
 /// </summary>
 internal static class BotShipCleaner
 {
-	internal static readonly Guid Key = new Guid("6f1e9c55-2a0b-4d9e-9a51-5e1316b07500");
-	private const double TrackMilliseconds = 10000;
-	/// <summary>How long a stamp outlives its grid's absence from the entity list (an import in progress, a closed grid).</summary>
-	private const long MissingSeconds = 600;
+    internal static readonly Guid Key = new Guid("6f1e9c55-2a0b-4d9e-9a51-5e1316b07500");
+    private const double TrackMilliseconds = 10000;
 
-	/// <summary>Last use (unix seconds) by grid id. Written by Init on any thread, so concurrent.</summary>
-	private static readonly ConcurrentDictionary<long, long> m_lastUse = new ConcurrentDictionary<long, long>();
-	private static double m_lastTrack = double.NaN;
-	private static long m_lastBackupRun;
-	private static string m_botsText;
-	private static SteamIdRanges m_bots;
-	private static int m_removed, m_removedBeforeOffline, m_wouldRemove;
-	private static readonly HashSet<long> m_dryRunLogged = new HashSet<long>();
-	private static readonly Dictionary<long, long> m_missingSince = new Dictionary<long, long>();
+    /// <summary>How long a stamp outlives its grid's absence from the entity list (an import in progress, a closed grid).</summary>
+    private const long MissingSeconds = 600;
 
-	internal enum Mode { Off, DryRun, On }
+    /// <summary>Last use (unix seconds) by grid id. Written by Init on any thread, so concurrent.</summary>
+    private static readonly ConcurrentDictionary<long, long> m_lastUse =
+        new ConcurrentDictionary<long, long>();
+    private static double m_lastTrack = double.NaN;
+    private static long m_lastBackupRun;
+    private static string m_botsText;
+    private static SteamIdRanges m_bots;
+    private static int m_removed,
+        m_removedBeforeOffline,
+        m_wouldRemove;
+    private static readonly HashSet<long> m_dryRunLogged = new HashSet<long>();
+    private static readonly Dictionary<long, long> m_missingSince = new Dictionary<long, long>();
 
-	internal static Mode Current => ClusterConfig.Get("cleanup.botShips") switch
-	{
-		"on" => Mode.On,
-		"dryrun" => Mode.DryRun,
-		_ => Mode.Off,
-	};
+    internal enum Mode
+    {
+        Off,
+        DryRun,
+        On,
+    }
 
-	private static bool Active => ClusterRuntime.IsClustered && !ClusterRuntime.IsWorldAuthority && Sync.IsServer && Current != Mode.Off;
+    internal static Mode Current =>
+        ClusterConfig.Get("cleanup.botShips") switch
+        {
+            "on" => Mode.On,
+            "dryrun" => Mode.DryRun,
+            _ => Mode.Off,
+        };
 
-	private static long Now => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+    private static bool Active =>
+        ClusterRuntime.IsClustered
+        && !ClusterRuntime.IsWorldAuthority
+        && Sync.IsServer
+        && Current != Mode.Off;
 
-	/// <summary>The rule: the backup was taken at least <paramref name="idleSeconds"/> after the ship's last use.</summary>
-	internal static bool Abandoned(long lastUse, long backupAt, long idleSeconds)
-		=> lastUse > 0 && backupAt > 0 && idleSeconds > 0 && backupAt - lastUse >= idleSeconds;
+    private static long Now => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-	/// <summary>MyCubeGrid.Init postfix, any thread: take the carried stamp, out of the grid's runtime storage.</summary>
-	internal static void Initialized(MyCubeGrid grid, MyObjectBuilder_EntityBase builder)
-	{
-		if (grid == null || builder == null || !ClusterRuntime.IsClustered) return;
-		string carried = BlockBuilderEntry.Read(builder, Key);
-		if (carried != null) grid.Storage?.RemoveValue(Key); // unregistered: vanilla would log it on every save and drop it
-		Arrived(builder.EntityId, carried);
-	}
+    /// <summary>The rule: the backup was taken at least <paramref name="idleSeconds"/> after the ship's last use.</summary>
+    internal static bool Abandoned(long lastUse, long backupAt, long idleSeconds) =>
+        lastUse > 0 && backupAt > 0 && idleSeconds > 0 && backupAt - lastUse >= idleSeconds;
 
-	/// <summary>
-	/// The arriving builder's stamp replaces whatever this node remembers of the grid. SE-1419: a grid that left this node
-	/// stays in <see cref="m_lastUse"/> for <see cref="MissingSeconds"/>. When it came back within that time without a
-	/// stamp (the node it was on had forgotten it), the old entry went into the import's builder, the frozen source had
-	/// none, and the round-trip gate blocked the partition (octahedron-test partitions 34201 and 35864, 2026-11-13).
-	/// </summary>
-	internal static void Arrived(long entityId, string carried)
-	{
-		if (Active && long.TryParse(carried, NumberStyles.Integer, CultureInfo.InvariantCulture, out long lastUse))
-			m_lastUse[entityId] = lastUse;
-		else
-			m_lastUse.TryRemove(entityId, out _);
-	}
+    /// <summary>MyCubeGrid.Init postfix, any thread: take the carried stamp, out of the grid's runtime storage.</summary>
+    internal static void Initialized(MyCubeGrid grid, MyObjectBuilder_EntityBase builder)
+    {
+        if (grid == null || builder == null || !ClusterRuntime.IsClustered)
+            return;
+        string carried = BlockBuilderEntry.Read(builder, Key);
+        if (carried != null)
+            grid.Storage?.RemoveValue(Key); // unregistered: vanilla would log it on every save and drop it
+        Arrived(builder.EntityId, carried);
+    }
 
-	/// <summary>MyCubeGrid.GetObjectBuilder postfix: write the stamp of a tracked bot ship into the builder.</summary>
-	internal static void Saving(MyCubeGrid grid, MyObjectBuilder_EntityBase builder)
-	{
-		if (grid == null || builder == null || !m_lastUse.TryGetValue(grid.EntityId, out long lastUse) || !Active) return;
-		BlockBuilderEntry.Write(builder, Key, lastUse.ToString(CultureInfo.InvariantCulture));
-	}
+    /// <summary>
+    /// The arriving builder's stamp replaces whatever this node remembers of the grid. SE-1419: a grid that left this node
+    /// stays in <see cref="m_lastUse"/> for <see cref="MissingSeconds"/>. When it came back within that time without a
+    /// stamp (the node it was on had forgotten it), the old entry went into the import's builder, the frozen source had
+    /// none, and the round-trip gate blocked the partition (octahedron-test partitions 34201 and 35864, 2026-11-13).
+    /// </summary>
+    internal static void Arrived(long entityId, string carried)
+    {
+        if (
+            Active
+            && long.TryParse(
+                carried,
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out long lastUse
+            )
+        )
+            m_lastUse[entityId] = lastUse;
+        else
+            m_lastUse.TryRemove(entityId, out _);
+    }
 
-	/// <summary>SE-1528 bench: people standing somewhere with no client behind them (a bot beside a ship), by test key.</summary>
-	private static readonly ConcurrentDictionary<string, (ulong Steam, Vector3D At)> m_testPeople =
-		new ConcurrentDictionary<string, (ulong Steam, Vector3D At)>();
+    /// <summary>MyCubeGrid.GetObjectBuilder postfix: write the stamp of a tracked bot ship into the builder.</summary>
+    internal static void Saving(MyCubeGrid grid, MyObjectBuilder_EntityBase builder)
+    {
+        if (
+            grid == null
+            || builder == null
+            || !m_lastUse.TryGetValue(grid.EntityId, out long lastUse)
+            || !Active
+        )
+            return;
+        BlockBuilderEntry.Write(builder, Key, lastUse.ToString(CultureInfo.InvariantCulture));
+    }
 
-	/// <summary>Test seam: put someone with that Steam ID at <paramref name="at"/> for the use tracking, or take them away (null).</summary>
-	internal static void SetTestPerson(string key, ulong steamId, Vector3D? at)
-	{
-		if (at is { } position) m_testPeople[key] = (steamId, position);
-		else m_testPeople.TryRemove(key, out _);
-	}
+    /// <summary>SE-1528 bench: people standing somewhere with no client behind them (a bot beside a ship), by test key.</summary>
+    private static readonly ConcurrentDictionary<string, (ulong Steam, Vector3D At)> m_testPeople =
+        new ConcurrentDictionary<string, (ulong Steam, Vector3D At)>();
 
-	/// <summary>The grid's last use (test probe), null when it is not tracked.</summary>
-	internal static long? LastUse(long entityId) => m_lastUse.TryGetValue(entityId, out long lastUse) ? lastUse : null;
+    /// <summary>Test seam: put someone with that Steam ID at <paramref name="at"/> for the use tracking, or take them away (null).</summary>
+    internal static void SetTestPerson(string key, ulong steamId, Vector3D? at)
+    {
+        if (at is { } position)
+            m_testPeople[key] = (steamId, position);
+        else
+            m_testPeople.TryRemove(key, out _);
+    }
 
-	/// <summary>Test seam: set a grid's last use, as if it had been carried in.</summary>
-	internal static void SetLastUse(long entityId, long lastUse) => m_lastUse[entityId] = lastUse;
+    /// <summary>The grid's last use (test probe), null when it is not tracked.</summary>
+    internal static long? LastUse(long entityId) =>
+        m_lastUse.TryGetValue(entityId, out long lastUse) ? lastUse : null;
 
-	private static SteamIdRanges Bots()
-	{
-		string text = ClusterConfig.Get("cleanup.botSteamIds");
-		if (text != m_botsText)
-		{
-			m_botsText = text;
-			m_bots = SteamIdRanges.Parse(text);
-		}
-		return m_bots;
-	}
+    /// <summary>Test seam: set a grid's last use, as if it had been carried in.</summary>
+    internal static void SetLastUse(long entityId, long lastUse) => m_lastUse[entityId] = lastUse;
 
-	/// <summary>Every block owner (big and small) is a bot of <paramref name="bots"/>, and there is one.</summary>
-	internal static bool IsBotShip(MyCubeGrid grid, SteamIdRanges bots)
-	{
-		if (bots == null || bots.IsEmpty || grid.Closed || grid.MarkedForClose) return false;
-		bool any = false;
-		foreach (long owner in grid.BigOwners.Concat(grid.SmallOwners))
-		{
-			if (!bots.Contains(MySession.Static.Players.TryGetSteamId(owner))) return false;
-			any = true;
-		}
-		return any;
-	}
+    private static SteamIdRanges Bots()
+    {
+        string text = ClusterConfig.Get("cleanup.botSteamIds");
+        if (text != m_botsText)
+        {
+            m_botsText = text;
+            m_bots = SteamIdRanges.Parse(text);
+        }
+        return m_bots;
+    }
 
-	private static bool IsRoot(MyCubeGrid grid)
-		=> grid.Save && !grid.IsPreview && !grid.Closed && !grid.MarkedForClose
-			&& (MyGridPhysicalHierarchy.Static == null || MyGridPhysicalHierarchy.Static.GetRoot(grid) == grid);
+    /// <summary>Every block owner (big and small) is a bot of <paramref name="bots"/>, and there is one.</summary>
+    internal static bool IsBotShip(MyCubeGrid grid, SteamIdRanges bots)
+    {
+        if (bots == null || bots.IsEmpty || grid.Closed || grid.MarkedForClose)
+            return false;
+        bool any = false;
+        foreach (long owner in grid.BigOwners.Concat(grid.SmallOwners))
+        {
+            if (!bots.Contains(MySession.Static.Players.TryGetSteamId(owner)))
+                return false;
+            any = true;
+        }
+        return any;
+    }
 
-	private static List<MyCubeGrid> Group(MyCubeGrid root)
-		=> MyCubeGridGroups.Static?.Physical.GetGroup(root)?.Nodes.Select(node => node.NodeData).ToList() ?? new List<MyCubeGrid> { root };
+    private static bool IsRoot(MyCubeGrid grid) =>
+        grid.Save
+        && !grid.IsPreview
+        && !grid.Closed
+        && !grid.MarkedForClose
+        && (
+            MyGridPhysicalHierarchy.Static == null
+            || MyGridPhysicalHierarchy.Static.GetRoot(grid) == grid
+        );
 
-	/// <summary>
-	/// Every player who is no bot of <paramref name="bots"/>: the cluster position registry's (a viewed camera, ClientId 0,
-	/// counts: its viewer is unknown) and this node's online players at their exact positions.
-	/// </summary>
-	internal static List<Vector3D> HumanPositions(SteamIdRanges bots)
-	{
-		var positions = new List<Vector3D>();
-		foreach (ClusterPlayerPosition player in PositionRegistryService.Players)
-			if (!bots.Contains(player.ClientId))
-				positions.Add(new Vector3D(player.X, player.Y, player.Z));
-		foreach (MyPlayer player in MySession.Static.Players.GetOnlinePlayers())
-		{
-			if (bots.Contains(player.Id.SteamId)) continue;
-			if (player.Controller?.ControlledEntity?.Entity is MyEntity controlled && controlled.PositionComp != null)
-				positions.Add(controlled.PositionComp.GetPosition());
-			else if (player.Character?.PositionComp != null)
-				positions.Add(player.Character.PositionComp.GetPosition());
-		}
-		return positions;
-	}
+    private static List<MyCubeGrid> Group(MyCubeGrid root) =>
+        MyCubeGridGroups
+            .Static?.Physical.GetGroup(root)
+            ?.Nodes.Select(node => node.NodeData)
+            .ToList()
+        ?? new List<MyCubeGrid> { root };
 
-	/// <summary>
-	/// Every player and viewed camera the cluster position registry knows, plus this node's online players at their exact
-	/// positions, with their Steam IDs (0 for a camera: its viewer is unknown).
-	/// </summary>
-	private static List<(ulong Steam, Vector3D At)> People()
-	{
-		var people = new List<(ulong, Vector3D)>();
-		foreach (ClusterPlayerPosition player in PositionRegistryService.Players)
-			people.Add((player.ClientId, new Vector3D(player.X, player.Y, player.Z)));
-		foreach (MyPlayer player in MySession.Static.Players.GetOnlinePlayers())
-			if (player.Controller?.ControlledEntity?.Entity is MyEntity controlled && controlled.PositionComp != null)
-				people.Add((player.Id.SteamId, controlled.PositionComp.GetPosition()));
-			else if (player.Character?.PositionComp != null)
-				people.Add((player.Id.SteamId, player.Character.PositionComp.GetPosition()));
-		people.AddRange(m_testPeople.Values);
-		return people;
-	}
+    /// <summary>
+    /// Every player who is no bot of <paramref name="bots"/>: the cluster position registry's (a viewed camera, ClientId 0,
+    /// counts: its viewer is unknown) and this node's online players at their exact positions.
+    /// </summary>
+    internal static List<Vector3D> HumanPositions(SteamIdRanges bots)
+    {
+        var positions = new List<Vector3D>();
+        foreach (ClusterPlayerPosition player in PositionRegistryService.Players)
+            if (!bots.Contains(player.ClientId))
+                positions.Add(new Vector3D(player.X, player.Y, player.Z));
+        foreach (MyPlayer player in MySession.Static.Players.GetOnlinePlayers())
+        {
+            if (bots.Contains(player.Id.SteamId))
+                continue;
+            if (
+                player.Controller?.ControlledEntity?.Entity is MyEntity controlled
+                && controlled.PositionComp != null
+            )
+                positions.Add(controlled.PositionComp.GetPosition());
+            else if (player.Character?.PositionComp != null)
+                positions.Add(player.Character.PositionComp.GetPosition());
+        }
+        return positions;
+    }
 
-	/// <summary>
-	/// SE-1528: whether someone near a bot ship keeps it in use: a human (or a viewed camera) does, and so does a bot that
-	/// owns the ship. Any other bot is only passing by: in a station hangar janitors, traders and taxi drivers come and go
-	/// all the time, and counting them kept an abandoned ship there in use for good.
-	/// </summary>
-	internal static bool KeepsInUse(ulong steamId, SteamIdRanges bots, ICollection<ulong> ownerSteamIds)
-		=> !bots.Contains(steamId) || ownerSteamIds.Contains(steamId);
+    /// <summary>
+    /// Every player and viewed camera the cluster position registry knows, plus this node's online players at their exact
+    /// positions, with their Steam IDs (0 for a camera: its viewer is unknown).
+    /// </summary>
+    private static List<(ulong Steam, Vector3D At)> People()
+    {
+        var people = new List<(ulong, Vector3D)>();
+        foreach (ClusterPlayerPosition player in PositionRegistryService.Players)
+            people.Add((player.ClientId, new Vector3D(player.X, player.Y, player.Z)));
+        foreach (MyPlayer player in MySession.Static.Players.GetOnlinePlayers())
+            if (
+                player.Controller?.ControlledEntity?.Entity is MyEntity controlled
+                && controlled.PositionComp != null
+            )
+                people.Add((player.Id.SteamId, controlled.PositionComp.GetPosition()));
+            else if (player.Character?.PositionComp != null)
+                people.Add((player.Id.SteamId, player.Character.PositionComp.GetPosition()));
+        people.AddRange(m_testPeople.Values);
+        return people;
+    }
 
-	/// <summary>Why the group is in use right now, or null.</summary>
-	private static string InUse(List<MyCubeGrid> group, double radius, List<(ulong Steam, Vector3D At)> people, SteamIdRanges bots)
-	{
-		var owners = new HashSet<ulong>(group.SelectMany(grid => grid.BigOwners.Concat(grid.SmallOwners))
-			.Select(owner => MySession.Static.Players.TryGetSteamId(owner)));
-		List<Vector3D> near = people.Where(person => KeepsInUse(person.Steam, bots, owners)).Select(person => person.At).ToList();
-		foreach (MyCubeGrid grid in group)
-		{
-			foreach (MyCockpit cockpit in grid.GetFatBlocks<MyCockpit>())
-				if (cockpit.Pilot != null) return "seated";
-			if (UnvisitedNpcSweeper.Visited(grid, radius, near)) return "someone near";
-		}
-		foreach (MyPlayer player in MySession.Static.Players.GetOnlinePlayers())
-			if (player.Controller?.ControlledEntity?.Entity?.GetTopMostParent() is MyCubeGrid controlled && group.Contains(controlled))
-				return "player controls it";
-		return null;
-	}
+    /// <summary>
+    /// SE-1528: whether someone near a bot ship keeps it in use: a human (or a viewed camera) does, and so does a bot that
+    /// owns the ship. Any other bot is only passing by: in a station hangar janitors, traders and taxi drivers come and go
+    /// all the time, and counting them kept an abandoned ship there in use for good.
+    /// </summary>
+    internal static bool KeepsInUse(
+        ulong steamId,
+        SteamIdRanges bots,
+        ICollection<ulong> ownerSteamIds
+    ) => !bots.Contains(steamId) || ownerSteamIds.Contains(steamId);
 
-	/// <summary>Game thread, from ClusterRuntime: track use, and run once for each new backup.</summary>
-	internal static void Update(PartitionManager partitions, PartitionPersistence persistence)
-	{
-		if (MySession.Static?.Ready != true || partitions == null || persistence == null) return;
-		if (!Active)
-		{
-			if (m_lastUse.Count > 0) m_lastUse.Clear();
-			m_missingSince.Clear();
-			m_lastBackupRun = 0;
-			return;
-		}
-		double now = ClusterRuntime.LocalMilliseconds;
-		if (!double.IsNaN(m_lastTrack) && now - m_lastTrack < TrackMilliseconds) return;
-		m_lastTrack = now;
-		List<MyCubeGrid> ships = Track();
-		long backupAt = NpcCensusService.Current?.BackupAt ?? 0;
-		if (backupAt == 0 || backupAt == m_lastBackupRun) return;
-		m_lastBackupRun = backupAt;
-		m_dryRunLogged.Clear();
-		Run(ships, backupAt, partitions, persistence);
-	}
+    /// <summary>Why the group is in use right now, or null.</summary>
+    private static string InUse(
+        List<MyCubeGrid> group,
+        double radius,
+        List<(ulong Steam, Vector3D At)> people,
+        SteamIdRanges bots
+    )
+    {
+        var owners = new HashSet<ulong>(
+            group
+                .SelectMany(grid => grid.BigOwners.Concat(grid.SmallOwners))
+                .Select(owner => MySession.Static.Players.TryGetSteamId(owner))
+        );
+        List<Vector3D> near = people
+            .Where(person => KeepsInUse(person.Steam, bots, owners))
+            .Select(person => person.At)
+            .ToList();
+        foreach (MyCubeGrid grid in group)
+        {
+            foreach (MyCockpit cockpit in grid.GetFatBlocks<MyCockpit>())
+                if (cockpit.Pilot != null)
+                    return "seated";
+            if (UnvisitedNpcSweeper.Visited(grid, radius, near))
+                return "someone near";
+        }
+        foreach (MyPlayer player in MySession.Static.Players.GetOnlinePlayers())
+            if (
+                player.Controller?.ControlledEntity?.Entity?.GetTopMostParent()
+                    is MyCubeGrid controlled
+                && group.Contains(controlled)
+            )
+                return "player controls it";
+        return null;
+    }
 
-	/// <summary>
-	/// Whether the stamp of a grid that is no bot ship root goes. SE-1557: not while the grid is frozen or has just arrived.
-	/// A staged import adds its grids over several frames, and a pass between them saw a carried bot ship that was no bot
-	/// ship root yet and dropped its stamp, so the handover gate read the grid's Storage one entry short of the frozen source
-	/// (octahedron-test 2026-11-15: four Taxis and a Cargo Shuttle, "dictionary: 2 != 1"). A grid not in the entity list may
-	/// be an import still being built, so it goes only after <see cref="MissingSeconds"/>.
-	/// </summary>
-	internal static bool Forgets(bool present, bool settling, long missingSeconds)
-		=> present ? !settling : missingSeconds > MissingSeconds;
+    /// <summary>Game thread, from ClusterRuntime: track use, and run once for each new backup.</summary>
+    internal static void Update(PartitionManager partitions, PartitionPersistence persistence)
+    {
+        if (MySession.Static?.Ready != true || partitions == null || persistence == null)
+            return;
+        if (!Active)
+        {
+            if (m_lastUse.Count > 0)
+                m_lastUse.Clear();
+            m_missingSince.Clear();
+            m_lastBackupRun = 0;
+            return;
+        }
+        double now = ClusterRuntime.LocalMilliseconds;
+        if (!double.IsNaN(m_lastTrack) && now - m_lastTrack < TrackMilliseconds)
+            return;
+        m_lastTrack = now;
+        List<MyCubeGrid> ships = Track();
+        long backupAt = NpcCensusService.Current?.BackupAt ?? 0;
+        if (backupAt == 0 || backupAt == m_lastBackupRun)
+            return;
+        m_lastBackupRun = backupAt;
+        m_dryRunLogged.Clear();
+        Run(ships, backupAt, partitions, persistence);
+    }
 
-	/// <summary>Stamps the bot ships in use (or first seen) and forgets every other grid. Returns this node's bot ship roots.</summary>
-	private static List<MyCubeGrid> Track()
-	{
-		SteamIdRanges bots = Bots();
-		double radius = ClusterConfig.GetInt("cleanup.botShipUseRadius");
-		List<(ulong Steam, Vector3D At)> people = People();
-		long now = Now;
-		var ships = new List<MyCubeGrid>();
-		var seen = new HashSet<long>();
-		foreach (MyEntity entity in MyEntities.GetEntities())
-		{
-			if (entity is not MyCubeGrid grid || !IsRoot(grid) || !IsBotShip(grid, bots)) continue;
-			ships.Add(grid);
-			seen.Add(grid.EntityId);
-			// Not while it moves between nodes: the handover gate compares the builder before and after the import.
-			bool settling = ClusterRuntime.IsFrozen(grid.EntityId) || MySessionComponentTrashPatch.InImportGrace(grid.EntityId);
-			if (!m_lastUse.ContainsKey(grid.EntityId))
-			{
-				if (!settling) m_lastUse[grid.EntityId] = now;
-			}
-			else if (!settling && InUse(Group(grid), radius, people, bots) != null)
-				m_lastUse[grid.EntityId] = now;
-		}
-		// A grid that is no bot ship root (any more) is forgotten. One not in the entity list may be an import still being
-		// built (its builder came in with a stamp the handover gate expects back), so it is forgotten only after a while.
-		foreach (long id in m_lastUse.Keys.ToArray())
-		{
-			if (seen.Contains(id)) { m_missingSince.Remove(id); continue; }
-			bool present = MyEntities.TryGetEntityById(id, out MyEntity entity) && entity is MyCubeGrid grid && !grid.Closed;
-			bool settling = present && (ClusterRuntime.IsFrozen(id) || MySessionComponentTrashPatch.InImportGrace(id));
-			if (present) m_missingSince.Remove(id);
-			else if (!m_missingSince.ContainsKey(id)) m_missingSince[id] = now;
-			if (Forgets(present, settling, present ? 0 : now - m_missingSince[id]))
-			{
-				m_lastUse.TryRemove(id, out _);
-				m_missingSince.Remove(id);
-			}
-		}
-		return ships;
-	}
+    /// <summary>
+    /// Whether the stamp of a grid that is no bot ship root goes. SE-1557: not while the grid is frozen or has just arrived.
+    /// A staged import adds its grids over several frames, and a pass between them saw a carried bot ship that was no bot
+    /// ship root yet and dropped its stamp, so the handover gate read the grid's Storage one entry short of the frozen source
+    /// (octahedron-test 2026-11-15: four Taxis and a Cargo Shuttle, "dictionary: 2 != 1"). A grid not in the entity list may
+    /// be an import still being built, so it goes only after <see cref="MissingSeconds"/>.
+    /// </summary>
+    internal static bool Forgets(bool present, bool settling, long missingSeconds) =>
+        present ? !settling : missingSeconds > MissingSeconds;
 
-	/// <summary>Why <paramref name="root"/> must stay now, or null. <paramref name="group"/> = its physical group.</summary>
-	private static string Blocker(MyCubeGrid root, List<MyCubeGrid> group, SteamIdRanges bots, double radius, List<(ulong Steam, Vector3D At)> people,
-		List<Vector3D> humans, Dictionary<long, ulong> holders, PartitionPersistence persistence, out ulong partition)
-	{
-		partition = holders.TryGetValue(root.EntityId, out ulong holder) ? holder : 0;
-		HashSet<MyCubeGrid> mechanical = MyCubeGridGroups.Static?.Mechanical.GetGroup(root)?.Nodes.Select(node => node.NodeData).ToHashSet()
-			?? new HashSet<MyCubeGrid> { root };
-		foreach (MyCubeGrid grid in group)
-		{
-			if (grid.Closed || grid.MarkedForClose) return "closing";
-			if (ClusterRuntime.IsFrozen(grid.EntityId) || ImportActivationGuard.IsOpenFor(GuardUser.BotShipCleanup, grid)) return "mid-handover";
-			// The link-settle part of the import grace only (SE-1317), as grid-delete: an offline wake is a recovery load whose
-			// trash grace outlasts the woken partition's time online, and its ships go right before it goes offline again.
-			if (MySessionComponentTrashPatch.LinksSettling(grid.EntityId)) return "import grace";
-			bool ownSubgrid = mechanical.Contains(grid) && grid.BigOwners.Count == 0 && grid.SmallOwners.Count == 0;
-			if (grid != root && !ownSubgrid && !IsBotShip(grid, bots)) return "attached to another grid";
-			if (!holders.TryGetValue(grid.EntityId, out ulong other) || other != partition) return "group spans partitions";
-		}
-		if (InUse(group, radius, people, bots) is { } use) return use;
-		// Viktor, 2026-11-09: a human player within the sync distance sees the ship, so it stays while one is there.
-		double sync = MyLayers.GetSyncDistance();
-		foreach (MyCubeGrid grid in group)
-			if (UnvisitedNpcSweeper.Visited(grid, sync, humans)) return "human player within sync distance";
-		if (partition == 0 || !persistence.OwnsPartition(partition)) return "partition not owned here";
-		return null;
-	}
+    /// <summary>Stamps the bot ships in use (or first seen) and forgets every other grid. Returns this node's bot ship roots.</summary>
+    private static List<MyCubeGrid> Track()
+    {
+        SteamIdRanges bots = Bots();
+        double radius = ClusterConfig.GetInt("cleanup.botShipUseRadius");
+        List<(ulong Steam, Vector3D At)> people = People();
+        long now = Now;
+        var ships = new List<MyCubeGrid>();
+        var seen = new HashSet<long>();
+        foreach (MyEntity entity in MyEntities.GetEntities())
+        {
+            if (entity is not MyCubeGrid grid || !IsRoot(grid) || !IsBotShip(grid, bots))
+                continue;
+            ships.Add(grid);
+            seen.Add(grid.EntityId);
+            // Not while it moves between nodes: the handover gate compares the builder before and after the import.
+            bool settling =
+                ClusterRuntime.IsFrozen(grid.EntityId)
+                || MySessionComponentTrashPatch.InImportGrace(grid.EntityId);
+            if (!m_lastUse.ContainsKey(grid.EntityId))
+            {
+                if (!settling)
+                    m_lastUse[grid.EntityId] = now;
+            }
+            else if (!settling && InUse(Group(grid), radius, people, bots) != null)
+                m_lastUse[grid.EntityId] = now;
+        }
+        // A grid that is no bot ship root (any more) is forgotten. One not in the entity list may be an import still being
+        // built (its builder came in with a stamp the handover gate expects back), so it is forgotten only after a while.
+        foreach (long id in m_lastUse.Keys.ToArray())
+        {
+            if (seen.Contains(id))
+            {
+                m_missingSince.Remove(id);
+                continue;
+            }
+            bool present =
+                MyEntities.TryGetEntityById(id, out MyEntity entity)
+                && entity is MyCubeGrid grid
+                && !grid.Closed;
+            bool settling =
+                present
+                && (ClusterRuntime.IsFrozen(id) || MySessionComponentTrashPatch.InImportGrace(id));
+            if (present)
+                m_missingSince.Remove(id);
+            else if (!m_missingSince.ContainsKey(id))
+                m_missingSince[id] = now;
+            if (Forgets(present, settling, present ? 0 : now - m_missingSince[id]))
+            {
+                m_lastUse.TryRemove(id, out _);
+                m_missingSince.Remove(id);
+            }
+        }
+        return ships;
+    }
 
-	private static void Run(List<MyCubeGrid> ships, long backupAt, PartitionManager partitions, PartitionPersistence persistence)
-	{
-		Mode mode = Current;
-		long idle = ClusterConfig.GetInt("cleanup.botShipIdleMinutes") * 60L;
-		int max = ClusterConfig.GetInt("cleanup.botShipsMaxPerRun");
-		SteamIdRanges bots = Bots();
-		double radius = ClusterConfig.GetInt("cleanup.botShipUseRadius");
-		List<(ulong Steam, Vector3D At)> people = People();
-		List<Vector3D> humans = HumanPositions(bots);
-		Dictionary<long, ulong> holders = partitions.Holders();
-		var due = new List<(MyCubeGrid Root, List<MyCubeGrid> Group, ulong Partition, long LastUse)>();
-		var kept = new Dictionary<string, int>();
-		foreach (MyCubeGrid root in ships)
-		{
-			if (!m_lastUse.TryGetValue(root.EntityId, out long lastUse) || !Abandoned(lastUse, backupAt, idle)) continue;
-			List<MyCubeGrid> group = Group(root);
-			if (Blocker(root, group, bots, radius, people, humans, holders, persistence, out ulong partition) is { } blocker)
-			{
-				kept[blocker] = kept.GetValueOrDefault(blocker) + 1;
-				continue;
-			}
-			due.Add((root, group, partition, lastUse));
-		}
-		int found = due.Count;
-		if (max > 0 && due.Count > max)
-		{
-			kept["over cleanup.botShipsMaxPerRun, next backup"] = due.Count - max;
-			due = due.OrderBy(x => x.LastUse).Take(max).ToList();
-		}
-		int removed = 0;
-		foreach (var byPartition in due.GroupBy(x => x.Partition))
-			removed += Remove(byPartition.ToList(), partitions.Peek(byPartition.Key), persistence, mode, backupAt, "after backup", kept);
-		Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
-			"[ClusterPlugin] bot ship cleanup ({0}) after the backup of {1:u}: {2} bot ship(s) here, {3} abandoned and free, {4} {5}{6}",
-			mode == Mode.On ? "on" : "dryrun", DateTimeOffset.FromUnixTimeSeconds(backupAt), ships.Count, found, removed,
-			mode == Mode.On ? "removed" : "would go",
-			kept.Count == 0 ? "" : "; kept: " + string.Join(", ", kept.OrderBy(x => x.Key).Select(x => x.Key + " " + x.Value))));
-	}
+    /// <summary>Why <paramref name="root"/> must stay now, or null. <paramref name="group"/> = its physical group.</summary>
+    private static string Blocker(
+        MyCubeGrid root,
+        List<MyCubeGrid> group,
+        SteamIdRanges bots,
+        double radius,
+        List<(ulong Steam, Vector3D At)> people,
+        List<Vector3D> humans,
+        Dictionary<long, ulong> holders,
+        PartitionPersistence persistence,
+        out ulong partition
+    )
+    {
+        partition = holders.TryGetValue(root.EntityId, out ulong holder) ? holder : 0;
+        HashSet<MyCubeGrid> mechanical =
+            MyCubeGridGroups
+                .Static?.Mechanical.GetGroup(root)
+                ?.Nodes.Select(node => node.NodeData)
+                .ToHashSet()
+            ?? new HashSet<MyCubeGrid> { root };
+        foreach (MyCubeGrid grid in group)
+        {
+            if (grid.Closed || grid.MarkedForClose)
+                return "closing";
+            if (
+                ClusterRuntime.IsFrozen(grid.EntityId)
+                || ImportActivationGuard.IsOpenFor(GuardUser.BotShipCleanup, grid)
+            )
+                return "mid-handover";
+            // The link-settle part of the import grace only (SE-1317), as grid-delete: an offline wake is a recovery load whose
+            // trash grace outlasts the woken partition's time online, and its ships go right before it goes offline again.
+            if (MySessionComponentTrashPatch.LinksSettling(grid.EntityId))
+                return "import grace";
+            bool ownSubgrid =
+                mechanical.Contains(grid)
+                && grid.BigOwners.Count == 0
+                && grid.SmallOwners.Count == 0;
+            if (grid != root && !ownSubgrid && !IsBotShip(grid, bots))
+                return "attached to another grid";
+            if (!holders.TryGetValue(grid.EntityId, out ulong other) || other != partition)
+                return "group spans partitions";
+        }
+        if (InUse(group, radius, people, bots) is { } use)
+            return use;
+        // Viktor, 2026-11-09: a human player within the sync distance sees the ship, so it stays while one is there.
+        double sync = MyLayers.GetSyncDistance();
+        foreach (MyCubeGrid grid in group)
+            if (UnvisitedNpcSweeper.Visited(grid, sync, humans))
+                return "human player within sync distance";
+        if (partition == 0 || !persistence.OwnsPartition(partition))
+            return "partition not owned here";
+        return null;
+    }
 
-	/// <summary>
-	/// The offline sweep, right before <paramref name="partition"/> is saved for good: its abandoned bot ships go first, so
-	/// the offline save never holds them. Returns how many went (the sweep then waits a pass, as for wreckage).
-	/// </summary>
-	internal static int BeforeOffline(PartitionManager.Partition partition, PartitionPersistence persistence, PartitionManager partitions)
-	{
-		if (!Active || MySession.Static?.Ready != true) return 0;
-		long backupAt = NpcCensusService.Current?.BackupAt ?? 0;
-		long idle = ClusterConfig.GetInt("cleanup.botShipIdleMinutes") * 60L;
-		if (backupAt == 0) return 0;
-		SteamIdRanges bots = Bots();
-		double radius = ClusterConfig.GetInt("cleanup.botShipUseRadius");
-		List<(ulong Steam, Vector3D At)> people = People();
-		List<Vector3D> humans = HumanPositions(bots);
-		Dictionary<long, ulong> holders = partitions.Holders();
-		var due = new List<(MyCubeGrid Root, List<MyCubeGrid> Group, ulong Partition, long LastUse)>();
-		foreach (long member in partition.Members)
-		{
-			if (!MyEntities.TryGetEntityById(member, out MyEntity entity) || entity is not MyCubeGrid root || !IsRoot(root)
-				|| !m_lastUse.TryGetValue(root.EntityId, out long lastUse) || !Abandoned(lastUse, backupAt, idle) || !IsBotShip(root, bots))
-				continue;
-			List<MyCubeGrid> group = Group(root);
-			if (Blocker(root, group, bots, radius, people, humans, holders, persistence, out ulong holder) != null || holder != partition.Id) continue;
-			due.Add((root, group, holder, lastUse));
-		}
-		int max = ClusterConfig.GetInt("cleanup.botShipsMaxPerRun");
-		if (max > 0) due = due.OrderBy(x => x.LastUse).Take(max).ToList();
-		if (due.Count == 0) return 0;
-		int removed = Remove(due, partition, persistence, Current, backupAt, "before offline", new Dictionary<string, int>());
-		m_removedBeforeOffline += Current == Mode.On ? removed : 0;
-		return Current == Mode.On ? removed : 0; // a dry run never holds the partition online
-	}
+    private static void Run(
+        List<MyCubeGrid> ships,
+        long backupAt,
+        PartitionManager partitions,
+        PartitionPersistence persistence
+    )
+    {
+        Mode mode = Current;
+        long idle = ClusterConfig.GetInt("cleanup.botShipIdleMinutes") * 60L;
+        int max = ClusterConfig.GetInt("cleanup.botShipsMaxPerRun");
+        SteamIdRanges bots = Bots();
+        double radius = ClusterConfig.GetInt("cleanup.botShipUseRadius");
+        List<(ulong Steam, Vector3D At)> people = People();
+        List<Vector3D> humans = HumanPositions(bots);
+        Dictionary<long, ulong> holders = partitions.Holders();
+        var due =
+            new List<(MyCubeGrid Root, List<MyCubeGrid> Group, ulong Partition, long LastUse)>();
+        var kept = new Dictionary<string, int>();
+        foreach (MyCubeGrid root in ships)
+        {
+            if (
+                !m_lastUse.TryGetValue(root.EntityId, out long lastUse)
+                || !Abandoned(lastUse, backupAt, idle)
+            )
+                continue;
+            List<MyCubeGrid> group = Group(root);
+            if (
+                Blocker(
+                    root,
+                    group,
+                    bots,
+                    radius,
+                    people,
+                    humans,
+                    holders,
+                    persistence,
+                    out ulong partition
+                ) is
+                { } blocker
+            )
+            {
+                kept[blocker] = kept.GetValueOrDefault(blocker) + 1;
+                continue;
+            }
+            due.Add((root, group, partition, lastUse));
+        }
+        int found = due.Count;
+        if (max > 0 && due.Count > max)
+        {
+            kept["over cleanup.botShipsMaxPerRun, next backup"] = due.Count - max;
+            due = due.OrderBy(x => x.LastUse).Take(max).ToList();
+        }
+        int removed = 0;
+        foreach (var byPartition in due.GroupBy(x => x.Partition))
+            removed += Remove(
+                byPartition.ToList(),
+                partitions.Peek(byPartition.Key),
+                persistence,
+                mode,
+                backupAt,
+                "after backup",
+                kept
+            );
+        Console.WriteLine(
+            string.Format(
+                CultureInfo.InvariantCulture,
+                "[ClusterPlugin] bot ship cleanup ({0}) after the backup of {1:u}: {2} bot ship(s) here, {3} abandoned and free, {4} {5}{6}",
+                mode == Mode.On ? "on" : "dryrun",
+                DateTimeOffset.FromUnixTimeSeconds(backupAt),
+                ships.Count,
+                found,
+                removed,
+                mode == Mode.On ? "removed" : "would go",
+                kept.Count == 0
+                    ? ""
+                    : "; kept: "
+                        + string.Join(
+                            ", ",
+                            kept.OrderBy(x => x.Key).Select(x => x.Key + " " + x.Value)
+                        )
+            )
+        );
+    }
 
-	/// <summary>Removes (or, in a dry run, logs) the ships of one partition; an emptied partition is released as a grid delete does.</summary>
-	private static int Remove(List<(MyCubeGrid Root, List<MyCubeGrid> Group, ulong Partition, long LastUse)> ships,
-		PartitionManager.Partition partition, PartitionPersistence persistence, Mode mode, long backupAt, string cause, Dictionary<string, int> kept)
-	{
-		HashSet<long> closing = ships.SelectMany(x => x.Group).Select(x => x.EntityId).ToHashSet();
-		bool emptied = partition.Members.All(closing.Contains);
-		// An emptied partition is never saved again, so its newest save would still hold the ships: it is released with an
-		// empty Final (GridDeleteService, #1334). Not possible right now: they wait for the next run.
-		if (mode == Mode.On && emptied && persistence.EmptyReleaseBlocker(partition.Id) is { } release)
-		{
-			kept["empties partition and " + release] = kept.GetValueOrDefault("empties partition and " + release) + ships.Count;
-			return 0;
-		}
-		long now = Now;
-		int count = 0;
-		foreach ((MyCubeGrid root, List<MyCubeGrid> group, ulong id, long lastUse) in ships)
-		{
-			if (mode == Mode.DryRun && !m_dryRunLogged.Add(root.EntityId)) continue;
-			Vector3D position = root.PositionComp.GetPosition();
-			string line = string.Format(CultureInfo.InvariantCulture,
-				"[ClusterPlugin] bot ship cleanup {0} grid {1} '{2}' ({3} grid(s), {4} blocks) owned by {5} at {6:F0},{7:F0},{8:F0} "
-				+ "in partition {9}: unused since {10:u} ({11:F0} min), still so at the backup of {12:u}, {13}",
-				mode == Mode.On ? "removed" : "would remove", root.EntityId, root.DisplayName, group.Count, group.Sum(x => x.BlocksCount),
-				Owners(root), position.X, position.Y, position.Z, id, DateTimeOffset.FromUnixTimeSeconds(lastUse), (now - lastUse) / 60.0,
-				DateTimeOffset.FromUnixTimeSeconds(backupAt), cause);
-			if (mode == Mode.On)
-			{
-				foreach (MyCubeGrid member in group) member.Close();
-				m_lastUse.TryRemove(root.EntityId, out _);
-				m_removed++;
-			}
-			else m_wouldRemove++;
-			count++;
-			Console.WriteLine(line);
-		}
-		if (mode == Mode.On && emptied && count > 0 && persistence.ReleaseEmptied(partition.Id) is { } failed)
-			Console.WriteLine("[ClusterPlugin] bot ship cleanup emptied partition " + partition.Id + " but could not release it: " + failed);
-		return count;
-	}
+    /// <summary>
+    /// The offline sweep, right before <paramref name="partition"/> is saved for good: its abandoned bot ships go first, so
+    /// the offline save never holds them. Returns how many went (the sweep then waits a pass, as for wreckage).
+    /// </summary>
+    internal static int BeforeOffline(
+        PartitionManager.Partition partition,
+        PartitionPersistence persistence,
+        PartitionManager partitions
+    )
+    {
+        if (!Active || MySession.Static?.Ready != true)
+            return 0;
+        long backupAt = NpcCensusService.Current?.BackupAt ?? 0;
+        long idle = ClusterConfig.GetInt("cleanup.botShipIdleMinutes") * 60L;
+        if (backupAt == 0)
+            return 0;
+        SteamIdRanges bots = Bots();
+        double radius = ClusterConfig.GetInt("cleanup.botShipUseRadius");
+        List<(ulong Steam, Vector3D At)> people = People();
+        List<Vector3D> humans = HumanPositions(bots);
+        Dictionary<long, ulong> holders = partitions.Holders();
+        var due =
+            new List<(MyCubeGrid Root, List<MyCubeGrid> Group, ulong Partition, long LastUse)>();
+        foreach (long member in partition.Members)
+        {
+            if (
+                !MyEntities.TryGetEntityById(member, out MyEntity entity)
+                || entity is not MyCubeGrid root
+                || !IsRoot(root)
+                || !m_lastUse.TryGetValue(root.EntityId, out long lastUse)
+                || !Abandoned(lastUse, backupAt, idle)
+                || !IsBotShip(root, bots)
+            )
+                continue;
+            List<MyCubeGrid> group = Group(root);
+            if (
+                Blocker(
+                    root,
+                    group,
+                    bots,
+                    radius,
+                    people,
+                    humans,
+                    holders,
+                    persistence,
+                    out ulong holder
+                ) != null
+                || holder != partition.Id
+            )
+                continue;
+            due.Add((root, group, holder, lastUse));
+        }
+        int max = ClusterConfig.GetInt("cleanup.botShipsMaxPerRun");
+        if (max > 0)
+            due = due.OrderBy(x => x.LastUse).Take(max).ToList();
+        if (due.Count == 0)
+            return 0;
+        int removed = Remove(
+            due,
+            partition,
+            persistence,
+            Current,
+            backupAt,
+            "before offline",
+            new Dictionary<string, int>()
+        );
+        m_removedBeforeOffline += Current == Mode.On ? removed : 0;
+        return Current == Mode.On ? removed : 0; // a dry run never holds the partition online
+    }
 
-	/// <summary>"Name (identity, steam id)" of each block owner.</summary>
-	private static string Owners(MyCubeGrid grid)
-		=> string.Join(", ", grid.BigOwners.Concat(grid.SmallOwners).Distinct().Select(owner =>
-			(MySession.Static.Players.TryGetIdentity(owner)?.DisplayName ?? "?") + " (" + owner.ToString(CultureInfo.InvariantCulture) + ", "
-			+ MySession.Static.Players.TryGetSteamId(owner).ToString(CultureInfo.InvariantCulture) + ")"));
+    /// <summary>Removes (or, in a dry run, logs) the ships of one partition; an emptied partition is released as a grid delete does.</summary>
+    private static int Remove(
+        List<(MyCubeGrid Root, List<MyCubeGrid> Group, ulong Partition, long LastUse)> ships,
+        PartitionManager.Partition partition,
+        PartitionPersistence persistence,
+        Mode mode,
+        long backupAt,
+        string cause,
+        Dictionary<string, int> kept
+    )
+    {
+        HashSet<long> closing = ships.SelectMany(x => x.Group).Select(x => x.EntityId).ToHashSet();
+        bool emptied = partition.Members.All(closing.Contains);
+        // An emptied partition is never saved again, so its newest save would still hold the ships: it is released with an
+        // empty Final (GridDeleteService, #1334). Not possible right now: they wait for the next run.
+        if (
+            mode == Mode.On
+            && emptied
+            && persistence.EmptyReleaseBlocker(partition.Id) is { } release
+        )
+        {
+            kept["empties partition and " + release] =
+                kept.GetValueOrDefault("empties partition and " + release) + ships.Count;
+            return 0;
+        }
+        long now = Now;
+        int count = 0;
+        foreach ((MyCubeGrid root, List<MyCubeGrid> group, ulong id, long lastUse) in ships)
+        {
+            if (mode == Mode.DryRun && !m_dryRunLogged.Add(root.EntityId))
+                continue;
+            Vector3D position = root.PositionComp.GetPosition();
+            string line = string.Format(
+                CultureInfo.InvariantCulture,
+                "[ClusterPlugin] bot ship cleanup {0} grid {1} '{2}' ({3} grid(s), {4} blocks) owned by {5} at {6:F0},{7:F0},{8:F0} "
+                    + "in partition {9}: unused since {10:u} ({11:F0} min), still so at the backup of {12:u}, {13}",
+                mode == Mode.On ? "removed" : "would remove",
+                root.EntityId,
+                root.DisplayName,
+                group.Count,
+                group.Sum(x => x.BlocksCount),
+                Owners(root),
+                position.X,
+                position.Y,
+                position.Z,
+                id,
+                DateTimeOffset.FromUnixTimeSeconds(lastUse),
+                (now - lastUse) / 60.0,
+                DateTimeOffset.FromUnixTimeSeconds(backupAt),
+                cause
+            );
+            if (mode == Mode.On)
+            {
+                foreach (MyCubeGrid member in group)
+                    member.Close();
+                m_lastUse.TryRemove(root.EntityId, out _);
+                m_removed++;
+            }
+            else
+                m_wouldRemove++;
+            count++;
+            Console.WriteLine(line);
+        }
+        if (
+            mode == Mode.On
+            && emptied
+            && count > 0
+            && persistence.ReleaseEmptied(partition.Id) is { } failed
+        )
+            Console.WriteLine(
+                "[ClusterPlugin] bot ship cleanup emptied partition "
+                    + partition.Id
+                    + " but could not release it: "
+                    + failed
+            );
+        return count;
+    }
 
-	/// <summary>GET /cluster/bot-ships: the mode, the backup time, and every bot ship this node holds. Game thread.</summary>
-	internal static object Report()
-	{
-		long backupAt = NpcCensusService.Current?.BackupAt ?? 0;
-		long idle = ClusterConfig.GetInt("cleanup.botShipIdleMinutes") * 60L;
-		SteamIdRanges bots = Bots();
-		var ships = new List<object>();
-		foreach (MyEntity entity in MyEntities.GetEntities())
-		{
-			if (entity is not MyCubeGrid grid || !IsRoot(grid) || !IsBotShip(grid, bots)) continue;
-			long? lastUse = LastUse(grid.EntityId);
-			Vector3D position = grid.PositionComp.GetPosition();
-			ships.Add(new
-			{
-				id = grid.EntityId, name = grid.DisplayName, owners = Owners(grid), lastUse,
-				abandoned = lastUse is { } use && Abandoned(use, backupAt, idle),
-				position = new[] { Math.Round(position.X), Math.Round(position.Y), Math.Round(position.Z) },
-			});
-		}
-		return new { mode = ClusterConfig.Get("cleanup.botShips"), backupAt, lastRun = m_lastBackupRun, idleSeconds = idle,
-			removed = m_removed, removedBeforeOffline = m_removedBeforeOffline, wouldRemove = m_wouldRemove, ships };
-	}
+    /// <summary>"Name (identity, steam id)" of each block owner.</summary>
+    private static string Owners(MyCubeGrid grid) =>
+        string.Join(
+            ", ",
+            grid.BigOwners.Concat(grid.SmallOwners)
+                .Distinct()
+                .Select(owner =>
+                    (MySession.Static.Players.TryGetIdentity(owner)?.DisplayName ?? "?")
+                    + " ("
+                    + owner.ToString(CultureInfo.InvariantCulture)
+                    + ", "
+                    + MySession
+                        .Static.Players.TryGetSteamId(owner)
+                        .ToString(CultureInfo.InvariantCulture)
+                    + ")"
+                )
+        );
 
-	public static string Describe()
-		=> string.Format(CultureInfo.InvariantCulture, "botShipCleanup mode={0} tracked={1} removed={2} removedBeforeOffline={3} wouldRemove={4} lastBackup={5}",
-			ClusterConfig.Get("cleanup.botShips"), m_lastUse.Count, m_removed, m_removedBeforeOffline, m_wouldRemove, m_lastBackupRun);
+    /// <summary>GET /cluster/bot-ships: the mode, the backup time, and every bot ship this node holds. Game thread.</summary>
+    internal static object Report()
+    {
+        long backupAt = NpcCensusService.Current?.BackupAt ?? 0;
+        long idle = ClusterConfig.GetInt("cleanup.botShipIdleMinutes") * 60L;
+        SteamIdRanges bots = Bots();
+        var ships = new List<object>();
+        foreach (MyEntity entity in MyEntities.GetEntities())
+        {
+            if (entity is not MyCubeGrid grid || !IsRoot(grid) || !IsBotShip(grid, bots))
+                continue;
+            long? lastUse = LastUse(grid.EntityId);
+            Vector3D position = grid.PositionComp.GetPosition();
+            ships.Add(
+                new
+                {
+                    id = grid.EntityId,
+                    name = grid.DisplayName,
+                    owners = Owners(grid),
+                    lastUse,
+                    abandoned = lastUse is { } use && Abandoned(use, backupAt, idle),
+                    position = new[]
+                    {
+                        Math.Round(position.X),
+                        Math.Round(position.Y),
+                        Math.Round(position.Z),
+                    },
+                }
+            );
+        }
+        return new
+        {
+            mode = ClusterConfig.Get("cleanup.botShips"),
+            backupAt,
+            lastRun = m_lastBackupRun,
+            idleSeconds = idle,
+            removed = m_removed,
+            removedBeforeOffline = m_removedBeforeOffline,
+            wouldRemove = m_wouldRemove,
+            ships,
+        };
+    }
+
+    public static string Describe() =>
+        string.Format(
+            CultureInfo.InvariantCulture,
+            "botShipCleanup mode={0} tracked={1} removed={2} removedBeforeOffline={3} wouldRemove={4} lastBackup={5}",
+            ClusterConfig.Get("cleanup.botShips"),
+            m_lastUse.Count,
+            m_removed,
+            m_removedBeforeOffline,
+            m_wouldRemove,
+            m_lastBackupRun
+        );
 }

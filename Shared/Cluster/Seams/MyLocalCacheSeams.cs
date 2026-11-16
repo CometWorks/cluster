@@ -9,12 +9,15 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyLocalCacheSeams
 {
-	/// <summary>
-	/// Invoked right after <c>LoadCheckpoint</c> deserialized <c>Sandbox.sbc</c> and before vanilla
-	/// applies the world configuration, platform patches and experimental-mode normalisation, so a
-	/// replacement World Authority can swap in the newest catalogued global checkpoint and its size.
-	/// </summary>
-	public delegate void ClusterRestoreCheckpoint(ref MyObjectBuilder_Checkpoint checkpoint, ref ulong checkpointSizeInBytes);
+    /// <summary>
+    /// Invoked right after <c>LoadCheckpoint</c> deserialized <c>Sandbox.sbc</c> and before vanilla
+    /// applies the world configuration, platform patches and experimental-mode normalisation, so a
+    /// replacement World Authority can swap in the newest catalogued global checkpoint and its size.
+    /// </summary>
+    public delegate void ClusterRestoreCheckpoint(
+        ref MyObjectBuilder_Checkpoint checkpoint,
+        ref ulong checkpointSizeInBytes
+    );
 
-	public static ClusterRestoreCheckpoint ClusterRestoreWorldAuthorityCheckpoint;
+    public static ClusterRestoreCheckpoint ClusterRestoreWorldAuthorityCheckpoint;
 }

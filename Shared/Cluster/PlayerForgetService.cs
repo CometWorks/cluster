@@ -21,55 +21,101 @@ namespace ClusterPlugin;
 /// </summary>
 public static class PlayerForgetService
 {
-	public sealed record ForgetRequest(ulong SteamId);
-	public sealed record ForgetResult(ulong SteamId, long IdentityId, bool IdentityRemoved, bool PromotionRemoved, bool RecordRemoved);
+    public sealed record ForgetRequest(ulong SteamId);
 
-	internal static void Install() => GlobalStateChannel.RegisterCommandHandler("player-forget", ForgetFromGateway, journaled: true);
+    public sealed record ForgetResult(
+        ulong SteamId,
+        long IdentityId,
+        bool IdentityRemoved,
+        bool PromotionRemoved,
+        bool RecordRemoved
+    );
 
-	private static string ForgetFromGateway(string origin, string payload)
-	{
-		if (origin != "$gateway") throw new InvalidOperationException("Player administration must originate at the Gateway");
-		ForgetRequest request = JsonSerializer.Deserialize<ForgetRequest>(payload);
-		if (request == null || request.SteamId == 0) throw new ArgumentException("Invalid player");
-		MySandboxGame game = MySandboxGame.Static ?? throw new InvalidOperationException("The World Authority game is unavailable");
-		var completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-		void Apply()
-		{
-			try { completion.SetResult(JsonSerializer.Serialize(Forget(request.SteamId))); }
-			catch (Exception e) { completion.SetException(e); }
-		}
-		if (game.UpdateThread == Thread.CurrentThread) Apply();
-		else game.Invoke(Apply, "ClusterPlugin player forget");
-		return completion.Task.GetAwaiter().GetResult();
-	}
+    internal static void Install() =>
+        GlobalStateChannel.RegisterCommandHandler(
+            "player-forget",
+            ForgetFromGateway,
+            journaled: true
+        );
 
-	private static ForgetResult Forget(ulong steamId)
-	{
-		MySession session = MySession.Static;
-		if (!ClusterRuntime.IsWorldAuthority || ClusterRuntime.IsAuthorityFenced || session?.Ready != true)
-			throw new InvalidOperationException("The World Authority is unavailable");
-		if (OnlinePlayersService.Cluster.Any(player => player.SteamId == steamId))
-			throw new InvalidOperationException("player_online");
-		long identityId = session.Players.TryGetIdentityId(steamId);
-		bool identityRemoved = false;
-		MyIdentity identity = identityId == 0 ? null : session.Players.TryGetIdentity(identityId);
-		if (identity != null)
-		{
-			// Only PER_PLAYER block limits count an identity's own blocks; the other modes count a shared pool. The WA
-			// loads no grids: its own count is only the start, the PCU ledger has what the regular nodes hold. Grids in
-			// offline partitions count nowhere, so the operator deletes those first (SE-1487 runbook).
-			if (session.BlockLimitsEnabled == MyBlockLimitsEnabledEnum.PER_PLAYER
-				&& identity.BlockLimits.BlocksBuilt + PcuLedgerService.RemoteUsage(identityId).BlocksBuilt != 0)
-				throw new InvalidOperationException("player_has_blocks");
-			MySessionComponentTrash trash = session.GetComponent<MySessionComponentTrash>()
-				?? throw new InvalidOperationException("Trash component unavailable");
-			identityRemoved = trash.ClusterForgetIdentity(identity, new MyPlayer.PlayerId(steamId));
-			if (!identityRemoved) throw new InvalidOperationException("identity_not_removed");
-		}
-		bool promotionRemoved = PromotionService.Forget(steamId);
-		bool recordRemoved = identityId != 0 && CharacterRegistryService.Forget(identityId);
-		Console.WriteLine($"[ClusterPlugin] player forget client={steamId} identity={identityId} removed={identityRemoved} "
-			+ $"promotion={promotionRemoved} record={recordRemoved}");
-		return new ForgetResult(steamId, identityId, identityRemoved, promotionRemoved, recordRemoved);
-	}
+    private static string ForgetFromGateway(string origin, string payload)
+    {
+        if (origin != "$gateway")
+            throw new InvalidOperationException(
+                "Player administration must originate at the Gateway"
+            );
+        ForgetRequest request = JsonSerializer.Deserialize<ForgetRequest>(payload);
+        if (request == null || request.SteamId == 0)
+            throw new ArgumentException("Invalid player");
+        MySandboxGame game =
+            MySandboxGame.Static
+            ?? throw new InvalidOperationException("The World Authority game is unavailable");
+        var completion = new TaskCompletionSource<string>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        void Apply()
+        {
+            try
+            {
+                completion.SetResult(JsonSerializer.Serialize(Forget(request.SteamId)));
+            }
+            catch (Exception e)
+            {
+                completion.SetException(e);
+            }
+        }
+        if (game.UpdateThread == Thread.CurrentThread)
+            Apply();
+        else
+            game.Invoke(Apply, "ClusterPlugin player forget");
+        return completion.Task.GetAwaiter().GetResult();
+    }
+
+    private static ForgetResult Forget(ulong steamId)
+    {
+        MySession session = MySession.Static;
+        if (
+            !ClusterRuntime.IsWorldAuthority
+            || ClusterRuntime.IsAuthorityFenced
+            || session?.Ready != true
+        )
+            throw new InvalidOperationException("The World Authority is unavailable");
+        if (OnlinePlayersService.Cluster.Any(player => player.SteamId == steamId))
+            throw new InvalidOperationException("player_online");
+        long identityId = session.Players.TryGetIdentityId(steamId);
+        bool identityRemoved = false;
+        MyIdentity identity = identityId == 0 ? null : session.Players.TryGetIdentity(identityId);
+        if (identity != null)
+        {
+            // Only PER_PLAYER block limits count an identity's own blocks; the other modes count a shared pool. The WA
+            // loads no grids: its own count is only the start, the PCU ledger has what the regular nodes hold. Grids in
+            // offline partitions count nowhere, so the operator deletes those first (SE-1487 runbook).
+            if (
+                session.BlockLimitsEnabled == MyBlockLimitsEnabledEnum.PER_PLAYER
+                && identity.BlockLimits.BlocksBuilt
+                    + PcuLedgerService.RemoteUsage(identityId).BlocksBuilt
+                    != 0
+            )
+                throw new InvalidOperationException("player_has_blocks");
+            MySessionComponentTrash trash =
+                session.GetComponent<MySessionComponentTrash>()
+                ?? throw new InvalidOperationException("Trash component unavailable");
+            identityRemoved = trash.ClusterForgetIdentity(identity, new MyPlayer.PlayerId(steamId));
+            if (!identityRemoved)
+                throw new InvalidOperationException("identity_not_removed");
+        }
+        bool promotionRemoved = PromotionService.Forget(steamId);
+        bool recordRemoved = identityId != 0 && CharacterRegistryService.Forget(identityId);
+        Console.WriteLine(
+            $"[ClusterPlugin] player forget client={steamId} identity={identityId} removed={identityRemoved} "
+                + $"promotion={promotionRemoved} record={recordRemoved}"
+        );
+        return new ForgetResult(
+            steamId,
+            identityId,
+            identityRemoved,
+            promotionRemoved,
+            recordRemoved
+        );
+    }
 }

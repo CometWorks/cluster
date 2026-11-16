@@ -11,19 +11,30 @@ namespace Shared.Patches;
 /// </summary>
 public static class MyMeteorPatch
 {
-	[HarmonyPatch(typeof(MyMeteor.MyMeteorGameLogic), nameof(MyMeteor.MyMeteorGameLogic.Init), typeof(MyObjectBuilder_EntityBase))]
-	private static class Init
-	{
-		[HarmonyPostfix]
-		private static void Postfix(MyMeteor.MyMeteorGameLogic __instance, MyObjectBuilder_EntityBase objectBuilder)
-			=> MeteorLifetime.Initialized(__instance, objectBuilder);
-	}
+    [HarmonyPatch(
+        typeof(MyMeteor.MyMeteorGameLogic),
+        nameof(MyMeteor.MyMeteorGameLogic.Init),
+        typeof(MyObjectBuilder_EntityBase)
+    )]
+    private static class Init
+    {
+        [HarmonyPostfix]
+        private static void Postfix(
+            MyMeteor.MyMeteorGameLogic __instance,
+            MyObjectBuilder_EntityBase objectBuilder
+        ) => MeteorLifetime.Initialized(__instance, objectBuilder);
+    }
 
-	[HarmonyPatch(typeof(MyMeteor.MyMeteorGameLogic), nameof(MyMeteor.MyMeteorGameLogic.GetObjectBuilder))]
-	private static class GetObjectBuilder
-	{
-		[HarmonyPostfix]
-		private static void Postfix(MyMeteor.MyMeteorGameLogic __instance, MyObjectBuilder_EntityBase __result)
-			=> MeteorLifetime.Saving(__instance, __result);
-	}
+    [HarmonyPatch(
+        typeof(MyMeteor.MyMeteorGameLogic),
+        nameof(MyMeteor.MyMeteorGameLogic.GetObjectBuilder)
+    )]
+    private static class GetObjectBuilder
+    {
+        [HarmonyPostfix]
+        private static void Postfix(
+            MyMeteor.MyMeteorGameLogic __instance,
+            MyObjectBuilder_EntityBase __result
+        ) => MeteorLifetime.Saving(__instance, __result);
+    }
 }

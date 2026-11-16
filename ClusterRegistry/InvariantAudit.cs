@@ -3,7 +3,13 @@ using System.Globalization;
 namespace ClusterRegistry;
 
 /// <summary>One live violation of a runtime invariant (Docs/ConcurrencyReview.md section 8).</summary>
-internal sealed record InvariantViolation(string Kind, ulong Partition, string Detail, DateTimeOffset Since, DateTimeOffset ReportedAt);
+internal sealed record InvariantViolation(
+    string Kind,
+    ulong Partition,
+    string Detail,
+    DateTimeOffset Since,
+    DateTimeOffset ReportedAt
+);
 
 /// <summary>The audit's view for /diag: violations still standing, and how many episodes were ever reported.</summary>
 internal sealed record InvariantAuditView(long Total, InvariantViolation[] Active);
@@ -30,79 +36,157 @@ internal sealed record InvariantAuditView(long Total, InvariantViolation[] Activ
 internal sealed partial class GatewayRegistry
 {
     internal static TimeSpan DuplicateGrace = Seconds("CLUSTER_AUDIT_DUPLICATE_SECONDS", 30);
+
     /// <summary>Self-test switch for the earned red of invariant-audit: off, a liveness heartbeat's empty list is an ownership report again.</summary>
     internal static bool LivenessIsNoReport = true;
     internal static TimeSpan AbandonedGrace = Seconds("CLUSTER_AUDIT_ABANDONED_SECONDS", 600);
 
     private static TimeSpan Seconds(string variable, double fallback) =>
-        TimeSpan.FromSeconds(double.TryParse(Environment.GetEnvironmentVariable(variable), NumberStyles.Float,
-            CultureInfo.InvariantCulture, out double seconds) && seconds > 0 ? seconds : fallback);
+        TimeSpan.FromSeconds(
+            double.TryParse(
+                Environment.GetEnvironmentVariable(variable),
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out double seconds
+            )
+            && seconds > 0
+                ? seconds
+                : fallback
+        );
 
     /// <summary>Latest heartbeat per node: the incarnation and the partitions it reported WITH members.</summary>
     private readonly Dictionary<string, (long Epoch, ulong[] Partitions)> _reportedWithMembers = [];
     private readonly Dictionary<ulong, DateTimeOffset> _duplicateSince = [];
     private readonly Dictionary<ulong, DateTimeOffset> _abandonedSince = [];
-    private readonly Dictionary<(string Kind, ulong Partition), InvariantViolation> _violations = [];
+    private readonly Dictionary<(string Kind, ulong Partition), InvariantViolation> _violations =
+    [];
     private long _violationsTotal;
 
     /// <summary>Heartbeat, under _lock: remembers what this incarnation simulates (members &gt; 0).</summary>
     private void RecordReportedOwnerships(string node, long epoch, PartitionVersion[] ownerships)
     {
-        ulong[] partitions = [.. ownerships.Where(x => x.Members > 0).Select(x => x.Partition).Distinct()];
-        if (partitions.Length == 0) _reportedWithMembers.Remove(node);
-        else _reportedWithMembers[node] = (epoch, partitions);
+        ulong[] partitions =
+        [
+            .. ownerships.Where(x => x.Members > 0).Select(x => x.Partition).Distinct(),
+        ];
+        if (partitions.Length == 0)
+            _reportedWithMembers.Remove(node);
+        else
+            _reportedWithMembers[node] = (epoch, partitions);
     }
 
     /// <summary>The live incarnations whose latest report has the partition with members (self-test and diag).</summary>
     internal string[] ReportedHolders(ulong partition)
     {
-        lock (_lock) return ReportedHoldersLocked(partition, _clock());
+        lock (_lock)
+            return ReportedHoldersLocked(partition, _clock());
     }
 
-    private string[] ReportedHoldersLocked(ulong partition, DateTimeOffset now) => [.. _reportedWithMembers
-        .Where(x => x.Value.Partitions.Contains(partition) && LiveIncarnation(x.Key, x.Value.Epoch, now))
-        .Select(x => x.Key).Order(StringComparer.Ordinal)];
+    private string[] ReportedHoldersLocked(ulong partition, DateTimeOffset now) =>
+        [
+            .. _reportedWithMembers
+                .Where(x =>
+                    x.Value.Partitions.Contains(partition)
+                    && LiveIncarnation(x.Key, x.Value.Epoch, now)
+                )
+                .Select(x => x.Key)
+                .Order(StringComparer.Ordinal),
+        ];
 
     private bool LiveIncarnation(string node, long epoch, DateTimeOffset now) =>
-        _state.Nodes.TryGetValue(node, out NodeRegistration? row) && row.Epoch == epoch
-            && row.State is NodeState.Active or NodeState.Closed && row.LeaseExpires > now;
+        _state.Nodes.TryGetValue(node, out NodeRegistration? row)
+        && row.Epoch == epoch
+        && row.State is NodeState.Active or NodeState.Closed
+        && row.LeaseExpires > now;
 
     public InvariantAuditView InvariantAudit()
     {
-        lock (_lock) return new InvariantAuditView(_violationsTotal, [.. _violations.Values.OrderBy(x => x.Since)]);
+        lock (_lock)
+            return new InvariantAuditView(
+                _violationsTotal,
+                [.. _violations.Values.OrderBy(x => x.Since)]
+            );
     }
 
     /// <summary>ExpireLeases, under _lock, after the expiry and the sweeps.</summary>
     private void AuditInvariants(DateTimeOffset now)
     {
         // Reports of incarnations that are gone say nothing any more.
-        foreach (string node in _reportedWithMembers.Where(x => !LiveIncarnation(x.Key, x.Value.Epoch, now)).Select(x => x.Key).ToArray())
+        foreach (
+            string node in _reportedWithMembers
+                .Where(x => !LiveIncarnation(x.Key, x.Value.Epoch, now))
+                .Select(x => x.Key)
+                .ToArray()
+        )
             _reportedWithMembers.Remove(node);
 
-        HashSet<ulong> duplicated = [.. _reportedWithMembers.Values.SelectMany(x => x.Partitions)
-            .GroupBy(x => x).Where(group => group.Count() > 1).Select(group => group.Key)];
-        Track("duplicate", duplicated, _duplicateSince, DuplicateGrace, now, partition =>
-        {
-            PartitionOwnership? owner = _state.Partitions.GetValueOrDefault(partition);
-            return $"reported with members by {string.Join(", ", ReportedHoldersLocked(partition, now))}; registry owner "
-                + (owner?.Node == null ? "none" : $"{owner.Node} epoch={owner.Epoch} generation={owner.Generation}");
-        });
+        HashSet<ulong> duplicated =
+        [
+            .. _reportedWithMembers
+                .Values.SelectMany(x => x.Partitions)
+                .GroupBy(x => x)
+                .Where(group => group.Count() > 1)
+                .Select(group => group.Key),
+        ];
+        Track(
+            "duplicate",
+            duplicated,
+            _duplicateSince,
+            DuplicateGrace,
+            now,
+            partition =>
+            {
+                PartitionOwnership? owner = _state.Partitions.GetValueOrDefault(partition);
+                return $"reported with members by {string.Join(", ", ReportedHoldersLocked(partition, now))}; registry owner "
+                    + (
+                        owner?.Node == null
+                            ? "none"
+                            : $"{owner.Node} epoch={owner.Epoch} generation={owner.Generation}"
+                    );
+            }
+        );
 
         HashSet<ulong> abandoned = [];
-        bool serving = _state.Phase is not (ClusterPhase.Draining or ClusterPhase.Down) && _state.Nodes.Values.Any(x =>
-            x.Role == NodeRole.Regular && x.State == NodeState.Active && x.Serving && !x.Spare && x.LeaseExpires > now);
+        bool serving =
+            _state.Phase is not (ClusterPhase.Draining or ClusterPhase.Down)
+            && _state.Nodes.Values.Any(x =>
+                x.Role == NodeRole.Regular
+                && x.State == NodeState.Active
+                && x.Serving
+                && !x.Spare
+                && x.LeaseExpires > now
+            );
         if (serving)
             foreach (PartitionOwnership row in _state.Partitions.Values)
-                if (row.Node == null && !row.Recovering && !IsRetired(row.Partition) && !_state.OfflinePartitions.ContainsKey(row.Partition)
-                    && SavesOf(row.Partition).Any(Reachable) && !NewerSaveHeld(row.Partition, now)
-                    && !HeldForLateSave(row.Partition, now))
+                if (
+                    row.Node == null
+                    && !row.Recovering
+                    && !IsRetired(row.Partition)
+                    && !_state.OfflinePartitions.ContainsKey(row.Partition)
+                    && SavesOf(row.Partition).Any(Reachable)
+                    && !NewerSaveHeld(row.Partition, now)
+                    && !HeldForLateSave(row.Partition, now)
+                )
                     abandoned.Add(row.Partition);
-        Track("abandoned", abandoned, _abandonedSince, AbandonedGrace, now, partition =>
-            $"unowned, not recovering and not offline, with {SavesOf(partition).Count(Reachable)} reachable save(s), while serving nodes are up");
+        Track(
+            "abandoned",
+            abandoned,
+            _abandonedSince,
+            AbandonedGrace,
+            now,
+            partition =>
+                $"unowned, not recovering and not offline, with {SavesOf(partition).Count(Reachable)} reachable save(s), while serving nodes are up"
+        );
     }
 
-    private void Track(string kind, HashSet<ulong> current, Dictionary<ulong, DateTimeOffset> since, TimeSpan grace,
-        DateTimeOffset now, Func<ulong, string> detail)
+    private void Track(
+        string kind,
+        HashSet<ulong> current,
+        Dictionary<ulong, DateTimeOffset> since,
+        TimeSpan grace,
+        DateTimeOffset now,
+        Func<ulong, string> detail
+    )
     {
         foreach (ulong partition in since.Keys.Where(x => !current.Contains(x)).ToArray())
         {
@@ -112,18 +196,37 @@ internal sealed partial class GatewayRegistry
         }
         foreach (ulong partition in current)
         {
-            if (!since.TryGetValue(partition, out DateTimeOffset first)) { since[partition] = now; continue; }
-            if (now - first < grace || _violations.ContainsKey((kind, partition))) continue;
-            string text = detail(partition);
-            _violations[(kind, partition)] = new InvariantViolation(kind, partition, text, first, now);
-            _violationsTotal++;
-            Emit("invariant.violation", partition.ToString(CultureInfo.InvariantCulture), new Dictionary<string, string>
+            if (!since.TryGetValue(partition, out DateTimeOffset first))
             {
-                ["kind"] = kind,
-                ["seconds"] = ((long)(now - first).TotalSeconds).ToString(CultureInfo.InvariantCulture),
-                ["detail"] = text,
-            });
-            Console.WriteLine($"INVARIANT VIOLATION {kind}: partition {partition} for {(now - first).TotalSeconds:F0}s: {text}");
+                since[partition] = now;
+                continue;
+            }
+            if (now - first < grace || _violations.ContainsKey((kind, partition)))
+                continue;
+            string text = detail(partition);
+            _violations[(kind, partition)] = new InvariantViolation(
+                kind,
+                partition,
+                text,
+                first,
+                now
+            );
+            _violationsTotal++;
+            Emit(
+                "invariant.violation",
+                partition.ToString(CultureInfo.InvariantCulture),
+                new Dictionary<string, string>
+                {
+                    ["kind"] = kind,
+                    ["seconds"] = ((long)(now - first).TotalSeconds).ToString(
+                        CultureInfo.InvariantCulture
+                    ),
+                    ["detail"] = text,
+                }
+            );
+            Console.WriteLine(
+                $"INVARIANT VIOLATION {kind}: partition {partition} for {(now - first).TotalSeconds:F0}s: {text}"
+            );
         }
     }
 }

@@ -17,17 +17,24 @@ internal static class ShipAntennaTestRoutes
     public static void Register()
     {
         // POST /ship-antenna-test-grace?grid=
-        TestRoutes.Add("POST", "/ship-antenna-test-grace", context =>
-        {
-            long grid = TestRoutes.Long(context, "grid");
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => Grace(grid)));
-        });
+        TestRoutes.Add(
+            "POST",
+            "/ship-antenna-test-grace",
+            context =>
+            {
+                long grid = TestRoutes.Long(context, "grid");
+                TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => Grace(grid)));
+            }
+        );
     }
 
     private static object Grace(long grid)
     {
-        FieldInfo field = typeof(ShipAntennaService).GetField("LastOccupied", BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new MissingFieldException(nameof(ShipAntennaService), "LastOccupied");
+        FieldInfo field =
+            typeof(ShipAntennaService).GetField(
+                "LastOccupied",
+                BindingFlags.NonPublic | BindingFlags.Static
+            ) ?? throw new MissingFieldException(nameof(ShipAntennaService), "LastOccupied");
         var lastOccupied = (Dictionary<long, double>)field.GetValue(null);
         double now = ClusterRuntime.LocalMilliseconds;
         lastOccupied[grid] = now;

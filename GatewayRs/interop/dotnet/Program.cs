@@ -59,30 +59,67 @@ sealed class Options
     public static Options Parse(string[] a)
     {
         var o = new Options { Role = a[0] };
-        if (o.Role != "server" && o.Role != "client") throw new ArgumentException("role must be server or client");
+        if (o.Role != "server" && o.Role != "client")
+            throw new ArgumentException("role must be server or client");
         for (int i = 1; i < a.Length; i++)
         {
             string Next() => a[++i];
             switch (a[i])
             {
-                case "--bind": case "--connect": o.Endpoint = IPEndPoint.Parse(Next()); break;
-                case "--end": o.End = Next(); break;
-                case "--timeout-ms": o.TimeoutMs = int.Parse(Next()); break;
-                case "--mtu-discovery": o.MtuDiscovery = true; break;
-                case "--expect-mtu": o.ExpectMtu = int.Parse(Next()); break;
-                case "--min-rtt": o.MinRtt = int.Parse(Next()); break;
-                case "--max-rtt": o.MaxRtt = int.Parse(Next()); break;
-                case "--hold-ms": o.HoldMs = int.Parse(Next()); break;
-                case "--reject": o.Reject = true; break;
-                case "--expect-reject": o.ExpectReject = true; break;
-                case "--per": o.Per = int.Parse(Next()); break;
-                case "--no-big": o.Big = false; break;
-                case "--deadline-ms": o.DeadlineMs = int.Parse(Next()); break;
-                case "--grace-ms": o.GraceMs = int.Parse(Next()); break;
-                case "--expect-unreliable": o.ExpectUnreliable = int.Parse(Next()); break;
-                case "--allow-address-change": o.AllowAddressChange = true; break;
-                case "--expect-address-change": o.ExpectAddressChange = true; break;
-                default: throw new ArgumentException("unknown option " + a[i]);
+                case "--bind":
+                case "--connect":
+                    o.Endpoint = IPEndPoint.Parse(Next());
+                    break;
+                case "--end":
+                    o.End = Next();
+                    break;
+                case "--timeout-ms":
+                    o.TimeoutMs = int.Parse(Next());
+                    break;
+                case "--mtu-discovery":
+                    o.MtuDiscovery = true;
+                    break;
+                case "--expect-mtu":
+                    o.ExpectMtu = int.Parse(Next());
+                    break;
+                case "--min-rtt":
+                    o.MinRtt = int.Parse(Next());
+                    break;
+                case "--max-rtt":
+                    o.MaxRtt = int.Parse(Next());
+                    break;
+                case "--hold-ms":
+                    o.HoldMs = int.Parse(Next());
+                    break;
+                case "--reject":
+                    o.Reject = true;
+                    break;
+                case "--expect-reject":
+                    o.ExpectReject = true;
+                    break;
+                case "--per":
+                    o.Per = int.Parse(Next());
+                    break;
+                case "--no-big":
+                    o.Big = false;
+                    break;
+                case "--deadline-ms":
+                    o.DeadlineMs = int.Parse(Next());
+                    break;
+                case "--grace-ms":
+                    o.GraceMs = int.Parse(Next());
+                    break;
+                case "--expect-unreliable":
+                    o.ExpectUnreliable = int.Parse(Next());
+                    break;
+                case "--allow-address-change":
+                    o.AllowAddressChange = true;
+                    break;
+                case "--expect-address-change":
+                    o.ExpectAddressChange = true;
+                    break;
+                default:
+                    throw new ArgumentException("unknown option " + a[i]);
             }
         }
         return o;
@@ -98,7 +135,12 @@ static class Script
     public const byte Channels = 16;
 
     public static readonly DeliveryMethod[] Channeled =
-        [DeliveryMethod.ReliableUnordered, DeliveryMethod.Sequenced, DeliveryMethod.ReliableOrdered, DeliveryMethod.ReliableSequenced];
+    [
+        DeliveryMethod.ReliableUnordered,
+        DeliveryMethod.Sequenced,
+        DeliveryMethod.ReliableOrdered,
+        DeliveryMethod.ReliableSequenced,
+    ];
 
     public static List<(DeliveryMethod M, byte C, int Size)> Plan(int per, bool big)
     {
@@ -120,7 +162,8 @@ static class Script
         return v;
     }
 
-    public static byte Pattern(byte m, byte c, uint seq, int i) => unchecked((byte)(seq * 31u + (uint)(i * 7 + m * 13 + c)));
+    public static byte Pattern(byte m, byte c, uint seq, int i) =>
+        unchecked((byte)(seq * 31u + (uint)(i * 7 + m * 13 + c)));
 
     public static byte[] Payload(DeliveryMethod m, byte c, uint seq, int len)
     {
@@ -129,7 +172,8 @@ static class Script
         b[1] = c;
         BitConverter.TryWriteBytes(b.AsSpan(2), seq);
         BitConverter.TryWriteBytes(b.AsSpan(6), (uint)len);
-        for (int i = 10; i < len; i++) b[i] = Pattern((byte)m, c, seq, i);
+        for (int i = 10; i < len; i++)
+            b[i] = Pattern((byte)m, c, seq, i);
         return b;
     }
 }
@@ -151,33 +195,46 @@ sealed class Verifier
 
     public void OnReceive(byte channel, DeliveryMethod method, byte[] data)
     {
-        if (data.Length < 10) throw new Exception($"short payload {data.Length}");
-        byte m = data[0], c = data[1];
+        if (data.Length < 10)
+            throw new Exception($"short payload {data.Length}");
+        byte m = data[0],
+            c = data[1];
         uint seq = BitConverter.ToUInt32(data, 2);
         uint len = BitConverter.ToUInt32(data, 6);
-        if (len != data.Length) throw new Exception($"length {data.Length} != header {len}");
+        if (len != data.Length)
+            throw new Exception($"length {data.Length} != header {len}");
         for (int i = 10; i < data.Length; i++)
-            if (data[i] != Script.Pattern(m, c, seq, i)) throw new Exception($"corrupt byte {i} in m{m} c{c} seq{seq}");
-        if (m != (byte)method) throw new Exception($"method mismatch {m} vs {method}");
-        if (method == DeliveryMethod.Unreliable ? channel != 0 : channel != c) throw new Exception($"channel mismatch {c} vs {channel}");
+            if (data[i] != Script.Pattern(m, c, seq, i))
+                throw new Exception($"corrupt byte {i} in m{m} c{c} seq{seq}");
+        if (m != (byte)method)
+            throw new Exception($"method mismatch {m} vs {method}");
+        if (method == DeliveryMethod.Unreliable ? channel != 0 : channel != c)
+            throw new Exception($"channel mismatch {c} vs {channel}");
         var key = (m, c);
-        if (!_expected.TryGetValue(key, out uint n) || seq >= n) throw new Exception($"seq {seq} out of plan for m{m} c{c}");
+        if (!_expected.TryGetValue(key, out uint n) || seq >= n)
+            throw new Exception($"seq {seq} out of plan for m{m} c{c}");
         Received++;
         switch (method)
         {
             case DeliveryMethod.ReliableOrdered:
                 uint next = _orderedNext.GetValueOrDefault(key);
-                if (seq != next) throw new Exception($"ReliableOrdered out of order on channel {c}: {seq} expected {next}");
+                if (seq != next)
+                    throw new Exception(
+                        $"ReliableOrdered out of order on channel {c}: {seq} expected {next}"
+                    );
                 _orderedNext[key] = next + 1;
                 break;
             case DeliveryMethod.ReliableUnordered:
-                if (!_seen.TryGetValue(key, out var seen)) _seen[key] = seen = new bool[n];
-                if (seen[seq]) throw new Exception($"ReliableUnordered duplicate {seq} on channel {c}");
+                if (!_seen.TryGetValue(key, out var seen))
+                    _seen[key] = seen = new bool[n];
+                if (seen[seq])
+                    throw new Exception($"ReliableUnordered duplicate {seq} on channel {c}");
                 seen[seq] = true;
                 break;
             case DeliveryMethod.Sequenced:
             case DeliveryMethod.ReliableSequenced:
-                if (_last.TryGetValue(key, out uint l) && seq <= l) throw new Exception($"sequenced not increasing: {seq} after {l} (m{m} c{c})");
+                if (_last.TryGetValue(key, out uint l) && seq <= l)
+                    throw new Exception($"sequenced not increasing: {seq} after {l} (m{m} c{c})");
                 _last[key] = seq;
                 break;
             default:
@@ -186,13 +243,19 @@ sealed class Verifier
         }
     }
 
-    public bool Complete => _expected.All(kv => (DeliveryMethod)kv.Key.Item1 switch
-    {
-        DeliveryMethod.ReliableOrdered => _orderedNext.GetValueOrDefault(kv.Key) == kv.Value,
-        DeliveryMethod.ReliableUnordered => _seen.TryGetValue(kv.Key, out var s) && s.All(x => x),
-        DeliveryMethod.ReliableSequenced => _last.TryGetValue(kv.Key, out var l) && l == kv.Value - 1,
-        _ => true,
-    });
+    public bool Complete =>
+        _expected.All(kv =>
+            (DeliveryMethod)kv.Key.Item1 switch
+            {
+                DeliveryMethod.ReliableOrdered => _orderedNext.GetValueOrDefault(kv.Key)
+                    == kv.Value,
+                DeliveryMethod.ReliableUnordered => _seen.TryGetValue(kv.Key, out var s)
+                    && s.All(x => x),
+                DeliveryMethod.ReliableSequenced => _last.TryGetValue(kv.Key, out var l)
+                    && l == kv.Value - 1,
+                _ => true,
+            }
+        );
 }
 
 sealed class Session(Options o)
@@ -205,12 +268,15 @@ sealed class Session(Options o)
     private ConnectionRequest? _held;
     private long _heldAt;
     private long _rejectedAt = -1;
-    private bool _sentVerified, _gotVerified, _gotVerifiedAck;
+    private bool _sentVerified,
+        _gotVerified,
+        _gotVerifiedAck;
     private int _latencyUpdates;
     private int _addressChanges;
     private string Other => o.Role == "server" ? "client" : "server";
 
-    private void Log(string s) => Console.WriteLine($"[cs {o.Role} {_clock.ElapsedMilliseconds,6}ms] {s}");
+    private void Log(string s) =>
+        Console.WriteLine($"[cs {o.Role} {_clock.ElapsedMilliseconds, 6}ms] {s}");
 
     private int Pass(string s)
     {
@@ -279,9 +345,18 @@ sealed class Session(Options o)
                 return;
             }
             Log($"connection request from {req.RemoteEndPoint}");
-            if (o.Reject) { req.Reject(Encoding.UTF8.GetBytes("go-away")); _rejectedAt = _clock.ElapsedMilliseconds; }
-            else if (o.HoldMs > 0) { _held = req; _heldAt = _clock.ElapsedMilliseconds; }
-            else req.Accept();
+            if (o.Reject)
+            {
+                req.Reject(Encoding.UTF8.GetBytes("go-away"));
+                _rejectedAt = _clock.ElapsedMilliseconds;
+            }
+            else if (o.HoldMs > 0)
+            {
+                _held = req;
+                _heldAt = _clock.ElapsedMilliseconds;
+            }
+            else
+                req.Accept();
         };
         listener.PeerConnectedEvent += p =>
         {
@@ -297,7 +372,9 @@ sealed class Session(Options o)
         };
         listener.PeerDisconnectedEvent += (p, info) =>
         {
-            string data = info.AdditionalData.IsNull ? "" : Encoding.UTF8.GetString(info.AdditionalData.GetRemainingBytes());
+            string data = info.AdditionalData.IsNull
+                ? ""
+                : Encoding.UTF8.GetString(info.AdditionalData.GetRemainingBytes());
             Log($"disconnected reason={info.Reason} data='{data}'");
             _disconnect = (info.Reason, data, _clock.ElapsedMilliseconds);
         };
@@ -312,8 +389,10 @@ sealed class Session(Options o)
                     _gotVerified = true;
                     p.Send([Script.VerifiedAck], 0, DeliveryMethod.ReliableOrdered);
                 }
-                else if (data.Length == 1 && data[0] == Script.VerifiedAck) _gotVerifiedAck = true;
-                else verifier.OnReceive(channel, method, data);
+                else if (data.Length == 1 && data[0] == Script.VerifiedAck)
+                    _gotVerifiedAck = true;
+                else
+                    verifier.OnReceive(channel, method, data);
             }
             catch (Exception e)
             {
@@ -323,11 +402,13 @@ sealed class Session(Options o)
 
         if (o.Role == "server")
         {
-            if (!nm.StartInManualMode(o.Endpoint.Address, IPAddress.IPv6Any, o.Endpoint.Port)) return Fail("bind failed");
+            if (!nm.StartInManualMode(o.Endpoint.Address, IPAddress.IPv6Any, o.Endpoint.Port))
+                return Fail("bind failed");
         }
         else
         {
-            if (!nm.StartInManualMode(0)) return Fail("bind failed");
+            if (!nm.StartInManualMode(0))
+                return Fail("bind failed");
             var w = new NetDataWriter();
             w.Put(Script.Key);
             w.Put(Script.ClientId);
@@ -343,7 +424,8 @@ sealed class Session(Options o)
         {
             Pump(nm);
             long now = _clock.ElapsedMilliseconds;
-            if (_failure != null) return Fail(_failure);
+            if (_failure != null)
+                return Fail(_failure);
             if (_held != null && now - _heldAt >= o.HoldMs)
             {
                 Log($"accepting held request after {now - _heldAt} ms");
@@ -353,13 +435,19 @@ sealed class Session(Options o)
             if (o.Reject && o.Role == "server")
             {
                 // The rejecting peer resends its Disconnect until the client answers ShutdownOk.
-                if (_peer != null) return Fail("a rejected client connected");
-                if (_rejectedAt >= 0 && now - _rejectedAt >= 500 && nm.GetPeersCount(ConnectionState.ShutdownRequested) == 0)
+                if (_peer != null)
+                    return Fail("a rejected client connected");
+                if (
+                    _rejectedAt >= 0
+                    && now - _rejectedAt >= 500
+                    && nm.GetPeersCount(ConnectionState.ShutdownRequested) == 0
+                )
                 {
                     nm.Stop();
                     return Pass("rejected the client; it answered ShutdownOk");
                 }
-                if (_rejectedAt >= 0 && now - _rejectedAt > 10000) return Fail("no ShutdownOk for the reject");
+                if (_rejectedAt >= 0 && now - _rejectedAt > 10000)
+                    return Fail("no ShutdownOk for the reject");
                 Thread.Sleep(1);
                 continue;
             }
@@ -372,15 +460,22 @@ sealed class Session(Options o)
                         ? Pass("rejected with data 'go-away'")
                         : Fail($"expected ConnectionRejected/go-away, got {d.Reason}/'{d.Data}'");
                 }
-                if (doneAt < 0) return Fail($"disconnected before the script completed: {d.Reason} (received {verifier.Received}, verified={_gotVerified}, ack={_gotVerifiedAck})");
+                if (doneAt < 0)
+                    return Fail(
+                        $"disconnected before the script completed: {d.Reason} (received {verifier.Received}, verified={_gotVerified}, ack={_gotVerifiedAck})"
+                    );
                 if (o.End == "await-close")
                 {
                     // Keep answering the remote's resent Disconnects with ShutdownOk for a while.
                     Linger(nm, 3000);
                     nm.Stop();
-                    return d.Reason == DisconnectReason.RemoteConnectionClose && d.Data == "bye-" + Other
+                    return
+                        d.Reason == DisconnectReason.RemoteConnectionClose
+                        && d.Data == "bye-" + Other
                         ? Pass($"remote close with data '{d.Data}'")
-                        : Fail($"expected RemoteConnectionClose/bye-{Other}, got {d.Reason}/'{d.Data}'");
+                        : Fail(
+                            $"expected RemoteConnectionClose/bye-{Other}, got {d.Reason}/'{d.Data}'"
+                        );
                 }
                 if (o.End == "await-timeout")
                 {
@@ -396,19 +491,33 @@ sealed class Session(Options o)
                 if (verifier.Complete && !_sentVerified)
                 {
                     _sentVerified = true;
-                    Log($"script complete: {verifier.Received} messages, {verifier.Unreliable} unreliable");
+                    Log(
+                        $"script complete: {verifier.Received} messages, {verifier.Unreliable} unreliable"
+                    );
                     _peer.Send([Script.Verified], 0, DeliveryMethod.ReliableOrdered);
                 }
                 bool mtuOk = o.ExpectMtu == 0 || _peer.Mtu == o.ExpectMtu;
                 bool moveOk = !o.ExpectAddressChange || _addressChanges > 0;
-                if (_sentVerified && _gotVerified && _gotVerifiedAck && _latencyUpdates > 0 && mtuOk && moveOk)
+                if (
+                    _sentVerified
+                    && _gotVerified
+                    && _gotVerifiedAck
+                    && _latencyUpdates > 0
+                    && mtuOk
+                    && moveOk
+                )
                 {
                     doneAt = now;
                     int rtt = _peer.RoundTripTime;
-                    Log($"done: rtt={rtt} ms mtu={_peer.Mtu} unreliable={verifier.Unreliable} latencyUpdates={_latencyUpdates}");
-                    if (o.MinRtt >= 0 && rtt < o.MinRtt) return Fail($"rtt {rtt} < {o.MinRtt}");
-                    if (o.MaxRtt >= 0 && rtt > o.MaxRtt) return Fail($"rtt {rtt} > {o.MaxRtt}");
-                    if (o.ExpectUnreliable >= 0 && verifier.Unreliable != o.ExpectUnreliable) return Fail($"unreliable {verifier.Unreliable} != {o.ExpectUnreliable}");
+                    Log(
+                        $"done: rtt={rtt} ms mtu={_peer.Mtu} unreliable={verifier.Unreliable} latencyUpdates={_latencyUpdates}"
+                    );
+                    if (o.MinRtt >= 0 && rtt < o.MinRtt)
+                        return Fail($"rtt {rtt} < {o.MinRtt}");
+                    if (o.MaxRtt >= 0 && rtt > o.MaxRtt)
+                        return Fail($"rtt {rtt} > {o.MaxRtt}");
+                    if (o.ExpectUnreliable >= 0 && verifier.Unreliable != o.ExpectUnreliable)
+                        return Fail($"unreliable {verifier.Unreliable} != {o.ExpectUnreliable}");
                 }
             }
             if (doneAt >= 0 && !closed && now - doneAt >= o.GraceMs)
@@ -421,7 +530,9 @@ sealed class Session(Options o)
                 }
                 else if (o.End == "die")
                 {
-                    Console.WriteLine($"PASS cs {o.Role}: script complete, exiting without disconnect");
+                    Console.WriteLine(
+                        $"PASS cs {o.Role}: script complete, exiting without disconnect"
+                    );
                     Environment.Exit(0);
                 }
             }
@@ -429,14 +540,20 @@ sealed class Session(Options o)
             {
                 if (_peer!.ConnectionState == ConnectionState.Disconnected)
                 {
-                    bool ownEvent = _disconnect is { Reason: DisconnectReason.DisconnectPeerCalled };
+                    bool ownEvent =
+                        _disconnect is { Reason: DisconnectReason.DisconnectPeerCalled };
                     nm.Stop();
-                    return ownEvent ? Pass("closed; remote answered ShutdownOk") : Fail($"own disconnect event missing: {_disconnect}");
+                    return ownEvent
+                        ? Pass("closed; remote answered ShutdownOk")
+                        : Fail($"own disconnect event missing: {_disconnect}");
                 }
-                if (now - doneAt > o.GraceMs + 5000) return Fail("no ShutdownOk after disconnect");
+                if (now - doneAt > o.GraceMs + 5000)
+                    return Fail("no ShutdownOk after disconnect");
             }
             Thread.Sleep(1);
         }
-        return Fail($"deadline: received {verifier.Received} complete={verifier.Complete} verified={_gotVerified} ack={_gotVerifiedAck} latency={_latencyUpdates} mtu={_peer?.Mtu} state={_peer?.ConnectionState}");
+        return Fail(
+            $"deadline: received {verifier.Received} complete={verifier.Complete} verified={_gotVerified} ack={_gotVerifiedAck} latency={_latencyUpdates} mtu={_peer?.Mtu} state={_peer?.ConnectionState}"
+        );
     }
 }

@@ -12,15 +12,15 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyVoxelMap))]
 public static class MyVoxelMapPatch
 {
-	/// <summary>
-	/// Prefix on the one-argument Init: a matching catalogued native base replaces the storage the vanilla
-	/// body would load from the world folder; the explicit two-argument overload is not patched.
-	/// </summary>
-	[HarmonyPrefix]
-	[HarmonyPatch(nameof(MyVoxelMap.Init), typeof(MyObjectBuilder_EntityBase))]
-	private static bool InitPrefix(MyVoxelMap __instance, MyObjectBuilder_EntityBase builder)
-	{
-		var seam = MyVoxelMapSeams.ClusterStorageInit;
-		return seam == null || seam(__instance, builder);
-	}
+    /// <summary>
+    /// Prefix on the one-argument Init: a matching catalogued native base replaces the storage the vanilla
+    /// body would load from the world folder; the explicit two-argument overload is not patched.
+    /// </summary>
+    [HarmonyPrefix]
+    [HarmonyPatch(nameof(MyVoxelMap.Init), typeof(MyObjectBuilder_EntityBase))]
+    private static bool InitPrefix(MyVoxelMap __instance, MyObjectBuilder_EntityBase builder)
+    {
+        var seam = MyVoxelMapSeams.ClusterStorageInit;
+        return seam == null || seam(__instance, builder);
+    }
 }

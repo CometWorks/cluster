@@ -24,13 +24,17 @@ namespace EnsureCodeHashes;
 internal static class Program
 {
     private static readonly List<string> ProbeDirs = new();
-    private static readonly Dictionary<string, Assembly> Loaded = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, Assembly> Loaded = new(
+        StringComparer.OrdinalIgnoreCase
+    );
 
     private static int Main(string[] args)
     {
         if (args.Length < 2)
         {
-            Console.Error.WriteLine("usage: EnsureCodeHashes <plugin.dll> <DedicatedServer64> [probe dirs...]");
+            Console.Error.WriteLine(
+                "usage: EnsureCodeHashes <plugin.dll> <DedicatedServer64> [probe dirs...]"
+            );
             return 2;
         }
 
@@ -43,7 +47,8 @@ internal static class Program
 
         foreach (string dir in args.Skip(1))
         {
-            if (dir.StartsWith("--")) continue;
+            if (dir.StartsWith("--"))
+                continue;
             string full = Path.GetFullPath(dir);
             if (!Directory.Exists(full))
             {
@@ -63,7 +68,9 @@ internal static class Program
         }
         catch (Exception e)
         {
-            Console.Error.WriteLine($"cannot load plugin assembly: {e.GetType().Name}: {e.Message}");
+            Console.Error.WriteLine(
+                $"cannot load plugin assembly: {e.GetType().Name}: {e.Message}"
+            );
             return 1;
         }
 
@@ -75,7 +82,10 @@ internal static class Program
             Console.Error.WriteLine("Shared.Tools.EnsureCode not found in the plugin assembly");
             return 1;
         }
-        MethodInfo report = ensureCode.GetMethod("ReportHashes", BindingFlags.Public | BindingFlags.Static);
+        MethodInfo report = ensureCode.GetMethod(
+            "ReportHashes",
+            BindingFlags.Public | BindingFlags.Static
+        );
         if (report == null)
         {
             Console.Error.WriteLine("EnsureCode.ReportHashes(Assembly) not found");
@@ -85,9 +95,14 @@ internal static class Program
         // The guard's own falsification test, before any hashes are printed. A table of hashes
         // from a guard that cannot reject anything is worse than no table: it would be injected,
         // it would pass forever, and the next game update would sail straight through it.
-        MethodInfo selfTest = ensureCode.GetMethod("SelfTest", BindingFlags.Public | BindingFlags.Static);
+        MethodInfo selfTest = ensureCode.GetMethod(
+            "SelfTest",
+            BindingFlags.Public | BindingFlags.Static
+        );
         if (selfTest == null)
-            Console.Error.WriteLine("WARNING: EnsureCode.SelfTest not present; guard not falsified");
+            Console.Error.WriteLine(
+                "WARNING: EnsureCode.SelfTest not present; guard not falsified"
+            );
         else
         {
             var failure = (string)selfTest.Invoke(null, new object[] { plugin });
@@ -99,21 +114,29 @@ internal static class Program
             Console.Error.WriteLine("guard self-test ok (true hash accepted, wrong hash rejected)");
         }
 
-        if (args.Contains("--transpilers") || Environment.GetEnvironmentVariable("ENSURECODE_TRANSPILERS") == "1")
+        if (
+            args.Contains("--transpilers")
+            || Environment.GetEnvironmentVariable("ENSURECODE_TRANSPILERS") == "1"
+        )
             return DryRunTranspilers(plugin);
 
-        int total = 0, resolved = 0;
+        int total = 0,
+            resolved = 0;
         // Enumerated one line at a time on purpose: ReportHashes is a generator that can throw on a
         // single bad patch, and materialising it with ToList() would lose every line before the
         // throw - exactly the hashes worth having.
         IEnumerator<string> lines;
         try
         {
-            lines = ((IEnumerable<string>)report.Invoke(null, new object[] { plugin })).GetEnumerator();
+            lines = (
+                (IEnumerable<string>)report.Invoke(null, new object[] { plugin })
+            ).GetEnumerator();
         }
         catch (TargetInvocationException e)
         {
-            Console.Error.WriteLine($"ReportHashes failed immediately: {e.InnerException?.Message ?? e.Message}");
+            Console.Error.WriteLine(
+                $"ReportHashes failed immediately: {e.InnerException?.Message ?? e.Message}"
+            );
             return 1;
         }
 
@@ -122,16 +145,23 @@ internal static class Program
             string line;
             try
             {
-                if (!lines.MoveNext()) break;
+                if (!lines.MoveNext())
+                    break;
                 line = lines.Current;
             }
             catch (Exception e)
             {
-                Console.Error.WriteLine($"enumeration aborted after {total} line(s): {e.GetType().Name}: {e.Message}");
+                Console.Error.WriteLine(
+                    $"enumeration aborted after {total} line(s): {e.GetType().Name}: {e.Message}"
+                );
                 break;
             }
             total++;
-            if (!line.Contains("????????") && !line.Contains("UNRESOLVED") && !line.Contains("FAILED"))
+            if (
+                !line.Contains("????????")
+                && !line.Contains("UNRESOLVED")
+                && !line.Contains("FAILED")
+            )
                 resolved++;
             Console.WriteLine(line);
         }
@@ -141,7 +171,11 @@ internal static class Program
         // directory, NOT from DedicatedServer64, and those files are byte-different. Two runs
         // that silently resolved to the same directory would produce an identical table and a
         // reassuring "0 differences" that proves nothing at all.
-        foreach (var pair in Loaded.Where(x => x.Value != null).OrderBy(x => x.Key, StringComparer.Ordinal))
+        foreach (
+            var pair in Loaded
+                .Where(x => x.Value != null)
+                .OrderBy(x => x.Key, StringComparer.Ordinal)
+        )
             Console.Error.WriteLine($"loaded {pair.Key} <- {pair.Value.Location}");
         Console.Error.WriteLine($"{resolved} of {total} patch method(s) hashed");
         // A run that resolves NOTHING is a loader failure, not an empty repo: fail loudly rather
@@ -165,17 +199,30 @@ internal static class Program
     /// </summary>
     private static int DryRunTranspilers(Assembly plugin)
     {
-        int ran = 0, failed = 0;
+        int ran = 0,
+            failed = 0;
         // GetTypes() throws ReflectionTypeLoadException outright when ANY type in the assembly
         // references something unresolvable (LiteNetLib, here, which no patch touches). Taking
         // the types it did load is what Harmony's own AccessTools.GetTypesFromAssembly does.
         Type[] types;
-        try { types = plugin.GetTypes(); }
-        catch (ReflectionTypeLoadException e) { types = e.Types.Where(t => t != null).ToArray(); }
+        try
+        {
+            types = plugin.GetTypes();
+        }
+        catch (ReflectionTypeLoadException e)
+        {
+            types = e.Types.Where(t => t != null).ToArray();
+        }
         foreach (Type patchType in types)
         {
-            foreach (MethodInfo method in patchType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic
-                         | BindingFlags.Static | BindingFlags.DeclaredOnly))
+            foreach (
+                MethodInfo method in patchType.GetMethods(
+                    BindingFlags.Public
+                        | BindingFlags.NonPublic
+                        | BindingFlags.Static
+                        | BindingFlags.DeclaredOnly
+                )
+            )
             {
                 if (!method.GetCustomAttributes().Any(a => a.GetType().Name == "HarmonyTranspiler"))
                     continue;
@@ -188,7 +235,9 @@ internal static class Program
                 }
                 catch (Exception e)
                 {
-                    Console.WriteLine($"  SKIP  {label}: cannot resolve target ({e.GetType().Name}: {e.Message})");
+                    Console.WriteLine(
+                        $"  SKIP  {label}: cannot resolve target ({e.GetType().Name}: {e.Message})"
+                    );
                     continue;
                 }
                 if (target == null)
@@ -202,16 +251,30 @@ internal static class Program
                 {
                     // Harmony is loaded reflectively (this tool compiles against nothing but the
                     // BCL), so PatchProcessor is reached the same way.
-                    Type processor = plugin.GetType("HarmonyLib.PatchProcessor", false)
-                                     ?? AppDomain.CurrentDomain.GetAssemblies()
-                                         .Select(a => a.GetType("HarmonyLib.PatchProcessor", false))
-                                         .FirstOrDefault(t => t != null);
-                    MethodInfo current = processor?.GetMethods(BindingFlags.Public | BindingFlags.Static)
-                        .FirstOrDefault(m => m.Name == "GetCurrentInstructions" && m.GetParameters().Length >= 1);
+                    Type processor =
+                        plugin.GetType("HarmonyLib.PatchProcessor", false)
+                        ?? AppDomain
+                            .CurrentDomain.GetAssemblies()
+                            .Select(a => a.GetType("HarmonyLib.PatchProcessor", false))
+                            .FirstOrDefault(t => t != null);
+                    MethodInfo current = processor
+                        ?.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                        .FirstOrDefault(m =>
+                            m.Name == "GetCurrentInstructions" && m.GetParameters().Length >= 1
+                        );
                     if (current == null)
-                        throw new Exception("HarmonyLib.PatchProcessor.GetCurrentInstructions not found");
-                    object[] currentArgs = current.GetParameters()
-                        .Select((par, i) => i == 0 ? (object)target : par.HasDefaultValue ? par.DefaultValue : null).ToArray();
+                        throw new Exception(
+                            "HarmonyLib.PatchProcessor.GetCurrentInstructions not found"
+                        );
+                    object[] currentArgs = current
+                        .GetParameters()
+                        .Select(
+                            (par, i) =>
+                                i == 0 ? (object)target
+                                : par.HasDefaultValue ? par.DefaultValue
+                                : null
+                        )
+                        .ToArray();
                     // Must be a List<CodeInstruction>, not a List<object>: transpilers take
                     // IEnumerable<CodeInstruction> and reflection will not coerce the element type.
                     // Getting this wrong makes EVERY transpiler "fail" with an ArgumentException
@@ -219,9 +282,19 @@ internal static class Program
                     // costume of 39 findings.
                     object rawBefore = current.Invoke(null, currentArgs);
                     Type ciType = processor.Assembly.GetType("HarmonyLib.CodeInstruction", true);
-                    object before = typeof(Enumerable).GetMethod("ToList").MakeGenericMethod(ciType).Invoke(
-                        null, new[] { typeof(Enumerable).GetMethod("Cast").MakeGenericMethod(ciType)
-                            .Invoke(null, new[] { rawBefore }) });
+                    object before = typeof(Enumerable)
+                        .GetMethod("ToList")
+                        .MakeGenericMethod(ciType)
+                        .Invoke(
+                            null,
+                            new[]
+                            {
+                                typeof(Enumerable)
+                                    .GetMethod("Cast")
+                                    .MakeGenericMethod(ciType)
+                                    .Invoke(null, new[] { rawBefore }),
+                            }
+                        );
                     int beforeCount = (int)before.GetType().GetProperty("Count").GetValue(before);
                     // Transpiler signatures vary; bind each parameter by its type.
                     // Many transpilers here take an ILGenerator and call DefineLabel() on it.
@@ -230,33 +303,62 @@ internal static class Program
                     // DynamicMethod's generator satisfies them. The labels it mints are not valid
                     // for the real patch, which is fine: this run checks "does it complete on
                     // today's IL", not "is the emitted IL correct".
-                    object[] argv = method.GetParameters().Select(par =>
-                        par.ParameterType == typeof(MethodBase) ? (object)target
-                        : typeof(System.Collections.IEnumerable).IsAssignableFrom(par.ParameterType) ? before
-                        : par.ParameterType == typeof(ILGenerator)
-                            ? new DynamicMethod($"dryrun_{label}", typeof(void), Type.EmptyTypes).GetILGenerator()
-                            : null).ToArray();
-                    var after = ((System.Collections.IEnumerable)method.Invoke(null, argv)).Cast<object>().ToList();
-                    Console.WriteLine($"  ok    {label}: {beforeCount} -> {after.Count} instructions"
-                                      + $"  [{target.DeclaringType?.Name}.{target.Name}]");
+                    object[] argv = method
+                        .GetParameters()
+                        .Select(par =>
+                            par.ParameterType == typeof(MethodBase) ? (object)target
+                            : typeof(System.Collections.IEnumerable).IsAssignableFrom(
+                                par.ParameterType
+                            )
+                                ? before
+                            : par.ParameterType == typeof(ILGenerator)
+                                ? new DynamicMethod(
+                                    $"dryrun_{label}",
+                                    typeof(void),
+                                    Type.EmptyTypes
+                                ).GetILGenerator()
+                            : null
+                        )
+                        .ToArray();
+                    var after = ((System.Collections.IEnumerable)method.Invoke(null, argv))
+                        .Cast<object>()
+                        .ToList();
+                    Console.WriteLine(
+                        $"  ok    {label}: {beforeCount} -> {after.Count} instructions"
+                            + $"  [{target.DeclaringType?.Name}.{target.Name}]"
+                    );
                 }
                 catch (Exception e)
                 {
                     failed++;
-                    Exception root = e is TargetInvocationException tie ? tie.InnerException ?? e : e;
+                    Exception root = e is TargetInvocationException tie
+                        ? tie.InnerException ?? e
+                        : e;
                     Console.WriteLine($"  FAIL  {label}: {root.GetType().Name}: {root.Message}");
                 }
             }
         }
-        Console.Error.WriteLine($"{ran - failed} of {ran} transpiler(s) ran clean against the current game build");
+        Console.Error.WriteLine(
+            $"{ran - failed} of {ran} transpiler(s) ran clean against the current game build"
+        );
         return failed > 0 ? 1 : 0;
     }
 
-    private static MethodBase ResolveTranspilerTarget(Assembly plugin, Type patchType, MethodInfo method)
+    private static MethodBase ResolveTranspilerTarget(
+        Assembly plugin,
+        Type patchType,
+        MethodInfo method
+    )
     {
         Type ensureCode = plugin.GetType("Shared.Tools.EnsureCode", throwOnError: false);
-        MethodInfo effective = ensureCode?.GetMethod("EffectiveInfo", BindingFlags.NonPublic | BindingFlags.Static);
-        MethodInfo resolve = ensureCode?.GetMethod("ResolveTarget", BindingFlags.NonPublic | BindingFlags.Static);
+        MethodInfo effective = ensureCode?.GetMethod(
+            "EffectiveInfo",
+            BindingFlags.NonPublic | BindingFlags.Static
+        );
+        MethodInfo resolve = ensureCode?.GetMethod(
+            "ResolveTarget",
+            BindingFlags.NonPublic | BindingFlags.Static
+        );
         if (effective == null || resolve == null)
             return null;
         object info = effective.Invoke(null, new object[] { method });
@@ -265,10 +367,16 @@ internal static class Program
         Type declaring = (Type)info.GetType().GetField("declaringType").GetValue(info);
         if (declaring == null)
         {
-            MethodInfo computed = ensureCode.GetMethod("ResolveComputedTargets", BindingFlags.NonPublic | BindingFlags.Static);
-            var targets = ((System.Collections.IEnumerable)computed.Invoke(null, new object[] { patchType }))
-                .Cast<MethodBase>().ToList();
-            return targets.FirstOrDefault();     // dry-run the first; the rest share the transpiler
+            MethodInfo computed = ensureCode.GetMethod(
+                "ResolveComputedTargets",
+                BindingFlags.NonPublic | BindingFlags.Static
+            );
+            var targets = (
+                (System.Collections.IEnumerable)computed.Invoke(null, new object[] { patchType })
+            )
+                .Cast<MethodBase>()
+                .ToList();
+            return targets.FirstOrDefault(); // dry-run the first; the rest share the transpiler
         }
         object[] argv = { declaring, info, null, null };
         resolve.Invoke(null, argv);
@@ -277,12 +385,15 @@ internal static class Program
 
     private static Assembly Probe(string simpleName)
     {
-        if (simpleName == null) return null;
-        if (Loaded.TryGetValue(simpleName, out Assembly cached)) return cached;
+        if (simpleName == null)
+            return null;
+        if (Loaded.TryGetValue(simpleName, out Assembly cached))
+            return cached;
         foreach (string dir in ProbeDirs)
         {
             string candidate = Path.Combine(dir, simpleName + ".dll");
-            if (!File.Exists(candidate)) continue;
+            if (!File.Exists(candidate))
+                continue;
             try
             {
                 Assembly assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(candidate);

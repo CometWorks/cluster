@@ -18,15 +18,28 @@ namespace Shared.Patches;
 /// here instead of being returned/kicked there. Either way it never reaches validation or invoke.
 /// </para>
 /// </summary>
-[HarmonyPatch(typeof(MyReplicationServer), "OnEvent",
-	typeof(MyPacketDataBitStreamBase), typeof(CallSite), typeof(object), typeof(IMyNetObject), typeof(Vector3D?), typeof(EndpointId))]
+[HarmonyPatch(
+    typeof(MyReplicationServer),
+    "OnEvent",
+    typeof(MyPacketDataBitStreamBase),
+    typeof(CallSite),
+    typeof(object),
+    typeof(IMyNetObject),
+    typeof(Vector3D?),
+    typeof(EndpointId)
+)]
 public static class MyReplicationServerPatch
 {
-	[HarmonyPrefix]
-	private static bool OnEventPrefix(MyPacketDataBitStreamBase data, CallSite site, IMyNetObject sendAs, EndpointId source)
-	{
-		if (FrozenRootIncomingRpcPatch.IsFrozen == null)
-			return true;
-		return FrozenRootIncomingRpcPatch.Prefix(data, site, sendAs, source);
-	}
+    [HarmonyPrefix]
+    private static bool OnEventPrefix(
+        MyPacketDataBitStreamBase data,
+        CallSite site,
+        IMyNetObject sendAs,
+        EndpointId source
+    )
+    {
+        if (FrozenRootIncomingRpcPatch.IsFrozen == null)
+            return true;
+        return FrozenRootIncomingRpcPatch.Prefix(data, site, sendAs, source);
+    }
 }

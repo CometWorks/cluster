@@ -16,11 +16,11 @@ public static class PatchHelpers
     public static bool HarmonyPatchAll(IPluginLogger log, Harmony harmony)
     {
 #if DEBUG && LIST_ALL_TYPES
-            log.Info("All types:");
-            foreach (var typ in AccessTools.AllTypes())
-            {
-                log.Info(typ.FullName);
-            }
+        log.Info("All types:");
+        foreach (var typ in AccessTools.AllTypes())
+        {
+            log.Info(typ.FullName);
+        }
 #endif
 
         // T-0122: report-only hash dump, off unless CLUSTER_PATCH_HASHES=1. The hash EnsureCode
@@ -67,9 +67,14 @@ public static class PatchHelpers
             // takes as evidence the patches were verified. This one checked 0 of 77 from
             // 2026-09-02 until the attributes are declared, and nothing said so.
             if (EnsureCode.LastVerifiedCount == 0)
-                log.Warning("No patch method declares [EnsureCode]: game-code changes are NOT being detected");
+                log.Warning(
+                    "No patch method declares [EnsureCode]: game-code changes are NOT being detected"
+                );
             else
-                log.Info("Verified {0} patch method(s) against declared body hashes", EnsureCode.LastVerifiedCount);
+                log.Info(
+                    "Verified {0} patch method(s) against declared body hashes",
+                    EnsureCode.LastVerifiedCount
+                );
         }
         catch (Exception ex)
         {

@@ -40,14 +40,17 @@ internal sealed partial class GatewayRegistry
 {
     internal const string ArchiveFileDaysKey = "retention.archiveFileDays";
     internal const int ArchiveFileDaysDefault = 7;
+
     /// <summary>CLUSTER_ARCHIVE_FILE_BATCH: archived rows (and due stamps) one pass may read, and store files that may be
     /// outstanding. 250: on a copy of the live w33 registry (304k archived partitions, ~1 KB rows) a full 250-row pass held
     /// the lock p50 2.7 / p90 5.6 ms over 60 passes, max 22 ms in a pass that ran into a GC (5 of 60); at 500 the typical
     /// pass was ~5 ms with ~50 ms GC passes. 250 rows a minute (~100 store files on w33) is still far above its archive
     /// rate (~30k saves a day); the first-sight backlog takes ~20 h to read through once.</summary>
     internal static int ArchiveFileBatch = EnvInt("CLUSTER_ARCHIVE_FILE_BATCH", 250);
+
     /// <summary>Due stamps read per store query; a pass reads several slices until its row budget is spent.</summary>
     private const int ArchiveStampSlice = 256;
+
     /// <summary>T-0412: how long a node-held directive may stay handed out without an ack. An Active node polls its
     /// deletions every replication loop (seconds), deletes and acks in the same call.</summary>
     internal static readonly TimeSpan ArchiveHandOutGrace = TimeSpan.FromMinutes(10);
@@ -55,22 +58,29 @@ internal sealed partial class GatewayRegistry
     /// <summary>The knob's value as the registry acts on it: absent = the default; a non-negative integer = that many days
     /// (0 = off). Anything else is refused at the PUT (<see cref="NormalizeArchiveFileDays"/>); should one ever be stored,
     /// it reads as OFF - this knob deletes files, so an unreadable value must not.</summary>
-    internal static int ArchiveFileDaysOf(string? value) => value == null ? ArchiveFileDaysDefault
-        : int.TryParse(value.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out int days) ? days : 0;
+    internal static int ArchiveFileDaysOf(string? value) =>
+        value == null ? ArchiveFileDaysDefault
+        : int.TryParse(value.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out int days)
+            ? days
+        : 0;
 
     /// <summary>The PUT's validation, as the nodes' ClusterConfig.Normalize does it for their integer knobs.</summary>
     internal static string NormalizeArchiveFileDays(string value) =>
         int.TryParse(value.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out int days)
             ? days.ToString(CultureInfo.InvariantCulture)
-            : throw new ArgumentException($"Config key {ArchiveFileDaysKey} expects a non-negative integer (days, 0 = off), got {value}");
+            : throw new ArgumentException(
+                $"Config key {ArchiveFileDaysKey} expects a non-negative integer (days, 0 = off), got {value}"
+            );
 
     /// <summary>Caller holds _lock.</summary>
-    private int ArchiveFileDays() => ArchiveFileDaysOf(_state.HandoverConfig.GetValueOrDefault(ArchiveFileDaysKey));
+    private int ArchiveFileDays() =>
+        ArchiveFileDaysOf(_state.HandoverConfig.GetValueOrDefault(ArchiveFileDaysKey));
 
     private sealed class PendingArchiveFile(SaveId id, string holder)
     {
         public readonly SaveId Id = id;
         public readonly string Holder = holder;
+
         /// <summary>When a node was first handed it: from then on the file may be gone even without an ack.</summary>
         public DateTimeOffset? HandedOutAt;
         public bool HandedOut => HandedOutAt != null;
@@ -80,6 +90,7 @@ internal sealed partial class GatewayRegistry
     {
         public readonly long ArchivedMs = archivedMs;
         public readonly int Legacy = legacy;
+
         /// <summary>Every store file of the partition is queued: the last ack marks it swept. False once a file left the
         /// queue unacknowledged (it is still in the store).</summary>
         public bool Complete = complete;
@@ -89,10 +100,16 @@ internal sealed partial class GatewayRegistry
     /// <summary>Per archived partition being swept: its store files not yet acknowledged deleted.</summary>
     private readonly Dictionary<ulong, ArchiveSweep> _archiveSweeps = [];
     private int _archiveFilesOutstanding;
+
     /// <summary>Where the pass continues in (archived, partition) order; back to the start once it reaches the end.</summary>
     private (long ArchivedMs, ulong Partition) _archiveSweepCursor = (long.MinValue, 0);
+
     /// <summary>Status: the last pass's figures, and the swept partitions' legacy locations (store total at load, kept in step).</summary>
-    private long _archiveRetentionDue, _archiveRetentionLegacy, _archiveRetentionSkipped, _archiveRetentionLegacyStamped, _archiveRetentionUnacked;
+    private long _archiveRetentionDue,
+        _archiveRetentionLegacy,
+        _archiveRetentionSkipped,
+        _archiveRetentionLegacyStamped,
+        _archiveRetentionUnacked;
     private int _archiveRetentionLastRows;
     private double _archiveRetentionLastMs;
 
@@ -105,37 +122,71 @@ internal sealed partial class GatewayRegistry
     private void StampArchiveAtLoad()
     {
         DateTimeOffset now = _clock();
-        (int stamped, int dropped, List<(ulong Partition, DateTimeOffset? Created, long? ClusterTime)> legacy) = _store.StampUnstamped(now.ToUnixTimeMilliseconds());
+        (
+            int stamped,
+            int dropped,
+            List<(ulong Partition, DateTimeOffset? Created, long? ClusterTime)> legacy
+        ) = _store.StampUnstamped(now.ToUnixTimeMilliseconds());
         _archiveRetentionLegacyStamped = stamped;
         _archiveRetentionLegacy = _store.SweptLegacyLocations();
-        if (stamped == 0 && dropped == 0) return;
+        if (stamped == 0 && dropped == 0)
+            return;
         int days = ArchiveFileDays();
-        int past = 0, unknown = 0;
+        int past = 0,
+            unknown = 0;
         foreach ((ulong partition, DateTimeOffset? created, long? clusterTime) in legacy)
         {
-            if (created is not { } at) { unknown++; continue; }
+            if (created is not { } at)
+            {
+                unknown++;
+                continue;
+            }
             // Cluster time is milliseconds but does not advance while the cluster is stopped, so only the span between
             // the newest save and the retiring record is carried over to wall time, and only when it is forward.
-            if (RetiringRecord(partition) is { } retiring && clusterTime is { } saved && retiring.ClusterTime > saved
-                && retiring.ClusterTime - saved < TimeSpan.FromDays(3650).TotalMilliseconds)
+            if (
+                RetiringRecord(partition) is { } retiring
+                && clusterTime is { } saved
+                && retiring.ClusterTime > saved
+                && retiring.ClusterTime - saved < TimeSpan.FromDays(3650).TotalMilliseconds
+            )
                 at += TimeSpan.FromMilliseconds(retiring.ClusterTime - saved);
-            if (days > 0 && now - at > TimeSpan.FromDays(days)) past++;
+            if (days > 0 && now - at > TimeSpan.FromDays(days))
+                past++;
         }
-        Console.WriteLine($"registry: archive retention: {stamped} archived partition(s) had no archive stamp and were stamped at first sight "
-            + $"{now:yyyy-MM-ddTHH:mm:ssZ} (their files go {days} day(s) after that at the earliest, {ArchiveFileDaysKey}={days}); "
-            + $"read-only proxy max(newest save Created, retiring lineage op time): {past} would already be past {days} day(s), "
-            + $"{unknown} without a proxy; not used to delete" + (dropped != 0 ? $"; {dropped} stale stamp(s) of partitions no longer archived dropped" : ""));
+        Console.WriteLine(
+            $"registry: archive retention: {stamped} archived partition(s) had no archive stamp and were stamped at first sight "
+                + $"{now:yyyy-MM-ddTHH:mm:ssZ} (their files go {days} day(s) after that at the earliest, {ArchiveFileDaysKey}={days}); "
+                + $"read-only proxy max(newest save Created, retiring lineage op time): {past} would already be past {days} day(s), "
+                + $"{unknown} without a proxy; not used to delete"
+                + (
+                    dropped != 0
+                        ? $"; {dropped} stale stamp(s) of partitions no longer archived dropped"
+                        : ""
+                )
+        );
     }
 
     /// <summary>The partitions an archive retention pass may not touch, whatever their age: still archived but owned,
     /// recovering, offline, not retired, retired by a record that has not collapsed, or named dirty by a snapshot.</summary>
-    private string? ArchiveSweepRefusal(ulong partition, HashSet<ulong> neededPartitions, HashSet<ulong> dirtyPartitions)
+    private string? ArchiveSweepRefusal(
+        ulong partition,
+        HashSet<ulong> neededPartitions,
+        HashSet<ulong> dirtyPartitions
+    )
     {
-        if (_state.Partitions.TryGetValue(partition, out PartitionOwnership? owner) && (owner.Node != null || owner.Recovering)) return "owned";
-        if (_state.OfflinePartitions.ContainsKey(partition)) return "offline";
-        if (!IsRetired(partition) || RetiringRecord(partition) is not { Collapsed: true }) return "lineage";
-        if (dirtyPartitions.Contains(partition)) return "dirty";
-        if (neededPartitions.Contains(partition)) return "needed";
+        if (
+            _state.Partitions.TryGetValue(partition, out PartitionOwnership? owner)
+            && (owner.Node != null || owner.Recovering)
+        )
+            return "owned";
+        if (_state.OfflinePartitions.ContainsKey(partition))
+            return "offline";
+        if (!IsRetired(partition) || RetiringRecord(partition) is not { Collapsed: true })
+            return "lineage";
+        if (dirtyPartitions.Contains(partition))
+            return "dirty";
+        if (neededPartitions.Contains(partition))
+            return "needed";
         return null;
     }
 
@@ -145,7 +196,8 @@ internal sealed partial class GatewayRegistry
     /// stopped node's dir, the host sweep's).</summary>
     private bool? NodeHolderDeletes(string holder) =>
         !_state.Nodes.TryGetValue(holder, out NodeRegistration? row) ? false
-            : row.State == NodeState.Active && row.LeaseExpires > _clock() ? true : null;
+        : row.State == NodeState.Active && row.LeaseExpires > _clock() ? true
+        : null;
 
     /// <summary>
     /// One archive retention pass: PlanRetention, under _lock, after ArchiveRetired and against the same
@@ -160,14 +212,31 @@ internal sealed partial class GatewayRegistry
         bool off = days <= 0;
         long cutoff = (_clock() - TimeSpan.FromDays(Math.Max(days, 0))).ToUnixTimeMilliseconds();
         HashSet<ulong> neededPartitions = [.. needed.Select(id => id.Partition)];
-        HashSet<ulong> dirtyPartitions = [.. _state.Snapshots.SelectMany(x => x.Dirty)
-            .Where(x => x.StartsWith("partition:", StringComparison.Ordinal))
-            .Select(x => ulong.TryParse(x.AsSpan("partition:".Length), NumberStyles.None, CultureInfo.InvariantCulture, out ulong p) ? p : 0)];
+        HashSet<ulong> dirtyPartitions =
+        [
+            .. _state
+                .Snapshots.SelectMany(x => x.Dirty)
+                .Where(x => x.StartsWith("partition:", StringComparison.Ordinal))
+                .Select(x =>
+                    ulong.TryParse(
+                        x.AsSpan("partition:".Length),
+                        NumberStyles.None,
+                        CultureInfo.InvariantCulture,
+                        out ulong p
+                    )
+                        ? p
+                        : 0
+                ),
+        ];
         // One store state per host per pass (StoreState walks the live node records).
         var serving = new Dictionary<string, bool>(StringComparer.Ordinal);
-        bool Serving(string host) => serving.TryGetValue(host, out bool known) ? known : serving[host] = StoreState(host) == HostStoreState.Serving;
+        bool Serving(string host) =>
+            serving.TryGetValue(host, out bool known)
+                ? known
+                : serving[host] = StoreState(host) == HostStoreState.Serving;
         // Whoever acts on a queued file can do so now: its host's store serves, or its node holder is Active.
-        bool Deletes(string holder) => HostOfHolder(holder) is { } host ? Serving(host) : NodeHolderDeletes(holder) == true;
+        bool Deletes(string holder) =>
+            HostOfHolder(holder) is { } host ? Serving(host) : NodeHolderDeletes(holder) == true;
         DateTimeOffset now = _clock();
         bool changed = false;
         int unacked = 0;
@@ -178,32 +247,54 @@ internal sealed partial class GatewayRegistry
         // deleted). Only a node-held one past ArchiveHandOutGrace goes, recorded as deleted (see the class summary).
         foreach ((ulong partition, ArchiveSweep sweep) in _archiveSweeps.ToArray())
         {
-            bool refusedNow = off || ArchiveSweepRefusal(partition, neededPartitions, dirtyPartitions) != null;
-            foreach (KeyValuePair<(string Key, string Location), PendingArchiveFile> file in sweep.Files.ToArray())
+            bool refusedNow =
+                off || ArchiveSweepRefusal(partition, neededPartitions, dirtyPartitions) != null;
+            foreach (
+                KeyValuePair<
+                    (string Key, string Location),
+                    PendingArchiveFile
+                > file in sweep.Files.ToArray()
+            )
                 if (!file.Value.HandedOut && (refusedNow || !Deletes(file.Value.Holder)))
                 {
                     sweep.Files.Remove(file.Key);
                     sweep.Complete = false;
                     _archiveFilesOutstanding--;
                 }
-                else if (file.Value.HandedOutAt is { } handed && now - handed > ArchiveHandOutGrace && HostOfHolder(file.Value.Holder) == null)
+                else if (
+                    file.Value.HandedOutAt is { } handed
+                    && now - handed > ArchiveHandOutGrace
+                    && HostOfHolder(file.Value.Holder) == null
+                )
                 {
                     sweep.Files.Remove(file.Key);
                     _archiveFilesOutstanding--;
-                    RecordArchivedDeletion(file.Value.Id, file.Key.Key, file.Key.Location, counted: false);
+                    RecordArchivedDeletion(
+                        file.Value.Id,
+                        file.Key.Key,
+                        file.Key.Location,
+                        counted: false
+                    );
                     FinishArchiveSweep(partition, sweep);
                     unacked++;
                     changed = true;
                 }
-            if (sweep.Files.Count == 0) _archiveSweeps.Remove(partition);
+            if (sweep.Files.Count == 0)
+                _archiveSweeps.Remove(partition);
         }
         if (unacked != 0)
         {
             _archiveRetentionUnacked += unacked;
-            Console.WriteLine($"WARNING: registry: archive retention: {unacked} node-held archived file(s) handed out more than "
-                + $"{ArchiveHandOutGrace.TotalMinutes:F0} min ago and not acknowledged by their holder; recorded as deleted");
+            Console.WriteLine(
+                $"WARNING: registry: archive retention: {unacked} node-held archived file(s) handed out more than "
+                    + $"{ArchiveHandOutGrace.TotalMinutes:F0} min ago and not acknowledged by their holder; recorded as deleted"
+            );
         }
-        int rows = 0, examined = 0, queued = 0, swept = 0, skipped = 0;
+        int rows = 0,
+            examined = 0,
+            queued = 0,
+            swept = 0,
+            skipped = 0;
         if (!off && _archiveFilesOutstanding < ArchiveFileBatch)
         {
             Dictionary<ulong, RegistryStore.ArchiveStamp?> pending = _store.QueuedStamps();
@@ -211,58 +302,115 @@ internal sealed partial class GatewayRegistry
             List<string> scanLocations = [];
             List<(string Location, string Holder)> scanHolders = [];
             // Bounded three ways: archived rows read, stamps examined (a refused partition costs one), files outstanding.
-            bool Spent() => rows >= ArchiveFileBatch || examined >= ArchiveFileBatch || _archiveFilesOutstanding >= ArchiveFileBatch;
+            bool Spent() =>
+                rows >= ArchiveFileBatch
+                || examined >= ArchiveFileBatch
+                || _archiveFilesOutstanding >= ArchiveFileBatch;
             while (!Spent())
             {
-                List<(ulong Partition, long ArchivedMs)> slice = _store.DueStamps(cutoff, _archiveSweepCursor, ArchiveStampSlice);
+                List<(ulong Partition, long ArchivedMs)> slice = _store.DueStamps(
+                    cutoff,
+                    _archiveSweepCursor,
+                    ArchiveStampSlice
+                );
                 int consumed = 0;
                 foreach ((ulong partition, long archivedMs) in slice)
                 {
-                    if (Spent()) break;
+                    if (Spent())
+                        break;
                     consumed++;
                     _archiveSweepCursor = (archivedMs, partition);
                     examined++;
                     // The committed stamp, unless a write still queued changed it (rehydrated, re-archived, swept).
-                    if (pending.TryGetValue(partition, out RegistryStore.ArchiveStamp? queuedStamp)
-                        && (queuedStamp is null || queuedStamp.Swept || queuedStamp.ArchivedMs > cutoff)) continue;
-                    if (!_archivedPartitions.ContainsKey(partition) || _archiveSweeps.ContainsKey(partition)) continue;
-                    if (ArchiveSweepRefusal(partition, neededPartitions, dirtyPartitions) != null) { skipped++; continue; }
+                    if (
+                        pending.TryGetValue(partition, out RegistryStore.ArchiveStamp? queuedStamp)
+                        && (
+                            queuedStamp is null
+                            || queuedStamp.Swept
+                            || queuedStamp.ArchivedMs > cutoff
+                        )
+                    )
+                        continue;
+                    if (
+                        !_archivedPartitions.ContainsKey(partition)
+                        || _archiveSweeps.ContainsKey(partition)
+                    )
+                        continue;
+                    if (ArchiveSweepRefusal(partition, neededPartitions, dirtyPartitions) != null)
+                    {
+                        skipped++;
+                        continue;
+                    }
                     var files = new Dictionary<(string Key, string Location), PendingArchiveFile>();
                     int legacy = 0;
-                    bool waiting = false, refused = false;
-                    foreach ((string key, RegistryStore.ArchivedRow row) in _store.ReadArchivedPartition(partition))
+                    bool waiting = false,
+                        refused = false;
+                    foreach (
+                        (string key, RegistryStore.ArchivedRow row) in _store.ReadArchivedPartition(
+                            partition
+                        )
+                    )
                     {
                         rows++;
-                        SaveId id = ScanArchivedRow(row.Value, key, scanLocations, scanHolders, out string writer);
-                        if (needed.Contains(id)) { refused = true; break; }
+                        SaveId id = ScanArchivedRow(
+                            row.Value,
+                            key,
+                            scanLocations,
+                            scanHolders,
+                            out string writer
+                        );
+                        if (needed.Contains(id))
+                        {
+                            refused = true;
+                            break;
+                        }
                         foreach (string location in scanLocations)
                         {
                             // As Rehydrate reads it: a location without a holder is the writer's.
                             string holder = writer;
                             foreach ((string held, string by) in scanHolders)
-                                if (held == location) { holder = by; break; }
+                                if (held == location)
+                                {
+                                    holder = by;
+                                    break;
+                                }
                             if (StoreFileHost(id, location, holder) is { } host)
                             {
-                                if (!Serving(host)) waiting = true;
-                                else files[(key, location)] = new PendingArchiveFile(id, holder);
+                                if (!Serving(host))
+                                    waiting = true;
+                                else
+                                    files[(key, location)] = new PendingArchiveFile(id, holder);
                             }
-                            else if (HostOfHolder(holder) != null) legacy++;   // a host holder's file outside its store path
+                            else if (HostOfHolder(holder) != null)
+                                legacy++; // a host holder's file outside its store path
                             // T-0412: a node's own copy goes to that node while it is Active; a released node's is legacy.
-                            else switch (NodeHolderDeletes(holder))
-                            {
-                                case true: files[(key, location)] = new PendingArchiveFile(id, holder); break;
-                                case null: waiting = true; break;
-                                default: legacy++; break;
-                            }
+                            else
+                                switch (NodeHolderDeletes(holder))
+                                {
+                                    case true:
+                                        files[(key, location)] = new PendingArchiveFile(id, holder);
+                                        break;
+                                    case null:
+                                        waiting = true;
+                                        break;
+                                    default:
+                                        legacy++;
+                                        break;
+                                }
                         }
                     }
-                    if (refused) { skipped++; continue; }
+                    if (refused)
+                    {
+                        skipped++;
+                        continue;
+                    }
                     if (files.Count != 0)
                     {
                         // A file no node can act on now (a host no node serves, a node holder not Active) is not queued;
                         // then the partition stays unswept after the last ack and is read again on a later round.
                         var sweep = new ArchiveSweep(archivedMs, legacy, complete: !waiting);
-                        foreach (KeyValuePair<(string, string), PendingArchiveFile> file in files) sweep.Files.Add(file.Key, file.Value);
+                        foreach (KeyValuePair<(string, string), PendingArchiveFile> file in files)
+                            sweep.Files.Add(file.Key, file.Value);
                         _archiveSweeps[partition] = sweep;
                         _archiveFilesOutstanding += files.Count;
                         queued += files.Count;
@@ -288,9 +436,11 @@ internal sealed partial class GatewayRegistry
         _archiveRetentionLastRows = rows;
         _archiveRetentionLastMs = clock.Elapsed.TotalMilliseconds;
         if (rows != 0 || swept != 0)
-            Console.WriteLine($"registry: archive retention: {rows} archived row(s) read, {queued} file(s) queued for deletion, "
-                + $"{swept} partition(s) swept, {skipped} skipped (owned/recovering/offline/lineage/dirty/needed); {_archiveFilesOutstanding} outstanding, "
-                + $"{_archiveRetentionDue} due at the last count; {_archiveRetentionLastMs:F1} ms under the registry lock ({ArchiveFileDaysKey}={days})");
+            Console.WriteLine(
+                $"registry: archive retention: {rows} archived row(s) read, {queued} file(s) queued for deletion, "
+                    + $"{swept} partition(s) swept, {skipped} skipped (owned/recovering/offline/lineage/dirty/needed); {_archiveFilesOutstanding} outstanding, "
+                    + $"{_archiveRetentionDue} due at the last count; {_archiveRetentionLastMs:F1} ms under the registry lock ({ArchiveFileDaysKey}={days})"
+            );
         return changed;
     }
 
@@ -300,37 +450,67 @@ internal sealed partial class GatewayRegistry
     /// stamps, endpoints) allocated enough that 500-row passes ran into ~50 ms GCs under the lock every few passes. The ack
     /// rewrite and Rehydrate still deserialize the whole row - they write it back or keep it.
     /// </summary>
-    private static SaveId ScanArchivedRow(byte[] json, string key, List<string> locations, List<(string, string)> holders, out string writer)
+    private static SaveId ScanArchivedRow(
+        byte[] json,
+        string key,
+        List<string> locations,
+        List<(string, string)> holders,
+        out string writer
+    )
     {
         locations.Clear();
         holders.Clear();
         writer = "";
         ulong partition = 0;
-        long generation = 0, sequence = 0;
+        long generation = 0,
+            sequence = 0;
         bool hasId = false;
         var reader = new Utf8JsonReader(json);
-        if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject) throw new InvalidDataException($"Archived save {key} is not an object");
+        if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+            throw new InvalidDataException($"Archived save {key} is not an object");
         while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
         {
             if (reader.ValueTextEquals("SaveId"u8))
             {
                 reader.Read();
-                if (reader.TokenType != JsonTokenType.StartObject) throw new InvalidDataException($"Archived save {key}: SaveId is not an object");
+                if (reader.TokenType != JsonTokenType.StartObject)
+                    throw new InvalidDataException($"Archived save {key}: SaveId is not an object");
                 while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
                 {
-                    if (reader.ValueTextEquals("Partition"u8)) { reader.Read(); partition = reader.GetUInt64(); }
-                    else if (reader.ValueTextEquals("Generation"u8)) { reader.Read(); generation = reader.GetInt64(); }
-                    else if (reader.ValueTextEquals("Sequence"u8)) { reader.Read(); sequence = reader.GetInt64(); }
-                    else { reader.Read(); reader.Skip(); }
+                    if (reader.ValueTextEquals("Partition"u8))
+                    {
+                        reader.Read();
+                        partition = reader.GetUInt64();
+                    }
+                    else if (reader.ValueTextEquals("Generation"u8))
+                    {
+                        reader.Read();
+                        generation = reader.GetInt64();
+                    }
+                    else if (reader.ValueTextEquals("Sequence"u8))
+                    {
+                        reader.Read();
+                        sequence = reader.GetInt64();
+                    }
+                    else
+                    {
+                        reader.Read();
+                        reader.Skip();
+                    }
                 }
                 hasId = true;
             }
-            else if (reader.ValueTextEquals("Node"u8)) { reader.Read(); writer = reader.GetString() ?? ""; }
+            else if (reader.ValueTextEquals("Node"u8))
+            {
+                reader.Read();
+                writer = reader.GetString() ?? "";
+            }
             else if (reader.ValueTextEquals("Locations"u8))
             {
                 reader.Read();
                 if (reader.TokenType == JsonTokenType.StartArray)
-                    while (reader.Read() && reader.TokenType == JsonTokenType.String) locations.Add(reader.GetString()!);
+                    while (reader.Read() && reader.TokenType == JsonTokenType.String)
+                        locations.Add(reader.GetString()!);
             }
             else if (reader.ValueTextEquals("LocationHolders"u8))
             {
@@ -343,9 +523,14 @@ internal sealed partial class GatewayRegistry
                         holders.Add((location, reader.GetString() ?? ""));
                     }
             }
-            else { reader.Read(); reader.Skip(); }
+            else
+            {
+                reader.Read();
+                reader.Skip();
+            }
         }
-        if (!hasId) throw new InvalidDataException($"Archived save {key} has no SaveId");
+        if (!hasId)
+            throw new InvalidDataException($"Archived save {key} has no SaveId");
         return new SaveId(partition, generation, sequence);
     }
 
@@ -353,9 +538,16 @@ internal sealed partial class GatewayRegistry
     /// the save. Null for anything else - a node id's location (a node data dir), or a path outside the store.</summary>
     private string? StoreFileHost(SaveId id, string location, string holder)
     {
-        if (HostOfHolder(holder) is not { } host) return null;
-        try { return location == HostStorePath(RunRoot, host, id) ? host : null; }
-        catch (InvalidDataException) { return null; }   // not one path component: not a store this registry names
+        if (HostOfHolder(holder) is not { } host)
+            return null;
+        try
+        {
+            return location == HostStorePath(RunRoot, host, id) ? host : null;
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        } // not one path component: not a store this registry names
     }
 
     /// <summary>PendingDeletes, under _lock: the archived files <paramref name="node"/> holds itself (T-0412), and the
@@ -363,15 +555,18 @@ internal sealed partial class GatewayRegistry
     /// pending deletes.</summary>
     private IEnumerable<DeleteDirective> ArchivedDeletesFor(string node, string? hostHolder)
     {
-        if (_archiveFilesOutstanding == 0 || ArchiveFileDays() <= 0) yield break;
+        if (_archiveFilesOutstanding == 0 || ArchiveFileDays() <= 0)
+            yield break;
         DateTimeOffset now = _clock();
         foreach (ArchiveSweep sweep in _archiveSweeps.Values)
-            foreach (KeyValuePair<(string Key, string Location), PendingArchiveFile> file in sweep.Files)
-                if (file.Value.Holder == node || hostHolder != null && file.Value.Holder == hostHolder)
-                {
-                    file.Value.HandedOutAt ??= now;
-                    yield return new DeleteDirective(file.Value.Id, node, file.Key.Location);
-                }
+        foreach (
+            KeyValuePair<(string Key, string Location), PendingArchiveFile> file in sweep.Files
+        )
+            if (file.Value.Holder == node || hostHolder != null && file.Value.Holder == hostHolder)
+            {
+                file.Value.HandedOutAt ??= now;
+                yield return new DeleteDirective(file.Value.Id, node, file.Key.Location);
+            }
     }
 
     /// <summary>
@@ -383,10 +578,15 @@ internal sealed partial class GatewayRegistry
     private bool AcknowledgeArchivedDelete(SaveId id, string location)
     {
         string key = Key(id);
-        if (!_archiveSweeps.TryGetValue(id.Partition, out ArchiveSweep? sweep) || !sweep.Files.Remove((key, location))) return false;
+        if (
+            !_archiveSweeps.TryGetValue(id.Partition, out ArchiveSweep? sweep)
+            || !sweep.Files.Remove((key, location))
+        )
+            return false;
         _archiveFilesOutstanding--;
         RecordArchivedDeletion(id, key, location, counted: true);
-        if (sweep.Files.Count == 0) _archiveSweeps.Remove(id.Partition);
+        if (sweep.Files.Count == 0)
+            _archiveSweeps.Remove(id.Partition);
         FinishArchiveSweep(id.Partition, sweep);
         Persist();
         return true;
@@ -396,22 +596,38 @@ internal sealed partial class GatewayRegistry
     /// DeletedLocations with the time. <paramref name="counted"/>: an acknowledged deletion (status deletedLocations).</summary>
     private void RecordArchivedDeletion(SaveId id, string key, string location, bool counted)
     {
-        if (_store.ReadArchived(id.Partition, key) is not { } stored) return;
-        SaveRegistration save = JsonSerializer.Deserialize<SaveRegistration>(stored.Value) ?? throw new InvalidDataException($"Archived save {key} is empty");
-        foreach (string held in save.Locations) save.LocationHolders.TryAdd(held, save.Node);
-        if (!save.Locations.Remove(location)) return;
+        if (_store.ReadArchived(id.Partition, key) is not { } stored)
+            return;
+        SaveRegistration save =
+            JsonSerializer.Deserialize<SaveRegistration>(stored.Value)
+            ?? throw new InvalidDataException($"Archived save {key} is empty");
+        foreach (string held in save.Locations)
+            save.LocationHolders.TryAdd(held, save.Node);
+        if (!save.Locations.Remove(location))
+            return;
         save.LocationHolders.Remove(location);
-        (save.DeletedLocations ??= new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal))[location] = _clock();
+        (save.DeletedLocations ??= new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal))[
+            location
+        ] = _clock();
         // Located stays as archived: the summary is lineage durability (collapse), which the content downstream keeps;
         // the deletion is in the row.
-        _store.Rearchive(id.Partition, key, stored.Generation, stored.Located, save, typeof(SaveRegistration));
-        if (counted) _state.ArchiveFilesDeleted++;
+        _store.Rearchive(
+            id.Partition,
+            key,
+            stored.Generation,
+            stored.Located,
+            save,
+            typeof(SaveRegistration)
+        );
+        if (counted)
+            _state.ArchiveFilesDeleted++;
     }
 
     /// <summary>A sweep whose last file left the queue marks its partition swept, unless a file was left out (Complete).</summary>
     private void FinishArchiveSweep(ulong partition, ArchiveSweep sweep)
     {
-        if (sweep.Files.Count != 0 || !sweep.Complete) return;
+        if (sweep.Files.Count != 0 || !sweep.Complete)
+            return;
         _store.MarkSwept(partition, sweep.ArchivedMs, sweep.Legacy);
         _archiveRetentionLegacy += sweep.Legacy;
     }
@@ -423,10 +639,15 @@ internal sealed partial class GatewayRegistry
     /// </summary>
     private HashSet<(string Key, string Location)>? ForgetArchiveSweep(ulong partition)
     {
-        if (_store.ReadStamp(partition) is { Swept: true } stamp) _archiveRetentionLegacy -= stamp.Legacy;
-        if (!_archiveSweeps.Remove(partition, out ArchiveSweep? sweep)) return null;
+        if (_store.ReadStamp(partition) is { Swept: true } stamp)
+            _archiveRetentionLegacy -= stamp.Legacy;
+        if (!_archiveSweeps.Remove(partition, out ArchiveSweep? sweep))
+            return null;
         _archiveFilesOutstanding -= sweep.Files.Count;
-        HashSet<(string, string)> handed = [.. sweep.Files.Where(x => x.Value.HandedOut).Select(x => x.Key)];
+        HashSet<(string, string)> handed =
+        [
+            .. sweep.Files.Where(x => x.Value.HandedOut).Select(x => x.Key),
+        ];
         return handed.Count == 0 ? null : handed;
     }
 
@@ -434,61 +655,132 @@ internal sealed partial class GatewayRegistry
     /// Rehydrate, per row coming back: a location handed out for deletion becomes a deleted one, and a row with deleted
     /// files says so in ONE named line - the recovery that needed it must not fall back to something older silently.
     /// </summary>
-    private void NoteArchiveRetention(string key, SaveRegistration save, HashSet<(string Key, string Location)>? handed)
+    private void NoteArchiveRetention(
+        string key,
+        SaveRegistration save,
+        HashSet<(string Key, string Location)>? handed
+    )
     {
         if (handed != null)
-            foreach (string location in save.Locations.Where(location => handed.Contains((key, location))).ToArray())
+            foreach (
+                string location in save
+                    .Locations.Where(location => handed.Contains((key, location)))
+                    .ToArray()
+            )
             {
                 save.Locations.Remove(location);
                 save.LocationHolders.Remove(location);
-                (save.DeletedLocations ??= new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal))[location] = _clock();
-                Console.WriteLine($"WARNING: registry: archived save {key}: {location} was handed out for deletion (archive retention) and not "
-                    + "acknowledged when its partition came back; recorded as deleted");
+                (
+                    save.DeletedLocations ??= new Dictionary<string, DateTimeOffset>(
+                        StringComparer.Ordinal
+                    )
+                )[location] = _clock();
+                Console.WriteLine(
+                    $"WARNING: registry: archived save {key}: {location} was handed out for deletion (archive retention) and not "
+                        + "acknowledged when its partition came back; recorded as deleted"
+                );
             }
-        if (save.DeletedLocations is not { Count: > 0 } deleted) return;
-        string at = deleted.Values.Max().ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
-        Console.WriteLine(save.Locations.Count == 0
-            ? $"registry: archived save {key} files deleted at {at} (archive retention) - not recoverable"
-            : $"registry: archived save {key} files deleted at {at} (archive retention) from {deleted.Count} location(s) - "
-                + $"recoverable only from its {save.Locations.Count} other location(s)");
+        if (save.DeletedLocations is not { Count: > 0 } deleted)
+            return;
+        string at = deleted
+            .Values.Max()
+            .ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+        Console.WriteLine(
+            save.Locations.Count == 0
+                ? $"registry: archived save {key} files deleted at {at} (archive retention) - not recoverable"
+                : $"registry: archived save {key} files deleted at {at} (archive retention) from {deleted.Count} location(s) - "
+                    + $"recoverable only from its {save.Locations.Count} other location(s)"
+        );
     }
 
     /// <summary>Registry status fields (next to archivedPartitions). Caller holds _lock.</summary>
-    private object ArchiveRetentionStatus() => new
-    {
-        days = ArchiveFileDays(),
-        eligiblePartitions = _archiveRetentionDue,
-        outstandingDirectives = _archiveFilesOutstanding,
-        sweepingPartitions = _archiveSweeps.Count,
-        deletedLocations = _state.ArchiveFilesDeleted,
-        legacyHolderLocations = _archiveRetentionLegacy,
-        unackedRecordedDeleted = _archiveRetentionUnacked,
-        skippedPartitions = _archiveRetentionSkipped,
-        lastPassRows = _archiveRetentionLastRows,
-        lastPassMs = Math.Round(_archiveRetentionLastMs, 2),
-        firstSightStamped = _archiveRetentionLegacyStamped,
-    };
+    private object ArchiveRetentionStatus() =>
+        new
+        {
+            days = ArchiveFileDays(),
+            eligiblePartitions = _archiveRetentionDue,
+            outstandingDirectives = _archiveFilesOutstanding,
+            sweepingPartitions = _archiveSweeps.Count,
+            deletedLocations = _state.ArchiveFilesDeleted,
+            legacyHolderLocations = _archiveRetentionLegacy,
+            unackedRecordedDeleted = _archiveRetentionUnacked,
+            skippedPartitions = _archiveRetentionSkipped,
+            lastPassRows = _archiveRetentionLastRows,
+            lastPassMs = Math.Round(_archiveRetentionLastMs, 2),
+            firstSightStamped = _archiveRetentionLegacyStamped,
+        };
 
     /// <summary>The due count for status, read BEFORE PlanRetention takes the lock, on a read-only connection.</summary>
     private long ArchiveRetentionDueCount()
     {
         int days;
-        lock (_lock) days = ArchiveFileDays();
-        if (days <= 0) return 0;
-        try { return _store.CountDueReadOnly((_clock() - TimeSpan.FromDays(days)).ToUnixTimeMilliseconds()); }
-        catch (Microsoft.Data.Sqlite.SqliteException) { return -1; }
+        lock (_lock)
+            days = ArchiveFileDays();
+        if (days <= 0)
+            return 0;
+        try
+        {
+            return _store.CountDueReadOnly(
+                (_clock() - TimeSpan.FromDays(days)).ToUnixTimeMilliseconds()
+            );
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException)
+        {
+            return -1;
+        }
     }
 
     // ---- Self-test access.
-    internal object ArchiveRetentionStatusForTest() { lock (_lock) return ArchiveRetentionStatus(); }
-    internal Dictionary<ulong, RegistryStore.ArchiveStamp> ArchiveStampsForTest() { lock (_lock) return _store.StampsFresh(); }
-    internal RegistryStore.ArchiveStamp? ArchiveStampForTest(ulong partition) { lock (_lock) return _store.ReadStamp(partition); }
-    internal int ArchiveFilesOutstanding { get { lock (_lock) return _archiveFilesOutstanding; } }
-    internal double ArchiveRetentionLastMs { get { lock (_lock) return _archiveRetentionLastMs; } }
-    internal int ArchiveRetentionLastRows { get { lock (_lock) return _archiveRetentionLastRows; } }
+    internal object ArchiveRetentionStatusForTest()
+    {
+        lock (_lock)
+            return ArchiveRetentionStatus();
+    }
+
+    internal Dictionary<ulong, RegistryStore.ArchiveStamp> ArchiveStampsForTest()
+    {
+        lock (_lock)
+            return _store.StampsFresh();
+    }
+
+    internal RegistryStore.ArchiveStamp? ArchiveStampForTest(ulong partition)
+    {
+        lock (_lock)
+            return _store.ReadStamp(partition);
+    }
+
+    internal int ArchiveFilesOutstanding
+    {
+        get
+        {
+            lock (_lock)
+                return _archiveFilesOutstanding;
+        }
+    }
+    internal double ArchiveRetentionLastMs
+    {
+        get
+        {
+            lock (_lock)
+                return _archiveRetentionLastMs;
+        }
+    }
+    internal int ArchiveRetentionLastRows
+    {
+        get
+        {
+            lock (_lock)
+                return _archiveRetentionLastRows;
+        }
+    }
 
     /// <summary>Self-test: the sweep's slim read of a row.</summary>
-    internal static (SaveId Id, string Writer, List<string> Locations, List<(string, string)> Holders) ScanArchivedRowForTest(byte[] json)
+    internal static (
+        SaveId Id,
+        string Writer,
+        List<string> Locations,
+        List<(string, string)> Holders
+    ) ScanArchivedRowForTest(byte[] json)
     {
         List<string> locations = [];
         List<(string, string)> holders = [];
@@ -500,7 +792,9 @@ internal sealed partial class GatewayRegistry
     internal SaveRegistration? ArchivedSaveForTest(SaveId id)
     {
         lock (_lock)
-            return _store.ReadArchived(id.Partition, Key(id)) is { } row ? JsonSerializer.Deserialize<SaveRegistration>(row.Value) : null;
+            return _store.ReadArchived(id.Partition, Key(id)) is { } row
+                ? JsonSerializer.Deserialize<SaveRegistration>(row.Value)
+                : null;
     }
 
     /// <summary>Self-test: puts an archived partition's ownership row in a state no API reaches without bringing it back.</summary>

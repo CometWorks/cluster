@@ -16,30 +16,52 @@ internal static class NpcCensusRoutes
     public static void Register()
     {
         // GET /npc-census-count?x=&y=&z=&radius= - Count(x, y, z, radius) and the age, from the published slots.
-        TestRoutes.Add("GET", "/npc-census-count", context =>
-        {
-            double x = TestRoutes.Double(context, "x"), y = TestRoutes.Double(context, "y"), z = TestRoutes.Double(context, "z");
-            double radius = TestRoutes.Double(context, "radius");
-            var count = AppDomain.CurrentDomain.GetData(CountSlot) as Func<double, double, double, double, int>;
-            var age = AppDomain.CurrentDomain.GetData(AgeSlot) as Func<double>;
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => new
+        TestRoutes.Add(
+            "GET",
+            "/npc-census-count",
+            context =>
             {
-                published = count != null && age != null,
-                count = count?.Invoke(x, y, z, radius),
-                ageSeconds = age?.Invoke(),
-            }));
-        });
-        // POST /npc-test-gap?minX= - a stand-in InGap: every point with x >= minX is in a gap band. No minX clears the slot.
-        TestRoutes.Add("POST", "/npc-test-gap", context =>
-        {
-            string raw = context.Request.QueryString["minX"];
-            if (raw == null) AppDomain.CurrentDomain.SetData(InGapSlot, null);
-            else
-            {
-                double minX = double.Parse(raw, CultureInfo.InvariantCulture);
-                AppDomain.CurrentDomain.SetData(InGapSlot, (Func<double, double, double, bool>)((x, y, z) => x >= minX));
+                double x = TestRoutes.Double(context, "x"),
+                    y = TestRoutes.Double(context, "y"),
+                    z = TestRoutes.Double(context, "z");
+                double radius = TestRoutes.Double(context, "radius");
+                var count =
+                    AppDomain.CurrentDomain.GetData(CountSlot)
+                    as Func<double, double, double, double, int>;
+                var age = AppDomain.CurrentDomain.GetData(AgeSlot) as Func<double>;
+                TestRoutes.Json(
+                    context,
+                    200,
+                    TestRoutes.OnGameThread(() =>
+                        new
+                        {
+                            published = count != null && age != null,
+                            count = count?.Invoke(x, y, z, radius),
+                            ageSeconds = age?.Invoke(),
+                        }
+                    )
+                );
             }
-            TestRoutes.Json(context, 200, new { slot = InGapSlot, minX = raw });
-        });
+        );
+        // POST /npc-test-gap?minX= - a stand-in InGap: every point with x >= minX is in a gap band. No minX clears the slot.
+        TestRoutes.Add(
+            "POST",
+            "/npc-test-gap",
+            context =>
+            {
+                string raw = context.Request.QueryString["minX"];
+                if (raw == null)
+                    AppDomain.CurrentDomain.SetData(InGapSlot, null);
+                else
+                {
+                    double minX = double.Parse(raw, CultureInfo.InvariantCulture);
+                    AppDomain.CurrentDomain.SetData(
+                        InGapSlot,
+                        (Func<double, double, double, bool>)((x, y, z) => x >= minX)
+                    );
+                }
+                TestRoutes.Json(context, 200, new { slot = InGapSlot, minX = raw });
+            }
+        );
     }
 }

@@ -16,12 +16,12 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyMultiplayerBase), "OnChatMessageReceived_Server", new[] { typeof(ChatMsg) })]
 public static class MyMultiplayerBasePatch
 {
-	// ClusterPlugin patch point: ChatAuthorityPatch.RequestPrefix
-	[HarmonyPrefix]
-	[HarmonyPriority(Priority.Low)]
-	private static bool RequestPrefix(ChatMsg msg)
-	{
-		var seam = MyMultiplayerBaseSeams.ClusterChatRequestPrefix;
-		return seam == null || seam(msg);
-	}
+    // ClusterPlugin patch point: ChatAuthorityPatch.RequestPrefix
+    [HarmonyPrefix]
+    [HarmonyPriority(Priority.Low)]
+    private static bool RequestPrefix(ChatMsg msg)
+    {
+        var seam = MyMultiplayerBaseSeams.ClusterChatRequestPrefix;
+        return seam == null || seam(msg);
+    }
 }

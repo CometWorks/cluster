@@ -6,10 +6,17 @@ internal sealed partial class GatewayRegistry
     /// #1218: how long a node may stay silent (since its last lease renewal) while its host's executor still reports its
     /// process alive. CLUSTER_LIVE_PROCESS_GRACE_SECONDS, default 60 s (the simulation-stall kill), 0 turns the hold off.
     /// </summary>
-    internal static readonly TimeSpan DefaultLiveProcessGrace =
-        TimeSpan.FromSeconds(double.TryParse(Environment.GetEnvironmentVariable("CLUSTER_LIVE_PROCESS_GRACE_SECONDS"),
-            System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double seconds)
-            && seconds >= 0 ? seconds : 60);
+    internal static readonly TimeSpan DefaultLiveProcessGrace = TimeSpan.FromSeconds(
+        double.TryParse(
+            Environment.GetEnvironmentVariable("CLUSTER_LIVE_PROCESS_GRACE_SECONDS"),
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out double seconds
+        )
+        && seconds >= 0
+            ? seconds
+            : 60
+    );
 
     internal TimeSpan LiveProcessGrace { get; set; } = DefaultLiveProcessGrace;
 
@@ -20,7 +27,8 @@ internal sealed partial class GatewayRegistry
     private static readonly TimeSpan LiveProcessObservationFreshness = TimeSpan.FromSeconds(20);
 
     /// <summary>The lapse each node incarnation was last logged as held at: one line per freeze, not per pass.</summary>
-    private readonly Dictionary<(string Node, long Epoch), DateTimeOffset> _liveProcessHoldLogged = [];
+    private readonly Dictionary<(string Node, long Epoch), DateTimeOffset> _liveProcessHoldLogged =
+    [];
 
     /// <summary>
     /// #1218: a lapsed lease is held while the node's own host says its process is still running. The #1191 octahedron
@@ -40,22 +48,37 @@ internal sealed partial class GatewayRegistry
     /// </summary>
     private bool LiveProcessHeld(NodeRegistration node, DateTimeOffset now)
     {
-        if (LiveProcessGrace <= TimeSpan.Zero || node.LeaseExpires > now || node.State is not (NodeState.Active or NodeState.Closed)
-            || now >= node.LeaseExpires - _leaseTtl + LiveProcessGrace)
+        if (
+            LiveProcessGrace <= TimeSpan.Zero
+            || node.LeaseExpires > now
+            || node.State is not (NodeState.Active or NodeState.Closed)
+            || now >= node.LeaseExpires - _leaseTtl + LiveProcessGrace
+        )
             return false;
-        bool alive = _state.NodePlan.Values.Any(slot => slot.ObservedNode == node.Node && slot.Observed == SpawnState.Ready
-            && slot.ObservedAt is { } observedAt && now - observedAt <= LiveProcessObservationFreshness);
-        if (alive && _liveProcessHoldLogged.GetValueOrDefault((node.Node, node.Epoch)) != node.LeaseExpires)
+        bool alive = _state.NodePlan.Values.Any(slot =>
+            slot.ObservedNode == node.Node
+            && slot.Observed == SpawnState.Ready
+            && slot.ObservedAt is { } observedAt
+            && now - observedAt <= LiveProcessObservationFreshness
+        );
+        if (
+            alive
+            && _liveProcessHoldLogged.GetValueOrDefault((node.Node, node.Epoch))
+                != node.LeaseExpires
+        )
         {
             _liveProcessHoldLogged[(node.Node, node.Epoch)] = node.LeaseExpires;
-            Console.WriteLine($"lease of {node.Node} epoch={node.Epoch} lapsed at {node.LeaseExpires:O} but its host reports the process "
-                + $"running: held up to {(node.LeaseExpires - _leaseTtl + LiveProcessGrace):O} (#1218)");
+            Console.WriteLine(
+                $"lease of {node.Node} epoch={node.Epoch} lapsed at {node.LeaseExpires:O} but its host reports the process "
+                    + $"running: held up to {(node.LeaseExpires - _leaseTtl + LiveProcessGrace):O} (#1218)"
+            );
         }
         return alive;
     }
 
     /// <summary>When a frozen silence of each node incarnation was last forgiven (<see cref="ForgiveFrozenSilence"/>).</summary>
-    private readonly Dictionary<(string Node, long Epoch), DateTimeOffset> _frozenSilenceForgiven = [];
+    private readonly Dictionary<(string Node, long Epoch), DateTimeOffset> _frozenSilenceForgiven =
+    [];
 
     /// <summary>
     /// #1218: the first frame report after a whole-process freeze can carry the frame of the last one before it (no frame
@@ -69,24 +92,41 @@ internal sealed partial class GatewayRegistry
     /// </summary>
     private void ForgiveFrozenSilence(NodeRegistration node, DateTimeOffset now)
     {
-        if (LiveProcessGrace <= TimeSpan.Zero || node.LeaseExpires > now || node.SimulationProgress == default
-            || now - _frozenSilenceForgiven.GetValueOrDefault((node.Node, node.Epoch), DateTimeOffset.MinValue) < SimulationStallKill)
+        if (
+            LiveProcessGrace <= TimeSpan.Zero
+            || node.LeaseExpires > now
+            || node.SimulationProgress == default
+            || now
+                - _frozenSilenceForgiven.GetValueOrDefault(
+                    (node.Node, node.Epoch),
+                    DateTimeOffset.MinValue
+                )
+                < SimulationStallKill
+        )
             return;
         TimeSpan silence = now - (node.LeaseExpires - _leaseTtl);
-        node.SimulationProgress = node.SimulationProgress + silence < now ? node.SimulationProgress + silence : now;
+        node.SimulationProgress =
+            node.SimulationProgress + silence < now ? node.SimulationProgress + silence : now;
         _frozenSilenceForgiven[(node.Node, node.Epoch)] = now;
-        Console.WriteLine($"{node.Node} epoch={node.Epoch} reported again after {silence.TotalSeconds:F1} s of silence past its lease: "
-            + "the silence is not counted as a simulation stall (#1218)");
+        Console.WriteLine(
+            $"{node.Node} epoch={node.Epoch} reported again after {silence.TotalSeconds:F1} s of silence past its lease: "
+                + "the silence is not counted as a simulation stall (#1218)"
+        );
     }
 
     /// <summary>#1282: drops the hold's per-incarnation entries of every incarnation that is no longer Active or Closed
     /// (Dead, replaced by a later epoch, or gone from the table). Called by ExpireLeases; caller holds _lock.</summary>
     private void PruneLiveProcessHold()
     {
-        if (_liveProcessHoldLogged.Count == 0 && _frozenSilenceForgiven.Count == 0) return;
-        bool Gone((string Node, long Epoch) key) => !_state.Nodes.TryGetValue(key.Node, out NodeRegistration? row)
-            || row.Epoch != key.Epoch || row.State is not (NodeState.Active or NodeState.Closed);
-        foreach ((string, long) key in _liveProcessHoldLogged.Keys.Where(Gone).ToArray()) _liveProcessHoldLogged.Remove(key);
-        foreach ((string, long) key in _frozenSilenceForgiven.Keys.Where(Gone).ToArray()) _frozenSilenceForgiven.Remove(key);
+        if (_liveProcessHoldLogged.Count == 0 && _frozenSilenceForgiven.Count == 0)
+            return;
+        bool Gone((string Node, long Epoch) key) =>
+            !_state.Nodes.TryGetValue(key.Node, out NodeRegistration? row)
+            || row.Epoch != key.Epoch
+            || row.State is not (NodeState.Active or NodeState.Closed);
+        foreach ((string, long) key in _liveProcessHoldLogged.Keys.Where(Gone).ToArray())
+            _liveProcessHoldLogged.Remove(key);
+        foreach ((string, long) key in _frozenSilenceForgiven.Keys.Where(Gone).ToArray())
+            _frozenSilenceForgiven.Remove(key);
     }
 }

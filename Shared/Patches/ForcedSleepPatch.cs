@@ -24,30 +24,37 @@ public static class ForcedSleepPatch
     /// <summary>Dampeners against gravity, a seated controller, gravity changes, reactor switches.</summary>
     [HarmonyPrefix]
     [HarmonyPatch(typeof(MyCubeGrid), nameof(MyCubeGrid.ActivatePhysics))]
-    private static bool ActivatePhysicsPrefix(MyCubeGrid __instance) => !ForcedSleepService.IsSlept(__instance);
+    private static bool ActivatePhysicsPrefix(MyCubeGrid __instance) =>
+        !ForcedSleepService.IsSlept(__instance);
 
     /// <summary>A rotor or hinge whose motor has a non-zero target wakes base and top every frame.</summary>
     [HarmonyPrefix]
     [HarmonyPatch(typeof(MyMotorStator), "ActivatePhysics")]
-    private static bool StatorActivatePrefix(MyMotorStator __instance)
-        => !ForcedSleepService.IsSlept(__instance.CubeGrid) && !ForcedSleepService.IsSlept(__instance.TopGrid);
+    private static bool StatorActivatePrefix(MyMotorStator __instance) =>
+        !ForcedSleepService.IsSlept(__instance.CubeGrid)
+        && !ForcedSleepService.IsSlept(__instance.TopGrid);
 
     [HarmonyPrefix]
     [HarmonyPatch(typeof(MyMotorSuspension), "ActivatePhysics")]
-    private static bool SuspensionActivatePrefix(MyMotorSuspension __instance)
-        => !ForcedSleepService.IsSlept(__instance.CubeGrid) && !ForcedSleepService.IsSlept(__instance.TopGrid);
+    private static bool SuspensionActivatePrefix(MyMotorSuspension __instance) =>
+        !ForcedSleepService.IsSlept(__instance.CubeGrid)
+        && !ForcedSleepService.IsSlept(__instance.TopGrid);
 
     /// <summary>The thrust update: held constant controls would re-activate or push the body.</summary>
     [HarmonyPrefix]
-    [HarmonyPatch(typeof(MyThrusterBlockThrustComponent), nameof(MyThrusterBlockThrustComponent.UpdateBeforeSimulation),
-        new[] { typeof(bool), typeof(VRage.Game.Entity.MyEntity) })]
-    private static bool ThrustUpdatePrefix(MyThrusterBlockThrustComponent __instance)
-        => !ForcedSleepService.IsSlept(__instance.CubeGrid);
+    [HarmonyPatch(
+        typeof(MyThrusterBlockThrustComponent),
+        nameof(MyThrusterBlockThrustComponent.UpdateBeforeSimulation),
+        new[] { typeof(bool), typeof(VRage.Game.Entity.MyEntity) }
+    )]
+    private static bool ThrustUpdatePrefix(MyThrusterBlockThrustComponent __instance) =>
+        !ForcedSleepService.IsSlept(__instance.CubeGrid);
 
     /// <summary>The gyro update: a constant override applies torque, which Havok treats as a wake.</summary>
     [HarmonyPrefix]
     [HarmonyPatch(typeof(MyGridGyroSystem), "Update")]
-    private static bool GyroUpdatePrefix(MyGridGyroSystem __instance) => !ForcedSleepService.IsSlept(__instance.Grid);
+    private static bool GyroUpdatePrefix(MyGridGyroSystem __instance) =>
+        !ForcedSleepService.IsSlept(__instance.Grid);
 
     /// <summary>
     /// The Havok-level hold: ANY managed Activate on a held body is skipped (and its caller counted), so
@@ -56,22 +63,35 @@ public static class ForcedSleepPatch
     /// </summary>
     [HarmonyPrefix]
     [HarmonyPatch(typeof(Havok.HkEntity), nameof(Havok.HkEntity.Activate))]
-    private static bool HkActivatePrefix(Havok.HkEntity __instance) => !ForcedSleepService.HoldActivation(__instance);
+    private static bool HkActivatePrefix(Havok.HkEntity __instance) =>
+        !ForcedSleepService.HoldActivation(__instance);
 
     [HarmonyPrefix]
     [HarmonyPatch(typeof(Havok.HkEntity), nameof(Havok.HkEntity.ActivateAsCriticalOperation))]
-    private static bool HkActivateCriticalPrefix(Havok.HkEntity __instance) => !ForcedSleepService.HoldActivation(__instance);
+    private static bool HkActivateCriticalPrefix(Havok.HkEntity __instance) =>
+        !ForcedSleepService.HoldActivation(__instance);
 
     // ---------------------------------------------------------------- control changes wake
 
     /// <summary>Pilot input from a cockpit or remote control.</summary>
     [HarmonyPrefix]
-    [HarmonyPatch(typeof(MyShipController), nameof(MyShipController.MoveAndRotate),
-        new[] { typeof(Vector3), typeof(Vector2), typeof(float) })]
-    private static void MoveAndRotatePrefix(MyShipController __instance, Vector3 moveIndicator, Vector2 rotationIndicator, float rollIndicator)
+    [HarmonyPatch(
+        typeof(MyShipController),
+        nameof(MyShipController.MoveAndRotate),
+        new[] { typeof(Vector3), typeof(Vector2), typeof(float) }
+    )]
+    private static void MoveAndRotatePrefix(
+        MyShipController __instance,
+        Vector3 moveIndicator,
+        Vector2 rotationIndicator,
+        float rollIndicator
+    )
     {
-        if (moveIndicator.LengthSquared() > ControlEpsilonSq || rotationIndicator.LengthSquared() > ControlEpsilonSq
-            || rollIndicator * rollIndicator > ControlEpsilonSq)
+        if (
+            moveIndicator.LengthSquared() > ControlEpsilonSq
+            || rotationIndicator.LengthSquared() > ControlEpsilonSq
+            || rollIndicator * rollIndicator > ControlEpsilonSq
+        )
             ForcedSleepService.Wake(__instance.CubeGrid, "pilot-input");
     }
 
@@ -79,17 +99,22 @@ public static class ForcedSleepPatch
     [HarmonyPatch(typeof(MyCubeGrid), nameof(MyCubeGrid.EnableDampingInternal))]
     private static void DampenersPrefix(MyCubeGrid __instance, bool enableDampeners)
     {
-        if (__instance.EntityThrustComponent != null && __instance.EntityThrustComponent.DampenersEnabled != enableDampeners)
+        if (
+            __instance.EntityThrustComponent != null
+            && __instance.EntityThrustComponent.DampenersEnabled != enableDampeners
+        )
             ForcedSleepService.Wake(__instance, "dampeners");
     }
 
     [HarmonyPostfix]
     [HarmonyPatch(typeof(MyThrust), "ThrustOverrideValueChanged")]
-    private static void ThrustOverridePostfix(MyThrust __instance) => ForcedSleepService.Wake(__instance.CubeGrid, "thrust-override");
+    private static void ThrustOverridePostfix(MyThrust __instance) =>
+        ForcedSleepService.Wake(__instance.CubeGrid, "thrust-override");
 
     [HarmonyPostfix]
     [HarmonyPatch(typeof(MyGyro), "GyroOverrideChanged")]
-    private static void GyroOverridePostfix(MyGyro __instance) => ForcedSleepService.Wake(__instance.CubeGrid, "gyro-override");
+    private static void GyroOverridePostfix(MyGyro __instance) =>
+        ForcedSleepService.Wake(__instance.CubeGrid, "gyro-override");
 
     [HarmonyPrefix]
     [HarmonyPatch(typeof(MyGyro), nameof(MyGyro.SetGyroTorque))]
@@ -100,7 +125,11 @@ public static class ForcedSleepPatch
     }
 
     [HarmonyPrefix]
-    [HarmonyPatch(typeof(MyEntityThrustComponent), nameof(MyEntityThrustComponent.ControlThrust), MethodType.Setter)]
+    [HarmonyPatch(
+        typeof(MyEntityThrustComponent),
+        nameof(MyEntityThrustComponent.ControlThrust),
+        MethodType.Setter
+    )]
     private static void ControlThrustPrefix(MyEntityThrustComponent __instance, Vector3 value)
     {
         if ((value - __instance.m_controlThrust).LengthSquared() > ControlEpsilonSq)
@@ -108,7 +137,11 @@ public static class ForcedSleepPatch
     }
 
     [HarmonyPrefix]
-    [HarmonyPatch(typeof(MyEntityThrustComponent), nameof(MyEntityThrustComponent.AutoPilotControlThrust), MethodType.Setter)]
+    [HarmonyPatch(
+        typeof(MyEntityThrustComponent),
+        nameof(MyEntityThrustComponent.AutoPilotControlThrust),
+        MethodType.Setter
+    )]
     private static void AutopilotThrustPrefix(MyEntityThrustComponent __instance, Vector3 value)
     {
         if ((value - __instance.m_autoPilotControlThrust).LengthSquared() > ControlEpsilonSq)
@@ -116,7 +149,11 @@ public static class ForcedSleepPatch
     }
 
     [HarmonyPrefix]
-    [HarmonyPatch(typeof(MyGridGyroSystem), nameof(MyGridGyroSystem.ControlTorque), MethodType.Setter)]
+    [HarmonyPatch(
+        typeof(MyGridGyroSystem),
+        nameof(MyGridGyroSystem.ControlTorque),
+        MethodType.Setter
+    )]
     private static void ControlTorquePrefix(MyGridGyroSystem __instance, Vector3 value)
     {
         if ((value - __instance.m_controlTorque).LengthSquared() > ControlEpsilonSq)

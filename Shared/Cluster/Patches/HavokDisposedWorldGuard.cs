@@ -1,7 +1,7 @@
 using System;
 using System.Threading;
-using Havok;
 using HarmonyLib;
+using Havok;
 using Sandbox.Engine.Physics;
 
 namespace ClusterPlugin;
@@ -29,99 +29,117 @@ namespace ClusterPlugin;
 /// </summary>
 internal static class HavokDisposedWorldGuard
 {
-	private static readonly AccessTools.FieldRef<HkWorld, IntPtr> AddBatch = AccessTools.FieldRefAccess<HkWorld, IntPtr>("m_addBatch");
-	private static readonly AccessTools.FieldRef<HkWorld, IntPtr> RemoveBatch = AccessTools.FieldRefAccess<HkWorld, IntPtr>("m_removeBatch");
-	private static readonly AccessTools.FieldRef<HkWorld, int> AddBatchSize = AccessTools.FieldRefAccess<HkWorld, int>("m_addBatchSize");
-	private static readonly AccessTools.FieldRef<HkWorld, int> AddBatchCount = AccessTools.FieldRefAccess<HkWorld, int>("m_addBatchCount");
-	private static readonly AccessTools.FieldRef<HkWorld, int> RemoveBatchSize = AccessTools.FieldRefAccess<HkWorld, int>("m_removeBatchSize");
-	private static readonly AccessTools.FieldRef<HkWorld, int> RemoveBatchCount = AccessTools.FieldRefAccess<HkWorld, int>("m_removeBatchCount");
-	private static readonly Action<HkWorld, HkRigidBody> RemoveInternal =
-		AccessTools.MethodDelegate<Action<HkWorld, HkRigidBody>>(AccessTools.Method(typeof(HkWorld), "RemoveRigidBodyInternal"));
+    private static readonly AccessTools.FieldRef<HkWorld, IntPtr> AddBatch =
+        AccessTools.FieldRefAccess<HkWorld, IntPtr>("m_addBatch");
+    private static readonly AccessTools.FieldRef<HkWorld, IntPtr> RemoveBatch =
+        AccessTools.FieldRefAccess<HkWorld, IntPtr>("m_removeBatch");
+    private static readonly AccessTools.FieldRef<HkWorld, int> AddBatchSize =
+        AccessTools.FieldRefAccess<HkWorld, int>("m_addBatchSize");
+    private static readonly AccessTools.FieldRef<HkWorld, int> AddBatchCount =
+        AccessTools.FieldRefAccess<HkWorld, int>("m_addBatchCount");
+    private static readonly AccessTools.FieldRef<HkWorld, int> RemoveBatchSize =
+        AccessTools.FieldRefAccess<HkWorld, int>("m_removeBatchSize");
+    private static readonly AccessTools.FieldRef<HkWorld, int> RemoveBatchCount =
+        AccessTools.FieldRefAccess<HkWorld, int>("m_removeBatchCount");
+    private static readonly Action<HkWorld, HkRigidBody> RemoveInternal =
+        AccessTools.MethodDelegate<Action<HkWorld, HkRigidBody>>(
+            AccessTools.Method(typeof(HkWorld), "RemoveRigidBodyInternal")
+        );
 
-	private static long s_skipped;
-	internal static long Skipped => Interlocked.Read(ref s_skipped);
+    private static long s_skipped;
+    internal static long Skipped => Interlocked.Read(ref s_skipped);
 
-	private static bool Enabled => Environment.GetEnvironmentVariable("CLUSTER_HAVOK_DISPOSED_WORLD_GUARD") != "0";
+    private static bool Enabled =>
+        Environment.GetEnvironmentVariable("CLUSTER_HAVOK_DISPOSED_WORLD_GUARD") != "0";
 
-	/// <summary>The world's batch pointers, for the self-test: both Zero once it is disposed.</summary>
-	internal static (IntPtr Add, IntPtr Remove) BatchPointers(HkWorld world) => (AddBatch(world), RemoveBatch(world));
+    /// <summary>The world's batch pointers, for the self-test: both Zero once it is disposed.</summary>
+    internal static (IntPtr Add, IntPtr Remove) BatchPointers(HkWorld world) =>
+        (AddBatch(world), RemoveBatch(world));
 
-	private static void Skip(string op, HkWorld world, HkRigidBody body)
-	{
-		long total = Interlocked.Increment(ref s_skipped);
-		string entity = (body?.UserObject as MyPhysicsBody)?.Entity is { } e ? $"{e.GetType().Name} {e.EntityId}" : "?";
-		Console.WriteLine($"[ClusterPlugin] havok_disposed_world_batch op={op} body=0x{(body?.NativeObject ?? IntPtr.Zero).ToInt64():x} "
-			+ $"entity={entity} total={total} (T-0263: skipped, no write into the released batch buffer)");
-	}
+    private static void Skip(string op, HkWorld world, HkRigidBody body)
+    {
+        long total = Interlocked.Increment(ref s_skipped);
+        string entity = (body?.UserObject as MyPhysicsBody)?.Entity is { } e
+            ? $"{e.GetType().Name} {e.EntityId}"
+            : "?";
+        Console.WriteLine(
+            $"[ClusterPlugin] havok_disposed_world_batch op={op} body=0x{(body?.NativeObject ?? IntPtr.Zero).ToInt64():x} "
+                + $"entity={entity} total={total} (T-0263: skipped, no write into the released batch buffer)"
+        );
+    }
 
-	[HarmonyPatch(typeof(HkWorld), "Dispose", typeof(bool))]
-	private static class DisposePatch
-	{
-		private static bool Prepare() => Enabled;
+    [HarmonyPatch(typeof(HkWorld), "Dispose", typeof(bool))]
+    private static class DisposePatch
+    {
+        private static bool Prepare() => Enabled;
 
-		[HarmonyPostfix]
-		private static void Postfix(HkWorld __instance)
-		{
-			// HkWorld_Release has freed both buffers: forget them so nothing can write through them.
-			AddBatch(__instance) = IntPtr.Zero;
-			RemoveBatch(__instance) = IntPtr.Zero;
-			AddBatchSize(__instance) = 0;
-			AddBatchCount(__instance) = 0;
-			RemoveBatchSize(__instance) = 0;
-			RemoveBatchCount(__instance) = 0;
-			HavokBodyAudit.Forget(__instance);
-		}
-	}
+        [HarmonyPostfix]
+        private static void Postfix(HkWorld __instance)
+        {
+            // HkWorld_Release has freed both buffers: forget them so nothing can write through them.
+            AddBatch(__instance) = IntPtr.Zero;
+            RemoveBatch(__instance) = IntPtr.Zero;
+            AddBatchSize(__instance) = 0;
+            AddBatchCount(__instance) = 0;
+            RemoveBatchSize(__instance) = 0;
+            RemoveBatchCount(__instance) = 0;
+            HavokBodyAudit.Forget(__instance);
+        }
+    }
 
-	[HarmonyPatch(typeof(HkWorld), nameof(HkWorld.RemoveRigidBodyBatch))]
-	private static class RemoveBatchPatch
-	{
-		private static bool Prepare() => Enabled;
+    [HarmonyPatch(typeof(HkWorld), nameof(HkWorld.RemoveRigidBodyBatch))]
+    private static class RemoveBatchPatch
+    {
+        private static bool Prepare() => Enabled;
 
-		[HarmonyPrefix, HarmonyPriority(Priority.First)]
-		private static bool Prefix(HkWorld __instance, HkRigidBody rigidBody)
-		{
-			if (!__instance.IsDisposed) return true;
-			Skip("remove_batch", __instance, rigidBody);
-			if (rigidBody != null) RemoveInternal(__instance, rigidBody);
-			return false;
-		}
-	}
+        [HarmonyPrefix, HarmonyPriority(Priority.First)]
+        private static bool Prefix(HkWorld __instance, HkRigidBody rigidBody)
+        {
+            if (!__instance.IsDisposed)
+                return true;
+            Skip("remove_batch", __instance, rigidBody);
+            if (rigidBody != null)
+                RemoveInternal(__instance, rigidBody);
+            return false;
+        }
+    }
 
-	[HarmonyPatch(typeof(HkWorld), nameof(HkWorld.AddRigidBodyBatch))]
-	private static class AddBatchPatch
-	{
-		private static bool Prepare() => Enabled;
+    [HarmonyPatch(typeof(HkWorld), nameof(HkWorld.AddRigidBodyBatch))]
+    private static class AddBatchPatch
+    {
+        private static bool Prepare() => Enabled;
 
-		[HarmonyPrefix, HarmonyPriority(Priority.First)]
-		private static bool Prefix(HkWorld __instance, HkRigidBody rigidBody)
-		{
-			if (!__instance.IsDisposed) return true;
-			Skip("add_batch", __instance, rigidBody);
-			return false;
-		}
-	}
+        [HarmonyPrefix, HarmonyPriority(Priority.First)]
+        private static bool Prefix(HkWorld __instance, HkRigidBody rigidBody)
+        {
+            if (!__instance.IsDisposed)
+                return true;
+            Skip("add_batch", __instance, rigidBody);
+            return false;
+        }
+    }
 
-	[HarmonyPatch(typeof(HkWorld), nameof(HkWorld.EnsureBatchSizes))]
-	private static class EnsurePatch
-	{
-		private static bool Prepare() => Enabled;
+    [HarmonyPatch(typeof(HkWorld), nameof(HkWorld.EnsureBatchSizes))]
+    private static class EnsurePatch
+    {
+        private static bool Prepare() => Enabled;
 
-		[HarmonyPrefix, HarmonyPriority(Priority.First)]
-		private static bool Prefix(HkWorld __instance) => !__instance.IsDisposed;
-	}
+        [HarmonyPrefix, HarmonyPriority(Priority.First)]
+        private static bool Prefix(HkWorld __instance) => !__instance.IsDisposed;
+    }
 
-	[HarmonyPatch(typeof(HkWorld), nameof(HkWorld.FinishBatch))]
-	private static class FinishBatchPatch
-	{
-		private static bool Prepare() => Enabled;
+    [HarmonyPatch(typeof(HkWorld), nameof(HkWorld.FinishBatch))]
+    private static class FinishBatchPatch
+    {
+        private static bool Prepare() => Enabled;
 
-		[HarmonyPrefix, HarmonyPriority(Priority.First)]
-		private static bool Prefix(HkWorld __instance)
-		{
-			if (!__instance.IsDisposed) return true;
-			HavokBodyAudit.Forget(__instance);
-			return false;
-		}
-	}
+        [HarmonyPrefix, HarmonyPriority(Priority.First)]
+        private static bool Prefix(HkWorld __instance)
+        {
+            if (!__instance.IsDisposed)
+                return true;
+            HavokBodyAudit.Forget(__instance);
+            return false;
+        }
+    }
 }

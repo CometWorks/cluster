@@ -13,10 +13,28 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyVoxelBase))]
 public static class MyVoxelBasePatch
 {
-	[HarmonyPostfix]
-	[HarmonyPatch(nameof(MyVoxelBase.RequestVoxelCutoutSphere), typeof(Vector3D), typeof(float), typeof(bool), typeof(bool))]
-	private static void RequestVoxelCutoutSpherePostfix(MyVoxelBase __instance, Vector3D center, float radius, bool createDebris, bool damage)
-	{
-		MyVoxelBaseSeams.ClusterVoxelCutoutSphere?.Invoke(__instance, center, radius, createDebris, damage);
-	}
+    [HarmonyPostfix]
+    [HarmonyPatch(
+        nameof(MyVoxelBase.RequestVoxelCutoutSphere),
+        typeof(Vector3D),
+        typeof(float),
+        typeof(bool),
+        typeof(bool)
+    )]
+    private static void RequestVoxelCutoutSpherePostfix(
+        MyVoxelBase __instance,
+        Vector3D center,
+        float radius,
+        bool createDebris,
+        bool damage
+    )
+    {
+        MyVoxelBaseSeams.ClusterVoxelCutoutSphere?.Invoke(
+            __instance,
+            center,
+            radius,
+            createDebris,
+            damage
+        );
+    }
 }

@@ -69,7 +69,11 @@ internal sealed partial class DirectGateway
             Directory.CreateDirectory(staging);
             DateTimeOffset copiedAt = DateTimeOffset.UtcNow;
             // #1275: retention keeps every save the copy names until the artifact is released or expires.
-            _registry.CopyStore(Path.Combine(staging, RegistryStore.FileName), artifactId, copiedAt + ttl);
+            _registry.CopyStore(
+                Path.Combine(staging, RegistryStore.FileName),
+                artifactId,
+                copiedAt + ttl
+            );
             (Dictionary<string, string> checksums, long sizeBytes, string manifestSha256) =
                 ChecksumTree(staging);
             string finalPath = Path.Combine(_options.ExportRoot!, artifactId);
@@ -140,7 +144,10 @@ internal sealed partial class DirectGateway
 internal sealed partial class GatewayRegistry
 {
     /// <summary>By holder (the artifact id): the held saves, null while the copy runs (everything held), and the end.</summary>
-    private readonly Dictionary<string, (HashSet<SaveId>? Saves, HashSet<GlobalSaveId>? Globals, DateTimeOffset Until)> _backupHolds = new(StringComparer.Ordinal);
+    private readonly Dictionary<
+        string,
+        (HashSet<SaveId>? Saves, HashSet<GlobalSaveId>? Globals, DateTimeOffset Until)
+    > _backupHolds = new(StringComparer.Ordinal);
 
     /// <summary>
     /// <see cref="CopyStore(string)"/> under a retention hold for <paramref name="holder"/> until
@@ -149,7 +156,8 @@ internal sealed partial class GatewayRegistry
     /// </summary>
     public void CopyStore(string destination, string holder, DateTimeOffset until)
     {
-        lock (_lock) _backupHolds[holder] = (null, null, until);
+        lock (_lock)
+            _backupHolds[holder] = (null, null, until);
         try
         {
             CopyStore(destination);
@@ -160,21 +168,36 @@ internal sealed partial class GatewayRegistry
             throw;
         }
         lock (_lock)
-            _backupHolds[holder] = (_state.Saves.Values.Where(save => !save.PendingDelete).Select(save => save.SaveId).ToHashSet(),
-                _state.GlobalSaves.Values.Where(save => !save.PendingDelete).Select(save => save.SaveId).ToHashSet(), until);
+            _backupHolds[holder] = (
+                _state
+                    .Saves.Values.Where(save => !save.PendingDelete)
+                    .Select(save => save.SaveId)
+                    .ToHashSet(),
+                _state
+                    .GlobalSaves.Values.Where(save => !save.PendingDelete)
+                    .Select(save => save.SaveId)
+                    .ToHashSet(),
+                until
+            );
     }
 
     /// <summary>Ends <paramref name="holder"/>'s hold; false when it had none (already released or expired).</summary>
     public bool ReleaseBackupHold(string holder)
     {
-        lock (_lock) return _backupHolds.Remove(holder);
+        lock (_lock)
+            return _backupHolds.Remove(holder);
     }
 
     /// <summary>PlanRetention, under _lock: adds what the live holds keep to <paramref name="retained"/>, drops expired holds.</summary>
     private void RetainBackupHolds(HashSet<SaveId> retained)
     {
         DateTimeOffset now = _clock();
-        foreach ((string holder, (HashSet<SaveId>? saves, _, DateTimeOffset until)) in _backupHolds.ToArray())
+        foreach (
+            (
+                string holder,
+                (HashSet<SaveId>? saves, _, DateTimeOffset until)
+            ) in _backupHolds.ToArray()
+        )
             if (until <= now)
                 _backupHolds.Remove(holder);
             else

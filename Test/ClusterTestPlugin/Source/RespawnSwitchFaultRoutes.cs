@@ -27,44 +27,69 @@ internal static class RespawnSwitchFaultRoutes
         // POST /respawn-switch-fault?mode=hold|refuse|off&count=N[&seconds=S] - fault the next N preview switches this
         // node asks for; a hold lasts until /respawn-switch-fault-release or S seconds (default 60). {mode, remaining,
         // held, faulted}.
-        TestRoutes.Add("POST", "/respawn-switch-fault", context =>
-        {
-            string mode = TestRoutes.Query(context, "mode");
-            if (mode is not ("hold" or "refuse" or "off")) throw new ArgumentException("mode must be hold, refuse or off");
-            lock (Sync)
+        TestRoutes.Add(
+            "POST",
+            "/respawn-switch-fault",
+            context =>
             {
-                m_mode = mode == "off" ? null : mode;
-                m_remaining = mode == "off" ? 0 : (int)TestRoutes.Long(context, "count");
-                m_seconds = double.Parse(TestRoutes.Query(context, "seconds", "60"), System.Globalization.CultureInfo.InvariantCulture);
-                m_release.Set();
-                m_release = new ManualResetEventSlim(false);
-                Faulted.Clear();
+                string mode = TestRoutes.Query(context, "mode");
+                if (mode is not ("hold" or "refuse" or "off"))
+                    throw new ArgumentException("mode must be hold, refuse or off");
+                lock (Sync)
+                {
+                    m_mode = mode == "off" ? null : mode;
+                    m_remaining = mode == "off" ? 0 : (int)TestRoutes.Long(context, "count");
+                    m_seconds = double.Parse(
+                        TestRoutes.Query(context, "seconds", "60"),
+                        System.Globalization.CultureInfo.InvariantCulture
+                    );
+                    m_release.Set();
+                    m_release = new ManualResetEventSlim(false);
+                    Faulted.Clear();
+                }
+                ClusterSeams.BeforeSwitchPost = mode == "off" ? null : Fault;
+                Plugin.Log($"respawn-switch-fault mode={mode} (SE-1189)");
+                TestRoutes.Json(context, 200, Status());
             }
-            ClusterSeams.BeforeSwitchPost = mode == "off" ? null : Fault;
-            Plugin.Log($"respawn-switch-fault mode={mode} (SE-1189)");
-            TestRoutes.Json(context, 200, Status());
-        });
-        TestRoutes.Add("POST", "/respawn-switch-fault-release", context =>
-        {
-            lock (Sync) m_release.Set();
-            TestRoutes.Json(context, 200, Status());
-        });
-        TestRoutes.Add("GET", "/respawn-switch-fault", context => TestRoutes.Json(context, 200, Status()));
+        );
+        TestRoutes.Add(
+            "POST",
+            "/respawn-switch-fault-release",
+            context =>
+            {
+                lock (Sync)
+                    m_release.Set();
+                TestRoutes.Json(context, 200, Status());
+            }
+        );
+        TestRoutes.Add(
+            "GET",
+            "/respawn-switch-fault",
+            context => TestRoutes.Json(context, 200, Status())
+        );
         // POST /respawn-restore-fault?count=N - SE-1199: fail the next N restores of a client whose switch failed, so the
         // node gives the client up (the last resort). {remaining, failed}.
-        TestRoutes.Add("POST", "/respawn-restore-fault", context =>
-        {
-            int count = (int)TestRoutes.Long(context, "count");
-            lock (Sync)
+        TestRoutes.Add(
+            "POST",
+            "/respawn-restore-fault",
+            context =>
             {
-                m_restoreFaults = count;
-                RestoreFailed.Clear();
+                int count = (int)TestRoutes.Long(context, "count");
+                lock (Sync)
+                {
+                    m_restoreFaults = count;
+                    RestoreFailed.Clear();
+                }
+                ClusterSeams.RestoreFault = count > 0 ? FailRestore : null;
+                Plugin.Log($"respawn-restore-fault count={count} (SE-1199)");
+                TestRoutes.Json(context, 200, RestoreStatus());
             }
-            ClusterSeams.RestoreFault = count > 0 ? FailRestore : null;
-            Plugin.Log($"respawn-restore-fault count={count} (SE-1199)");
-            TestRoutes.Json(context, 200, RestoreStatus());
-        });
-        TestRoutes.Add("GET", "/respawn-restore-fault", context => TestRoutes.Json(context, 200, RestoreStatus()));
+        );
+        TestRoutes.Add(
+            "GET",
+            "/respawn-restore-fault",
+            context => TestRoutes.Json(context, 200, RestoreStatus())
+        );
     }
 
     private static int m_restoreFaults;
@@ -72,14 +97,16 @@ internal static class RespawnSwitchFaultRoutes
 
     private static object RestoreStatus()
     {
-        lock (Sync) return new { remaining = m_restoreFaults, failed = RestoreFailed.ToArray() };
+        lock (Sync)
+            return new { remaining = m_restoreFaults, failed = RestoreFailed.ToArray() };
     }
 
     private static string FailRestore(Guid operationId)
     {
         lock (Sync)
         {
-            if (m_restoreFaults <= 0) return null;
+            if (m_restoreFaults <= 0)
+                return null;
             m_restoreFaults--;
             RestoreFailed.Add(operationId);
         }
@@ -89,7 +116,14 @@ internal static class RespawnSwitchFaultRoutes
 
     private static object Status()
     {
-        lock (Sync) return new { mode = m_mode, remaining = m_remaining, held = m_held, faulted = Faulted.ToArray() };
+        lock (Sync)
+            return new
+            {
+                mode = m_mode,
+                remaining = m_remaining,
+                held = m_held,
+                faulted = Faulted.ToArray(),
+            };
     }
 
     private static void Fault(ClusterRespawnExecution request)
@@ -98,21 +132,40 @@ internal static class RespawnSwitchFaultRoutes
         ManualResetEventSlim release;
         lock (Sync)
         {
-            if (m_remaining <= 0) return;
+            if (m_remaining <= 0)
+                return;
             m_remaining--;
             mode = m_mode;
             release = m_release;
-            Faulted.Add(new { mode, operation = request.OperationId, partition = request.PartitionId, generation = request.Generation });
+            Faulted.Add(
+                new
+                {
+                    mode,
+                    operation = request.OperationId,
+                    partition = request.PartitionId,
+                    generation = request.Generation,
+                }
+            );
         }
         if (mode == "refuse")
         {
-            Plugin.Log($"spawn preview switch operation={request.OperationId:D} refused by the bench (SE-1189)");
-            throw new InvalidOperationException("Gateway respawn switch refused by the SE-1189 bench");
+            Plugin.Log(
+                $"spawn preview switch operation={request.OperationId:D} refused by the bench (SE-1189)"
+            );
+            throw new InvalidOperationException(
+                "Gateway respawn switch refused by the SE-1189 bench"
+            );
         }
-        lock (Sync) m_held = request.OperationId;
-        Plugin.Log($"spawn preview switch operation={request.OperationId:D} held by the bench partition={request.PartitionId} (SE-1189)");
+        lock (Sync)
+            m_held = request.OperationId;
+        Plugin.Log(
+            $"spawn preview switch operation={request.OperationId:D} held by the bench partition={request.PartitionId} (SE-1189)"
+        );
         bool released = release.Wait(TimeSpan.FromSeconds(m_seconds));
-        lock (Sync) m_held = Guid.Empty;
-        Plugin.Log($"spawn preview switch operation={request.OperationId:D} {(released ? "released" : "hold timed out")} by the bench (SE-1189)");
+        lock (Sync)
+            m_held = Guid.Empty;
+        Plugin.Log(
+            $"spawn preview switch operation={request.OperationId:D} {(released ? "released" : "hold timed out")} by the bench (SE-1189)"
+        );
     }
 }

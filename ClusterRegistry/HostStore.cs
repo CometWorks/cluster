@@ -36,12 +36,19 @@ namespace ClusterRegistry;
 /// <item>Lost: the host left the plan. Its copies stop counting.</item>
 /// </list>
 /// </summary>
-internal enum HostStoreState { Serving, Held, Dark, Lost }
+internal enum HostStoreState
+{
+    Serving,
+    Held,
+    Dark,
+    Lost,
+}
 
 internal sealed partial class GatewayRegistry
 {
     /// <summary>CLUSTER_HOST_STORE=1: re-key the catalogue to host holders at load.</summary>
-    internal static bool HostStoreEnabled = Environment.GetEnvironmentVariable("CLUSTER_HOST_STORE") == "1";
+    internal static bool HostStoreEnabled =
+        Environment.GetEnvironmentVariable("CLUSTER_HOST_STORE") == "1";
 
     private const string HostHolderPrefix = "host:";
 
@@ -49,20 +56,33 @@ internal sealed partial class GatewayRegistry
 
     /// <summary>The host of a host holder key, null for a node id.</summary>
     internal static string? HostOfHolder(string holder) =>
-        holder.StartsWith(HostHolderPrefix, StringComparison.Ordinal) ? holder[HostHolderPrefix.Length..] : null;
+        holder.StartsWith(HostHolderPrefix, StringComparison.Ordinal)
+            ? holder[HostHolderPrefix.Length..]
+            : null;
 
-    private static bool IsHostHolder(string holder) => holder.StartsWith(HostHolderPrefix, StringComparison.Ordinal);
+    private static bool IsHostHolder(string holder) =>
+        holder.StartsWith(HostHolderPrefix, StringComparison.Ordinal);
 
     /// <summary>Where <paramref name="host"/>'s copy of a partition save lies: the node's own function
     /// (<see cref="ClusterProtocol.HostSaveStore"/>). The registry never takes this path from a request.</summary>
     internal static string HostStorePath(string runRoot, string host, SaveId id) =>
-        ClusterProtocol.HostSaveStore.PartitionSave(HostStoreRoot(runRoot, host), id.Partition, id.Generation, id.Sequence);
+        ClusterProtocol.HostSaveStore.PartitionSave(
+            HostStoreRoot(runRoot, host),
+            id.Partition,
+            id.Generation,
+            id.Sequence
+        );
 
     internal static string HostStorePath(string runRoot, string host, GlobalSaveId id) =>
-        ClusterProtocol.HostSaveStore.GlobalSave(HostStoreRoot(runRoot, host), id.Generation, id.Sequence);
+        ClusterProtocol.HostSaveStore.GlobalSave(
+            HostStoreRoot(runRoot, host),
+            id.Generation,
+            id.Sequence
+        );
 
     // The host name becomes a directory name and comes from a node's own registration: it must be one path component.
-    private static string HostStoreRoot(string runRoot, string host) => ClusterProtocol.HostSaveStore.Root(runRoot, host);
+    private static string HostStoreRoot(string runRoot, string host) =>
+        ClusterProtocol.HostSaveStore.Root(runRoot, host);
 
     /// <summary>The run root every host shares (Cli/cluster.py refuses hosts whose runRoot differs): the registry directory's parent.</summary>
     internal string RunRoot { get; }
@@ -71,10 +91,18 @@ internal sealed partial class GatewayRegistry
     private bool _hostStore;
 
     /// <summary>Self-test: the frozen legacy node id -> host map.</summary>
-    internal Dictionary<string, string> HostStoreAliases() { lock (_lock) return new(_state.HostStoreAliases, StringComparer.Ordinal); }
+    internal Dictionary<string, string> HostStoreAliases()
+    {
+        lock (_lock)
+            return new(_state.HostStoreAliases, StringComparer.Ordinal);
+    }
 
     /// <summary>Self-test: the archived save rows as stored.</summary>
-    internal Dictionary<string, byte[]> ArchivedRowBytes() { lock (_lock) return _store.ArchivedRowsFresh(); }
+    internal Dictionary<string, byte[]> ArchivedRowBytes()
+    {
+        lock (_lock)
+            return _store.ArchivedRowsFresh();
+    }
 
     /// <summary>
     /// The host a legacy (node id) holder's files lie on: the host node control launched it on (its live record, else
@@ -85,11 +113,14 @@ internal sealed partial class GatewayRegistry
     /// </summary>
     private string HostOfLegacyHolder(string node)
     {
-        if (_state.HostStoreAliases.TryGetValue(node, out string? known)) return known;
-        string host = Control.Live.GetValueOrDefault(node)?.Host
+        if (_state.HostStoreAliases.TryGetValue(node, out string? known))
+            return known;
+        string host =
+            Control.Live.GetValueOrDefault(node)?.Host
             ?? _state.NodeHistory.LastOrDefault(x => x.Node == node)?.Host
             ?? _state.Nodes.GetValueOrDefault(node)?.Host
-            ?? GatewayHost ?? MachineHost;
+            ?? GatewayHost
+            ?? MachineHost;
         host = HostsFileSpelling(host);
         HostStoreRoot(RunRoot, host);
         _state.HostStoreAliases[node] = host;
@@ -98,15 +129,21 @@ internal sealed partial class GatewayRegistry
 
     /// <summary>One spelling per host, the hosts file's: the name is a path component and a holder key.</summary>
     private string HostsFileSpelling(string host) =>
-        Control.Hosts.Keys.FirstOrDefault(x => string.Equals(x, host, StringComparison.OrdinalIgnoreCase)) ?? host;
+        Control.Hosts.Keys.FirstOrDefault(x =>
+            string.Equals(x, host, StringComparison.OrdinalIgnoreCase)
+        ) ?? host;
 
     /// <summary>The synthetic row of a host holder (see the class summary). Its lease is set, and lapsed, so no load re-arms it.</summary>
     private void EnsureHostRow(string host)
     {
         string key = HostHolder(host);
-        if (_state.Nodes.ContainsKey(key)) return;
+        if (_state.Nodes.ContainsKey(key))
+            return;
         DateTimeOffset now = _clock();
-        _state.Nodes[key] = new NodeRegistration(key, 0, string.Empty, now, NodeState.Empty, now) { Host = host };
+        _state.Nodes[key] = new NodeRegistration(key, 0, string.Empty, now, NodeState.Empty, now)
+        {
+            Host = host,
+        };
     }
 
     /// <summary>A host holder whose row is missing gets it back (the previous package releases a host row nothing names;
@@ -114,7 +151,8 @@ internal sealed partial class GatewayRegistry
     private void EnsureHostRows(Dictionary<string, string> holders)
     {
         foreach (string holder in holders.Values)
-            if (HostOfHolder(holder) is { } host) EnsureHostRow(host);
+            if (HostOfHolder(holder) is { } host)
+                EnsureHostRow(host);
     }
 
     /// <summary>
@@ -125,9 +163,18 @@ internal sealed partial class GatewayRegistry
     /// </summary>
     private static bool StoreFileThere(string path, long size)
     {
-        try { return new FileInfo(path) is { Exists: true } file && file.Length == size; }
-        catch (IOException) { return false; }
-        catch (UnauthorizedAccessException) { return false; }
+        try
+        {
+            return new FileInfo(path) is { Exists: true } file && file.Length == size;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -138,15 +185,24 @@ internal sealed partial class GatewayRegistry
     /// merge into one location, which is corrupt only if every copy merged into it was (the file move keeps the copy
     /// whose checksum matches the catalogue). Idempotent; true when anything changed.
     /// </summary>
-    private bool RekeyToHostStore(HashSet<string> locations, Dictionary<string, string> holders, Dictionary<string, string> endpoints,
-        HashSet<string>? corrupt, string writer, long size, Func<string, string> storePath, List<string>? unmoved = null)
+    private bool RekeyToHostStore(
+        HashSet<string> locations,
+        Dictionary<string, string> holders,
+        Dictionary<string, string> endpoints,
+        HashSet<string>? corrupt,
+        string writer,
+        long size,
+        Func<string, string> storePath,
+        List<string>? unmoved = null
+    )
     {
         Dictionary<string, bool>? intact = null;
         HashSet<string>? rekeyed = null;
         foreach (string location in locations.ToArray())
         {
             string holder = holders.GetValueOrDefault(location, writer);
-            if (HostOfHolder(holder) != null) continue;
+            if (HostOfHolder(holder) != null)
+                continue;
             string host = HostOfLegacyHolder(holder);
             if (!StoreFileThere(storePath(host), size))
             {
@@ -159,7 +215,8 @@ internal sealed partial class GatewayRegistry
             locations.Remove(location);
             holders.Remove(location);
         }
-        if (intact == null) return false;
+        if (intact == null)
+            return false;
         // A host holder has no endpoint of its own: whichever live node of the host serves its files. A node that
         // still holds an unmoved location keeps its endpoint and its corrupt mark.
         foreach (string node in rekeyed!.Where(node => !holders.ContainsValue(node)))
@@ -170,8 +227,10 @@ internal sealed partial class GatewayRegistry
         foreach ((string host, bool good) in intact)
         {
             string key = HostHolder(host);
-            if (good || corrupt == null || holders.ContainsValue(key) && !corrupt.Contains(key)) corrupt?.Remove(key);
-            else corrupt.Add(key);
+            if (good || corrupt == null || holders.ContainsValue(key) && !corrupt.Contains(key))
+                corrupt?.Remove(key);
+            else
+                corrupt.Add(key);
             string path = storePath(host);
             locations.Add(path);
             holders[path] = key;
@@ -180,8 +239,17 @@ internal sealed partial class GatewayRegistry
         return true;
     }
 
-    private bool RekeyToHostStore(SaveRegistration save, List<string>? unmoved = null) => RekeyToHostStore(save.Locations, save.LocationHolders,
-        save.HolderEndpoints, save.CorruptHolders, save.Node, save.SizeBytes, host => HostStorePath(RunRoot, host, save.SaveId), unmoved);
+    private bool RekeyToHostStore(SaveRegistration save, List<string>? unmoved = null) =>
+        RekeyToHostStore(
+            save.Locations,
+            save.LocationHolders,
+            save.HolderEndpoints,
+            save.CorruptHolders,
+            save.Node,
+            save.SizeBytes,
+            host => HostStorePath(RunRoot, host, save.SaveId),
+            unmoved
+        );
 
     /// <summary>
     /// The re-key pass: at load (constructor, after the store is attached) and again when a start applies the hosts
@@ -192,11 +260,14 @@ internal sealed partial class GatewayRegistry
     /// </summary>
     private void RekeyCatalogueToHostStore()
     {
-        if (!HostStoreEnabled) return;
+        if (!HostStoreEnabled)
+            return;
         if (!NodeControlActive)
         {
-            Console.WriteLine("WARNING: host store: CLUSTER_HOST_STORE=1 but node control is not active yet; store mode is decided again when "
-                + "a start applies the hosts file (without node control the previous package could not serve a host holder's files to another host)");
+            Console.WriteLine(
+                "WARNING: host store: CLUSTER_HOST_STORE=1 but node control is not active yet; store mode is decided again when "
+                    + "a start applies the hosts file (without node control the previous package could not serve a host holder's files to another host)"
+            );
             return;
         }
         // The store directory of the gateway host is the operator's go-ahead for store mode; which locations are re-keyed
@@ -204,15 +275,26 @@ internal sealed partial class GatewayRegistry
         string store = HostStoreRoot(RunRoot, HostsFileSpelling(GatewayHost ?? MachineHost));
         if (!Directory.Exists(store))
         {
-            Console.WriteLine($"WARNING: host store: CLUSTER_HOST_STORE=1 but {store} does not exist; the catalogue is not re-keyed "
-                + "(the save files have not been moved into the per-host store)");
+            Console.WriteLine(
+                $"WARNING: host store: CLUSTER_HOST_STORE=1 but {store} does not exist; the catalogue is not re-keyed "
+                    + "(the save files have not been moved into the per-host store)"
+            );
             return;
         }
-        if (!_hostStore) _replicaQueueReady = false;   // host holders are ranked by the host rules from here on
+        if (!_hostStore)
+            _replicaQueueReady = false; // host holders are ranked by the host rules from here on
         _hostStore = true;
         var unmoved = new List<string>();
-        int aliases = _state.HostStoreAliases.Count, rows = _state.Nodes.Count, saves = 0, globals = 0;
-        foreach (string node in _state.Nodes.Keys.Concat(_state.NodeHistory.Select(x => x.Node)).Where(x => HostOfHolder(x) == null).ToArray())
+        int aliases = _state.HostStoreAliases.Count,
+            rows = _state.Nodes.Count,
+            saves = 0,
+            globals = 0;
+        foreach (
+            string node in _state
+                .Nodes.Keys.Concat(_state.NodeHistory.Select(x => x.Node))
+                .Where(x => HostOfHolder(x) == null)
+                .ToArray()
+        )
             HostOfLegacyHolder(node);
         foreach (SaveRegistration save in _state.Saves.Values)
         {
@@ -225,8 +307,18 @@ internal sealed partial class GatewayRegistry
         }
         foreach (GlobalSaveRegistration global in _state.GlobalSaves.Values)
         {
-            if (RekeyToHostStore(global.Locations, global.LocationHolders, global.HolderEndpoints, null, global.Node, global.SizeBytes,
-                    host => HostStorePath(RunRoot, host, global.SaveId), unmoved))
+            if (
+                RekeyToHostStore(
+                    global.Locations,
+                    global.LocationHolders,
+                    global.HolderEndpoints,
+                    null,
+                    global.Node,
+                    global.SizeBytes,
+                    host => HostStorePath(RunRoot, host, global.SaveId),
+                    unmoved
+                )
+            )
             {
                 Touch(global);
                 globals++;
@@ -234,14 +326,24 @@ internal sealed partial class GatewayRegistry
             EnsureHostRows(global.LocationHolders);
         }
         if (unmoved.Count != 0)
-            Console.WriteLine($"WARNING: host store: {unmoved.Count} location(s) are not in the store (no file of the catalogued size at the store path the "
-                + $"registry sees); they stay node-held at their old paths: {string.Join(", ", unmoved.Take(5))}{(unmoved.Count > 5 ? ", ..." : "")}");
-        if (saves == 0 && globals == 0 && aliases == _state.HostStoreAliases.Count && rows == _state.Nodes.Count) return;
+            Console.WriteLine(
+                $"WARNING: host store: {unmoved.Count} location(s) are not in the store (no file of the catalogued size at the store path the "
+                    + $"registry sees); they stay node-held at their old paths: {string.Join(", ", unmoved.Take(5))}{(unmoved.Count > 5 ? ", ..." : "")}"
+            );
+        if (
+            saves == 0
+            && globals == 0
+            && aliases == _state.HostStoreAliases.Count
+            && rows == _state.Nodes.Count
+        )
+            return;
         Persist();
         FlushState();
-        Console.WriteLine($"registry: host store: re-keyed {saves} save(s) and {globals} global save(s) to host holders under "
-            + $"{Path.Combine(RunRoot, "saves")}; {_state.Nodes.Count - rows} host row(s) added, "
-            + $"{_state.HostStoreAliases.Count} legacy node id(s) mapped to their host ({_archivedPartitions.Count} archived partition(s) re-key when read)");
+        Console.WriteLine(
+            $"registry: host store: re-keyed {saves} save(s) and {globals} global save(s) to host holders under "
+                + $"{Path.Combine(RunRoot, "saves")}; {_state.Nodes.Count - rows} host row(s) added, "
+                + $"{_state.HostStoreAliases.Count} legacy node id(s) mapped to their host ({_archivedPartitions.Count} archived partition(s) re-key when read)"
+        );
     }
 
     // ---- Step 2: host holders in the replica queue and in reachability. All of it behind _hostStore: with the switch
@@ -256,16 +358,29 @@ internal sealed partial class GatewayRegistry
         bool held = false;
         foreach (NodeRecord record in Control.Live.Values)
         {
-            if (!string.Equals(record.Host, host, StringComparison.OrdinalIgnoreCase) || !_state.Nodes.TryGetValue(record.Node, out NodeRegistration? row)
-                || row.Role != NodeRole.Regular || row.State is not (NodeState.Active or NodeState.Closed)) continue;
-            if (row.LeaseExpires > now) return HostStoreState.Serving;
-            held |= LeaseHold?.Holds(row, now) == true || LiveProcessHeld(row, now);   // #1282: the live-process hold too
+            if (
+                !string.Equals(record.Host, host, StringComparison.OrdinalIgnoreCase)
+                || !_state.Nodes.TryGetValue(record.Node, out NodeRegistration? row)
+                || row.Role != NodeRole.Regular
+                || row.State is not (NodeState.Active or NodeState.Closed)
+            )
+                continue;
+            if (row.LeaseExpires > now)
+                return HostStoreState.Serving;
+            held |= LeaseHold?.Holds(row, now) == true || LiveProcessHeld(row, now); // #1282: the live-process hold too
         }
-        return held ? HostStoreState.Held : Control.Hosts.Keys.Contains(host, StringComparer.OrdinalIgnoreCase) ? HostStoreState.Dark : HostStoreState.Lost;
+        return held ? HostStoreState.Held
+            : Control.Hosts.Keys.Contains(host, StringComparer.OrdinalIgnoreCase)
+                ? HostStoreState.Dark
+            : HostStoreState.Lost;
     }
 
     /// <summary>Self-test and diag: a host store's state.</summary>
-    internal HostStoreState HostStoreStateOf(string host) { lock (_lock) return StoreState(host); }
+    internal HostStoreState HostStoreStateOf(string host)
+    {
+        lock (_lock)
+            return StoreState(host);
+    }
 
     /// <summary>How many hosts must hold a save: two while two hosts are planned to serve, else one. From the PLAN, not
     /// from the hosts that happen to have an Active node now: a stopped node or a dark host changes nothing.</summary>
@@ -281,7 +396,8 @@ internal sealed partial class GatewayRegistry
     private static bool HeldByHost(Dictionary<string, string> holders)
     {
         foreach (string holder in holders.Values)
-            if (IsHostHolder(holder)) return true;
+            if (IsHostHolder(holder))
+                return true;
         return false;
     }
 
@@ -291,8 +407,13 @@ internal sealed partial class GatewayRegistry
     {
         int copies = 0;
         foreach (string holder in save.LocationHolders.Values)
-            if (IsHostHolder(holder) && !save.CorruptHolders.Contains(holder)
-                && _replicaHolderMap.TryGetValue(holder, out HolderState state) && state.Store is not (null or HostStoreState.Lost)) copies++;
+            if (
+                IsHostHolder(holder)
+                && !save.CorruptHolders.Contains(holder)
+                && _replicaHolderMap.TryGetValue(holder, out HolderState state)
+                && state.Store is not (null or HostStoreState.Lost)
+            )
+                copies++;
         return copies >= _replicaCopyTarget;
     }
 
@@ -302,17 +423,29 @@ internal sealed partial class GatewayRegistry
     /// </summary>
     private bool HostEligibleReplica(SaveRegistration save, string node, DateTimeOffset now)
     {
-        if (PlanHostOf(node) is not { } host || !HostAboveDiskFloor(host)) return false;
+        if (PlanHostOf(node) is not { } host || !HostAboveDiskFloor(host))
+            return false;
         int copies = 0;
         foreach (string holder in save.LocationHolders.Values)
         {
-            if (!IsHostHolder(holder) || save.CorruptHolders.Contains(holder)) continue;
+            if (!IsHostHolder(holder) || save.CorruptHolders.Contains(holder))
+                continue;
             string holding = HostOfHolder(holder)!;
-            if (string.Equals(holding, host, StringComparison.OrdinalIgnoreCase)) return false;
-            if (StoreState(holding) != HostStoreState.Lost) copies++;
+            if (string.Equals(holding, host, StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (StoreState(holding) != HostStoreState.Lost)
+                copies++;
         }
-        if (copies >= HostCopyTarget()) return false;
-        if (_replicaReservations.TryGetValue(save.SaveId, out (string Node, DateTimeOffset Until) reservation) && reservation.Node != node && reservation.Until > now)
+        if (copies >= HostCopyTarget())
+            return false;
+        if (
+            _replicaReservations.TryGetValue(
+                save.SaveId,
+                out (string Node, DateTimeOffset Until) reservation
+            )
+            && reservation.Node != node
+            && reservation.Until > now
+        )
             return false;
         return ReplicaSources(save).Length != 0;
     }
@@ -328,15 +461,21 @@ internal sealed partial class GatewayRegistry
     /// the request); else the node, as before (a location outside the store; the next load re-keys it once the file is moved).</summary>
     private string RegisteringHolder(string node, string location, Func<string, string> storePath)
     {
-        if (!_hostStore || StoreHostOf(node) is not { } host || location != storePath(host)) return node;
+        if (!_hostStore || StoreHostOf(node) is not { } host || location != storePath(host))
+            return node;
         EnsureHostRow(host);
         return HostHolder(host);
     }
 
     /// <summary>The host whose store a registered node writes into: the plan's host, and for the World Authority - which
     /// node control does not run - the gateway host, where it always runs.</summary>
-    private string? StoreHostOf(string node) => PlanHostOf(node)
-        ?? (_state.Nodes.TryGetValue(node, out NodeRegistration? row) && row.Role == NodeRole.WA ? HostsFileSpelling(GatewayHost ?? MachineHost) : null);
+    private string? StoreHostOf(string node) =>
+        PlanHostOf(node)
+        ?? (
+            _state.Nodes.TryGetValue(node, out NodeRegistration? row) && row.Role == NodeRole.WA
+                ? HostsFileSpelling(GatewayHost ?? MachineHost)
+                : null
+        );
 
     /// <summary>
     /// The registry alone decides whether a node keeps its saves in its host's store, and says so in the registration
@@ -348,13 +487,21 @@ internal sealed partial class GatewayRegistry
     /// </summary>
     private bool NodeUsesHostStore(NodeJoinRequest request)
     {
-        if (!_hostStore) return false;
+        if (!_hostStore)
+            return false;
         string? host = StoreHostOf(request.Node);
-        string? refusal = !request.HostStore ? "it did not offer host-store mode (a plugin before T-0340, or it has no data root)"
+        string? refusal =
+            !request.HostStore
+                ? "it did not offer host-store mode (a plugin before T-0340, or it has no data root)"
             : host == null ? "node control does not run it on any host"
-            : !string.Equals(request.Host, host, StringComparison.Ordinal) ? $"it reports host '{request.Host}', the plan has it on '{host}'" : null;
-        if (refusal == null) return true;
-        Console.WriteLine($"WARNING: host store: {request.Node} keeps its saves in its own data dir, not in the host store: {refusal}");
+            : !string.Equals(request.Host, host, StringComparison.Ordinal)
+                ? $"it reports host '{request.Host}', the plan has it on '{host}'"
+            : null;
+        if (refusal == null)
+            return true;
+        Console.WriteLine(
+            $"WARNING: host store: {request.Node} keeps its saves in its own data dir, not in the host store: {refusal}"
+        );
         return false;
     }
 
@@ -373,26 +520,63 @@ internal sealed partial class GatewayRegistry
         // aliases: step 6 - not zero means rows may have been released without the archive, in this run or an earlier one
         // (`cluster nodes prune` then keeps every node dir that still has save files, whatever the mode is now).
         int aliases = _state.HostStoreAliases.Count;
-        if (!_hostStore) return new { enabled = false, hosts, unmoved = 0, legacyNodes = Array.Empty<string>(), aliases, adopted = HostStoreAdopted };
+        if (!_hostStore)
+            return new
+            {
+                enabled = false,
+                hosts,
+                unmoved = 0,
+                legacyNodes = Array.Empty<string>(),
+                aliases,
+                adopted = HostStoreAdopted,
+            };
         DateTimeOffset now = _clock();
-        if (_hostStoreCounts is not { } counts || now < counts.At || now - counts.At >= TimeSpan.FromMinutes(1))
+        if (
+            _hostStoreCounts is not { } counts
+            || now < counts.At
+            || now - counts.At >= TimeSpan.FromMinutes(1)
+        )
         {
             counts = (now, new Dictionary<string, int>(StringComparer.Ordinal), 0);
             foreach (SaveRegistration save in _state.Saves.Values)
-                foreach (string holder in save.LocationHolders.Values)
-                    if (HostOfHolder(holder) is { } host) counts.Saves[host] = counts.Saves.GetValueOrDefault(host) + 1;
-                    else counts.Unmoved++;
+            foreach (string holder in save.LocationHolders.Values)
+                if (HostOfHolder(holder) is { } host)
+                    counts.Saves[host] = counts.Saves.GetValueOrDefault(host) + 1;
+                else
+                    counts.Unmoved++;
             foreach (GlobalSaveRegistration global in _state.GlobalSaves.Values)
-                counts.Unmoved += global.LocationHolders.Values.Count(holder => !IsHostHolder(holder));
+                counts.Unmoved += global.LocationHolders.Values.Count(holder =>
+                    !IsHostHolder(holder)
+                );
             _hostStoreCounts = counts;
         }
-        foreach (string host in Control.Hosts.Keys.Concat(counts.Saves.Keys).Distinct(StringComparer.Ordinal))
-            hosts[host] = new { state = StoreState(host).ToString(), saves = counts.Saves.GetValueOrDefault(host) };
+        foreach (
+            string host in Control
+                .Hosts.Keys.Concat(counts.Saves.Keys)
+                .Distinct(StringComparer.Ordinal)
+        )
+            hosts[host] = new
+            {
+                state = StoreState(host).ToString(),
+                saves = counts.Saves.GetValueOrDefault(host),
+            };
         return new
         {
-            enabled = true, hosts, unmoved = counts.Unmoved, aliases, adopted = HostStoreAdopted,
-            legacyNodes = _state.Nodes.Values.Where(row => !IsHostHolder(row.Node) && !row.HostStore && row.LeaseExpires > now
-                && row.State is NodeState.Active or NodeState.Closed).Select(row => row.Node).OrderBy(node => node, StringComparer.Ordinal).ToArray(),
+            enabled = true,
+            hosts,
+            unmoved = counts.Unmoved,
+            aliases,
+            adopted = HostStoreAdopted,
+            legacyNodes = _state
+                .Nodes.Values.Where(row =>
+                    !IsHostHolder(row.Node)
+                    && !row.HostStore
+                    && row.LeaseExpires > now
+                    && row.State is NodeState.Active or NodeState.Closed
+                )
+                .Select(row => row.Node)
+                .OrderBy(node => node, StringComparer.Ordinal)
+                .ToArray(),
         };
     }
 
@@ -402,23 +586,34 @@ internal sealed partial class GatewayRegistry
     /// than the target do (a Lost store's copy does not count).</summary>
     private bool HostNeedsGlobal(GlobalSaveRegistration global, string node)
     {
-        if (PlanHostOf(node) is not { } host || !HostAboveDiskFloor(host)) return false;
+        if (PlanHostOf(node) is not { } host || !HostAboveDiskFloor(host))
+            return false;
         int copies = 0;
         foreach (string holder in global.LocationHolders.Values)
         {
-            if (!IsHostHolder(holder)) continue;
+            if (!IsHostHolder(holder))
+                continue;
             string holding = HostOfHolder(holder)!;
-            if (string.Equals(holding, host, StringComparison.OrdinalIgnoreCase)) return false;
-            if (StoreState(holding) != HostStoreState.Lost) copies++;
+            if (string.Equals(holding, host, StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (StoreState(holding) != HostStoreState.Lost)
+                copies++;
         }
         return copies < HostCopyTarget();
     }
 
     /// <summary>A live server of every Serving host that holds the global save (the node fetches /global-save-file there).</summary>
     private HolderSource[] HostGlobalSources(GlobalSaveRegistration global) =>
-        [.. global.LocationHolders.Values.Where(IsHostHolder).Distinct(StringComparer.Ordinal)
-            .Select(holder => (Holder: holder, Server: HostServers(HostOfHolder(holder)!).FirstOrDefault()))
-            .Where(x => x.Server != null).Select(x => new HolderSource(x.Holder, x.Server!.Endpoint))];
+        [
+            .. global
+                .LocationHolders.Values.Where(IsHostHolder)
+                .Distinct(StringComparer.Ordinal)
+                .Select(holder =>
+                    (Holder: holder, Server: HostServers(HostOfHolder(holder)!).FirstOrDefault())
+                )
+                .Where(x => x.Server != null)
+                .Select(x => new HolderSource(x.Holder, x.Server!.Endpoint)),
+        ];
 
     /// <summary>The global save as recovery is told about it: a host holder has no endpoint of its own, so the answer
     /// names a live server of each Serving host that holds it (the World Authority reads its own host's store from disk
@@ -427,12 +622,15 @@ internal sealed partial class GatewayRegistry
     {
         GlobalSaveRegistration copy = Snapshot(global);
         if (_hostStore)
-            foreach (HolderSource source in HostGlobalSources(global)) copy.HolderEndpoints[source.Holder] = source.Endpoint;
+            foreach (HolderSource source in HostGlobalSources(global))
+                copy.HolderEndpoints[source.Holder] = source.Endpoint;
         return copy;
     }
 
     /// <summary>Per host: the node that is handed the host's delete batch, and until when.</summary>
-    private readonly Dictionary<string, (string Node, DateTimeOffset Until)> _hostDeleteTurn = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (string Node, DateTimeOffset Until)> _hostDeleteTurn = new(
+        StringComparer.OrdinalIgnoreCase
+    );
     private static readonly TimeSpan HostDeleteTurnLength = TimeSpan.FromSeconds(60);
 
     /// <summary>
@@ -443,19 +641,27 @@ internal sealed partial class GatewayRegistry
     /// </summary>
     private string? HostDeleteTurn(string node)
     {
-        if (!_hostStore || PlanHostOf(node) is not { } host) return null;
+        if (!_hostStore || PlanHostOf(node) is not { } host)
+            return null;
         DateTimeOffset now = _clock();
         HolderProxy[] servers = HostServers(host);
-        if (!servers.Any(x => x.Node == node)) return null;
-        if (_hostDeleteTurn.TryGetValue(host, out (string Node, DateTimeOffset Until) turn) && turn.Node != node && turn.Until > now
-            && servers.Any(x => x.Node == turn.Node))
+        if (!servers.Any(x => x.Node == node))
+            return null;
+        if (
+            _hostDeleteTurn.TryGetValue(host, out (string Node, DateTimeOffset Until) turn)
+            && turn.Node != node
+            && turn.Until > now
+            && servers.Any(x => x.Node == turn.Node)
+        )
             return null;
         _hostDeleteTurn[host] = (node, now + HostDeleteTurnLength);
         return HostHolder(host);
     }
 
     /// <summary>Per host: how many grants its store has served, which rotates its Active servers.</summary>
-    private readonly Dictionary<string, int> _hostServerCursor = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _hostServerCursor = new(
+        StringComparer.OrdinalIgnoreCase
+    );
 
     /// <summary>
     /// The live regular nodes of <paramref name="host"/> that can serve its store, in the order to try them: spares
@@ -467,15 +673,39 @@ internal sealed partial class GatewayRegistry
         DateTimeOffset now = _clock();
         // #1210: managed mode has no node control; there a row's own host is its slot's.
         IEnumerable<NodeRegistration?> rows = NodeControlActive
-            ? Control.Live.Values.Where(x => string.Equals(x.Host, host, StringComparison.OrdinalIgnoreCase)).Select(x => _state.Nodes.GetValueOrDefault(x.Node))
-            : _state.Nodes.Values.Where(row => string.Equals(HostKey(row), host, StringComparison.OrdinalIgnoreCase));
-        NodeRegistration[] live = [.. rows.Select(row => row!)
-            .Where(row => row is { Role: NodeRole.Regular, State: NodeState.Active or NodeState.Closed } && row.LeaseExpires > now && !string.IsNullOrWhiteSpace(row.ControlEndpoint))
-            .OrderBy(row => NodeNumber(row.Node)).ThenBy(row => row.Node, StringComparer.Ordinal)];
-        NodeRegistration[] active = [.. live.Where(row => row.State == NodeState.Active && !row.Spare)];
-        int turn = active.Length == 0 ? 0 : _hostServerCursor.GetValueOrDefault(host) % active.Length;
-        return [.. live.Where(row => row.State == NodeState.Active && row.Spare).Concat(active.Skip(turn)).Concat(active.Take(turn))
-            .Concat(live.Where(row => row.State == NodeState.Closed)).Select(row => new HolderProxy(row.Node, row.ControlEndpoint!))];
+            ? Control
+                .Live.Values.Where(x =>
+                    string.Equals(x.Host, host, StringComparison.OrdinalIgnoreCase)
+                )
+                .Select(x => _state.Nodes.GetValueOrDefault(x.Node))
+            : _state.Nodes.Values.Where(row =>
+                string.Equals(HostKey(row), host, StringComparison.OrdinalIgnoreCase)
+            );
+        NodeRegistration[] live =
+        [
+            .. rows.Select(row => row!)
+                .Where(row =>
+                    row is { Role: NodeRole.Regular, State: NodeState.Active or NodeState.Closed }
+                    && row.LeaseExpires > now
+                    && !string.IsNullOrWhiteSpace(row.ControlEndpoint)
+                )
+                .OrderBy(row => NodeNumber(row.Node))
+                .ThenBy(row => row.Node, StringComparer.Ordinal),
+        ];
+        NodeRegistration[] active =
+        [
+            .. live.Where(row => row.State == NodeState.Active && !row.Spare),
+        ];
+        int turn =
+            active.Length == 0 ? 0 : _hostServerCursor.GetValueOrDefault(host) % active.Length;
+        return
+        [
+            .. live.Where(row => row.State == NodeState.Active && row.Spare)
+                .Concat(active.Skip(turn))
+                .Concat(active.Take(turn))
+                .Concat(live.Where(row => row.State == NodeState.Closed))
+                .Select(row => new HolderProxy(row.Node, row.ControlEndpoint!)),
+        ];
     }
 
     // ---- Step 6: stopped rows release without the archive; a released holder's catalogued files stay served.
@@ -483,6 +713,7 @@ internal sealed partial class GatewayRegistry
     /// <summary>Self-test switch that restores the release pass before step 6 - in store mode too it keeps every row an
     /// archived save names - to earn the red of host-store-release.</summary>
     internal static bool HostStoreReleaseChecksArchive;
+
     /// <summary>Self-test switch: without it a released holder's files are not served (what a bare release would do), to
     /// show that host-store-release can tell.</summary>
     internal static bool ServeReleasedHolders = true;
@@ -498,8 +729,13 @@ internal sealed partial class GatewayRegistry
     /// slot's row is released the same way.
     /// </summary>
     private string? ReleasedHolderHost(string holder) =>
-        ServeReleasedHolders && (NodeControlActive || _state.ManagedDeployment is not null) && !IsHostHolder(holder) && !_state.Nodes.ContainsKey(holder)
-        && _state.HostStoreAliases.TryGetValue(holder, out string? host) ? host : null;
+        ServeReleasedHolders
+        && (NodeControlActive || _state.ManagedDeployment is not null)
+        && !IsHostHolder(holder)
+        && !_state.Nodes.ContainsKey(holder)
+        && _state.HostStoreAliases.TryGetValue(holder, out string? host)
+            ? host
+            : null;
 
     /// <summary>Freezes the host of a row about to be released (store mode); false - and the row stays - when no store
     /// directory can be named for it (a host name that is not one path component).</summary>
@@ -519,7 +755,8 @@ internal sealed partial class GatewayRegistry
 
     /// <summary>A released holder is usable exactly while a live node of its host can serve its files (as a Dead gone
     /// holder is, T-0348): no node there - a host cut - and it is not offered.</summary>
-    private bool ReleasedHolderServed(string holder) => ReleasedHolderHost(holder) is { } host && HostServers(host).Length != 0;
+    private bool ReleasedHolderServed(string holder) =>
+        ReleasedHolderHost(holder) is { } host && HostServers(host).Length != 0;
 
     // ---- Step 3: save grants bound to (save id, host).
 
@@ -530,15 +767,29 @@ internal sealed partial class GatewayRegistry
     /// </summary>
     private string? HostOfGrant(GrantRequest request)
     {
-        if (!_hostStore || !TryGetSave(Key(new SaveId(request.Partition, request.Generation, request.Sequence)), out SaveRegistration? save)) return null;
-        string? holder = request.Location != null ? save.LocationHolders.GetValueOrDefault(request.Location)
-            : IsHostHolder(request.Receiver) ? request.Receiver : null;
-        if (holder == null || !IsHostHolder(holder)) return null;
+        if (
+            !_hostStore
+            || !TryGetSave(
+                Key(new SaveId(request.Partition, request.Generation, request.Sequence)),
+                out SaveRegistration? save
+            )
+        )
+            return null;
+        string? holder =
+            request.Location != null ? save.LocationHolders.GetValueOrDefault(request.Location)
+            : IsHostHolder(request.Receiver) ? request.Receiver
+            : null;
+        if (holder == null || !IsHostHolder(holder))
+            return null;
         string host = HostOfHolder(holder)!;
         if (!save.LocationHolders.ContainsValue(holder) || save.CorruptHolders.Contains(holder))
-            throw new RegistryConflictException($"Save grant: host '{host}' holds no intact copy of save {save.SaveId}");
+            throw new RegistryConflictException(
+                $"Save grant: host '{host}' holds no intact copy of save {save.SaveId}"
+            );
         if (StoreState(host) != HostStoreState.Serving)
-            throw new RegistryConflictException($"Save grant: no node of host '{host}' can serve save {save.SaveId} now");
+            throw new RegistryConflictException(
+                $"Save grant: no node of host '{host}' can serve save {save.SaveId} now"
+            );
         return host;
     }
 
@@ -557,7 +808,8 @@ internal sealed partial class GatewayRegistry
     /// over the port is a server of the host in its own right.
     /// </summary>
     private bool MayServeHostGrant(NodeRegistration receiver, string host) =>
-        receiver.State != NodeState.Dead && string.Equals(PlanHostOf(receiver.Node), host, StringComparison.OrdinalIgnoreCase);
+        receiver.State != NodeState.Dead
+        && string.Equals(PlanHostOf(receiver.Node), host, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Self-test: how many saves wait for a copy.</summary>
     internal int ReplicaQueueDepth()

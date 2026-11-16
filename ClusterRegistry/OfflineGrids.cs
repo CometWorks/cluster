@@ -21,24 +21,37 @@ internal sealed record OfflineGrid(
     [property: JsonPropertyName("y")] double Y,
     [property: JsonPropertyName("z")] double Z,
     [property: JsonPropertyName("o")] long[] Owners,
-    [property: JsonPropertyName("m"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? MassKg = null,
-    [property: JsonPropertyName("g"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Group = null,
-    [property: JsonPropertyName("f"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Functional = null,
-    [property: JsonPropertyName("p"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Powered = null,
-    [property: JsonPropertyName("t"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Station = null);
+    [property: JsonPropertyName("m"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        double? MassKg = null,
+    [property: JsonPropertyName("g"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        long? Group = null,
+    [property: JsonPropertyName("f"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        bool? Functional = null,
+    [property: JsonPropertyName("p"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        bool? Powered = null,
+    [property: JsonPropertyName("t"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        bool? Station = null
+);
 
 /// <summary>A grid with the offline row it is in, as GET /registry/partitions/offline/grids answers.</summary>
 internal sealed record OfflineGridRow(
     [property: JsonPropertyName("partition")] ulong Partition,
     [property: JsonPropertyName("offlineAt")] DateTimeOffset OfflineAt,
-    [property: JsonPropertyName("grid")] OfflineGrid Grid);
+    [property: JsonPropertyName("grid")] OfflineGrid Grid
+);
 
 /// <summary>Unknown = offline rows whose grids aren't known yet, so an answer can say it is incomplete.</summary>
 internal sealed record OfflineGridsAnswer(
     [property: JsonPropertyName("unknown")] int Unknown,
-    [property: JsonPropertyName("grids")] OfflineGridRow[] Grids);
+    [property: JsonPropertyName("grids")] OfflineGridRow[] Grids
+);
 
-internal sealed record OfflineGridsRequest(ulong Partition, long Generation, long Sequence, OfflineGrid[] Grids);
+internal sealed record OfflineGridsRequest(
+    ulong Partition,
+    long Generation,
+    long Sequence,
+    OfflineGrid[] Grids
+);
 
 internal sealed partial class GatewayRegistry
 {
@@ -49,9 +62,21 @@ internal sealed partial class GatewayRegistry
         lock (_lock)
             return new OfflineGridsAnswer(
                 _state.OfflinePartitions.Values.Count(row => row.Grids == null),
-                [.. _state.OfflinePartitions.Values.Where(row => row.Grids != null).SelectMany(row => row.Grids!
-                    .Where(grid => owner == null || grid.Owners.Contains(owner.Value))
-                    .Select(grid => new OfflineGridRow(row.Partition, row.OfflineAt, grid)))]);
+                [
+                    .. _state
+                        .OfflinePartitions.Values.Where(row => row.Grids != null)
+                        .SelectMany(row =>
+                            row.Grids!.Where(grid =>
+                                    owner == null || grid.Owners.Contains(owner.Value)
+                                )
+                                .Select(grid => new OfflineGridRow(
+                                    row.Partition,
+                                    row.OfflineAt,
+                                    grid
+                                ))
+                        ),
+                ]
+            );
     }
 
     /// <summary>The saves of the next rows whose grids aren't known, after a partition id: the caller walks them round.</summary>
@@ -59,8 +84,20 @@ internal sealed partial class GatewayRegistry
     {
         lock (_lock)
         {
-            SaveId[] missing = [.. _state.OfflinePartitions.Values.Where(row => row.Grids == null).Select(row => row.Save).OrderBy(x => x.Partition)];
-            return [.. missing.Where(x => x.Partition > after).Concat(missing.Where(x => x.Partition <= after)).Take(limit)];
+            SaveId[] missing =
+            [
+                .. _state
+                    .OfflinePartitions.Values.Where(row => row.Grids == null)
+                    .Select(row => row.Save)
+                    .OrderBy(x => x.Partition),
+            ];
+            return
+            [
+                .. missing
+                    .Where(x => x.Partition > after)
+                    .Concat(missing.Where(x => x.Partition <= after))
+                    .Take(limit),
+            ];
         }
     }
 
@@ -69,8 +106,11 @@ internal sealed partial class GatewayRegistry
     {
         lock (_lock)
         {
-            if (!_state.OfflinePartitions.TryGetValue(request.Partition, out OfflinePartition? row)
-                || row.Grids != null || row.Save != new SaveId(request.Partition, request.Generation, request.Sequence))
+            if (
+                !_state.OfflinePartitions.TryGetValue(request.Partition, out OfflinePartition? row)
+                || row.Grids != null
+                || row.Save != new SaveId(request.Partition, request.Generation, request.Sequence)
+            )
                 return false;
             row.Grids = request.Grids;
             Persist();
@@ -83,20 +123,48 @@ internal sealed partial class DirectGateway
 {
     private void HandleOfflineGridRoutes(HttpListenerContext context, string path)
     {
-        if (context.Request.HttpMethod == "GET" && path.Equals("/registry/partitions/offline/grids", StringComparison.OrdinalIgnoreCase))
+        if (
+            context.Request.HttpMethod == "GET"
+            && path.Equals("/registry/partitions/offline/grids", StringComparison.OrdinalIgnoreCase)
+        )
         {
-            WriteJson(context, 200, _registry!.OfflineGrids(context.Request.QueryString["owner"] is { } owner ? long.Parse(owner) : null));
+            WriteJson(
+                context,
+                200,
+                _registry!.OfflineGrids(
+                    context.Request.QueryString["owner"] is { } owner ? long.Parse(owner) : null
+                )
+            );
             return;
         }
-        if (context.Request.HttpMethod == "POST" && path.Equals("/registry/partitions/offline/grids", StringComparison.OrdinalIgnoreCase))
+        if (
+            context.Request.HttpMethod == "POST"
+            && path.Equals("/registry/partitions/offline/grids", StringComparison.OrdinalIgnoreCase)
+        )
         {
-            WriteJson(context, 200, new { set = _registry!.SetOfflineGrids(ReadJson<OfflineGridsRequest>(context)) });
+            WriteJson(
+                context,
+                200,
+                new { set = _registry!.SetOfflineGrids(ReadJson<OfflineGridsRequest>(context)) }
+            );
             return;
         }
-        if (context.Request.HttpMethod == "GET" && path.Equals("/registry/partitions/offline/grids/missing", StringComparison.OrdinalIgnoreCase))
+        if (
+            context.Request.HttpMethod == "GET"
+            && path.Equals(
+                "/registry/partitions/offline/grids/missing",
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
         {
-            WriteJson(context, 200, _registry!.OfflineGridsMissing(
-                ulong.Parse(context.Request.QueryString["after"] ?? "0"), int.Parse(context.Request.QueryString["limit"] ?? "1")));
+            WriteJson(
+                context,
+                200,
+                _registry!.OfflineGridsMissing(
+                    ulong.Parse(context.Request.QueryString["after"] ?? "0"),
+                    int.Parse(context.Request.QueryString["limit"] ?? "1")
+                )
+            );
             return;
         }
         WriteJson(context, 404, new { error = "no such route" });

@@ -24,10 +24,22 @@ public static class MyTimerComponentSystemPatch
 {
     private static IEnumerable<MethodBase> TargetMethods()
     {
-        yield return AccessTools.DeclaredMethod(typeof(MyTimerComponentSystem), "UpdateTimerComponents10")
-                     ?? throw new MissingMethodException(nameof(MyTimerComponentSystem), "UpdateTimerComponents10");
-        yield return AccessTools.DeclaredMethod(typeof(MyTimerComponentSystem), "UpdateTimerComponents100")
-                     ?? throw new MissingMethodException(nameof(MyTimerComponentSystem), "UpdateTimerComponents100");
+        yield return AccessTools.DeclaredMethod(
+            typeof(MyTimerComponentSystem),
+            "UpdateTimerComponents10"
+        )
+            ?? throw new MissingMethodException(
+                nameof(MyTimerComponentSystem),
+                "UpdateTimerComponents10"
+            );
+        yield return AccessTools.DeclaredMethod(
+            typeof(MyTimerComponentSystem),
+            "UpdateTimerComponents100"
+        )
+            ?? throw new MissingMethodException(
+                nameof(MyTimerComponentSystem),
+                "UpdateTimerComponents100"
+            );
     }
 
     /// <summary>Transpiler call site replacing the IsSessionUpdateEnabled read.</summary>
@@ -40,19 +52,37 @@ public static class MyTimerComponentSystemPatch
         var entity = timer.Entity;
         // T-0392: not while the entity's sliced import activation is open - FramesFromLastTrigger is a
         // round-trip field and the source froze it; advancing it between slices is a residual.
-        return entity == null || (entity.InScene && !ImportActivationGuard.IsOpenFor(GuardUser.Timer, entity as VRage.Game.Entity.MyEntity));
+        return entity == null
+            || (
+                entity.InScene
+                && !ImportActivationGuard.IsOpenFor(
+                    GuardUser.Timer,
+                    entity as VRage.Game.Entity.MyEntity
+                )
+            );
     }
 
     [HarmonyTranspiler]
-    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, MethodBase original)
+    private static IEnumerable<CodeInstruction> Transpiler(
+        IEnumerable<CodeInstruction> instructions,
+        MethodBase original
+    )
     {
         var il = instructions.ToList();
-        var isSessionUpdateEnabled = AccessTools.PropertyGetter(typeof(MyTimerComponent), nameof(MyTimerComponent.IsSessionUpdateEnabled));
-        var shouldUpdate = AccessTools.Method(typeof(MyTimerComponentSystemPatch), nameof(ShouldUpdate));
+        var isSessionUpdateEnabled = AccessTools.PropertyGetter(
+            typeof(MyTimerComponent),
+            nameof(MyTimerComponent.IsSessionUpdateEnabled)
+        );
+        var shouldUpdate = AccessTools.Method(
+            typeof(MyTimerComponentSystemPatch),
+            nameof(ShouldUpdate)
+        );
 
         var reads = il.FindAllIndex(ci => ci.Calls(isSessionUpdateEnabled));
         if (reads.Count != 1)
-            throw new CodeInstructionNotFound($"{original.Name}: expected exactly one IsSessionUpdateEnabled read, found {reads.Count}");
+            throw new CodeInstructionNotFound(
+                $"{original.Name}: expected exactly one IsSessionUpdateEnabled read, found {reads.Count}"
+            );
 
         var read = il[reads[0]];
         read.opcode = OpCodes.Call;

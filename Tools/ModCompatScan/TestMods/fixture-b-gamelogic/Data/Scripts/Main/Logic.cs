@@ -11,13 +11,16 @@ namespace Fixture
     {
         public override void Init(MyObjectBuilder_EntityBase objectBuilder)
         {
-            using (var writer = MyAPIGateway.Utilities.WriteFileInWorldStorage("state.txt", typeof(BeaconLogic)))
+            using (
+                var writer = MyAPIGateway.Utilities.WriteFileInWorldStorage(
+                    "state.txt",
+                    typeof(BeaconLogic)
+                )
+            )
                 writer.Write(Entity.EntityId);
         }
     }
 
     [MySessionComponentDescriptor(MyUpdateOrder.NoUpdate)]
-    public class Session : MySessionComponentBase
-    {
-    }
+    public class Session : MySessionComponentBase { }
 }

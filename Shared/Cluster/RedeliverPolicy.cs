@@ -32,59 +32,93 @@ namespace ClusterPlugin;
 /// </summary>
 internal static class RedeliverPolicy
 {
-	public readonly struct Plan<T>
-	{
-		public Plan(List<T> redeliver, List<T> destroy, List<T> kept)
-		{
-			Redeliver = redeliver;
-			Destroy = destroy;
-			Kept = kept;
-		}
+    public readonly struct Plan<T>
+    {
+        public Plan(List<T> redeliver, List<T> destroy, List<T> kept)
+        {
+            Redeliver = redeliver;
+            Destroy = destroy;
+            Kept = kept;
+        }
 
-		/// <summary>The replicables to destroy and create again, in the order given.</summary>
-		public List<T> Redeliver { get; }
-		/// <summary>Descendants to destroy explicitly before that, parents before children.</summary>
-		public List<T> Destroy { get; }
-		/// <summary>Descendants left alone because they are (or are below) the client's own bindings.</summary>
-		public List<T> Kept { get; }
-	}
+        /// <summary>The replicables to destroy and create again, in the order given.</summary>
+        public List<T> Redeliver { get; }
 
-	/// <param name="pending">What the export held as pending, in adopt order.</param>
-	/// <param name="children">The node's replicable hierarchy (the one RemoveForClient walks).</param>
-	/// <param name="inView">Whether the client's adopted view holds the replicable.</param>
-	/// <param name="binding">The client's own character or controlled entity.</param>
-	public static Plan<T> Decide<T>(IEnumerable<T> pending, Func<T, IEnumerable<T>> children, Func<T, bool> inView, Func<T, bool> binding)
-	{
-		List<T> order = new List<T>(pending);
-		HashSet<T> below = new HashSet<T>();
-		foreach (T item in order)
-			Walk(item, children, new HashSet<T> { item }, descendant => { below.Add(descendant); return true; });
-		List<T> redeliver = new List<T>();
-		List<T> destroy = new List<T>();
-		List<T> kept = new List<T>();
-		HashSet<T> listed = new HashSet<T>();
-		foreach (T item in order)
-		{
-			if (below.Contains(item) || !listed.Add(item)) continue;
-			redeliver.Add(item);
-			Walk(item, children, new HashSet<T> { item }, descendant =>
-			{
-				if (!inView(descendant)) return true;
-				if (binding(descendant)) { kept.Add(descendant); return false; }
-				destroy.Add(descendant);
-				return true;
-			});
-		}
-		return new Plan<T>(redeliver, destroy, kept);
-	}
+        /// <summary>Descendants to destroy explicitly before that, parents before children.</summary>
+        public List<T> Destroy { get; }
 
-	/// <summary>Pre-order over the descendants of <paramref name="root"/>; <paramref name="visit"/> false skips a subtree.</summary>
-	private static void Walk<T>(T root, Func<T, IEnumerable<T>> children, HashSet<T> seen, Func<T, bool> visit)
-	{
-		foreach (T child in children(root) ?? Array.Empty<T>())
-		{
-			if (!seen.Add(child)) continue;
-			if (visit(child)) Walk(child, children, seen, visit);
-		}
-	}
+        /// <summary>Descendants left alone because they are (or are below) the client's own bindings.</summary>
+        public List<T> Kept { get; }
+    }
+
+    /// <param name="pending">What the export held as pending, in adopt order.</param>
+    /// <param name="children">The node's replicable hierarchy (the one RemoveForClient walks).</param>
+    /// <param name="inView">Whether the client's adopted view holds the replicable.</param>
+    /// <param name="binding">The client's own character or controlled entity.</param>
+    public static Plan<T> Decide<T>(
+        IEnumerable<T> pending,
+        Func<T, IEnumerable<T>> children,
+        Func<T, bool> inView,
+        Func<T, bool> binding
+    )
+    {
+        List<T> order = new List<T>(pending);
+        HashSet<T> below = new HashSet<T>();
+        foreach (T item in order)
+            Walk(
+                item,
+                children,
+                new HashSet<T> { item },
+                descendant =>
+                {
+                    below.Add(descendant);
+                    return true;
+                }
+            );
+        List<T> redeliver = new List<T>();
+        List<T> destroy = new List<T>();
+        List<T> kept = new List<T>();
+        HashSet<T> listed = new HashSet<T>();
+        foreach (T item in order)
+        {
+            if (below.Contains(item) || !listed.Add(item))
+                continue;
+            redeliver.Add(item);
+            Walk(
+                item,
+                children,
+                new HashSet<T> { item },
+                descendant =>
+                {
+                    if (!inView(descendant))
+                        return true;
+                    if (binding(descendant))
+                    {
+                        kept.Add(descendant);
+                        return false;
+                    }
+                    destroy.Add(descendant);
+                    return true;
+                }
+            );
+        }
+        return new Plan<T>(redeliver, destroy, kept);
+    }
+
+    /// <summary>Pre-order over the descendants of <paramref name="root"/>; <paramref name="visit"/> false skips a subtree.</summary>
+    private static void Walk<T>(
+        T root,
+        Func<T, IEnumerable<T>> children,
+        HashSet<T> seen,
+        Func<T, bool> visit
+    )
+    {
+        foreach (T child in children(root) ?? Array.Empty<T>())
+        {
+            if (!seen.Add(child))
+                continue;
+            if (visit(child))
+                Walk(child, children, seen, visit);
+        }
+    }
 }

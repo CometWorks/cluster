@@ -13,11 +13,19 @@ namespace ClusterProtocol;
 /// </summary>
 public static class HttpListenerLengthRequired
 {
-	public static bool AlreadyAnswered(string method, string? contentLength, string? transferEncoding) =>
-		(method.Equals("POST", StringComparison.OrdinalIgnoreCase) || method.Equals("PUT", StringComparison.OrdinalIgnoreCase))
-		&& contentLength == null && transferEncoding == null;
+    public static bool AlreadyAnswered(
+        string method,
+        string? contentLength,
+        string? transferEncoding
+    ) =>
+        (
+            method.Equals("POST", StringComparison.OrdinalIgnoreCase)
+            || method.Equals("PUT", StringComparison.OrdinalIgnoreCase)
+        )
+        && contentLength == null
+        && transferEncoding == null;
 
-	public static string Describe(string method, string? path) =>
-		$"verb={method} path={path ?? "?"} carries neither Content-Length nor Transfer-Encoding; the listener answered 411 Length"
-		+ " Required, so nothing ran (send an empty body, e.g. curl -d '')";
+    public static string Describe(string method, string? path) =>
+        $"verb={method} path={path ?? "?"} carries neither Content-Length nor Transfer-Encoding; the listener answered 411 Length"
+        + " Required, so nothing ran (send an empty body, e.g. curl -d '')";
 }

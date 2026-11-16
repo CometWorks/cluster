@@ -4,7 +4,12 @@ namespace ClusterRegistry;
 
 /// <summary>SE-1168: one lifetime recycle of a managed node: <paramref name="Node"/> incarnation <paramref name="Epoch"/>
 /// drains into the activated <paramref name="Spare"/>, and its slot restarts as the new spare.</summary>
-internal sealed record ManagedRecycle(string Node, long Epoch, string Spare, DateTimeOffset StartedAt)
+internal sealed record ManagedRecycle(
+    string Node,
+    long Epoch,
+    string Spare,
+    DateTimeOffset StartedAt
+)
 {
     /// <summary>The drain timeout passed and the node was closed: its own drain takes the rest offline.</summary>
     public bool Forced { get; set; }
@@ -33,36 +38,70 @@ internal sealed partial class GatewayRegistry
 
     private double RotationSeconds(string key, double fallback) =>
         _state.HandoverConfig.TryGetValue(key, out string? value)
-            && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed) && parsed >= 0 ? parsed : fallback;
+        && double.TryParse(
+            value,
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out double parsed
+        )
+        && parsed >= 0
+            ? parsed
+            : fallback;
 
     /// <summary>From <see cref="NodeControlPass"/>, once a second. Returns whether anything changed (the caller persists).</summary>
     private bool ManagedRotationStep(DateTimeOffset now)
     {
-        if (_state.ManagedRotation is { } recycle) return AdvanceManagedRecycle(recycle, now);
+        if (_state.ManagedRotation is { } recycle)
+            return AdvanceManagedRecycle(recycle, now);
         double lifetime = RotationSeconds(RotationLifetimeKey, 7200);
-        if (lifetime <= 0 || _state.Phase != ClusterPhase.Serving) return false;
-        NodeRegistration[] regulars = [.. _state.Nodes.Values.Where(x => x.Role == NodeRole.Regular && x.State == NodeState.Active)];
+        if (lifetime <= 0 || _state.Phase != ClusterPhase.Serving)
+            return false;
+        NodeRegistration[] regulars =
+        [
+            .. _state.Nodes.Values.Where(x =>
+                x.Role == NodeRole.Regular && x.State == NodeState.Active
+            ),
+        ];
         NodeRegistration[] serving = RotationOrder(regulars, now);
-        if (serving.Length == 0) return false;
+        if (serving.Length == 0)
+            return false;
         TimeSpan spacing = TimeSpan.FromSeconds(lifetime / serving.Length);
         NodeRegistration oldest = serving[0];
         TimeSpan age = now - (oldest.Activated ?? oldest.Registered);
-        if (age < spacing || _state.LastManagedRotationAt is { } last && now - last < spacing) return false;
-        string? wait = _state.Scale.Retiring.Count != 0 ? "a node is retiring"
-            : _state.Nodes.Values.Any(x => x.Role == NodeRole.Regular && x.State == NodeState.Closed) ? "a node is closing"
-            : _state.NodePlan.Values.Any(x => x.IncumbentAction != NodeIncumbentAction.None) ? "a node slot has a kill or drain planned"
-            : RecoveryPending() ? "a recovery is pending" : null;
+        if (age < spacing || _state.LastManagedRotationAt is { } last && now - last < spacing)
+            return false;
+        string? wait =
+            _state.Scale.Retiring.Count != 0 ? "a node is retiring"
+            : _state.Nodes.Values.Any(x =>
+                x.Role == NodeRole.Regular && x.State == NodeState.Closed
+            )
+                ? "a node is closing"
+            : _state.NodePlan.Values.Any(x => x.IncumbentAction != NodeIncumbentAction.None)
+                ? "a node slot has a kill or drain planned"
+            : RecoveryPending() ? "a recovery is pending"
+            : null;
         string? host = HostOfNode(oldest.Node);
         NodeRegistration? spare = regulars
-            .Where(x => _state.SpareNodes.Contains(x.Node) && x.Serving && NodeLeaseLive(x, now) && ManagedNodeReady(x))
-            .OrderBy(x => string.Equals(HostOfNode(x.Node), host, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-            .ThenBy(x => x.Registered).ThenBy(x => x.Node, StringComparer.Ordinal).FirstOrDefault();
+            .Where(x =>
+                _state.SpareNodes.Contains(x.Node)
+                && x.Serving
+                && NodeLeaseLive(x, now)
+                && ManagedNodeReady(x)
+            )
+            .OrderBy(x =>
+                string.Equals(HostOfNode(x.Node), host, StringComparison.OrdinalIgnoreCase) ? 0 : 1
+            )
+            .ThenBy(x => x.Registered)
+            .ThenBy(x => x.Node, StringComparer.Ordinal)
+            .FirstOrDefault();
         wait ??= spare == null ? "no live hot spare" : null;
         if (wait != null)
         {
             if (_rotationWaitLogged != wait)
-                Console.WriteLine($"Rotation: {oldest.Node} has served {Duration(age)} (one rotation per {Duration(spacing)}, lifetime "
-                    + $"{Duration(TimeSpan.FromSeconds(lifetime))}); waiting: {wait}");
+                Console.WriteLine(
+                    $"Rotation: {oldest.Node} has served {Duration(age)} (one rotation per {Duration(spacing)}, lifetime "
+                        + $"{Duration(TimeSpan.FromSeconds(lifetime))}); waiting: {wait}"
+                );
             _rotationWaitLogged = wait;
             return false;
         }
@@ -70,14 +109,30 @@ internal sealed partial class GatewayRegistry
         _state.SpareNodes.Remove(spare!.Node);
         spare.Spare = false;
         spare.Activated = now;
-        Emit("node.spare", spare.Node, new Dictionary<string, string> { ["spare"] = false.ToString() });
-        Emit("node.activated", spare.Node, new Dictionary<string, string> { ["host"] = host ?? "", ["replaces"] = oldest.Node });
+        Emit(
+            "node.spare",
+            spare.Node,
+            new Dictionary<string, string> { ["spare"] = false.ToString() }
+        );
+        Emit(
+            "node.activated",
+            spare.Node,
+            new Dictionary<string, string> { ["host"] = host ?? "", ["replaces"] = oldest.Node }
+        );
         _state.Scale.Retiring.Add(oldest.Node);
         _state.Scale.Retired.Remove(oldest.Node);
-        Emit("scale.retiring", oldest.Node, new Dictionary<string, string> { ["why"] = "rotation" });
+        Emit(
+            "scale.retiring",
+            oldest.Node,
+            new Dictionary<string, string> { ["why"] = "rotation" }
+        );
         // Desired stays Wanted: the incumbent's Empty turns Draining into Kill (MarkEmpty), and after Gone the slot restarts.
-        NodeSlotPlan slot = _state.NodePlan.Values.Single(x => x.Role == NodeRole.Regular
-            && _state.ManagedDeployment!.Slots.Any(s => s.SlotKey == x.SlotKey && s.Node == oldest.Node));
+        NodeSlotPlan slot = _state.NodePlan.Values.Single(x =>
+            x.Role == NodeRole.Regular
+            && _state.ManagedDeployment!.Slots.Any(s =>
+                s.SlotKey == x.SlotKey && s.Node == oldest.Node
+            )
+        );
         slot.IncumbentNode = oldest.Node;
         slot.IncumbentEpoch = oldest.Epoch;
         slot.IncumbentAction = NodeIncumbentAction.Draining;
@@ -85,15 +140,30 @@ internal sealed partial class GatewayRegistry
         _state.NodePlanUpdated = now;
         _state.ManagedRotation = new(oldest.Node, oldest.Epoch, spare.Node, now);
         _state.LastManagedRotationAt = now;
-        Console.WriteLine($"Rotation: recycling {oldest.Node} epoch={oldest.Epoch} after {Duration(age)} of serving "
-            + $"({OwnedPartitions(oldest.Node)} partition(s)); hot spare {spare.Node} takes its place, its slot restarts as the spare");
+        Console.WriteLine(
+            $"Rotation: recycling {oldest.Node} epoch={oldest.Epoch} after {Duration(age)} of serving "
+                + $"({OwnedPartitions(oldest.Node)} partition(s)); hot spare {spare.Node} takes its place, its slot restarts as the spare"
+        );
         return true;
     }
 
     /// <summary>The serving regular nodes rotation may recycle, oldest serving first: the order it recycles them in.</summary>
-    private NodeRegistration[] RotationOrder(IEnumerable<NodeRegistration> regulars, DateTimeOffset now) =>
-        [.. regulars.Where(x => x.Serving && !x.Spare && !_state.SpareNodes.Contains(x.Node) && !_state.Scale.Retiring.Contains(x.Node)
-            && NodeLeaseLive(x, now)).OrderBy(x => x.Activated ?? x.Registered).ThenBy(x => x.Node, StringComparer.Ordinal)];
+    private NodeRegistration[] RotationOrder(
+        IEnumerable<NodeRegistration> regulars,
+        DateTimeOffset now
+    ) =>
+        [
+            .. regulars
+                .Where(x =>
+                    x.Serving
+                    && !x.Spare
+                    && !_state.SpareNodes.Contains(x.Node)
+                    && !_state.Scale.Retiring.Contains(x.Node)
+                    && NodeLeaseLive(x, now)
+                )
+                .OrderBy(x => x.Activated ?? x.Registered)
+                .ThenBy(x => x.Node, StringComparer.Ordinal),
+        ];
 
     /// <summary>
     /// SE-1241: when each serving regular node is expected to be recycled, for the operator view. The same rule as
@@ -105,14 +175,26 @@ internal sealed partial class GatewayRegistry
     {
         Dictionary<string, DateTimeOffset> due = new(StringComparer.Ordinal);
         double lifetime = RotationSeconds(RotationLifetimeKey, 7200);
-        if (_state.ManagedDeployment is null || lifetime <= 0) return due;
-        NodeRegistration[] serving = RotationOrder(_state.Nodes.Values.Where(x => x.Role == NodeRole.Regular && x.State == NodeState.Active), now);
-        if (serving.Length == 0) return due;
+        if (_state.ManagedDeployment is null || lifetime <= 0)
+            return due;
+        NodeRegistration[] serving = RotationOrder(
+            _state.Nodes.Values.Where(x =>
+                x.Role == NodeRole.Regular && x.State == NodeState.Active
+            ),
+            now
+        );
+        if (serving.Length == 0)
+            return due;
         TimeSpan spacing = TimeSpan.FromSeconds(lifetime / serving.Length);
         DateTimeOffset next = _state.LastManagedRotationAt is { } last ? last + spacing : now;
         foreach (NodeRegistration node in serving)
         {
-            DateTimeOffset at = new[] { next, (node.Activated ?? node.Registered) + spacing, now }.Max();
+            DateTimeOffset at = new[]
+            {
+                next,
+                (node.Activated ?? node.Registered) + spacing,
+                now,
+            }.Max();
             due[node.Node] = at;
             next = at + spacing;
         }
@@ -125,8 +207,14 @@ internal sealed partial class GatewayRegistry
         if (row == null || row.Epoch > recycle.Epoch)
         {
             _state.ManagedRotation = null;
-            Console.WriteLine($"Rotation: {recycle.Node} recycled in {Duration(now - recycle.StartedAt)}"
-                + (row == null ? "" : $"; epoch {row.Epoch} registered as {(row.Spare ? "the hot spare" : "a serving node")}"));
+            Console.WriteLine(
+                $"Rotation: {recycle.Node} recycled in {Duration(now - recycle.StartedAt)}"
+                    + (
+                        row == null
+                            ? ""
+                            : $"; epoch {row.Epoch} registered as {(row.Spare ? "the hot spare" : "a serving node")}"
+                    )
+            );
             return true;
         }
         bool changed = false;
@@ -134,24 +222,45 @@ internal sealed partial class GatewayRegistry
         {
             row.Spare = true;
             row.Activated = null;
-            Emit("node.spare", recycle.Node, new Dictionary<string, string> { ["spare"] = true.ToString() });
-            Console.WriteLine($"Rotation: {recycle.Node} epoch={recycle.Epoch} is {row.State}; its slot restarts as the hot spare");
+            Emit(
+                "node.spare",
+                recycle.Node,
+                new Dictionary<string, string> { ["spare"] = true.ToString() }
+            );
+            Console.WriteLine(
+                $"Rotation: {recycle.Node} epoch={recycle.Epoch} is {row.State}; its slot restarts as the hot spare"
+            );
             changed = true;
         }
-        if (!recycle.Forced && row.State == NodeState.Active
-            && now - recycle.StartedAt >= TimeSpan.FromSeconds(RotationSeconds(RotationDrainTimeoutKey, 600)))
+        if (
+            !recycle.Forced
+            && row.State == NodeState.Active
+            && now - recycle.StartedAt
+                >= TimeSpan.FromSeconds(RotationSeconds(RotationDrainTimeoutKey, 600))
+        )
         {
             recycle.Forced = true;
             row.State = NodeState.Closed;
             row.ForceDrainAt ??= now;
-            Emit("node.closing", row.Node, new Dictionary<string, string> { ["epoch"] = row.Epoch.ToString(CultureInfo.InvariantCulture) });
-            Console.WriteLine($"Rotation: {recycle.Node} still owns {OwnedPartitions(recycle.Node)} partition(s) after "
-                + $"{Duration(now - recycle.StartedAt)}; closed, its own drain hands out the rest");
+            Emit(
+                "node.closing",
+                row.Node,
+                new Dictionary<string, string>
+                {
+                    ["epoch"] = row.Epoch.ToString(CultureInfo.InvariantCulture),
+                }
+            );
+            Console.WriteLine(
+                $"Rotation: {recycle.Node} still owns {OwnedPartitions(recycle.Node)} partition(s) after "
+                    + $"{Duration(now - recycle.StartedAt)}; closed, its own drain hands out the rest"
+            );
             changed = true;
         }
         return changed;
     }
 
-    private static string Duration(TimeSpan span) => span.TotalHours >= 1
-        ? $"{(int)span.TotalHours}h{span.Minutes:00}m" : $"{(int)span.TotalMinutes}m{span.Seconds:00}s";
+    private static string Duration(TimeSpan span) =>
+        span.TotalHours >= 1
+            ? $"{(int)span.TotalHours}h{span.Minutes:00}m"
+            : $"{(int)span.TotalMinutes}m{span.Seconds:00}s";
 }

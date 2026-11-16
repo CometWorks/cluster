@@ -25,7 +25,10 @@ public static class MyCoordinateSystemPatch
     /// installs it, and the vanilla per-process counter is correct for a standalone server.
     /// </summary>
     [HarmonyPostfix]
-    [HarmonyPatch(nameof(MyCoordinateSystem.Init), new[] { typeof(MyObjectBuilder_SessionComponent) })]
+    [HarmonyPatch(
+        nameof(MyCoordinateSystem.Init),
+        new[] { typeof(MyObjectBuilder_SessionComponent) }
+    )]
     private static void InitPostfix(MyCoordinateSystem __instance)
     {
         CoordinateSystemIdPatch.Reseed(__instance);

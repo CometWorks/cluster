@@ -25,6 +25,10 @@ public static class MySessionComponentSmartUpdaterPatch
     {
         // T-0392: the same reason for a grid whose sliced import activation is still open - it is in the
         // scene but not yet validated, and judging its presence pauses its timers (TimerEnabled residual).
-        return !ClusterRuntime.IsClustered || (__instance.InScene && !ImportActivationGuard.IsOpenFor(GuardUser.SmartUpdater, __instance.EntityId));
+        return !ClusterRuntime.IsClustered
+            || (
+                __instance.InScene
+                && !ImportActivationGuard.IsOpenFor(GuardUser.SmartUpdater, __instance.EntityId)
+            );
     }
 }

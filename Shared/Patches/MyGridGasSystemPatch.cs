@@ -45,6 +45,7 @@ public static class MyGridGasSystemPatch
         // trace is emitted, so the count is captured here), -1 once traced.
         public int SavedRoomsAtMs = -1;
         public int SavedRoomsCount;
+
         // How many saved rooms landed on a live room; applied < saved is pressure dropped with no copy.
         public int AppliedRoomsCount = -1;
         public int FirstUpdateAtMs = -1;
@@ -56,7 +57,8 @@ public static class MyGridGasSystemPatch
 
     private static State Of(MyGridGasSystem system) => States.GetOrCreateValue(system);
 
-    private static bool TryGet(MyGridGasSystem system, out State state) => States.TryGetValue(system, out state);
+    private static bool TryGet(MyGridGasSystem system, out State state) =>
+        States.TryGetValue(system, out state);
 
     // ---- Init: request the pass that applies the saved rooms ----
 
@@ -99,9 +101,18 @@ public static class MyGridGasSystemPatch
     private static void UpdatePrefix(MyGridGasSystem __instance, out UpdateSnapshot __state)
     {
         __state = null;
-        if (!ClusterRuntime.IsClustered || !MyFakes.BACKGROUND_OXYGEN || __instance.m_isProcessingData || !__instance.m_generatedDataPending)
+        if (
+            !ClusterRuntime.IsClustered
+            || !MyFakes.BACKGROUND_OXYGEN
+            || __instance.m_isProcessingData
+            || !__instance.m_generatedDataPending
+        )
             return;
-        if (TryGet(__instance, out var state) && state.SavedRoomsAtMs >= 0 && state.FirstUpdateAtMs < 0)
+        if (
+            TryGet(__instance, out var state)
+            && state.SavedRoomsAtMs >= 0
+            && state.FirstUpdateAtMs < 0
+        )
             state.FirstUpdateAtMs = __instance.GetTotalGamePlayTimeInMilliseconds();
         __state = new UpdateSnapshot { PhysicsNull = __instance.CubeGrid.Physics == null };
     }
@@ -156,7 +167,9 @@ public static class MyGridGasSystemPatch
             }
             catch (Exception ex)
             {
-                MySandboxGame.Log.WriteLineAndConsole("MyGridGasSystem.GetOxygenAmount: " + ex.Message + ", " + ex.StackTrace);
+                MySandboxGame.Log.WriteLineAndConsole(
+                    "MyGridGasSystem.GetOxygenAmount: " + ex.Message + ", " + ex.StackTrace
+                );
             }
         }
         return true;
@@ -180,14 +193,20 @@ public static class MyGridGasSystemPatch
     // prefix captured before the method nulled it. Pool thread, like the original.
     [HarmonyPrefix]
     [HarmonyPatch(nameof(MyGridGasSystem.GenerateAirtightData))]
-    private static void GenerateAirtightDataPrefix(MyGridGasSystem __instance, out OxygenRoom[] __state)
+    private static void GenerateAirtightDataPrefix(
+        MyGridGasSystem __instance,
+        out OxygenRoom[] __state
+    )
     {
         __state = ClusterRuntime.IsClustered ? __instance.m_savedRooms : null;
     }
 
     [HarmonyPostfix]
     [HarmonyPatch(nameof(MyGridGasSystem.GenerateAirtightData))]
-    private static void GenerateAirtightDataPostfix(MyGridGasSystem __instance, OxygenRoom[] __state)
+    private static void GenerateAirtightDataPostfix(
+        MyGridGasSystem __instance,
+        OxygenRoom[] __state
+    )
     {
         if (__state == null || !TryGet(__instance, out var state))
             return;
@@ -197,9 +216,16 @@ public static class MyGridGasSystemPatch
         Vector3I max = __instance.m_storedGridMax;
         foreach (var room in __state)
         {
-            if (Vector3I.Min(room.StartingPosition, min) != min || Vector3I.Max(room.StartingPosition, max) != max)
+            if (
+                Vector3I.Min(room.StartingPosition, min) != min
+                || Vector3I.Max(room.StartingPosition, max) != max
+            )
                 continue;
-            var link = cube?[room.StartingPosition.X, room.StartingPosition.Y, room.StartingPosition.Z];
+            var link = cube?[
+                room.StartingPosition.X,
+                room.StartingPosition.Y,
+                room.StartingPosition.Z
+            ];
             if (link != null && link.Room != null)
                 applied++;
         }
@@ -219,15 +245,26 @@ public static class MyGridGasSystemPatch
         var grid = __instance.CubeGrid;
         var rooms = __instance.m_rooms;
         MySandboxGame.Log.WriteLineAndConsole(
-            "[Airtight] grid=" + (grid != null ? grid.EntityId : 0L)
-            + " name='" + (grid != null ? grid.DisplayName : "?") + "'"
-            + " savedRooms=" + state.SavedRoomsCount
-            + " appliedRooms=" + state.AppliedRoomsCount
-            + " firstUpdateMs=" + (state.FirstUpdateAtMs < 0 ? -1 : state.FirstUpdateAtMs - state.SavedRoomsAtMs)
-            + " passStartMs=" + (state.PassStartedAtMs < 0 ? -1 : state.PassStartedAtMs - state.SavedRoomsAtMs)
-            + " passDoneMs=" + (now - state.SavedRoomsAtMs)
-            + " rooms=" + (rooms != null ? rooms.Count : -1)
-            + " physics=" + (grid != null && grid.Physics != null));
+            "[Airtight] grid="
+                + (grid != null ? grid.EntityId : 0L)
+                + " name='"
+                + (grid != null ? grid.DisplayName : "?")
+                + "'"
+                + " savedRooms="
+                + state.SavedRoomsCount
+                + " appliedRooms="
+                + state.AppliedRoomsCount
+                + " firstUpdateMs="
+                + (state.FirstUpdateAtMs < 0 ? -1 : state.FirstUpdateAtMs - state.SavedRoomsAtMs)
+                + " passStartMs="
+                + (state.PassStartedAtMs < 0 ? -1 : state.PassStartedAtMs - state.SavedRoomsAtMs)
+                + " passDoneMs="
+                + (now - state.SavedRoomsAtMs)
+                + " rooms="
+                + (rooms != null ? rooms.Count : -1)
+                + " physics="
+                + (grid != null && grid.Physics != null)
+        );
         state.SavedRoomsAtMs = -1;
     }
 }

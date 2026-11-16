@@ -12,16 +12,16 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyPlanetSeams
 {
-	/// <summary>
-	/// Runs before <c>MyPlanet.Init(MyObjectBuilder_EntityBase)</c>. Returning false means the seam
-	/// initialised the planet itself (from the newest verified catalogued native base) and the
-	/// vanilla one-line body must be skipped.
-	/// </summary>
-	public static Func<MyPlanet, MyObjectBuilder_EntityBase, bool> ClusterStorageInit;
+    /// <summary>
+    /// Runs before <c>MyPlanet.Init(MyObjectBuilder_EntityBase)</c>. Returning false means the seam
+    /// initialised the planet itself (from the newest verified catalogued native base) and the
+    /// vanilla one-line body must be skipped.
+    /// </summary>
+    public static Func<MyPlanet, MyObjectBuilder_EntityBase, bool> ClusterStorageInit;
 
-	/// <summary>
-	/// Runs after <c>MyPlanet.storage_RangeChangedPlanet</c>: captures the exact committed content and
-	/// material bytes of every planet-storage range mutation for the voxel journal.
-	/// </summary>
-	public static Action<MyPlanet, Vector3I, Vector3I, MyStorageDataTypeFlags> ClusterRangeChanged;
+    /// <summary>
+    /// Runs after <c>MyPlanet.storage_RangeChangedPlanet</c>: captures the exact committed content and
+    /// material bytes of every planet-storage range mutation for the voxel journal.
+    /// </summary>
+    public static Action<MyPlanet, Vector3I, Vector3I, MyStorageDataTypeFlags> ClusterRangeChanged;
 }

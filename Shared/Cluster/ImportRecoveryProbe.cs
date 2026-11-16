@@ -25,57 +25,76 @@ namespace ClusterPlugin;
 /// </summary>
 public static class ImportRecoveryProbe
 {
-	private sealed class Entry
-	{
-		public Guid TransferId;
-		public ulong Partition;
-		public int Members;
-		public int Clients;
-		public long StartStamp;
-		public double MinSim = double.MaxValue;
-		public int HealthyTicks;
-		public int ConcurrentAtStart;
-	}
+    private sealed class Entry
+    {
+        public Guid TransferId;
+        public ulong Partition;
+        public int Members;
+        public int Clients;
+        public long StartStamp;
+        public double MinSim = double.MaxValue;
+        public int HealthyTicks;
+        public int ConcurrentAtStart;
+    }
 
-	private const double RecoveredRatio = 0.9;
-	private const int RequiredHealthyTicks = 2;
-	private const double TimeoutSeconds = 120;
+    private const double RecoveredRatio = 0.9;
+    private const int RequiredHealthyTicks = 2;
+    private const double TimeoutSeconds = 120;
 
-	private static readonly object m_lock = new object();
-	private static readonly List<Entry> m_open = new List<Entry>();
+    private static readonly object m_lock = new object();
+    private static readonly List<Entry> m_open = new List<Entry>();
 
-	/// <summary>Called at the end of the target-side Commit (game thread).</summary>
-	public static void Note(Guid transferId, ulong partition, int members, int clients)
-	{
-		lock (m_lock)
-			m_open.Add(new Entry
-			{
-				TransferId = transferId, Partition = partition, Members = members, Clients = clients,
-				StartStamp = Stopwatch.GetTimestamp(), ConcurrentAtStart = m_open.Count,
-			});
-	}
+    /// <summary>Called at the end of the target-side Commit (game thread).</summary>
+    public static void Note(Guid transferId, ulong partition, int members, int clients)
+    {
+        lock (m_lock)
+            m_open.Add(
+                new Entry
+                {
+                    TransferId = transferId,
+                    Partition = partition,
+                    Members = members,
+                    Clients = clients,
+                    StartStamp = Stopwatch.GetTimestamp(),
+                    ConcurrentAtStart = m_open.Count,
+                }
+            );
+    }
 
-	/// <summary>Called from ClusterRuntime.Update (250 ms timer, game thread).</summary>
-	public static void Update()
-	{
-		if (m_open.Count == 0) return;
-		double ratio = Sandbox.Game.Multiplayer.Sync.ServerSimulationRatio;
-		lock (m_lock)
-			for (int i = m_open.Count - 1; i >= 0; i--)
-			{
-				Entry entry = m_open[i];
-				if (ratio < entry.MinSim) entry.MinSim = ratio;
-				entry.HealthyTicks = ratio >= RecoveredRatio ? entry.HealthyTicks + 1 : 0;
-				double elapsed = (Stopwatch.GetTimestamp() - entry.StartStamp) / (double)Stopwatch.Frequency;
-				bool recovered = entry.HealthyTicks >= RequiredHealthyTicks;
-				if (!recovered && elapsed < TimeoutSeconds) continue;
-				Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
-					"[ClusterPlugin] import-recovery transferId={0} partition={1} members={2} clients={3}"
-					+ " concurrent={4} minSim={5:F2} recoveredMs={6:F0}{7}",
-					entry.TransferId, entry.Partition, entry.Members, entry.Clients,
-					entry.ConcurrentAtStart, entry.MinSim == double.MaxValue ? ratio : entry.MinSim,
-					elapsed * 1000, recovered ? "" : " timeout"));
-				m_open.RemoveAt(i);
-			}
-	}
+    /// <summary>Called from ClusterRuntime.Update (250 ms timer, game thread).</summary>
+    public static void Update()
+    {
+        if (m_open.Count == 0)
+            return;
+        double ratio = Sandbox.Game.Multiplayer.Sync.ServerSimulationRatio;
+        lock (m_lock)
+            for (int i = m_open.Count - 1; i >= 0; i--)
+            {
+                Entry entry = m_open[i];
+                if (ratio < entry.MinSim)
+                    entry.MinSim = ratio;
+                entry.HealthyTicks = ratio >= RecoveredRatio ? entry.HealthyTicks + 1 : 0;
+                double elapsed =
+                    (Stopwatch.GetTimestamp() - entry.StartStamp) / (double)Stopwatch.Frequency;
+                bool recovered = entry.HealthyTicks >= RequiredHealthyTicks;
+                if (!recovered && elapsed < TimeoutSeconds)
+                    continue;
+                Console.WriteLine(
+                    string.Format(
+                        CultureInfo.InvariantCulture,
+                        "[ClusterPlugin] import-recovery transferId={0} partition={1} members={2} clients={3}"
+                            + " concurrent={4} minSim={5:F2} recoveredMs={6:F0}{7}",
+                        entry.TransferId,
+                        entry.Partition,
+                        entry.Members,
+                        entry.Clients,
+                        entry.ConcurrentAtStart,
+                        entry.MinSim == double.MaxValue ? ratio : entry.MinSim,
+                        elapsed * 1000,
+                        recovered ? "" : " timeout"
+                    )
+                );
+                m_open.RemoveAt(i);
+            }
+    }
 }
