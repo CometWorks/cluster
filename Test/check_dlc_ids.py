@@ -1,4 +1,4 @@
-"""SE-1158: the Gateway's DLC app ids (SteamFrontend.DlcAppIds in C#, DLC_APP_IDS in Rust) must
+"""SE-1158: the Gateway's DLC app ids (KnownDlcs.AppIds in C#, shared by the Gateway and the nodes, DLC_APP_IDS in Rust) must
 match each other and the game's Content/Data/Game/DLCs.sbc. A DLC missing from them counts as owned
 by every player on the nodes. Run after every game update:
 
@@ -25,7 +25,7 @@ def ids(path: Path, start: str, end: str) -> list[int]:
 
 
 def main() -> int:
-    csharp = ids(ROOT / "ClusterRegistry/SteamFrontend.cs", "DlcAppIds =", "];")
+    csharp = ids(ROOT / "Shared/Cluster/KnownDlcs.cs", "AppIds =", "];")
     rust = ids(
         ROOT / "GatewayRs/gateway-rs/src/steam.rs", "DLC_APP_IDS: &[u32] = &[", "];"
     )

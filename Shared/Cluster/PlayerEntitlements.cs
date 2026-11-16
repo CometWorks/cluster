@@ -30,7 +30,7 @@ namespace ClusterPlugin;
 /// (<see cref="CheckSkins"/>) and come with every later attach binding.
 ///
 /// A player admitted without Steam (Direct Transport bots, EOS) has no answers, and the game's own check decides,
-/// as before. A player online nowhere in the cluster owns no DLC, as on a vanilla DS, where Steam knows nothing about
+/// as before. A DLC that isn't in <see cref="KnownDlcs"/> counts as not owned by anyone. A player online nowhere in the cluster owns no DLC, as on a vanilla DS, where Steam knows nothing about
 /// someone who left.
 /// </summary>
 public static class PlayerEntitlements
@@ -83,6 +83,9 @@ public static class PlayerEntitlements
     {
         if (!ClusterRuntime.IsClustered || steamId == 0)
             return null;
+        // Fail closed: nobody asked Steam about a DLC the cluster doesn't know, and Direct Transport would say yes
+        if (!KnownDlcs.Contains(appId))
+            return false;
         bool attached = Attached.TryGetValue(steamId, out Entry local);
         return HasDlc(appId, steamId, attached, local?.MissingDlcs, OnlinePlayersService.Cluster);
     }
