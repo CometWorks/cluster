@@ -27,7 +27,9 @@ internal static class OfflineRefineryMeasurementPatch
 internal static class OfflineAssemblerMeasurementPatch
 {
     [HarmonyPrefix]
-    [EnsureCode("a90270cc")]
+    // 1.211.017 returns early, before producing, while queue inputs are missing (CheckQueueInventory):
+    // that tick measures no production, as a stalled queue did before
+    [EnsureCode("ab56fdce")]
     private static void Prefix(
         MyAssembler __instance,
         uint framesFromLastTrigger,

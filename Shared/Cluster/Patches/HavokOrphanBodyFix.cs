@@ -33,7 +33,7 @@ namespace ClusterPlugin;
 /// already gone, so CheckRBNotInWorld does nothing and Dispose releases the wrapper's own reference
 /// and unregisters the handle. If the body's HkWorld outlived the parent (other objects keep the cluster),
 /// the body is first removed from it properly, so the world's managed lists do not keep the disposed
-/// body. A welded body is left alone: its weld group owns the close.
+/// body.
 /// CharacterProxy, the third field that branch drops, is only counted.
 /// </summary>
 [HarmonyPatch(typeof(MyPhysicsBody), nameof(MyPhysicsBody.Deactivate), new Type[0])]
@@ -57,7 +57,7 @@ internal static class HavokOrphanBodyFix
         out (HkRigidBody, HkRigidBody, MyCharacterProxy) __state
     )
     {
-        // The fields, not the properties: RigidBody resolves to a weld parent's body.
+        // The fields, read before Deactivate clears them.
         __state = (__instance.m_rigidBody, __instance.m_rigidBody2, __instance.CharacterProxy);
     }
 
@@ -73,8 +73,6 @@ internal static class HavokOrphanBodyFix
         if (proxy != null && __instance.CharacterProxy == null)
             s_proxiesOrphaned++;
         if (!orphan1 && !orphan2)
-            return;
-        if (__instance.IsWelded || __instance.WeldInfo.Children.Count != 0)
             return;
         try
         {
