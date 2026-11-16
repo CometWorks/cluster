@@ -56,7 +56,7 @@ Nothing here names a host, a user or a path outside the repository: everything h
 | `scenarios.py`, `scenarios_ext.py` | membership, characters, balancing, recovery, security, Gateway self-tests |
 | `scenarios_admin.py` | admin API parity, scoped tokens, durable operations (a self-hosted Gateway, no nodes) |
 | `scenarios_player.py` | player settings across a node rotation and a relog |
-| `scenarios_recovery.py` | drain, rotation, node-kill recovery, bounded rollback, save round-trip fidelity, a hung node's stacks before its exit watchdog (SE-883, P2-HANG-01) |
+| `scenarios_recovery.py` | drain, rotation, node-kill recovery, bounded rollback, save round-trip fidelity, a hung node's stacks before its exit watchdog (SE-883, P2-HANG-01), a MyStringHash collision that throws instead of hanging the game thread with DotNetCompat's fix (SE-1606, P1-STRHASH-01) |
 | `scenarios_saves.py` | save pipeline, replica fetch, retention, handover tee, paused-handover counters and client view |
 | `scenarios_redeliver.py` | T-0396: a client-view adopt that re-delivers a grid still streaming to a viewer (the test plugin's `/stream-test-hold`) |
 | `scenarios_property_sync.py` | #1376: a client-view adopt of a frozen grid whose emotion controller Syncs are still null (state sync before the thaw) |
