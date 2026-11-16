@@ -122,8 +122,6 @@ internal static class CollisionFilterRefreshGuard
                             + " physics="
                             + (top.Physics != null)
                 )
-                + " welded="
-                + body.IsWelded
                 + " rb="
                 + (body.RigidBody != null)
                 + " rb2="

@@ -418,11 +418,7 @@ public static class ForcedSleepService
         }
         foreach (MyCubeGrid member in m_members)
         {
-            if (
-                member.Physics == null
-                || !member.Physics.Enabled
-                || member.Physics.IsWelded && member != grid
-            )
+            if (member.Physics == null || !member.Physics.Enabled)
                 continue;
             if (ClusterRuntime.IsFrozen(member.EntityId) || m_slept.ContainsKey(member.EntityId))
                 return false;
