@@ -29,7 +29,20 @@ public static class MyGpsCollectionPatch
     private static void Accepted() => MyGpsCollectionSeams.ClusterGpsAcceptedPostfix?.Invoke();
 
     // ClusterPlugin patch point: GpsAuthorityPatch.AddPrefix
-    [HarmonyPatch(typeof(MyGpsCollection), nameof(MyGpsCollection.SendAddGpsRequest))]
+    // The overload with lifetimeSeconds (1.211.017): the old one forwards to it, and jump signatures call it directly
+    [HarmonyPatch(
+        typeof(MyGpsCollection),
+        nameof(MyGpsCollection.SendAddGpsRequest),
+        new[] { typeof(long), typeof(MyGps), typeof(long), typeof(bool), typeof(int) },
+        new[]
+        {
+            ArgumentType.Normal,
+            ArgumentType.Ref,
+            ArgumentType.Normal,
+            ArgumentType.Normal,
+            ArgumentType.Normal,
+        }
+    )]
     private static class SendAddGpsRequest
     {
         [HarmonyPrefix]
