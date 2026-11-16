@@ -4,6 +4,7 @@ using ClusterPlugin;
 using HarmonyLib;
 using Sandbox;
 using Sandbox.Engine.Multiplayer;
+using Sandbox.Game;
 using Sandbox.Game.SessionComponents;
 using Shared.Patches;
 using VRage.Utils;
@@ -85,14 +86,42 @@ Check(
 );
 PlayerEntitlements.Detach(user);
 Check(PlayerEntitlements.HasSkin(silver, user) == null, "detach removes verified ownership");
+
+// DLCs through the real HasDLC prefix. Direct Transport answers yes to every license, so only the Gateway's Steam
+// answers can say no. A DLC the cluster doesn't know (not in KnownDlcs) was never asked about: it fails closed.
+var dlc = new MySessionComponentDLC();
+const ulong owner = 76561198000000002;
+const uint unregistered = 4_000_000_000;
+MyDLCs.Definitions["Warfare3"] = 5070970;
+MyDLCs.Definitions["FutureDlc"] = unregistered;
+Check(!KnownDlcs.Contains(unregistered), "the test DLC is not registered");
+PlayerEntitlements.Attach(new(owner, MissingDlcs: []));
+Check(dlc.HasDLC("Warfare3", owner), "a registered DLC Steam confirmed is owned");
+Check(
+    !dlc.HasDLC("FutureDlc", owner),
+    "an unregistered DLC is not owned, even by a player who owns every known one"
+);
+PlayerEntitlements.Detach(owner);
+PlayerEntitlements.Attach(new(owner, MissingDlcs: [5070970]));
+Check(!dlc.HasDLC("Warfare3", owner), "a registered DLC Steam denied is not owned");
+PlayerEntitlements.Detach(owner);
+PlayerEntitlements.Attach(new(owner));
+Check(
+    !dlc.HasDLC("FutureDlc", owner),
+    "an unregistered DLC is not owned by a player without Steam answers"
+);
+Check(dlc.HasDLC("Warfare3", owner), "a registered DLC without Steam answers is left to the game");
+PlayerEntitlements.Detach(owner);
+
 ClusterRuntime.IsClustered = false;
+Check(dlc.HasDLC("FutureDlc", owner), "standalone servers keep vanilla DLC checks");
 MySessionComponentGameInventory.RequestUpdateClientGameInventory([7]);
 Check(
     MySessionComponentGameInventory.VanillaRequests == 1,
     "standalone servers keep vanilla inventory handling"
 );
 Console.WriteLine(
-    "PASS: skin requests, ownership, acknowledgement, handover, stale replies and retry suppression"
+    "PASS: skin requests, ownership, acknowledgement, handover, stale replies, retry suppression and DLC ownership"
 );
 
 static void Check(bool condition, string message)

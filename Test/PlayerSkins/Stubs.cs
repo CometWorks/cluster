@@ -108,10 +108,13 @@ namespace Sandbox.Game
 {
     public static class MyDLCs
     {
+        /// <summary>The game's DLC definitions by name, as the test declares them.</summary>
+        public static readonly Dictionary<string, uint> Definitions = [];
+
         public static bool TryGetDLC(string name, out VRage.Game.Definitions.MyDlcDefinition dlc)
         {
-            dlc = null;
-            return false;
+            dlc = Definitions.TryGetValue(name, out uint appId) ? new() { AppId = appId } : null;
+            return dlc != null;
         }
     }
 }
@@ -156,7 +159,8 @@ namespace Sandbox.Game.SessionComponents
     public sealed class MySessionComponentDLC
     {
         [MethodImpl(MethodImplOptions.NoInlining)]
-        public bool HasDLC(string DLCName, ulong steamId) => false;
+        // Direct Transport's game server answers yes to every license
+        public bool HasDLC(string DLCName, ulong steamId) => true;
     }
 
     public sealed class MySessionComponentGameInventory

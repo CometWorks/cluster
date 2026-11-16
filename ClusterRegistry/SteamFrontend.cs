@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using ClusterPlugin;
 using LiteNetLib;
 using Steamworks;
 
@@ -20,37 +21,8 @@ internal sealed class SteamFrontend : IDisposable
 {
     private const uint SpaceEngineersAppId = 244850;
 
-    /// <summary>
-    /// SE-1158: the game's DLC app ids (Content/Data/Game/DLCs.sbc, MyDLCs.DLCs), which a vanilla DS asks
-    /// UserHasLicenseForApp about for every client. The nodes can't ask: Direct Transport answers yes to all. A DLC
-    /// released after this list counts as owned by everyone until it is added here.
-    /// </summary>
-    internal static readonly uint[] DlcAppIds =
-    [
-        573160,
-        999999990,
-        999999991,
-        1049790,
-        1084680,
-        1135960,
-        1167910,
-        1241550,
-        1307680,
-        1374610,
-        1475830,
-        1676100,
-        1783760,
-        1958640,
-        2504720,
-        2569770,
-        2914120,
-        3066290,
-        3601770,
-        3858380,
-        4116960,
-        4502100,
-        4835530,
-    ];
+    /// <summary>The DLCs the Gateway asks Steam about, see <see cref="KnownDlcs"/>.</summary>
+    internal static readonly uint[] DlcAppIds = KnownDlcs.AppIds;
 
     /// <summary>How long a Steam inventory blob may stay pending before the check gives up.</summary>
     private const long SkinCheckTimeoutMilliseconds = 5000;

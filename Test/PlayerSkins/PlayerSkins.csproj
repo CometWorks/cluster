@@ -6,6 +6,7 @@
   <ItemGroup>
     <PackageReference Include="Lib.Harmony" Version="2.4.2" />
     <Compile Include="../../Shared/Cluster/PlayerEntitlements.cs" Link="PlayerEntitlements.cs" />
+    <Compile Include="../../Shared/Cluster/KnownDlcs.cs" Link="KnownDlcs.cs" />
     <Compile Include="../../Shared/Patches/PlayerEntitlementsPatch.cs" Link="PlayerEntitlementsPatch.cs" />
     <!-- Include the former discard patch if it is reintroduced, so it cannot silently swallow requests again. -->
     <Compile Include="../../Shared/Cluster/Patches/GameInventoryRequestPatch.cs" Link="GameInventoryRequestPatch.cs"

@@ -24,6 +24,7 @@
     <Compile Include="../Shared/Cluster/CharacterReapPermit.cs" Link="Protocol/CharacterReapPermit.cs" />
     <!-- T-0321: the node's addressing/credential rules, so the registry self-test covers them without a live node. -->
     <Compile Include="../Shared/Cluster/ClusterNet.cs" Link="Protocol/ClusterNet.cs" />
+    <Compile Include="../Shared/Cluster/KnownDlcs.cs" Link="Protocol/KnownDlcs.cs" />
     <Compile Include="../Shared/Cluster/ProxiedSavePath.cs" Link="Protocol/ProxiedSavePath.cs" />
     <!-- T-0347: the node's journal of Final saves the registry never catalogued, so the registry self-test reads what the node writes. -->
     <Compile Include="../Shared/Cluster/UnregisteredFinals.cs" Link="Protocol/UnregisteredFinals.cs" />
