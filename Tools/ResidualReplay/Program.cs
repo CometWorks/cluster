@@ -46,6 +46,12 @@ class Program
         // Compare two assemblies on the same input to measure whether a change removes WORK or only
         // removes warnings; the node's own "import warm-up done ... compareMs=" is the same
         // measurement in-process, so this is its offline equivalent with no deploy.
+        // DISPLACED=<id>[,<id>...]: the pilots the live gate stripped from this transfer (the node logs them as
+        // ghost_seat ... pilot=<id> transferId=<transfer>), so the pair replays exactly as the gate compared it.
+        HashSet<long> displaced = null;
+        string displacedList = Environment.GetEnvironmentVariable("DISPLACED");
+        if (!string.IsNullOrEmpty(displacedList))
+            displaced = new HashSet<long>(Array.ConvertAll(displacedList.Split(','), long.Parse));
         int iterations = int.TryParse(Environment.GetEnvironmentVariable("ITERATIONS"), out int n) ? n : 1;
         List<string> residuals = null;
         List<double> times = new List<double>();
@@ -53,7 +59,7 @@ class Program
         {
             XDocument a = Load(args[1]), b = Load(args[2]);
             System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
-            residuals = (List<string>)method.Invoke(null, new object[] { a, b, null });
+            residuals = (List<string>)method.Invoke(null, new object[] { a, b, displaced });
             times.Add(watch.Elapsed.TotalMilliseconds);
         }
         if (iterations > 1)
