@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Threading;
 using HarmonyLib;
 using Sandbox.Game.Entities;
 using VRage.Game.Entity;
@@ -55,8 +57,9 @@ internal static class MyEntitySimCostPatch
 	//
 	// Each has the signature of the call it replaces, receiver first. The inner call is a
 	// virtual dispatch made from THIS assembly, which Harmony has not patched, so there is no
-	// recursion. Exceptions are not caught: an entity that throws out of its update did so
-	// before this patch existed too, and swallowing it here would hide it.
+	// recursion. The serial wrappers do not catch: an entity that throws out of its update did so
+	// before this patch existed too, and swallowing it here would hide it. The two parallel ones
+	// do (SE-1583), see below.
 
 	private static void Charge(MyEntity entity, long started)
 	{
@@ -116,18 +119,42 @@ internal static class MyEntitySimCostPatch
 	// The parallel handlers take IMyParallelUpdateable, not MyEntity. Every implementer in the
 	// orchestrator's lists is a MyEntity, but the static type is not, so the charge is skipped
 	// rather than cast-and-throw: an un-chargeable implementer must not take the update with it.
+	//
+	// SE-1583: unlike the serial wrappers above, these two DO catch. A throw on a worker thread
+	// fails the whole ParallelTasks.ForEach, which the game loop turns into a server stop: one
+	// imported character stopped seven nodes in a row on 2026-11-15. The entity skips the rest of
+	// its update for this frame, the first throw of each entity is logged with its stack, and
+	// every throw is counted.
 	public static void UpdateBeforeSimulationParallel(IMyParallelUpdateable entity)
 	{
-		if (!m_enabled || entity is not MyEntity charged) { entity.UpdateBeforeSimulationParallel(); return; }
 		long started = Stopwatch.GetTimestamp();
-		try { entity.UpdateBeforeSimulationParallel(); } finally { Charge(charged, started); }
+		try { entity.UpdateBeforeSimulationParallel(); }
+		catch (Exception exception) { Fault(entity, nameof(UpdateBeforeSimulationParallel), exception); }
+		finally { if (m_enabled && entity is MyEntity charged) Charge(charged, started); }
 	}
 
 	public static void UpdateAfterSimulationParallel(IMyParallelUpdateable entity)
 	{
-		if (!m_enabled || entity is not MyEntity charged) { entity.UpdateAfterSimulationParallel(); return; }
 		long started = Stopwatch.GetTimestamp();
-		try { entity.UpdateAfterSimulationParallel(); } finally { Charge(charged, started); }
+		try { entity.UpdateAfterSimulationParallel(); }
+		catch (Exception exception) { Fault(entity, nameof(UpdateAfterSimulationParallel), exception); }
+		finally { if (m_enabled && entity is MyEntity charged) Charge(charged, started); }
+	}
+
+	private static readonly ConcurrentDictionary<long, byte> s_faulted = new ConcurrentDictionary<long, byte>();
+	private static long s_faults;
+
+	/// <summary>Exceptions caught in the parallel entity updates since start.</summary>
+	internal static long ParallelUpdateFaults => Interlocked.Read(ref s_faults);
+
+	internal static void Fault(IMyParallelUpdateable entity, string update, Exception exception)
+	{
+		Interlocked.Increment(ref s_faults);
+		MyEntity named = entity as MyEntity;
+		if (!s_faulted.TryAdd(named?.EntityId ?? 0, 0)) return;
+		Console.WriteLine("[ClusterPlugin] parallel_update_fault update=" + update + " entity=" + (named?.EntityId ?? 0)
+			+ " type=" + entity.GetType().Name + " name=" + named?.DisplayName
+			+ " (logged once per entity; it skips the rest of this update, the node keeps running): " + exception);
 	}
 
 	// ---- the redirects -------------------------------------------------------------------

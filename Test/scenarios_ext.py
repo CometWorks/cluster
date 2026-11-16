@@ -1922,7 +1922,15 @@ def p3_hnd_stator(bench) -> None:
     bench.exercised(fixture="headless rotor, stale LimitsActive", directions="both")
 
 
+def p1_char_noident(bench) -> None:
+    """SE-1583: a body whose owner identity the node does not hold survives the weapon position update, and an entity
+    that throws out of its parallel update no longer stops the node."""
+    assert_node_sections(bench, "a character owned by an unknown identity skips the weapon position update without an "
+                         "NRE; a throwing parallel update is caught and counted", "character-without-identity")
+
+
 SCENARIOS_EXT = {
+    "P1-CHAR-NOIDENT": (p1_char_noident, "SE-1583: imported character without an identity, parallel update faults", "1"),
     "T0266-HVK-02": (t0266_hvk_02, "T-0266 harness: real release paths under the Havok body audit", "1"),
     "T0266-HVK-03": (t0266_hvk_03, "T-0266 harness: cluster release/offline paths in a procedural world", "1"),
     "T0266-HVK-01": (t0266_hvk_01, "closing an entity with an already-destroyed native body does not crash", "1"),
