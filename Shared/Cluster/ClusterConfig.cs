@@ -69,7 +69,7 @@ public static class ClusterConfig
         // heapDumpMb, and exit 6 when it passes heapLimitMb, so Host restarts it before it takes the host's memory. Its heap is
         // 1.2-1.7 GB in a 100-trader soak; the one that grew to 67 GB froze the host. 0 = off.
         ["wa.heapDumpMb"] = "8192",
-        ["wa.heapLimitMb"] = "24576",
+        ["wa.heapLimitMb"] = "16384",
         // HandoverDelta.md: the gateway presyncs the partition onto the target before the freeze and
         // the capture carries a field-level patch. presync.enabled is read by the GATEWAY (same
         // document); the nodes read ttlSeconds (baseline / dormant-copy lifetime) and the applier

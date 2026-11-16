@@ -3231,9 +3231,45 @@ def p1_wa_resync_backlog(bench) -> None:
     bench.exercised(waSelfTestSections=["resync-backlog"])
 
 
+def p1_wa_heap_limit(bench) -> None:
+    """SE-1615: the World Authority's heap safety limit is 16 GB (wa.heapLimitMb 16384, 24576 before). The WA reports
+    the default, holds 15 GB of managed heap through the test plugin without exiting, then exits with code 6 once
+    the heap passes 16 GB. wa.heapDumpMb is set to 0 first so the only dump is the one at the exit."""
+    bench.start_cluster(nodes=["node-1", "wa-1"])
+    values = (_node(bench, "wa-1", "/config") or {}).get("values") or {}
+    bench.record("wa-config", values)
+    bench.check("the World Authority reports wa.heapLimitMb 16384", values.get("wa.heapLimitMb") == "16384",
+                f"wa.heapLimitMb={values.get('wa.heapLimitMb')} wa.heapDumpMb={values.get('wa.heapDumpMb')}")
+    values["wa.heapDumpMb"] = "0"
+    bench.cluster._request("PUT", "/cluster/config", _nodes(bench)["wa-1"].control, 30, values)
+    process = bench.cluster.processes["wa-1"]
+    below = _node(bench, "wa-1", "/test-heap-hold?mb=15360", method="POST", timeout=120)
+    time.sleep(6)  # three heap watch checks
+    alive = process.poll() is None and _try(bench, "wa-1", "/config") is not None
+    bench.check("at 15 GB of managed heap the World Authority keeps running", alive,
+                f"heapMb={below.get('heapMb')} exit={process.poll()}")
+    started = time.time()
+    above = _try(bench, "wa-1", "/test-heap-hold?mb=2048", method="POST", timeout=120) or {}
+    deadline = started + 600
+    while process.poll() is None and time.time() < deadline:
+        time.sleep(1)
+    line = next((line for log in bench.run_root.rglob("SpaceEngineersDedicated_*.log") if "wa-1" in str(log)
+                 for line in log.read_text(errors="replace").splitlines() if "passed wa.heapLimitMb" in line), "")
+    bench.record("wa-exit", {"heapMb": above.get("heapMb"), "exit": process.poll(),
+                             "seconds": round(time.time() - started, 1), "line": line[-300:]})
+    bench.check("past 16 GB the World Authority exits with code 6", process.poll() == 6,
+                f"exit={process.poll()} after {time.time() - started:.0f} s; {line[-200:]}")
+    for dump in bench.run_root.rglob("heap-*.dmp"):
+        bench.record("wa-heap-dump", {"path": str(dump), "mb": dump.stat().st_size >> 20})
+        dump.unlink()
+    bench.exercised(heldMb=[15360, 2048])
+
+
 SCENARIOS_WA = {
     "P1-WA-CMD-INFLIGHT": (p1_wa_cmd_inflight, "SE-1561: the game thread does not wait for a command another thread "
                            "is still running (the World Authority hang)", "1"),
+    "P1-WA-HEAP-LIMIT": (p1_wa_heap_limit, "SE-1615: the World Authority holds 15 GB of heap and exits 6 past its "
+                         "16 GB safety limit", "1"),
     "P1-WA-RESYNC-BACKLOG": (p1_wa_resync_backlog, "SE-1577: repeated snapshot requests from a node queue one snapshot, "
                              "not one per request (the World Authority heap runaway)", "1"),
     "P2-WA-00": (p2_wa_00, "World Authority role, clock and replacement", "3"),
