@@ -50,6 +50,7 @@ internal sealed class SteamFrontend : IDisposable
         4116960,
         4502100,
         4835530,
+        5070970,
     ];
 
     /// <summary>How long a Steam inventory blob may stay pending before the check gives up.</summary>
