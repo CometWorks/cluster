@@ -14,7 +14,9 @@ namespace ClusterTestPlugin;
 /// the other members of the medbay's partition away together and waits for the split, so the partition the Gateway just
 /// resolved is renumbered on this node right before the target checks it holds the medbay (a trader shuttle leaving
 /// Alpha on octahedron-test, 2026-11-05). The movers are the larger group and keep the id, the medbay gets a new one.
-/// "refuse" makes the target answer the switch with an error.
+/// "refuse" makes the target answer the switch with an error. "stall" (SE-1590) answers nothing for S seconds and then
+/// refuses: a target that never adopts the client, so the Gateway's node call times out and it moves the client back,
+/// after ~10 s off every node's player list, as on octahedron-test 2026-11-15.
 /// </summary>
 internal static class RespawnFaultRoutes
 {
@@ -22,18 +24,19 @@ internal static class RespawnFaultRoutes
     private static string m_mode;
     private static long[] m_movers = Array.Empty<long>();
     private static double m_distance;
+    private static double m_stallSeconds;
     private static int m_remaining;
     private static readonly HashSet<Guid> Seen = new HashSet<Guid>();
     private static readonly List<object> Faulted = new List<object>();
 
     public static void Register()
     {
-        // POST /respawn-execute-fault?mode=split|refuse|off&count=N[&movers=ID,ID&distance=M] - fault the next N
-        // operations this node executes. {mode, remaining, faulted}.
+        // POST /respawn-execute-fault?mode=split|refuse|stall|off&count=N[&movers=ID,ID&distance=M][&seconds=S] - fault
+        // the next N operations this node executes; a stall lasts S seconds (default 12). {mode, remaining, faulted}.
         TestRoutes.Add("POST", "/respawn-execute-fault", context =>
         {
             string mode = TestRoutes.Query(context, "mode");
-            if (mode is not ("split" or "refuse" or "off")) throw new ArgumentException("mode must be split, refuse or off");
+            if (mode is not ("split" or "refuse" or "stall" or "off")) throw new ArgumentException("mode must be split, refuse, stall or off");
             lock (Sync)
             {
                 m_mode = mode == "off" ? null : mode;
@@ -42,6 +45,7 @@ internal static class RespawnFaultRoutes
                     ? TestRoutes.Query(context, "movers").Split(',').Select(x => long.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToArray()
                     : Array.Empty<long>();
                 m_distance = double.Parse(TestRoutes.Query(context, "distance", "30000"), System.Globalization.CultureInfo.InvariantCulture);
+                m_stallSeconds = double.Parse(TestRoutes.Query(context, "seconds", "12"), System.Globalization.CultureInfo.InvariantCulture);
                 Faulted.Clear();
             }
             ClusterSeams.BeforeRespawnExecute = mode == "off" ? null : Fault;
@@ -77,6 +81,13 @@ internal static class RespawnFaultRoutes
             if (m_remaining <= 0 || !Seen.Add(request.OperationId)) return;
             m_remaining--;
             mode = m_mode;
+        }
+        if (mode == "stall")
+        {
+            lock (Sync) Faulted.Add(new { mode, operation = request.OperationId, preview = request.Preview });
+            Plugin.Log($"respawn execute operation={request.OperationId:D} stalled {m_stallSeconds}s by the bench (SE-1590)");
+            Thread.Sleep(TimeSpan.FromSeconds(m_stallSeconds));
+            throw new InvalidOperationException("Respawn execution stalled by the SE-1590 bench");
         }
         if (mode == "refuse")
         {

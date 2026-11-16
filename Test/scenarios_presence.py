@@ -16,7 +16,7 @@ reason in two different ways, and both have happened:
    the detector works on the SAME cursor first - the login it just performed must be found - before
    it is allowed to conclude anything from an absence.
 2. **Asking before the answer could have arrived.** ``ClusterPresenceAnnouncer`` holds a departure
-   for ``CLUSTER_PRESENCE_GRACE`` seconds (default 5) so that a handover gap can cancel it, which
+   for ``CLUSTER_PRESENCE_GRACE`` seconds (default 45) so that a handover gap can cancel it, which
    means an assertion made immediately after the traversal would find silence no matter what the
    code did. ``GRACE_MARGIN_SECONDS`` is what the scenario waits out, and it must stay above that
    grace; the final logout check then proves the hold releases rather than swallows.
@@ -41,6 +41,11 @@ Each must reach the Gateway's cluster-wide books: the player is disconnected whe
 refused until the (shortened) cooldown runs out and then gets back in, and a banned player is refused through the
 other node too. A player who is not on the Gateway's administrator list gets nothing done, even where a node
 rates them an admin.
+
+SE-1590: ``P2-PRS-06`` keeps a dead player previewing a spawn point on a node that never adopts it. Each failed
+switch takes the player off every node's list for ~10 s until the Gateway moves it back (a Steam player on
+octahedron-test, 2026-11-15, was announced leaving and rejoining every ~10 s). The failed switches must not be
+announced, and the logout must still be announced once.
 """
 
 from __future__ import annotations
@@ -51,11 +56,21 @@ import time
 from cluster import ClusterError, ClusterHttpError, wait_until
 from scenarios_core import CLIENT_ID, _client_partition, _handover_url, _lines, _nodes, _partitions
 from scenarios_core import _owners, _wait_line
+from scenarios_spawn_preview import _kill, _kit_on_node1, _own_partition_on
 from scenarios_wa import CLIENT2_ID, CLIENT2_PORT, CLIENT3_ID, CLIENT3_PORT, _session, start_second_client
+from scenarios_wa_ops import _medical_click
 
 #: Waited out before concluding that a traversal announced nothing. Must exceed the announcer's
-#: CLUSTER_PRESENCE_GRACE (default 5 s), or the silence proves only that we asked too early.
-GRACE_MARGIN_SECONDS = 12
+#: CLUSTER_PRESENCE_GRACE (default 45 s since SE-1590), or the silence proves only that we asked too early.
+GRACE_MARGIN_SECONDS = 50
+
+#: P2-PRS-06: how long the kit's node sits on each spawn preview before refusing it. Above the Gateway's 10 s node-call
+#: timeout, so every switch fails the way it did live: by the Gateway giving up and moving the client back.
+STALL_SECONDS = 12
+
+#: P2-PRS-06: failed switches to see before reading the chat. Each leaves the client off every node's list for ~10 s
+#: (10.1 s and 10.4 s measured on the bench, as live). A second one would need another click on the medical screen.
+STALLED_SWITCHES = 1
 
 #: A departure may not be announced before the grace has run; anything faster is the hold missing.
 MIN_DEPARTURE_DELAY_SECONDS = 3
@@ -341,7 +356,7 @@ def p2_prs_01(bench) -> None:
         # -- the logout is still announced, once, and not before the grace -----------------------
         left_at = time.monotonic()
         bench.kill_client(CLIENT_ID)
-        # 180 s, NOT 120 s, and the number is not padding. Killing the process gives the transport
+        # 240 s: the 120 s below plus the announcer's 45 s grace and a margin; the number is not padding. Killing the process gives the transport
         # no goodbye, so nobody learns the client is gone until the gateway's own peer timeout -
         # DirectGateway._front.DisconnectTimeout = 120000 - expires. Measured on 2026-09-19: killed
         # at 22:09:14, "Client 1234567890 disconnected: Timeout" in the gateway log at 22:11:14,
@@ -349,7 +364,7 @@ def p2_prs_01(bench) -> None:
         # number as the mechanism it waits on can only lose the race.
         messages, cursor = wait_until(
             lambda: (lambda page: page if _presence(page[0], name) else None)(_chat(bench, "wa-1", cursor)),
-            180, f"the cluster to announce {name} leaving")
+            240, f"the cluster to announce {name} leaving")
         delay = time.monotonic() - left_at
         leaves = _presence(messages, name)
         record["logout"] = {"lines": leaves, "delaySeconds": round(delay, 2)}
@@ -753,6 +768,68 @@ def p2_prs_05(bench) -> None:
         bench.record("f3-gateway-moderation", record)
 
 
+def p2_prs_06(bench) -> None:
+    """SE-1590: spawn preview switches that the Gateway gives up on announce nothing; the logout is still announced."""
+    record = {"absences": []}
+    try:
+        # The bench client joins through Direct Transport, which the announcer skips by default (SE-1081).
+        bench.cluster.config.node_env_by_id.setdefault("wa-1", {})["CLUSTER_PRESENCE_DIRECT"] = "1"
+        # SE-1124's setup: client 1 spawns at the kit on node-1, then flies off to a partition of its own on node-2.
+        api, _, grid, kit = _kit_on_node1(bench)
+        _own_partition_on(bench, grid, "node-2")
+
+        def row() -> dict | None:
+            return next((r for r in _cluster_players(bench, "wa-1") if r["steamId"] == CLIENT_ID), None)
+
+        name = wait_until(row, 60, "client 1 in the cluster player list")["name"]
+        _, cursor = _chat(bench, "wa-1")
+        time.sleep(SEEDING_WINDOW_SECONDS)  # nothing is announced inside the WA's seeding window
+        record["stall"] = bench.cluster.node(
+            "node-1", f"/respawn-execute-fault?mode=stall&count=1000&seconds={STALL_SECONDS}", "POST")
+
+        # Dead on node-2 with the kit on node-1: the medical screen previews the kit, the Gateway moves the client to
+        # node-1, which stalls, and the Gateway moves it back: one round of the loop a Steam player clicked through on
+        # octahedron-test.
+        _kill(bench, CLIENT_ID)
+        _medical_click(bench, api, kit)
+
+        def stalls() -> int:
+            return len(bench.cluster.node("node-1", "/respawn-execute-fault").get("faulted") or [])
+
+        # COVERAGE: the switches must fail AND take the player off the merged list, or the silence below proves nothing.
+        missing_since, deadline = None, time.monotonic() + 300
+        while time.monotonic() < deadline and len(record["absences"]) < STALLED_SWITCHES:
+            now = time.monotonic()
+            if row() is None:
+                missing_since = missing_since or now
+            elif missing_since is not None:
+                record["absences"].append(round(now - missing_since, 1))
+                missing_since = None
+            time.sleep(0.25)
+        record["stalled"] = stalls()
+        bench.cluster.node("node-1", "/respawn-execute-fault?mode=off", "POST")
+        bench.check("the spawn preview switch stalled and was given up",
+                    record["stalled"] >= STALLED_SWITCHES, json.dumps(record))
+        bench.check("the failed switch took the player off the cluster list for longer than the old 5 s grace",
+                    len(record["absences"]) >= STALLED_SWITCHES and min(record["absences"]) > 5, json.dumps(record))
+
+        time.sleep(GRACE_MARGIN_SECONDS)  # a held departure would be spoken by now
+        messages, cursor = _chat(bench, "wa-1", cursor)
+        record["duringSwitches"] = _presence(messages, name)
+        bench.check("failed spawn preview switches announce nothing", record["duringSwitches"] == [],
+                    json.dumps(record["duringSwitches"]))
+
+        # The hold delays a departure and never swallows it; this also proves the chat read above can see a line.
+        bench.kill_client(CLIENT_ID)
+        messages, cursor = wait_until(
+            lambda: (lambda page: page if _presence(page[0], name) else None)(_chat(bench, "wa-1", cursor)),
+            240, f"the cluster to announce {name} leaving")
+        record["logout"] = _presence(messages, name)
+        bench.check("the logout is announced once", record["logout"] == ["left"], json.dumps(record["logout"]))
+        bench.exercised(route=f"client 1 dead on node-2 previewing the kit on node-1, {record['stalled']} stalled switches")
+    finally:
+        bench.record("presence-failed-switch", record)
+
 p2_prs_01.regular_nodes = 2
 p2_prs_02.regular_nodes = 1
 p2_prs_03.regular_nodes = 1
@@ -760,6 +837,7 @@ p2_prs_04.regular_nodes = 2
 p2_prs_05.regular_nodes = 2
 p2_prs_05.administrators = [CLIENT_ID]
 p2_prs_05.kick_timeout_seconds = KICK_TIMEOUT_SECONDS
+p2_prs_06.regular_nodes = 2
 
 SCENARIOS_PRESENCE = {
     "P2-PRS-01": (p2_prs_01, "cluster presence: one announcement per login, none per traversal", "3"),
@@ -767,4 +845,5 @@ SCENARIOS_PRESENCE = {
     "P2-PRS-03": (p2_prs_03, "a Direct Transport login and logout are not announced (SE-1081)", "2"),
     "P2-PRS-04": (p2_prs_04, "F3 lists every cluster player, across a handover too (SE-1192)", "3"),
     "P2-PRS-05": (p2_prs_05, "F3 kick and ban act on the whole cluster through the Gateway (SE-1197)", "3"),
+    "P2-PRS-06": (p2_prs_06, "a failed respawn switch is not announced as a logout and login (SE-1590)", "3"),
 }
