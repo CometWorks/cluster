@@ -28,7 +28,8 @@ internal sealed record PartitionReport(
     // PartitionInfo.SimLoadUs. The balancer switches its load dimension from PCU to the measured
     // cost only when EVERY node in a pass reports true - the two units are not commensurable, so a
     // mixed fleet keeps comparing in PCU.
-    [property: JsonPropertyName("simLoadSupported")] bool SimLoadSupported = false);
+    [property: JsonPropertyName("simLoadSupported")] bool SimLoadSupported = false
+);
 
 internal sealed record PartitionInfo(
     [property: JsonPropertyName("id")] ulong Id,
@@ -64,10 +65,12 @@ internal sealed record PartitionInfo(
     // #1354: the partition's NPC grids, for the cluster-wide NPC census (NpcCensus.cs). Null from a node
     // that predates the field.
     [property: JsonPropertyName("npc")] NpcGrid[]? Npc = null,
-    [property: JsonPropertyName("remoteUsers")] ulong[]? RemoteUsers = null);
+    [property: JsonPropertyName("remoteUsers")] ulong[]? RemoteUsers = null
+);
 
 internal sealed record PartitionSphere(
     [property: JsonPropertyName("x")] double X,
     [property: JsonPropertyName("y")] double Y,
     [property: JsonPropertyName("z")] double Z,
-    [property: JsonPropertyName("radius")] double Radius);
+    [property: JsonPropertyName("radius")] double Radius
+);

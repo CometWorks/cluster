@@ -36,16 +36,26 @@ public static class MyCubeBlockPatch
     }
 
     [HarmonyTranspiler]
-    private static IEnumerable<CodeInstruction> InitOwnershipTranspiler(IEnumerable<CodeInstruction> instructions, MethodBase original)
+    private static IEnumerable<CodeInstruction> InitOwnershipTranspiler(
+        IEnumerable<CodeInstruction> instructions,
+        MethodBase original
+    )
     {
         var il = instructions.ToList();
-        var hasIdentity = AccessTools.Method(typeof(MyPlayerCollection), nameof(MyPlayerCollection.HasIdentity), new[] { typeof(long) })
-                          ?? throw new CodeInstructionNotFound("MyPlayerCollection.HasIdentity(long) not found");
+        var hasIdentity =
+            AccessTools.Method(
+                typeof(MyPlayerCollection),
+                nameof(MyPlayerCollection.HasIdentity),
+                new[] { typeof(long) }
+            )
+            ?? throw new CodeInstructionNotFound("MyPlayerCollection.HasIdentity(long) not found");
         var preserve = AccessTools.Method(typeof(MyCubeBlockPatch), nameof(PreserveOwner));
 
         var calls = il.FindAllIndex(ci => ci.Calls(hasIdentity));
         if (calls.Count != 1)
-            throw new CodeInstructionNotFound($"{original.Name}: expected exactly one Sync.Players.HasIdentity call, found {calls.Count}");
+            throw new CodeInstructionNotFound(
+                $"{original.Name}: expected exactly one Sync.Players.HasIdentity call, found {calls.Count}"
+            );
 
         il.Insert(calls[0] + 1, new CodeInstruction(OpCodes.Call, preserve));
         return il;

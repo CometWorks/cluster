@@ -23,17 +23,17 @@ namespace ClusterRegistry;
 /// clientless preference falling out of the arithmetic.
 /// </remarks>
 internal sealed record CostModel(
-    double Alpha = 0.0,               // per snapshot byte, beyond the frozen window
-    double BetaPerFrozenMs = 1.0,     // per estimated frozen millisecond
-    double FrozenMsBase = 93.0,       // freeze floor a transfer pays regardless of size
+    double Alpha = 0.0, // per snapshot byte, beyond the frozen window
+    double BetaPerFrozenMs = 1.0, // per estimated frozen millisecond
+    double FrozenMsBase = 93.0, // freeze floor a transfer pays regardless of size
     double FrozenMsPerByte = 0.00033, // frozen-window growth per estimator byte
-    double GammaPerSwitch = 254.0,    // per client switch
+    double GammaPerSwitch = 254.0, // per client switch
     // The freeze estimate's entity term (w22/w23 measurements, 2026-08-22/24): the import commit
     // stall is driven by ENTITY COUNT, not bytes - essentially zero below ~10 entities, 8-12
     // ms/entity above ~100, flat across a 20x byte range. Prices the LAG side of a rebalance
     // decision (Docs/GlobalLoadBalancing.md); nothing is refused by it, only ordered.
-    double FreezeMsPerEntity = 10.0,      // commit stall per imported entity once stalling
-    int StallFloorEntities = 10,          // below this a commit essentially never stalls
+    double FreezeMsPerEntity = 10.0, // commit stall per imported entity once stalling
+    int StallFloorEntities = 10, // below this a commit essentially never stalls
     // Viktor 2026-08-24: THE single balancing tunable. The most loaded node may exceed the mean
     // PCU of the other serving nodes by this relative fraction before moving partitions is
     // warranted; below it the assignment is "good enough" and nothing moves, because the lag the
@@ -207,23 +207,34 @@ internal sealed record CostModel(
     // SE-1134: a paced CLIENT move (tier 2) qualifies only if its load gain (overload reduction over the mean node
     // load, the pin log's gain=) is at least this much per second of its estimated migration lag (CostMs). Alpha's
     // move was gain 0.042 for a 15.2 s freeze of 3 clients. 0 = no such check (as before).
-    double ClientMinGainPerLagSecond = 0)
+    double ClientMinGainPerLagSecond = 0
+)
 {
     /// <summary>#1454: whether a component carrying <paramref name="clients"/> is heavy, given whether it was heavy on the
     /// previous pass (<paramref name="latched"/>): the hysteresis between <see cref="HeavyClients"/> and
     /// <see cref="HeavyReleaseClients"/>. Always false while HeavyClients is 0.</summary>
     public bool IsHeavy(int clients, bool latched) =>
-        HeavyClients > 0 && clients >= (latched && HeavyReleaseClients > 0 ? Math.Min(HeavyReleaseClients, HeavyClients) : HeavyClients);
+        HeavyClients > 0
+        && clients
+            >= (
+                latched && HeavyReleaseClients > 0
+                    ? Math.Min(HeavyReleaseClients, HeavyClients)
+                    : HeavyClients
+            );
 
     /// <summary>T-0393: the gate threshold while balancing is active (see <see cref="BalanceLowWater"/>). A method, not a
     /// property: a property would serialize into GET /balance/cost-model as a field an override silently cannot set.</summary>
-    public double EffectiveLowWater() => BalanceLowWater < 0 ? BalanceRiskTolerance : Math.Min(BalanceLowWater, BalanceRiskTolerance);
+    public double EffectiveLowWater() =>
+        BalanceLowWater < 0
+            ? BalanceRiskTolerance
+            : Math.Min(BalanceLowWater, BalanceRiskTolerance);
 
     /// <summary>The highest member speed, in m/s, the co-location and offline-wake velocity lookahead counts; a pair's
     /// closing speed is capped at twice this. Not a cost-model field: the gateway sets it from the handover config's
     /// <c>lookahead.maxSpeed</c> (DirectGateway.GapModel), so it stays out of the JSON, the file and the live overrides.
     /// 100 is the vanilla top speed; a world with a speed mod sets its own top speed.</summary>
-    [JsonIgnore] public double MaxGridSpeed { get; init; } = 100;
+    [JsonIgnore]
+    public double MaxGridSpeed { get; init; } = 100;
 
     /// <summary>A never-reported size still prices above nothing - an empty partition's floor.</summary>
     private const long MinimumBytes = 2_000;
@@ -231,7 +242,8 @@ internal sealed record CostModel(
     public double Cost(long snapshotBytes, int clientSwitches)
     {
         long bytes = Math.Max(snapshotBytes, MinimumBytes);
-        return Alpha * bytes + BetaPerFrozenMs * (FrozenMsBase + FrozenMsPerByte * bytes)
+        return Alpha * bytes
+            + BetaPerFrozenMs * (FrozenMsBase + FrozenMsPerByte * bytes)
             + GammaPerSwitch * clientSwitches;
     }
 
@@ -246,7 +258,8 @@ internal sealed record CostModel(
     {
         long bytes = Math.Max(snapshotBytes, MinimumBytes);
         double freeze = FrozenMsBase + FrozenMsPerByte * bytes;
-        if (entities >= StallFloorEntities) freeze += FreezeMsPerEntity * entities;
+        if (entities >= StallFloorEntities)
+            freeze += FreezeMsPerEntity * entities;
         return freeze;
     }
 
@@ -256,21 +269,38 @@ internal sealed record CostModel(
     /// Names match the record's properties ignoring case; values parse as the property's JSON type. An unknown
     /// name or an unparsable value throws, and nothing is applied.
     /// </summary>
-    public static CostModel WithOverrides(CostModel model, IEnumerable<KeyValuePair<string, string>> overrides)
+    public static CostModel WithOverrides(
+        CostModel model,
+        IEnumerable<KeyValuePair<string, string>> overrides
+    )
     {
-        var node = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(model))!.AsObject();
+        var node = System
+            .Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(model))!
+            .AsObject();
         foreach ((string name, string value) in overrides)
         {
-            string? key = node.Select(pair => pair.Key).FirstOrDefault(k => string.Equals(k, name, StringComparison.OrdinalIgnoreCase));
-            if (key == null) throw new ArgumentException("Unknown cost model field " + name);
+            string? key = node.Select(pair => pair.Key)
+                .FirstOrDefault(k => string.Equals(k, name, StringComparison.OrdinalIgnoreCase));
+            if (key == null)
+                throw new ArgumentException("Unknown cost model field " + name);
             System.Text.Json.Nodes.JsonNode? current = node[key];
             node[key] = current switch
             {
-                System.Text.Json.Nodes.JsonValue v when v.TryGetValue(out bool _) => bool.Parse(value),
-                System.Text.Json.Nodes.JsonValue v when v.GetValueKind() == JsonValueKind.Number => System.Text.Json.Nodes.JsonNode.Parse(
-                    double.Parse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture)
-                        .ToString("R", System.Globalization.CultureInfo.InvariantCulture)),
-                _ => throw new ArgumentException("Cost model field " + key + " is not a number or a flag"),
+                System.Text.Json.Nodes.JsonValue v when v.TryGetValue(out bool _) => bool.Parse(
+                    value
+                ),
+                System.Text.Json.Nodes.JsonValue v when v.GetValueKind() == JsonValueKind.Number =>
+                    System.Text.Json.Nodes.JsonNode.Parse(
+                        double.Parse(
+                                value,
+                                System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture
+                            )
+                            .ToString("R", System.Globalization.CultureInfo.InvariantCulture)
+                    ),
+                _ => throw new ArgumentException(
+                    "Cost model field " + key + " is not a number or a flag"
+                ),
             };
         }
         return node.Deserialize<CostModel>() ?? throw new InvalidDataException("Empty cost model");
@@ -281,25 +311,34 @@ internal sealed record CostModel(
     /// own defaults stay the pre-T-0393 planner, so <c>new CostModel()</c> remains the self-tests' reference plan.
     /// T-0409 (2026-10-09, Viktor): the load floor 800000 and the peak-drop guard 0.01 ship on, after the T-0409b ABBA on r144
     /// (notes/LagHunt-T0409-2026-10-09.md).</summary>
-    public static CostModel Deployed() => new CostModel() with
-    {
-        HitchMsPerMove = 1000, MinGainFraction = 0.02, ResidenceMinFreezeMs = 0, BalanceLowWater = 0.15,
-        BalanceMinPeakLoad = 800_000, BalanceMinPeakDrop = 0.01,
-        // #1304 (2026-10-21): the balancer plans units at the engage distance, so the hysteresis is what lets it move part
-        // of a lane chain; at 1.0 octahedron-1191's node-1 was 21-24-partition units of 230-290 s estimated lag. 0.875 =
-        // engage at 3500 m at 3000/1000, the value this record's bound comment names; 1 reverts it live (POST /balance/cost-model).
-        ColocationEngageFraction = 0.875,
-        // #1454 (Viktor 2026-10-23): "a partition above a client threshold (configurable, e.g. 30) is heavy".
-        HeavyClients = 30, HeavyReleaseClients = 20,
-        // SE-1134 (2026-11-06): a sim-ratio dip has to last 10 s, and a client move has to gain 1 % of the mean node
-        // load per second of its freeze.
-        SimRatioSustainSeconds = 10, ClientMinGainPerLagSecond = 0.01,
-    };
+    public static CostModel Deployed() =>
+        new CostModel() with
+        {
+            HitchMsPerMove = 1000,
+            MinGainFraction = 0.02,
+            ResidenceMinFreezeMs = 0,
+            BalanceLowWater = 0.15,
+            BalanceMinPeakLoad = 800_000,
+            BalanceMinPeakDrop = 0.01,
+            // #1304 (2026-10-21): the balancer plans units at the engage distance, so the hysteresis is what lets it move part
+            // of a lane chain; at 1.0 octahedron-1191's node-1 was 21-24-partition units of 230-290 s estimated lag. 0.875 =
+            // engage at 3500 m at 3000/1000, the value this record's bound comment names; 1 reverts it live (POST /balance/cost-model).
+            ColocationEngageFraction = 0.875,
+            // #1454 (Viktor 2026-10-23): "a partition above a client threshold (configurable, e.g. 30) is heavy".
+            HeavyClients = 30,
+            HeavyReleaseClients = 20,
+            // SE-1134 (2026-11-06): a sim-ratio dip has to last 10 s, and a client move has to gain 1 % of the mean node
+            // load per second of its freeze.
+            SimRatioSustainSeconds = 10,
+            ClientMinGainPerLagSecond = 0.01,
+        };
 
     public static CostModel Load(string? path)
     {
-        if (path == null || !File.Exists(path)) return Deployed();
-        CostModel model = JsonSerializer.Deserialize<CostModel>(File.ReadAllText(path))
+        if (path == null || !File.Exists(path))
+            return Deployed();
+        CostModel model =
+            JsonSerializer.Deserialize<CostModel>(File.ReadAllText(path))
             ?? throw new InvalidDataException("Empty cost model at " + path);
         Console.WriteLine($"Cost model loaded from {path}: {JsonSerializer.Serialize(model)}");
         return model;

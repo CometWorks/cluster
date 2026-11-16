@@ -10,26 +10,45 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyReplicationServerSeams
 {
-	/// <summary>
-	/// ClusterPlugin seam (SE1-0122): replays the respawn screen's request for a spawn point's grid on a node that did
-	/// not receive it, because the grid or the client got here after the request. Same rights check and permanent
-	/// replicable entry as vanilla's <c>ReplicableRequest</c>, so the preview stays streamed however far away the
-	/// client is, and the grid is sent now instead of at the next layer update. False when the grid or the client
-	/// is not on this node or the rights check refuses.
-	/// </summary>
-	public static bool RequestSpawnPreviewForClient(this MyReplicationServer self, long gridEntityId, long medicalRoomId,
-		Endpoint clientEndpoint) => self.ReplayRequest(gridEntityId, medicalRoomId, 0, 0, clientEndpoint);
+    /// <summary>
+    /// ClusterPlugin seam (SE1-0122): replays the respawn screen's request for a spawn point's grid on a node that did
+    /// not receive it, because the grid or the client got here after the request. Same rights check and permanent
+    /// replicable entry as vanilla's <c>ReplicableRequest</c>, so the preview stays streamed however far away the
+    /// client is, and the grid is sent now instead of at the next layer update. False when the grid or the client
+    /// is not on this node or the rights check refuses.
+    /// </summary>
+    public static bool RequestSpawnPreviewForClient(
+        this MyReplicationServer self,
+        long gridEntityId,
+        long medicalRoomId,
+        Endpoint clientEndpoint
+    ) => self.ReplayRequest(gridEntityId, medicalRoomId, 0, 0, clientEndpoint);
 
-	/// <summary>Replay the original request, including rights, endpoint and permanent pin flags.</summary>
-	public static bool ReplayRequest(this MyReplicationServer self, long gridEntityId, long medicalRoomId,
-		long interactedEntityId, byte flags, Endpoint clientEndpoint)
-	{
-		if (ClusterRuntime.IsFrozen(gridEntityId)) return false;
-		IMyReplicable replicable = self.m_callback.GetReplicableByEntityId(gridEntityId);
-		if (replicable == null || !self.m_clientStates.TryGetValue(clientEndpoint, out MyClient client)
-			|| !replicable.HasRightsForReplication(clientEndpoint, interactedEntityId, medicalRoomId)) return false;
-		client.PermanentReplicables[replicable] = flags;
-		self.ForceReplicable(replicable, clientEndpoint);
-		return true;
-	}
+    /// <summary>Replay the original request, including rights, endpoint and permanent pin flags.</summary>
+    public static bool ReplayRequest(
+        this MyReplicationServer self,
+        long gridEntityId,
+        long medicalRoomId,
+        long interactedEntityId,
+        byte flags,
+        Endpoint clientEndpoint
+    )
+    {
+        if (ClusterRuntime.IsFrozen(gridEntityId))
+            return false;
+        IMyReplicable replicable = self.m_callback.GetReplicableByEntityId(gridEntityId);
+        if (
+            replicable == null
+            || !self.m_clientStates.TryGetValue(clientEndpoint, out MyClient client)
+            || !replicable.HasRightsForReplication(
+                clientEndpoint,
+                interactedEntityId,
+                medicalRoomId
+            )
+        )
+            return false;
+        client.PermanentReplicables[replicable] = flags;
+        self.ForceReplicable(replicable, clientEndpoint);
+        return true;
+    }
 }

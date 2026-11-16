@@ -9,10 +9,10 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyDedicatedServerSeams
 {
-	// (accepted message, sender steam id as vanilla resolved it) after OnChatMessage ran unchanged.
-	public static Action<ChatMsg, ulong> ClusterChatAccepted;
+    // (accepted message, sender steam id as vanilla resolved it) after OnChatMessage ran unchanged.
+    public static Action<ChatMsg, ulong> ClusterChatAccepted;
 
-	// (sender) true: skip OnChatMessage, the accepted postfix still runs. The World Authority leaves a player's
-	// line to the player's node (ChatAuthorityPatch.SkipAccepted).
-	public static Func<ulong, bool> ClusterChatSkipAccepted;
+    // (sender) true: skip OnChatMessage, the accepted postfix still runs. The World Authority leaves a player's
+    // line to the player's node (ChatAuthorityPatch.SkipAccepted).
+    public static Func<ulong, bool> ClusterChatSkipAccepted;
 }

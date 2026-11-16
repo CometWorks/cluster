@@ -35,59 +35,119 @@ internal static class StreamHoldRoutes
     public static void Register()
     {
         // POST /stream-test-hold?client=&entity= - arm: the stream of grid `entity` to client `client` is held.
-        TestRoutes.Add("POST", "/stream-test-hold", context =>
-        {
-            ulong client = ulong.Parse(TestRoutes.Query(context, "client"), System.Globalization.CultureInfo.InvariantCulture);
-            long grid = TestRoutes.Long(context, "entity");
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+        TestRoutes.Add(
+            "POST",
+            "/stream-test-hold",
+            context =>
             {
-                EnsurePatched();
-                m_client = client;
-                Interlocked.Exchange(ref m_heldSends, 0);
-                Interlocked.Exchange(ref m_grid, grid);
-                Plugin.Log($"stream-test-hold armed client={client} grid={grid} (T-0396)");
-                return (object)new { armed = true, client, grid };
-            }));
-        });
+                ulong client = ulong.Parse(
+                    TestRoutes.Query(context, "client"),
+                    System.Globalization.CultureInfo.InvariantCulture
+                );
+                long grid = TestRoutes.Long(context, "entity");
+                TestRoutes.Json(
+                    context,
+                    200,
+                    TestRoutes.OnGameThread(() =>
+                    {
+                        EnsurePatched();
+                        m_client = client;
+                        Interlocked.Exchange(ref m_heldSends, 0);
+                        Interlocked.Exchange(ref m_grid, grid);
+                        Plugin.Log($"stream-test-hold armed client={client} grid={grid} (T-0396)");
+                        return (object)
+                            new
+                            {
+                                armed = true,
+                                client,
+                                grid,
+                            };
+                    })
+                );
+            }
+        );
         // POST /stream-test-release - disarm; the held entry is still scheduled, so the stream goes out next sync.
-        TestRoutes.Add("POST", "/stream-test-release", context =>
-        {
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+        TestRoutes.Add(
+            "POST",
+            "/stream-test-release",
+            context =>
             {
-                long grid = Interlocked.Exchange(ref m_grid, 0);
-                Plugin.Log($"stream-test-hold released client={m_client} grid={grid} heldSends={Interlocked.Read(ref m_heldSends)} (T-0396)");
-                return (object)new { armed = false, client = m_client, grid, heldSends = Interlocked.Read(ref m_heldSends) };
-            }));
-        });
+                TestRoutes.Json(
+                    context,
+                    200,
+                    TestRoutes.OnGameThread(() =>
+                    {
+                        long grid = Interlocked.Exchange(ref m_grid, 0);
+                        Plugin.Log(
+                            $"stream-test-hold released client={m_client} grid={grid} heldSends={Interlocked.Read(ref m_heldSends)} (T-0396)"
+                        );
+                        return (object)
+                            new
+                            {
+                                armed = false,
+                                client = m_client,
+                                grid,
+                                heldSends = Interlocked.Read(ref m_heldSends),
+                            };
+                    })
+                );
+            }
+        );
         // GET /stream-test-hold?client=&entity=&character= - what this node's replication server holds for the
         // client: the grid's and the character's view entries (inView / pending / streaming), whether the
         // character replicable is a child of the grid's, and the network ids of the character's whole subtree
         // (replicable, state groups, child replicables and theirs) - the ids a client logs
         // 'Replicated object already exists ... id : N' for.
-        TestRoutes.Add("GET", "/stream-test-hold", context =>
-        {
-            ulong client = ulong.Parse(TestRoutes.Query(context, "client"), System.Globalization.CultureInfo.InvariantCulture);
-            long grid = TestRoutes.Long(context, "entity");
-            long character = long.Parse(TestRoutes.Query(context, "character", "0"), System.Globalization.CultureInfo.InvariantCulture);
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => State(client, grid, character)));
-        });
+        TestRoutes.Add(
+            "GET",
+            "/stream-test-hold",
+            context =>
+            {
+                ulong client = ulong.Parse(
+                    TestRoutes.Query(context, "client"),
+                    System.Globalization.CultureInfo.InvariantCulture
+                );
+                long grid = TestRoutes.Long(context, "entity");
+                long character = long.Parse(
+                    TestRoutes.Query(context, "character", "0"),
+                    System.Globalization.CultureInfo.InvariantCulture
+                );
+                TestRoutes.Json(
+                    context,
+                    200,
+                    TestRoutes.OnGameThread(() => State(client, grid, character))
+                );
+            }
+        );
     }
 
     private static void EnsurePatched()
     {
-        if (m_patched) return;
-        var original = AccessTools.Method(typeof(MyReplicationServer), "SendStreamingEntry")
+        if (m_patched)
+            return;
+        var original =
+            AccessTools.Method(typeof(MyReplicationServer), "SendStreamingEntry")
             ?? throw new MissingMethodException("MyReplicationServer.SendStreamingEntry");
-        new Harmony("ClusterTestPlugin.StreamHold").Patch(original,
-            prefix: new HarmonyMethod(AccessTools.Method(typeof(StreamHoldRoutes), nameof(SendStreamingEntryPrefix))));
+        new Harmony("ClusterTestPlugin.StreamHold").Patch(
+            original,
+            prefix: new HarmonyMethod(
+                AccessTools.Method(typeof(StreamHoldRoutes), nameof(SendStreamingEntryPrefix))
+            )
+        );
         m_patched = true;
     }
 
-    private static bool SendStreamingEntryPrefix(MyReplicationServer __instance, MyClient client, MyStateDataEntry entry)
+    private static bool SendStreamingEntryPrefix(
+        MyReplicationServer __instance,
+        MyClient client,
+        MyStateDataEntry entry
+    )
     {
         long grid = Interlocked.Read(ref m_grid);
-        if (grid == 0 || client?.State == null || client.State.EndpointId.Id.Value != m_client) return true;
-        if (entry?.Owner is not IMyEntityReplicable owner || owner.EntityId != grid) return true;
+        if (grid == 0 || client?.State == null || client.State.EndpointId.Id.Value != m_client)
+            return true;
+        if (entry?.Owner is not IMyEntityReplicable owner || owner.EntityId != grid)
+            return true;
         // Not sent: keep it scheduled, as the dirty group would be after a send that wrote nothing.
         Interlocked.Increment(ref m_heldSends);
         __instance.ScheduleStateGroupSync(client, entry, __instance.SyncFrameCounter);
@@ -101,10 +161,12 @@ internal static class StreamHoldRoutes
         Endpoint endpoint = new Endpoint(new EndpointId(clientId), 0);
         server.m_clientStates.TryGetValue(endpoint, out MyClient client);
         IMyReplicable grid = server.m_callback.GetReplicableByEntityId(gridId);
-        IMyReplicable character = characterId == 0 ? null : server.m_callback.GetReplicableByEntityId(characterId);
+        IMyReplicable character =
+            characterId == 0 ? null : server.m_callback.GetReplicableByEntityId(characterId);
         object Entry(IMyReplicable replicable)
         {
-            if (replicable == null) return null;
+            if (replicable == null)
+                return null;
             MyReplicableClientData held = null;
             bool inView = client != null && client.Replicables.TryGetValue(replicable, out held);
             return new
@@ -123,8 +185,15 @@ internal static class StreamHoldRoutes
             foreach (IMyReplicable replicable in all.Distinct())
             {
                 subtree.Add(server.GetNetworkIdByObject(replicable).Value);
-                if (server.m_replicableGroups.TryGetValue(replicable, out List<IMyStateGroup> groups))
-                    subtree.AddRange(groups.Select(group => server.GetNetworkIdByObject(group).Value));
+                if (
+                    server.m_replicableGroups.TryGetValue(
+                        replicable,
+                        out List<IMyStateGroup> groups
+                    )
+                )
+                    subtree.AddRange(
+                        groups.Select(group => server.GetNetworkIdByObject(group).Value)
+                    );
             }
         }
         MyEntities.TryGetEntityById(characterId, out MyCharacter body);
@@ -138,7 +207,9 @@ internal static class StreamHoldRoutes
             clientKnown = client != null,
             grid = Entry(grid),
             character = Entry(character),
-            characterParentIsGrid = character != null && grid != null && ReferenceEquals(character.GetParent(), grid),
+            characterParentIsGrid = character != null
+                && grid != null
+                && ReferenceEquals(character.GetParent(), grid),
             characterSeated = body?.UsingEntity is MyShipController,
             characterSubtree = subtree.Where(id => id != 0).Distinct().OrderBy(id => id).ToArray(),
         };

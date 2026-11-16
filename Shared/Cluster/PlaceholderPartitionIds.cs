@@ -23,5 +23,6 @@ public static class PlaceholderPartitionIds
     /// The id before a process's first placeholder, at random inside the range: every node process used to start at the
     /// same id, so two Closed nodes minted the same partition id. Leaves room for 2^61 placeholders above it.
     /// </summary>
-    public static long RandomStart() => (long)(Floor + (BitConverter.ToUInt64(Guid.NewGuid().ToByteArray(), 0) & (StartSpan - 1)));
+    public static long RandomStart() =>
+        (long)(Floor + (BitConverter.ToUInt64(Guid.NewGuid().ToByteArray(), 0) & (StartSpan - 1)));
 }

@@ -50,21 +50,31 @@ internal sealed class EosFrontend
     public void Start()
     {
         Result initialize = PlatformInterface.Initialize(
-            new InitializeOptions { ProductName = "Space Engineers", ProductVersion = _version });
+            new InitializeOptions { ProductName = "Space Engineers", ProductVersion = _version }
+        );
         // AlreadyConfigured is success on a second Start in the same process (self-tests).
         if (initialize is not (Result.Success or Result.AlreadyConfigured))
-            throw new InvalidOperationException($"EOS PlatformInterface.Initialize failed: {initialize}");
+            throw new InvalidOperationException(
+                $"EOS PlatformInterface.Initialize failed: {initialize}"
+            );
 
-        _platform = PlatformInterface.Create(new Options
-        {
-            ClientCredentials = new ClientCredentials { ClientId = ClientId, ClientSecret = ClientSecret },
-            ProductId = ProductId,
-            SandboxId = SandboxId,
-            DeploymentId = DeploymentId,
-            // The dedicated server creates the platform with IsServer = false; mirroring it keeps
-            // this login indistinguishable from a vanilla DS to the EOS backend.
-            IsServer = false,
-        }) ?? throw new InvalidOperationException("EOS PlatformInterface.Create returned null");
+        _platform =
+            PlatformInterface.Create(
+                new Options
+                {
+                    ClientCredentials = new ClientCredentials
+                    {
+                        ClientId = ClientId,
+                        ClientSecret = ClientSecret,
+                    },
+                    ProductId = ProductId,
+                    SandboxId = SandboxId,
+                    DeploymentId = DeploymentId,
+                    // The dedicated server creates the platform with IsServer = false; mirroring it keeps
+                    // this login indistinguishable from a vanilla DS to the EOS backend.
+                    IsServer = false,
+                }
+            ) ?? throw new InvalidOperationException("EOS PlatformInterface.Create returned null");
 
         _running = true;
         _pump = new Thread(Pump) { Name = "Gateway-EOS", IsBackground = true };
@@ -75,38 +85,59 @@ internal sealed class EosFrontend
     private void Login()
     {
         ConnectInterface connect = _platform!.GetConnectInterface();
-        connect.CreateDeviceId(new CreateDeviceIdOptions { DeviceModel = "MagnetarClusterGateway" }, null, device =>
-        {
-            if (device.ResultCode is not (Result.Success or Result.DuplicateNotAllowed))
+        connect.CreateDeviceId(
+            new CreateDeviceIdOptions { DeviceModel = "MagnetarClusterGateway" },
+            null,
+            device =>
             {
-                Console.Error.WriteLine($"EOS CreateDeviceId failed: {device.ResultCode}");
-                return;
-            }
-            connect.Login(new LoginOptions
-            {
-                Credentials = new Credentials { Type = ExternalCredentialType.DeviceidAccessToken },
-                UserLoginInfo = new UserLoginInfo { DisplayName = "MagnetarGateway" },
-            }, null, login =>
-            {
-                if (login.ResultCode != Result.Success)
+                if (device.ResultCode is not (Result.Success or Result.DuplicateNotAllowed))
                 {
-                    Console.Error.WriteLine($"EOS Connect.Login failed: {login.ResultCode}");
+                    Console.Error.WriteLine($"EOS CreateDeviceId failed: {device.ResultCode}");
                     return;
                 }
-                LocalUserId = login.LocalUserId?.ToString();
-                Console.WriteLine($"EOS frontend logged in as {LocalUserId} for {_endpoint}"
-                    + " - cross-play publishing and client termination are not implemented yet"
-                    + " (MyP2PQoSAdapter wire format, see Findings/2026-07-25-p3-eos-spike.md)");
-            });
-        });
+                connect.Login(
+                    new LoginOptions
+                    {
+                        Credentials = new Credentials
+                        {
+                            Type = ExternalCredentialType.DeviceidAccessToken,
+                        },
+                        UserLoginInfo = new UserLoginInfo { DisplayName = "MagnetarGateway" },
+                    },
+                    null,
+                    login =>
+                    {
+                        if (login.ResultCode != Result.Success)
+                        {
+                            Console.Error.WriteLine(
+                                $"EOS Connect.Login failed: {login.ResultCode}"
+                            );
+                            return;
+                        }
+                        LocalUserId = login.LocalUserId?.ToString();
+                        Console.WriteLine(
+                            $"EOS frontend logged in as {LocalUserId} for {_endpoint}"
+                                + " - cross-play publishing and client termination are not implemented yet"
+                                + " (MyP2PQoSAdapter wire format, see Findings/2026-07-25-p3-eos-spike.md)"
+                        );
+                    }
+                );
+            }
+        );
     }
 
     private void Pump()
     {
         while (_running)
         {
-            try { _platform?.Tick(); }
-            catch (Exception exception) { Console.Error.WriteLine($"EOS pump: {exception.Message}"); }
+            try
+            {
+                _platform?.Tick();
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine($"EOS pump: {exception.Message}");
+            }
             Thread.Sleep(50);
         }
     }
@@ -115,13 +146,20 @@ internal sealed class EosFrontend
     {
         _running = false;
         _pump?.Join(TimeSpan.FromSeconds(2));
-        try { _platform?.Release(); } catch { }
+        try
+        {
+            _platform?.Release();
+        }
+        catch { }
         _platform = null;
     }
 
-    public object Status() => new
-    {
-        endpoint = _endpoint.ToString(), localUserId = LocalUserId, loggedOn = LoggedOn,
-        terminatesClients = TerminatesClients,
-    };
+    public object Status() =>
+        new
+        {
+            endpoint = _endpoint.ToString(),
+            localUserId = LocalUserId,
+            loggedOn = LoggedOn,
+            terminatesClients = TerminatesClients,
+        };
 }

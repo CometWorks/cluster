@@ -31,7 +31,11 @@ public static class MyXmlSerializerManagerPatch
         lock (RegisterLock)
         {
             if (!MyXmlSerializerManager.m_serializersByType.ContainsKey(type))
-                MyXmlSerializerManager.RegisterType(type, forceRegister: true, checkAttributes: false);
+                MyXmlSerializerManager.RegisterType(
+                    type,
+                    forceRegister: true,
+                    checkAttributes: false
+                );
         }
         return false;
     }
@@ -44,7 +48,10 @@ public static class MyXmlSerializerManagerPatch
             return true;
         lock (RegisterLock)
         {
-            if (assembly == null || MyXmlSerializerManager.m_registeredAssemblies.Contains(assembly))
+            if (
+                assembly == null
+                || MyXmlSerializerManager.m_registeredAssemblies.Contains(assembly)
+            )
                 return false;
             MyXmlSerializerManager.m_registeredAssemblies.Add(assembly);
             foreach (var type in assembly.GetTypes())
@@ -56,7 +63,10 @@ public static class MyXmlSerializerManagerPatch
                 }
                 catch (Exception innerException)
                 {
-                    throw new InvalidOperationException("Error creating XML serializer for type " + type.Name, innerException);
+                    throw new InvalidOperationException(
+                        "Error creating XML serializer for type " + type.Name,
+                        innerException
+                    );
                 }
             }
         }
@@ -102,12 +112,19 @@ public static class MyXmlSerializerManagerPatch
 
     [HarmonyPrefix]
     [HarmonyPatch(nameof(MyXmlSerializerManager.TryGetSerializer))]
-    private static bool TryGetSerializerPrefix(string serializedName, ref XmlSerializer serializer, ref bool __result)
+    private static bool TryGetSerializerPrefix(
+        string serializedName,
+        ref XmlSerializer serializer,
+        ref bool __result
+    )
     {
         if (!ClusterRuntime.IsClustered)
             return true;
         lock (RegisterLock)
-            __result = MyXmlSerializerManager.m_serializersBySerializedName.TryGetValue(serializedName, out serializer);
+            __result = MyXmlSerializerManager.m_serializersBySerializedName.TryGetValue(
+                serializedName,
+                out serializer
+            );
         return false;
     }
 

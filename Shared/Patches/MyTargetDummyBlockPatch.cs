@@ -26,21 +26,21 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyTargetDummyBlock), nameof(MyTargetDummyBlock.GetObjectBuilderCubeBlock))]
 public static class MyTargetDummyBlockPatch
 {
-	[HarmonyPostfix]
-	private static void Postfix(MyTargetDummyBlock __instance, MyObjectBuilder_CubeBlock __result)
-	{
-		if (!ClusterRuntime.IsClustered || __result is not MyObjectBuilder_TargetDummyBlock builder)
-		{
-			return;
-		}
-		if (!__instance.m_areSubpartsInitialized && __instance.LoadIsDestroyed.HasValue)
-		{
-			builder.IsDestroyed = __instance.LoadIsDestroyed;
-			builder.TimeToRestore = __instance.LoadTimeToRestore;
-		}
-		if (builder.SubpartState?.Count == 0)
-		{
-			builder.SubpartState = null;
-		}
-	}
+    [HarmonyPostfix]
+    private static void Postfix(MyTargetDummyBlock __instance, MyObjectBuilder_CubeBlock __result)
+    {
+        if (!ClusterRuntime.IsClustered || __result is not MyObjectBuilder_TargetDummyBlock builder)
+        {
+            return;
+        }
+        if (!__instance.m_areSubpartsInitialized && __instance.LoadIsDestroyed.HasValue)
+        {
+            builder.IsDestroyed = __instance.LoadIsDestroyed;
+            builder.TimeToRestore = __instance.LoadTimeToRestore;
+        }
+        if (builder.SubpartState?.Count == 0)
+        {
+            builder.SubpartState = null;
+        }
+    }
 }

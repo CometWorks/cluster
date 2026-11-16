@@ -20,6 +20,8 @@ public static class MyShipControllerPatch
     {
         if (!ClusterRuntime.IsClustered || !Sync.IsServer)
             return;
-        MyLog.Default?.WriteLine($"cockpit_use_received entity={__instance.EntityId} pilot={(__instance as MyCockpit)?.Pilot?.EntityId ?? 0} controller={(__instance.ControllerInfo.Controller?.Player?.Id.SteamId ?? 0)}");
+        MyLog.Default?.WriteLine(
+            $"cockpit_use_received entity={__instance.EntityId} pilot={(__instance as MyCockpit)?.Pilot?.EntityId ?? 0} controller={(__instance.ControllerInfo.Controller?.Player?.Id.SteamId ?? 0)}"
+        );
     }
 }

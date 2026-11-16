@@ -41,40 +41,56 @@ namespace ClusterPlugin;
 /// </summary>
 public static class CoordinateSystemIdPatch
 {
-	/// <summary>Set by ClusterRuntime; null or false outside a cluster, where the vanilla counter is correct.</summary>
-	public static Func<bool> IsClustered;
+    /// <summary>Set by ClusterRuntime; null or false outside a cluster, where the vanilla counter is correct.</summary>
+    public static Func<bool> IsClustered;
 
-	private static readonly FieldInfo LastCoordSysIdField =
-		AccessTools.Field(typeof(MyCoordinateSystem), "m_lastCoordSysId");
+    private static readonly FieldInfo LastCoordSysIdField = AccessTools.Field(
+        typeof(MyCoordinateSystem),
+        "m_lastCoordSysId"
+    );
 
-	/// <summary>
-	/// Reseed the counter after the session component has loaded it from the world. Runs once per
-	/// session load, before any coordinate system can be created: registration draws the node's
-	/// EntityId range during ClusterRuntime start, which completes before the session is loaded.
-	/// </summary>
-	public static void Reseed(MyCoordinateSystem instance)
-	{
-		if (instance == null || IsClustered?.Invoke() != true) return;
-		if (!EntityIdAllocator.Enabled) return;                       // standalone, or range not yet issued
-		uint index = EntityIdAllocator.CurrentRangeIndex;
-		if (index == 0) return;                                        // the registry never issues 0
-		if (LastCoordSysIdField == null) return;                       // field renamed by a game update
+    /// <summary>
+    /// Reseed the counter after the session component has loaded it from the world. Runs once per
+    /// session load, before any coordinate system can be created: registration draws the node's
+    /// EntityId range during ClusterRuntime start, which completes before the session is loaded.
+    /// </summary>
+    public static void Reseed(MyCoordinateSystem instance)
+    {
+        if (instance == null || IsClustered?.Invoke() != true)
+            return;
+        if (!EntityIdAllocator.Enabled)
+            return; // standalone, or range not yet issued
+        uint index = EntityIdAllocator.CurrentRangeIndex;
+        if (index == 0)
+            return; // the registry never issues 0
+        if (LastCoordSysIdField == null)
+            return; // field renamed by a game update
 
-		long baseId = (long)index << EntityIdAllocator.RangeBits;
-		long current = (long)LastCoordSysIdField.GetValue(instance);
-		// Never move the counter DOWN. A world saved by this node already carries ids at or above
-		// its own base, and reusing them would collide with its own live systems.
-		if (current >= baseId)
-		{
-			Log($"[ClusterPlugin] coord_sys_id already node-scoped: counter={current} base={baseId} index={index}");
-			return;
-		}
-		LastCoordSysIdField.SetValue(instance, baseId);
-		Log($"[ClusterPlugin] coord_sys_id range allocated index={index} base={baseId} was={current}");
-	}
+        long baseId = (long)index << EntityIdAllocator.RangeBits;
+        long current = (long)LastCoordSysIdField.GetValue(instance);
+        // Never move the counter DOWN. A world saved by this node already carries ids at or above
+        // its own base, and reusing them would collide with its own live systems.
+        if (current >= baseId)
+        {
+            Log(
+                $"[ClusterPlugin] coord_sys_id already node-scoped: counter={current} base={baseId} index={index}"
+            );
+            return;
+        }
+        LastCoordSysIdField.SetValue(instance, baseId);
+        Log(
+            $"[ClusterPlugin] coord_sys_id range allocated index={index} base={baseId} was={current}"
+        );
+    }
 
-	private static void Log(string message)
-	{
-		try { Console.WriteLine(message); } catch { /* logging must never break session load */ }
-	}
+    private static void Log(string message)
+    {
+        try
+        {
+            Console.WriteLine(message);
+        }
+        catch
+        { /* logging must never break session load */
+        }
+    }
 }

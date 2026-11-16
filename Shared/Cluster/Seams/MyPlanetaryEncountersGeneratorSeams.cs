@@ -10,13 +10,13 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyPlanetaryEncountersGeneratorSeams
 {
-	// ClusterPlugin seam adapter for MyPlanetaryEncountersGeneratorPatch.UpdateBeforeSimulationPrefix
-	public static Func<bool> ClusterUpdatePrefix;
+    // ClusterPlugin seam adapter for MyPlanetaryEncountersGeneratorPatch.UpdateBeforeSimulationPrefix
+    public static Func<bool> ClusterUpdatePrefix;
 
-	/// <summary>The gate the transpiler calls: vanilla (true) unless the seam says otherwise.</summary>
-	public static bool UpdateGate()
-	{
-		var prefix = ClusterUpdatePrefix;
-		return prefix == null || prefix();
-	}
+    /// <summary>The gate the transpiler calls: vanilla (true) unless the seam says otherwise.</summary>
+    public static bool UpdateGate()
+    {
+        var prefix = ClusterUpdatePrefix;
+        return prefix == null || prefix();
+    }
 }

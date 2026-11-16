@@ -24,7 +24,8 @@ public static class DiagnosticsProtocol
     public static bool TryRequest(byte[] data, out Guid session)
     {
         session = Guid.Empty;
-        if (data == null || data.Length != 17 || data[0] != Version) return false;
+        if (data == null || data.Length != 17 || data[0] != Version)
+            return false;
         var bytes = new byte[16];
         Array.Copy(data, 1, bytes, 0, bytes.Length);
         session = new Guid(bytes);
@@ -49,20 +50,28 @@ public static class DiagnosticsProtocol
             writer.Write(snapshot.TotalNodes);
             int count = Math.Min(snapshot.Nodes.Length, MaxNodes);
             writer.Write(count);
-            for (int i = 0; i < count; i++) WriteNode(writer, snapshot.Nodes[i]);
+            for (int i = 0; i < count; i++)
+                WriteNode(writer, snapshot.Nodes[i]);
         }
-        if (stream.Length > MaxPacketBytes) throw new InvalidDataException("Diagnostics packet too large");
+        if (stream.Length > MaxPacketBytes)
+            throw new InvalidDataException("Diagnostics packet too large");
         return stream.ToArray();
     }
 
     public static DiagnosticsSnapshot Decode(byte[] data, Guid session)
     {
-        if (data == null || data.Length > MaxPacketBytes) throw new InvalidDataException("Invalid packet size");
+        if (data == null || data.Length > MaxPacketBytes)
+            throw new InvalidDataException("Invalid packet size");
         using var stream = new MemoryStream(data, false);
         using var reader = new BinaryReader(stream, Encoding.UTF8);
         if (reader.ReadByte() != Version || new Guid(ReadBytes(reader, 16)) != session)
             throw new InvalidDataException("Wrong protocol or session");
-        var result = new DiagnosticsSnapshot { Admin = reader.ReadBoolean(), ServerAt = reader.ReadInt64(), Current = ReadNode(reader) };
+        var result = new DiagnosticsSnapshot
+        {
+            Admin = reader.ReadBoolean(),
+            ServerAt = reader.ReadInt64(),
+            Current = ReadNode(reader),
+        };
         if (result.Admin)
         {
             result.RegistryAvailable = reader.ReadBoolean();
@@ -70,11 +79,14 @@ public static class DiagnosticsProtocol
             result.Registry = ReadString(reader);
             result.TotalNodes = reader.ReadInt32();
             int count = reader.ReadInt32();
-            if (count < 0 || count > MaxNodes || result.TotalNodes < count) throw new InvalidDataException("Invalid node count");
+            if (count < 0 || count > MaxNodes || result.TotalNodes < count)
+                throw new InvalidDataException("Invalid node count");
             result.Nodes = new NodeDiagnostics[count];
-            for (int i = 0; i < count; i++) result.Nodes[i] = ReadNode(reader);
+            for (int i = 0; i < count; i++)
+                result.Nodes[i] = ReadNode(reader);
         }
-        if (stream.Position != stream.Length) throw new InvalidDataException("Trailing diagnostics data");
+        if (stream.Position != stream.Length)
+            throw new InvalidDataException("Trailing diagnostics data");
         return result;
     }
 
@@ -98,26 +110,40 @@ public static class DiagnosticsProtocol
         writer.Write(node.LeaseAt);
     }
 
-    private static NodeDiagnostics ReadNode(BinaryReader reader) => new NodeDiagnostics
-    {
-        Name = ReadString(reader), Endpoint = ReadString(reader), Epoch = reader.ReadInt64(),
-        AgeSeconds = reader.ReadInt64(), ProcessUptimeSeconds = reader.ReadInt64(), ServingSeconds = reader.ReadInt64(), DrainAt = reader.ReadInt64(),
-        RotationDueAt = reader.ReadInt64(), RotationExpiresAt = reader.ReadInt64(), Rotation = ReadRotation(reader),
-        State = ReadString(reader), Serving = reader.ReadBoolean(), Spare = reader.ReadBoolean(),
-        Authority = reader.ReadBoolean(), AuthorityGeneration = reader.ReadInt64(), LeaseAt = reader.ReadInt64()
-    };
+    private static NodeDiagnostics ReadNode(BinaryReader reader) =>
+        new NodeDiagnostics
+        {
+            Name = ReadString(reader),
+            Endpoint = ReadString(reader),
+            Epoch = reader.ReadInt64(),
+            AgeSeconds = reader.ReadInt64(),
+            ProcessUptimeSeconds = reader.ReadInt64(),
+            ServingSeconds = reader.ReadInt64(),
+            DrainAt = reader.ReadInt64(),
+            RotationDueAt = reader.ReadInt64(),
+            RotationExpiresAt = reader.ReadInt64(),
+            Rotation = ReadRotation(reader),
+            State = ReadString(reader),
+            Serving = reader.ReadBoolean(),
+            Spare = reader.ReadBoolean(),
+            Authority = reader.ReadBoolean(),
+            AuthorityGeneration = reader.ReadInt64(),
+            LeaseAt = reader.ReadInt64(),
+        };
 
     private static RotationState ReadRotation(BinaryReader reader)
     {
         var state = (RotationState)reader.ReadByte();
-        if (!Enum.IsDefined(typeof(RotationState), state)) throw new InvalidDataException("Invalid rotation state");
+        if (!Enum.IsDefined(typeof(RotationState), state))
+            throw new InvalidDataException("Invalid rotation state");
         return state;
     }
 
     private static void WriteString(BinaryWriter writer, string value)
     {
         var bytes = Encoding.UTF8.GetBytes(value ?? "");
-        if (bytes.Length > MaxStringBytes) throw new InvalidDataException("Diagnostics string too long");
+        if (bytes.Length > MaxStringBytes)
+            throw new InvalidDataException("Diagnostics string too long");
         writer.Write((ushort)bytes.Length);
         writer.Write(bytes);
     }
@@ -125,14 +151,16 @@ public static class DiagnosticsProtocol
     private static string ReadString(BinaryReader reader)
     {
         int length = reader.ReadUInt16();
-        if (length > MaxStringBytes) throw new InvalidDataException("Diagnostics string too long");
+        if (length > MaxStringBytes)
+            throw new InvalidDataException("Diagnostics string too long");
         return Encoding.UTF8.GetString(ReadBytes(reader, length));
     }
 
     private static byte[] ReadBytes(BinaryReader reader, int length)
     {
         var bytes = reader.ReadBytes(length);
-        if (bytes.Length != length) throw new EndOfStreamException();
+        if (bytes.Length != length)
+            throw new EndOfStreamException();
         return bytes;
     }
 }

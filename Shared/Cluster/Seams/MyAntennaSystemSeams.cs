@@ -11,8 +11,8 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyAntennaSystemSeams
 {
-	// ClusterPlugin seam adapters for MyAntennaSystemPatch postfixes
-	public static Action<MyDataBroadcaster> ClusterRegisterPostfix;
+    // ClusterPlugin seam adapters for MyAntennaSystemPatch postfixes
+    public static Action<MyDataBroadcaster> ClusterRegisterPostfix;
 
-	public static Action<MyDataBroadcaster> ClusterUnregisterPostfix;
+    public static Action<MyDataBroadcaster> ClusterUnregisterPostfix;
 }

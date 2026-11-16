@@ -18,12 +18,21 @@ internal sealed partial class DirectGateway
 {
     private void AdminWorldExport(HttpListenerContext context, AdminActor actor)
     {
-        var request = ReadAdminBody<Admin.WorldExportRequest>(context) ?? new Admin.WorldExportRequest();
-        if (_options.ExportRoot == null || _options.World == null
-            || _options.ExportDataRoots is not { Length: > 0 } || _options.WorldTool == null)
+        var request =
+            ReadAdminBody<Admin.WorldExportRequest>(context) ?? new Admin.WorldExportRequest();
+        if (
+            _options.ExportRoot == null
+            || _options.World == null
+            || _options.ExportDataRoots is not { Length: > 0 }
+            || _options.WorldTool == null
+        )
         {
-            WriteAdminError(context, 503, "exports_unconfigured",
-                "World exports need --world, --export-root, --export-data-roots, and MAGNETAR_WORLD_TOOL.");
+            WriteAdminError(
+                context,
+                503,
+                "exports_unconfigured",
+                "World exports need --world, --export-root, --export-data-roots, and MAGNETAR_WORLD_TOOL."
+            );
             return;
         }
         if (request.TtlHours is <= 0)
@@ -31,12 +40,20 @@ internal sealed partial class DirectGateway
             WriteAdminError(context, 400, "invalid_arguments", "ttlHours must be positive.");
             return;
         }
-        AdminOperationRecord? record = BeginMutation(context, actor, "world-export", Fingerprint(request),
-            "world", out bool replayed);
+        AdminOperationRecord? record = BeginMutation(
+            context,
+            actor,
+            "world-export",
+            Fingerprint(request),
+            "world",
+            out bool replayed
+        );
         if (record == null)
             return;
         if (!replayed)
-            ThreadPool.QueueUserWorkItem(_ => RunWorldExport(record, TimeSpan.FromHours(request.TtlHours ?? 24)));
+            ThreadPool.QueueUserWorkItem(_ =>
+                RunWorldExport(record, TimeSpan.FromHours(request.TtlHours ?? 24))
+            );
         WriteOperation(context, record);
     }
 
@@ -53,8 +70,11 @@ internal sealed partial class DirectGateway
             Admin.SnapshotSummary? newest = _registry.AdminSnapshots().FirstOrDefault();
             var warnings = new List<string>();
             Admin.ExportConsistency consistency;
-            if (status.Phase == Admin.ClusterPhase.Down && newest is { Kind: Admin.AdminSnapshotKind.CleanShutdown }
-                && newest.Dirty.Length == 0)
+            if (
+                status.Phase == Admin.ClusterPhase.Down
+                && newest is { Kind: Admin.AdminSnapshotKind.CleanShutdown }
+                && newest.Dirty.Length == 0
+            )
                 consistency = Admin.ExportConsistency.Quiescent;
             else
             {
@@ -64,19 +84,33 @@ internal sealed partial class DirectGateway
 
             Directory.CreateDirectory(_options.ExportRoot!);
             Directory.CreateDirectory(staging);
-            string[] arguments = ["to-vanilla", _options.World!, staging, .. _options.ExportDataRoots!];
+            string[] arguments =
+            [
+                "to-vanilla",
+                _options.World!,
+                staging,
+                .. _options.ExportDataRoots!,
+            ];
             (int exitCode, string tail) = RunWorldTool(arguments, TimeSpan.FromMinutes(30));
             if (exitCode != 0)
             {
-                _registry.FailAdminOperation(record.OperationId, "export_failed",
-                    $"MagnetarWorld to-vanilla exited {exitCode}: {tail}");
+                _registry.FailAdminOperation(
+                    record.OperationId,
+                    "export_failed",
+                    $"MagnetarWorld to-vanilla exited {exitCode}: {tail}"
+                );
                 return;
             }
 
-            (Dictionary<string, string> checksums, long sizeBytes, string manifestSha256) = ChecksumTree(staging);
+            (Dictionary<string, string> checksums, long sizeBytes, string manifestSha256) =
+                ChecksumTree(staging);
             if (checksums.Count == 0)
             {
-                _registry.FailAdminOperation(record.OperationId, "export_failed", "Export produced no files.");
+                _registry.FailAdminOperation(
+                    record.OperationId,
+                    "export_failed",
+                    "Export produced no files."
+                );
                 return;
             }
             string artifactId = "world-" + record.OperationId;
@@ -92,21 +126,32 @@ internal sealed partial class DirectGateway
                 sizeBytes,
                 manifestSha256,
                 checksums,
-                new Admin.ArtifactRetrieval(Admin.ArtifactRetrievalKind.SharedPath, Path.GetFullPath(finalPath)),
-                warnings.ToArray());
+                new Admin.ArtifactRetrieval(
+                    Admin.ArtifactRetrievalKind.SharedPath,
+                    Path.GetFullPath(finalPath)
+                ),
+                warnings.ToArray()
+            );
             _artifacts!.Add(descriptor); // non-null whenever ExportRoot is, which AdminWorldExport checked
-            _events.Append("artifact.published", target: artifactId, data: new Dictionary<string, string>
-            {
-                ["consistency"] = consistency.ToString(),
-                ["sizeBytes"] = sizeBytes.ToString(),
-            });
-            _registry.CompleteAdminOperation(record.OperationId, new Dictionary<string, string>
-            {
-                ["artifactId"] = artifactId,
-                ["consistency"] = consistency.ToString(),
-                ["sizeBytes"] = sizeBytes.ToString(),
-                ["localPath"] = descriptor.Retrieval.LocalPath!,
-            });
+            _events.Append(
+                "artifact.published",
+                target: artifactId,
+                data: new Dictionary<string, string>
+                {
+                    ["consistency"] = consistency.ToString(),
+                    ["sizeBytes"] = sizeBytes.ToString(),
+                }
+            );
+            _registry.CompleteAdminOperation(
+                record.OperationId,
+                new Dictionary<string, string>
+                {
+                    ["artifactId"] = artifactId,
+                    ["consistency"] = consistency.ToString(),
+                    ["sizeBytes"] = sizeBytes.ToString(),
+                    ["localPath"] = descriptor.Retrieval.LocalPath!,
+                }
+            );
         }
         catch (Exception e)
         {
@@ -114,7 +159,12 @@ internal sealed partial class DirectGateway
         }
         finally
         {
-            try { if (Directory.Exists(staging)) Directory.Delete(staging, true); } catch { }
+            try
+            {
+                if (Directory.Exists(staging))
+                    Directory.Delete(staging, true);
+            }
+            catch { }
         }
     }
 
@@ -133,11 +183,13 @@ internal sealed partial class DirectGateway
         var tail = new Queue<string>();
         void Keep(string? line)
         {
-            if (line == null) return;
+            if (line == null)
+                return;
             lock (tail)
             {
                 tail.Enqueue(line);
-                while (tail.Count > 20) tail.Dequeue();
+                while (tail.Count > 20)
+                    tail.Dequeue();
             }
         }
         process.OutputDataReceived += (_, e) => Keep(e.Data);
@@ -146,29 +198,48 @@ internal sealed partial class DirectGateway
         process.BeginErrorReadLine();
         if (!process.WaitForExit((int)timeout.TotalMilliseconds))
         {
-            try { process.Kill(entireProcessTree: true); } catch { }
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch { }
             return (-1, "timed out after " + timeout);
         }
         process.WaitForExit();
-        lock (tail) return (process.ExitCode, string.Join(" | ", tail));
+        lock (tail)
+            return (process.ExitCode, string.Join(" | ", tail));
     }
 
     /// <summary>Per-file SHA-256 plus a manifest hash over the sorted relative-path:hash lines.</summary>
-    internal static (Dictionary<string, string> Checksums, long SizeBytes, string ManifestSha256) ChecksumTree(string root)
+    internal static (
+        Dictionary<string, string> Checksums,
+        long SizeBytes,
+        string ManifestSha256
+    ) ChecksumTree(string root)
     {
         var checksums = new Dictionary<string, string>();
         long sizeBytes = 0;
-        foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Order())
+        foreach (
+            string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Order()
+        )
         {
             using FileStream stream = File.OpenRead(file);
-            checksums[Path.GetRelativePath(root, file).Replace('\\', '/')] =
-                Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+            checksums[Path.GetRelativePath(root, file).Replace('\\', '/')] = Convert
+                .ToHexString(SHA256.HashData(stream))
+                .ToLowerInvariant();
             sizeBytes += new FileInfo(file).Length;
         }
-        string manifest = string.Join('\n', checksums.OrderBy(x => x.Key, StringComparer.Ordinal)
-            .Select(x => x.Key + ":" + x.Value));
-        return (checksums, sizeBytes,
-            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(manifest))).ToLowerInvariant());
+        string manifest = string.Join(
+            '\n',
+            checksums.OrderBy(x => x.Key, StringComparer.Ordinal).Select(x => x.Key + ":" + x.Value)
+        );
+        return (
+            checksums,
+            sizeBytes,
+            Convert
+                .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(manifest)))
+                .ToLowerInvariant()
+        );
     }
 }
 
@@ -241,12 +312,15 @@ internal sealed class ArtifactStore(string root)
         try
         {
             return File.Exists(_indexPath)
-                ? JsonSerializer.Deserialize<Shape>(File.ReadAllBytes(_indexPath), Json)?.Artifacts ?? []
+                ? JsonSerializer.Deserialize<Shape>(File.ReadAllBytes(_indexPath), Json)?.Artifacts
+                    ?? []
                 : [];
         }
         catch (Exception e) when (e is IOException or JsonException)
         {
-            Console.Error.WriteLine($"Artifact index '{_indexPath}' is unreadable; treating as empty: {e.Message}");
+            Console.Error.WriteLine(
+                $"Artifact index '{_indexPath}' is unreadable; treating as empty: {e.Message}"
+            );
             return [];
         }
     }
@@ -255,7 +329,10 @@ internal sealed class ArtifactStore(string root)
     {
         Directory.CreateDirectory(root);
         string temporary = _indexPath + ".tmp";
-        File.WriteAllBytes(temporary, JsonSerializer.SerializeToUtf8Bytes(new Shape(artifacts), Json));
+        File.WriteAllBytes(
+            temporary,
+            JsonSerializer.SerializeToUtf8Bytes(new Shape(artifacts), Json)
+        );
         File.Move(temporary, _indexPath, overwrite: true);
     }
 
@@ -270,6 +347,11 @@ internal sealed class ArtifactStore(string root)
         string scope = Path.GetFullPath(root) + Path.DirectorySeparatorChar;
         if (!full.StartsWith(scope, StringComparison.Ordinal))
             return;
-        try { if (Directory.Exists(full)) Directory.Delete(full, true); } catch { }
+        try
+        {
+            if (Directory.Exists(full))
+                Directory.Delete(full, true);
+        }
+        catch { }
     }
 }

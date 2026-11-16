@@ -9,11 +9,12 @@ namespace ClusterPlugin;
 /// node when a dispatch is retried.
 /// </summary>
 public sealed record ClusterEncounterRequest(
-	Guid OperationId,
-	string Origin,
-	string SpawnGroup,
-	ulong TargetClient,
-	string Kind = ClusterEncounterKinds.Global);
+    Guid OperationId,
+    string Origin,
+    string SpawnGroup,
+    ulong TargetClient,
+    string Kind = ClusterEncounterKinds.Global
+);
 
 /// <summary>
 /// Which generator a dispatch drives. All are decided at the World Authority and executed on the node owning the
@@ -23,62 +24,76 @@ public sealed record ClusterEncounterRequest(
 /// </summary>
 public static class ClusterEncounterKinds
 {
-	public const string Global = "global";
-	public const string Planetary = "planetary";
-	public const string Cargo = "cargo";
-	public const string Meteor = "meteor";
+    public const string Global = "global";
+    public const string Planetary = "planetary";
+    public const string Cargo = "cargo";
+    public const string Meteor = "meteor";
 }
 
 public sealed record ClusterEncounterResult(
-	bool Spawned,
-	string SpawnGroup,
-	int EncountersBefore,
-	int EncountersAfter,
-	string Error);
+    bool Spawned,
+    string SpawnGroup,
+    int EncountersBefore,
+    int EncountersAfter,
+    string Error
+);
 
 public static class EncounterDirectorCodec
 {
-	public const int MaxSpawnGroupLength = 256;
+    public const int MaxSpawnGroupLength = 256;
 
-	public static string WriteRequest(ClusterEncounterRequest request)
-	{
-		Validate(request);
-		return JsonSerializer.Serialize(request);
-	}
+    public static string WriteRequest(ClusterEncounterRequest request)
+    {
+        Validate(request);
+        return JsonSerializer.Serialize(request);
+    }
 
-	public static ClusterEncounterRequest ReadRequest(string payload)
-	{
-		if (payload == null || payload.Length > 16 * 1024)
-			throw new InvalidOperationException("Invalid encounter request payload");
-		ClusterEncounterRequest request = JsonSerializer.Deserialize<ClusterEncounterRequest>(payload)
-			?? throw new InvalidOperationException("Invalid encounter request payload");
-		Validate(request);
-		return request;
-	}
+    public static ClusterEncounterRequest ReadRequest(string payload)
+    {
+        if (payload == null || payload.Length > 16 * 1024)
+            throw new InvalidOperationException("Invalid encounter request payload");
+        ClusterEncounterRequest request =
+            JsonSerializer.Deserialize<ClusterEncounterRequest>(payload)
+            ?? throw new InvalidOperationException("Invalid encounter request payload");
+        Validate(request);
+        return request;
+    }
 
-	/// <summary>
-	/// Validates what the World Authority decides. <see cref="ClusterEncounterRequest.Origin"/> is not required:
-	/// the owning node is resolved during dispatch, so a decision is well-formed without it.
-	/// </summary>
-	public static void ValidateDecision(ClusterEncounterRequest request)
-	{
-		if (request == null || request.OperationId == Guid.Empty || request.TargetClient == 0
-			|| request.SpawnGroup?.Length > MaxSpawnGroupLength
-			|| request.Origin?.Length > 128
-			|| (request.Kind != ClusterEncounterKinds.Global && request.Kind != ClusterEncounterKinds.Planetary
-				&& request.Kind != ClusterEncounterKinds.Cargo && request.Kind != ClusterEncounterKinds.Meteor)
-			// Global encounters and cargo ships name their spawn group; planetary installations and meteor
-			// waves are placed from the target's position alone.
-			|| ((request.Kind == ClusterEncounterKinds.Global || request.Kind == ClusterEncounterKinds.Cargo)
-				&& string.IsNullOrEmpty(request.SpawnGroup)))
-			throw new InvalidOperationException("Invalid encounter request payload");
-	}
+    /// <summary>
+    /// Validates what the World Authority decides. <see cref="ClusterEncounterRequest.Origin"/> is not required:
+    /// the owning node is resolved during dispatch, so a decision is well-formed without it.
+    /// </summary>
+    public static void ValidateDecision(ClusterEncounterRequest request)
+    {
+        if (
+            request == null
+            || request.OperationId == Guid.Empty
+            || request.TargetClient == 0
+            || request.SpawnGroup?.Length > MaxSpawnGroupLength
+            || request.Origin?.Length > 128
+            || (
+                request.Kind != ClusterEncounterKinds.Global
+                && request.Kind != ClusterEncounterKinds.Planetary
+                && request.Kind != ClusterEncounterKinds.Cargo
+                && request.Kind != ClusterEncounterKinds.Meteor
+            )
+            // Global encounters and cargo ships name their spawn group; planetary installations and meteor
+            // waves are placed from the target's position alone.
+            || (
+                (
+                    request.Kind == ClusterEncounterKinds.Global
+                    || request.Kind == ClusterEncounterKinds.Cargo
+                ) && string.IsNullOrEmpty(request.SpawnGroup)
+            )
+        )
+            throw new InvalidOperationException("Invalid encounter request payload");
+    }
 
-	/// <summary>Validates a dispatched request, which must name the node that is to execute it.</summary>
-	public static void Validate(ClusterEncounterRequest request)
-	{
-		ValidateDecision(request);
-		if (string.IsNullOrEmpty(request.Origin))
-			throw new InvalidOperationException("Invalid encounter request payload");
-	}
+    /// <summary>Validates a dispatched request, which must name the node that is to execute it.</summary>
+    public static void Validate(ClusterEncounterRequest request)
+    {
+        ValidateDecision(request);
+        if (string.IsNullOrEmpty(request.Origin))
+            throw new InvalidOperationException("Invalid encounter request payload");
+    }
 }

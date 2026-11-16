@@ -9,6 +9,6 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyPlayerSeams
 {
-	// ClusterPlugin seam adapter for MyPlayerPatch.IdentityPrefix.
-	public static Action<MyPlayer, MyIdentity> ClusterIdentityChanging;
+    // ClusterPlugin seam adapter for MyPlayerPatch.IdentityPrefix.
+    public static Action<MyPlayer, MyIdentity> ClusterIdentityChanging;
 }

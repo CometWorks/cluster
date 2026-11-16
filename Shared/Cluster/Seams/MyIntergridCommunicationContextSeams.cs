@@ -14,8 +14,8 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyIntergridCommunicationContextSeams
 {
-	// ClusterPlugin seam adapters for MyIntergridCommunicationContextPatch
-	public static Func<MyProgrammableBlock, long, string, object, bool> ClusterSendRemoteUnicast;
+    // ClusterPlugin seam adapters for MyIntergridCommunicationContextPatch
+    public static Func<MyProgrammableBlock, long, string, object, bool> ClusterSendRemoteUnicast;
 
-	public static Action<MyProgrammableBlock, string, object, int> ClusterSendRemoteBroadcast;
+    public static Action<MyProgrammableBlock, string, object, int> ClusterSendRemoteBroadcast;
 }

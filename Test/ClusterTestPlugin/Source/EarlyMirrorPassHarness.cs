@@ -15,36 +15,52 @@ namespace ClusterTestPlugin;
 /// </summary>
 internal static class EarlyMirrorPassHarness
 {
-    private static readonly FieldInfo Next = typeof(RemotePlayerMirrorService).GetField("m_next", BindingFlags.NonPublic | BindingFlags.Static);
+    private static readonly FieldInfo Next = typeof(RemotePlayerMirrorService).GetField(
+        "m_next",
+        BindingFlags.NonPublic | BindingFlags.Static
+    );
     private static bool m_on;
     private static MyMultiplayerBase m_hooked;
     private static int m_forced;
 
     public static void Register()
     {
-        TestRoutes.Add("POST", "/test-early-mirror-pass", context =>
-        {
-            bool on = TestRoutes.Query(context, "on") != "0";
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+        TestRoutes.Add(
+            "POST",
+            "/test-early-mirror-pass",
+            context =>
             {
-                m_on = on;
-                MyMultiplayerBase multiplayer = MyMultiplayer.Static;
-                if (on && multiplayer != null && !ReferenceEquals(m_hooked, multiplayer))
-                {
-                    // Subscribed after vanilla's handlers, so the client's state exists when this runs.
-                    // Through reflection: the publicized assembly makes the event and its backing field ambiguous.
-                    typeof(MyMultiplayerBase).GetEvent("ClientJoined")
-                        .AddEventHandler(multiplayer, new Action<ulong, string>(OnClientJoined));
-                    m_hooked = multiplayer;
-                }
-                return (object)new { on = m_on, forced = m_forced };
-            }));
-        });
+                bool on = TestRoutes.Query(context, "on") != "0";
+                TestRoutes.Json(
+                    context,
+                    200,
+                    TestRoutes.OnGameThread(() =>
+                    {
+                        m_on = on;
+                        MyMultiplayerBase multiplayer = MyMultiplayer.Static;
+                        if (on && multiplayer != null && !ReferenceEquals(m_hooked, multiplayer))
+                        {
+                            // Subscribed after vanilla's handlers, so the client's state exists when this runs.
+                            // Through reflection: the publicized assembly makes the event and its backing field ambiguous.
+                            typeof(MyMultiplayerBase)
+                                .GetEvent("ClientJoined")
+                                .AddEventHandler(
+                                    multiplayer,
+                                    new Action<ulong, string>(OnClientJoined)
+                                );
+                            m_hooked = multiplayer;
+                        }
+                        return (object)new { on = m_on, forced = m_forced };
+                    })
+                );
+            }
+        );
     }
 
     private static void OnClientJoined(ulong client, string name)
     {
-        if (!m_on) return;
+        if (!m_on)
+            return;
         Next.SetValue(null, 0.0);
         RemotePlayerMirrorService.Update();
         m_forced++;

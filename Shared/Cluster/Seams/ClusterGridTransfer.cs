@@ -7,6 +7,6 @@ namespace Sandbox.Game.World;
 // start crashes the type initializer (the same trap MyLaserAntenna has).
 public static class ClusterGridTransfer
 {
-	public static Func<long, string, long, long, int, int, ulong, bool> Offer;
-	public static Func<long, long, long, bool> ForwardAccept;
+    public static Func<long, string, long, long, int, int, ulong, bool> Offer;
+    public static Func<long, long, long, bool> ForwardAccept;
 }

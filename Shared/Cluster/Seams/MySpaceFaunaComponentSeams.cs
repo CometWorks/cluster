@@ -8,6 +8,6 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MySpaceFaunaComponentSeams
 {
-	// ClusterPlugin seam adapter for MySpaceFaunaComponentPatch.UpdateAfterSimulationPrefix
-	public static Func<bool> ClusterUpdatePrefix;
+    // ClusterPlugin seam adapter for MySpaceFaunaComponentPatch.UpdateAfterSimulationPrefix
+    public static Func<bool> ClusterUpdatePrefix;
 }

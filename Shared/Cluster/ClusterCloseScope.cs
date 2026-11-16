@@ -12,14 +12,21 @@ namespace ClusterPlugin;
 /// </summary>
 internal static class ClusterCloseScope
 {
-	[ThreadStatic] private static int t_depth;
+    [ThreadStatic]
+    private static int t_depth;
 
-	public static bool Active => t_depth > 0;
+    public static bool Active => t_depth > 0;
 
-	public static void Run(Action close)
-	{
-		t_depth++;
-		try { close(); }
-		finally { t_depth--; }
-	}
+    public static void Run(Action close)
+    {
+        t_depth++;
+        try
+        {
+            close();
+        }
+        finally
+        {
+            t_depth--;
+        }
+    }
 }

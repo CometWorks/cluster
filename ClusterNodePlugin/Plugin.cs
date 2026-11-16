@@ -1,7 +1,7 @@
 using System;
 using System.IO;
-using HarmonyLib;
 using ClusterPlugin;
+using HarmonyLib;
 using Shared.Config;
 using Shared.Logging;
 using Shared.Patches;
@@ -9,13 +9,13 @@ using Shared.Plugin;
 using VRage.FileSystem;
 using VRage.Game;
 using VRage.Plugins;
-
 // Define assembly version when compiled by Magnetar
 #if !LOCAL_BUILD
 using System.Reflection;
 
 [assembly: AssemblyVersion("0.3.18.0")]
 [assembly: AssemblyFileVersion("0.3.18.0")]
+
 #endif
 
 namespace ClusterNodePlugin;
@@ -41,7 +41,9 @@ public class Plugin : IPlugin, ICommonPlugin
     private PersistentConfig<PluginConfig> config;
     private static readonly string ConfigFileName = $"{Name}.cfg";
 
-    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.NoInlining
+    )]
     public void Init(object gameInstance)
     {
         Instance = this;
@@ -69,7 +71,9 @@ public class Plugin : IPlugin, ICommonPlugin
 
         // No preloader hook ran (a launcher without Pulsar's preloader): patch and start now. This is
         // after the session loaded, so the patches on startup paths did not take effect this run.
-        Log.Warning("Late start: the preloader hook did not run; startup-path patches are inactive");
+        Log.Warning(
+            "Late start: the preloader hook did not run; startup-path patches are inactive"
+        );
         var harmony = new Harmony(Name);
         if (!PatchHelpers.HarmonyPatchAll(Log, harmony))
         {

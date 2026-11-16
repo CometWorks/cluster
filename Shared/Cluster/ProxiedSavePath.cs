@@ -20,15 +20,31 @@ public static class ProxiedSavePath
     /// that <c>nodes</c> directory, not the data root's parent (which holds only this slot).</summary>
     public static string? Resolve(string? location, string? dataRoot, bool managed = false)
     {
-        if (string.IsNullOrWhiteSpace(location) || string.IsNullOrWhiteSpace(dataRoot) || !Path.IsPathFullyQualified(location)) return null;
+        if (
+            string.IsNullOrWhiteSpace(location)
+            || string.IsNullOrWhiteSpace(dataRoot)
+            || !Path.IsPathFullyQualified(location)
+        )
+            return null;
         string? data = RealPath(dataRoot!);
         string? root = data == null ? null : Path.GetDirectoryName(data);
-        if (managed && root != null && Path.GetDirectoryName(root) is { } nodes && Path.GetFileName(nodes) == ManagedNodesDirectory)
+        if (
+            managed
+            && root != null
+            && Path.GetDirectoryName(root) is { } nodes
+            && Path.GetFileName(nodes) == ManagedNodesDirectory
+        )
             root = nodes;
         string? file = RealPath(location!);
-        if (root == null || file == null) return null;
-        return file.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-            && file.EndsWith(".mps", StringComparison.Ordinal) ? file : null;
+        if (root == null || file == null)
+            return null;
+        return
+            file.StartsWith(
+                root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+                StringComparison.Ordinal
+            ) && file.EndsWith(".mps", StringComparison.Ordinal)
+            ? file
+            : null;
     }
 
     /// <summary>The directory Quasar.Host keeps every managed slot of a host in (<c>runtime/nodes</c>).</summary>
@@ -40,27 +56,49 @@ public static class ProxiedSavePath
     public const int MissingStatus = 410;
 
     /// <summary>Whether a failed read of a save file means the file (or its directory) is not there.</summary>
-    public static bool IsMissing(Exception error) => error is FileNotFoundException || error is DirectoryNotFoundException;
+    public static bool IsMissing(Exception error) =>
+        error is FileNotFoundException || error is DirectoryNotFoundException;
 
     /// <summary>realpath: the absolute path with every "..", "." and symlink (of any component) resolved; null on a link loop.</summary>
     public static string? RealPath(string path)
     {
         string full = Path.GetFullPath(path);
         string current = Path.GetPathRoot(full) ?? "/";
-        var pending = new Stack<string>(full.Substring(current.Length).Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries).Reverse());
+        var pending = new Stack<string>(
+            full.Substring(current.Length)
+                .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries)
+                .Reverse()
+        );
         int links = 0;
         while (pending.Count != 0)
         {
             string part = pending.Pop();
-            if (part == ".") continue;
-            if (part == "..") { current = Path.GetDirectoryName(current) ?? current; continue; }
+            if (part == ".")
+                continue;
+            if (part == "..")
+            {
+                current = Path.GetDirectoryName(current) ?? current;
+                continue;
+            }
             string next = Path.Combine(current, part);
             string? target = new FileInfo(next).LinkTarget;
-            if (target == null) { current = next; continue; }
-            if (++links > 40) return null;
-            string absolute = Path.IsPathFullyQualified(target) ? target : Path.Combine(current, target);
+            if (target == null)
+            {
+                current = next;
+                continue;
+            }
+            if (++links > 40)
+                return null;
+            string absolute = Path.IsPathFullyQualified(target)
+                ? target
+                : Path.Combine(current, target);
             string root = Path.GetPathRoot(absolute) ?? "/";
-            foreach (string component in absolute.Substring(root.Length).Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries).Reverse())
+            foreach (
+                string component in absolute
+                    .Substring(root.Length)
+                    .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries)
+                    .Reverse()
+            )
                 pending.Push(component);
             current = root;
         }

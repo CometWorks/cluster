@@ -12,19 +12,23 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyContractPatch
 {
-	public static void Install()
-	{
-		MyContractSeams.ClusterBeginDeposit = SeamBeginDeposit;
-		MyContractSeams.ClusterCommitDeposit = SeamCommitDeposit;
-		ContractLedger.Install();
-		StationContractOffers.Install();
-	}
+    public static void Install()
+    {
+        MyContractSeams.ClusterBeginDeposit = SeamBeginDeposit;
+        MyContractSeams.ClusterCommitDeposit = SeamCommitDeposit;
+        ContractLedger.Install();
+        StationContractOffers.Install();
+    }
 
-	private static (IDisposable Scope, bool Approved) SeamBeginDeposit(long payerId, long amount)
-	{
-		MyStoreBlockPatch.StorePaymentScope deposit = MyStoreBlockPatch.BeginPayment(payerId, amount);
-		return (deposit, deposit.Approved);
-	}
+    private static (IDisposable Scope, bool Approved) SeamBeginDeposit(long payerId, long amount)
+    {
+        MyStoreBlockPatch.StorePaymentScope deposit = MyStoreBlockPatch.BeginPayment(
+            payerId,
+            amount
+        );
+        return (deposit, deposit.Approved);
+    }
 
-	private static void SeamCommitDeposit(IDisposable scope) => ((MyStoreBlockPatch.StorePaymentScope)scope).Commit();
+    private static void SeamCommitDeposit(IDisposable scope) =>
+        ((MyStoreBlockPatch.StorePaymentScope)scope).Commit();
 }

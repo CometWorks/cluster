@@ -19,12 +19,22 @@ namespace Shared.Patches;
 /// node-4 (T-0245). A decompile of Sandbox.Game shows no other id+N assumption; the pair costs half of
 /// each 2^24-id range, and ranges are cheap.
 /// </summary>
-[HarmonyPatch(typeof(MyEntityIdentifier), nameof(MyEntityIdentifier.AllocateId),
-    new[] { typeof(MyEntityIdentifier.ID_OBJECT_TYPE), typeof(MyEntityIdentifier.ID_ALLOCATION_METHOD) })]
+[HarmonyPatch(
+    typeof(MyEntityIdentifier),
+    nameof(MyEntityIdentifier.AllocateId),
+    new[]
+    {
+        typeof(MyEntityIdentifier.ID_OBJECT_TYPE),
+        typeof(MyEntityIdentifier.ID_ALLOCATION_METHOD),
+    }
+)]
 public static class MyEntityIdentifierPatch
 {
     [HarmonyPrefix]
-    private static bool AllocateIdPrefix(MyEntityIdentifier.ID_OBJECT_TYPE objectType, ref long __result)
+    private static bool AllocateIdPrefix(
+        MyEntityIdentifier.ID_OBJECT_TYPE objectType,
+        ref long __result
+    )
     {
         if (!EntityIdAllocator.Enabled)
             return true;

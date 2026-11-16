@@ -19,7 +19,9 @@ internal static class WaCommandBurstRoutes
     private static readonly Stopwatch Watch = new();
     private static long m_owner;
     private static long m_burstMs;
-    private static int m_sent, m_timedOut, m_failed;
+    private static int m_sent,
+        m_timedOut,
+        m_failed;
     private static long m_maxMs;
     private static object m_result;
 
@@ -46,7 +48,8 @@ internal static class WaCommandBurstRoutes
         TestRoutes.Add(
             "GET",
             "/test-wa-command-burst",
-            context => TestRoutes.Json(context, 200, Volatile.Read(ref m_result) ?? new { done = false })
+            context =>
+                TestRoutes.Json(context, 200, Volatile.Read(ref m_result) ?? new { done = false })
         );
     }
 
@@ -68,7 +71,11 @@ internal static class WaCommandBurstRoutes
             long started = Watch.ElapsedMilliseconds;
             try
             {
-                MyBankingSystemPatch.ChangeBalanceWithOperation(owner, m_sent % 2 == 0 ? 1 : -1, Guid.NewGuid());
+                MyBankingSystemPatch.ChangeBalanceWithOperation(
+                    owner,
+                    m_sent % 2 == 0 ? 1 : -1,
+                    Guid.NewGuid()
+                );
             }
             catch (TimeoutException)
             {
@@ -85,7 +92,19 @@ internal static class WaCommandBurstRoutes
             return;
         Watch.Reset();
         Interlocked.Exchange(ref m_burstMs, 0);
-        Volatile.Write(ref m_result, new { done = true, sent = m_sent, timedOut = m_timedOut, failed = m_failed, maxMs = m_maxMs });
-        Plugin.Log($"wa-command-burst done sent={m_sent} timedOut={m_timedOut} failed={m_failed} maxMs={m_maxMs} (SE-1228)");
+        Volatile.Write(
+            ref m_result,
+            new
+            {
+                done = true,
+                sent = m_sent,
+                timedOut = m_timedOut,
+                failed = m_failed,
+                maxMs = m_maxMs,
+            }
+        );
+        Plugin.Log(
+            $"wa-command-burst done sent={m_sent} timedOut={m_timedOut} failed={m_failed} maxMs={m_maxMs} (SE-1228)"
+        );
     }
 }

@@ -39,101 +39,149 @@ namespace ClusterPlugin;
 /// </summary>
 internal static class ClientLayerRefresh
 {
-	private static readonly double MotionMeters = double.TryParse(Environment.GetEnvironmentVariable("CLUSTER_LAYER_REFRESH_METERS"),
-		NumberStyles.Float, CultureInfo.InvariantCulture, out double meters) ? meters : 500.0;
-	private static readonly bool OnImport = Environment.GetEnvironmentVariable("CLUSTER_LAYER_REFRESH_ON_IMPORT") != "0";
-	private static readonly double[] ImportDelays = { 0.5, 2.0 };
-	private const double SummarySeconds = 300;
+    private static readonly double MotionMeters = double.TryParse(
+        Environment.GetEnvironmentVariable("CLUSTER_LAYER_REFRESH_METERS"),
+        NumberStyles.Float,
+        CultureInfo.InvariantCulture,
+        out double meters
+    )
+        ? meters
+        : 500.0;
+    private static readonly bool OnImport =
+        Environment.GetEnvironmentVariable("CLUSTER_LAYER_REFRESH_ON_IMPORT") != "0";
+    private static readonly double[] ImportDelays = { 0.5, 2.0 };
+    private const double SummarySeconds = 300;
 
-	private static readonly Dictionary<Endpoint, Vector3D> m_anchors = new Dictionary<Endpoint, Vector3D>();
-	private static readonly List<Endpoint> m_gone = new List<Endpoint>();
-	private static readonly double ImportClientCooldown = 2.0;
-	private static readonly System.Collections.Concurrent.ConcurrentQueue<long[]> m_importsNoted = new System.Collections.Concurrent.ConcurrentQueue<long[]>();
-	private static readonly List<(double Due, long[] Members, BoundingSphereD? Sphere)> m_importDue = new List<(double, long[], BoundingSphereD?)>();
-	private static readonly Dictionary<Endpoint, double> m_lastImportRefresh = new Dictionary<Endpoint, double>();
-	private static double m_nextSummary;
-	private static long m_summaryMotion, m_summaryImport;
-	internal static long MotionRefreshes;
-	internal static long ImportRefreshes;
+    private static readonly Dictionary<Endpoint, Vector3D> m_anchors =
+        new Dictionary<Endpoint, Vector3D>();
+    private static readonly List<Endpoint> m_gone = new List<Endpoint>();
+    private static readonly double ImportClientCooldown = 2.0;
+    private static readonly System.Collections.Concurrent.ConcurrentQueue<long[]> m_importsNoted =
+        new System.Collections.Concurrent.ConcurrentQueue<long[]>();
+    private static readonly List<(
+        double Due,
+        long[] Members,
+        BoundingSphereD? Sphere
+    )> m_importDue = new List<(double, long[], BoundingSphereD?)>();
+    private static readonly Dictionary<Endpoint, double> m_lastImportRefresh =
+        new Dictionary<Endpoint, double>();
+    private static double m_nextSummary;
+    private static long m_summaryMotion,
+        m_summaryImport;
+    internal static long MotionRefreshes;
+    internal static long ImportRefreshes;
 
-	/// <summary>Any thread: a partition's entities (its members) were just created on this node.</summary>
-	internal static void NoteImport(IEnumerable<long> members)
-	{
-		if (OnImport) m_importsNoted.Enqueue(System.Linq.Enumerable.ToArray(members));
-	}
+    /// <summary>Any thread: a partition's entities (its members) were just created on this node.</summary>
+    internal static void NoteImport(IEnumerable<long> members)
+    {
+        if (OnImport)
+            m_importsNoted.Enqueue(System.Linq.Enumerable.ToArray(members));
+    }
 
-	/// <summary>Game thread, every tick.</summary>
-	internal static void Update()
-	{
-		if (MySession.Static?.Ready != true) return;
-		if (MyMultiplayer.Static?.ReplicationLayer is not MyReplicationServer server) return;
-		double now = MySession.Static.ElapsedGameTime.TotalSeconds;
-		while (m_importsNoted.TryDequeue(out long[] members))
-			foreach (double delay in ImportDelays)
-				m_importDue.Add((now + delay, members, null));
-		List<BoundingSphereD> dueSpheres = null;
-		for (int i = m_importDue.Count - 1; i >= 0; i--)
-		{
-			if (m_importDue[i].Due > now) continue;
-			BoundingSphereD? sphere = MemberSphere(m_importDue[i].Members);
-			if (sphere.HasValue) (dueSpheres ??= new List<BoundingSphereD>()).Add(sphere.Value);
-			m_importDue.RemoveAt(i);
-		}
-		double reach = VRage.Network.MyLayers.GetSyncDistance();
-		try
-		{
-			foreach (KeyValuePair<Endpoint, MyClient> entry in server.m_clientStates)
-			{
-				MyClient client = entry.Value;
-				if (!client.IsReady || client.State?.Position is not Vector3D position) continue;
-				if (dueSpheres != null && (!m_lastImportRefresh.TryGetValue(entry.Key, out double last) || now - last >= ImportClientCooldown)
-					&& dueSpheres.Exists(sphere => Vector3D.Distance(sphere.Center, position) - sphere.Radius <= reach))
-				{
-					client.ResetLayerTimers();
-					m_anchors[entry.Key] = position;
-					m_lastImportRefresh[entry.Key] = now;
-					ImportRefreshes++;
-				}
-				else if (!m_anchors.TryGetValue(entry.Key, out Vector3D anchor))
-					m_anchors[entry.Key] = position;
-				else if (MotionMeters > 0 && Vector3D.DistanceSquared(anchor, position) > MotionMeters * MotionMeters)
-				{
-					client.ResetLayerTimers();
-					m_anchors[entry.Key] = position;
-					MotionRefreshes++;
-				}
-			}
-			if (m_anchors.Count > server.m_clientStates.Count)
-			{
-				foreach (Endpoint endpoint in m_anchors.Keys)
-					if (!server.m_clientStates.ContainsKey(endpoint)) m_gone.Add(endpoint);
-				foreach (Endpoint endpoint in m_gone) { m_anchors.Remove(endpoint); m_lastImportRefresh.Remove(endpoint); }
-				m_gone.Clear();
-			}
-		}
-		catch (Exception exception)
-		{
-			MyLog.Default?.WriteLine("client_layer_refresh failed: " + exception.Message);
-		}
-		if (now < m_nextSummary) return;
-		m_nextSummary = now + SummarySeconds;
-		if (MotionRefreshes == m_summaryMotion && ImportRefreshes == m_summaryImport) return;
-		MyLog.Default?.WriteLine($"client_layer_refresh motion={MotionRefreshes - m_summaryMotion} import={ImportRefreshes - m_summaryImport} "
-			+ $"clients={server.m_clientStates.Count} thresholdM={MotionMeters.ToString(CultureInfo.InvariantCulture)} (T-0300)");
-		m_summaryMotion = MotionRefreshes;
-		m_summaryImport = ImportRefreshes;
-	}
+    /// <summary>Game thread, every tick.</summary>
+    internal static void Update()
+    {
+        if (MySession.Static?.Ready != true)
+            return;
+        if (MyMultiplayer.Static?.ReplicationLayer is not MyReplicationServer server)
+            return;
+        double now = MySession.Static.ElapsedGameTime.TotalSeconds;
+        while (m_importsNoted.TryDequeue(out long[] members))
+            foreach (double delay in ImportDelays)
+                m_importDue.Add((now + delay, members, null));
+        List<BoundingSphereD> dueSpheres = null;
+        for (int i = m_importDue.Count - 1; i >= 0; i--)
+        {
+            if (m_importDue[i].Due > now)
+                continue;
+            BoundingSphereD? sphere = MemberSphere(m_importDue[i].Members);
+            if (sphere.HasValue)
+                (dueSpheres ??= new List<BoundingSphereD>()).Add(sphere.Value);
+            m_importDue.RemoveAt(i);
+        }
+        double reach = VRage.Network.MyLayers.GetSyncDistance();
+        try
+        {
+            foreach (KeyValuePair<Endpoint, MyClient> entry in server.m_clientStates)
+            {
+                MyClient client = entry.Value;
+                if (!client.IsReady || client.State?.Position is not Vector3D position)
+                    continue;
+                if (
+                    dueSpheres != null
+                    && (
+                        !m_lastImportRefresh.TryGetValue(entry.Key, out double last)
+                        || now - last >= ImportClientCooldown
+                    )
+                    && dueSpheres.Exists(sphere =>
+                        Vector3D.Distance(sphere.Center, position) - sphere.Radius <= reach
+                    )
+                )
+                {
+                    client.ResetLayerTimers();
+                    m_anchors[entry.Key] = position;
+                    m_lastImportRefresh[entry.Key] = now;
+                    ImportRefreshes++;
+                }
+                else if (!m_anchors.TryGetValue(entry.Key, out Vector3D anchor))
+                    m_anchors[entry.Key] = position;
+                else if (
+                    MotionMeters > 0
+                    && Vector3D.DistanceSquared(anchor, position) > MotionMeters * MotionMeters
+                )
+                {
+                    client.ResetLayerTimers();
+                    m_anchors[entry.Key] = position;
+                    MotionRefreshes++;
+                }
+            }
+            if (m_anchors.Count > server.m_clientStates.Count)
+            {
+                foreach (Endpoint endpoint in m_anchors.Keys)
+                    if (!server.m_clientStates.ContainsKey(endpoint))
+                        m_gone.Add(endpoint);
+                foreach (Endpoint endpoint in m_gone)
+                {
+                    m_anchors.Remove(endpoint);
+                    m_lastImportRefresh.Remove(endpoint);
+                }
+                m_gone.Clear();
+            }
+        }
+        catch (Exception exception)
+        {
+            MyLog.Default?.WriteLine("client_layer_refresh failed: " + exception.Message);
+        }
+        if (now < m_nextSummary)
+            return;
+        m_nextSummary = now + SummarySeconds;
+        if (MotionRefreshes == m_summaryMotion && ImportRefreshes == m_summaryImport)
+            return;
+        MyLog.Default?.WriteLine(
+            $"client_layer_refresh motion={MotionRefreshes - m_summaryMotion} import={ImportRefreshes - m_summaryImport} "
+                + $"clients={server.m_clientStates.Count} thresholdM={MotionMeters.ToString(CultureInfo.InvariantCulture)} (T-0300)"
+        );
+        m_summaryMotion = MotionRefreshes;
+        m_summaryImport = ImportRefreshes;
+    }
 
-	/// <summary>Bounding sphere of the members that exist on this node now; null when none does.</summary>
-	private static BoundingSphereD? MemberSphere(long[] members)
-	{
-		BoundingSphereD? sphere = null;
-		foreach (long id in members)
-		{
-			if (!Sandbox.Game.Entities.MyEntities.TryGetEntityById(id, out VRage.Game.Entity.MyEntity entity) || entity.PositionComp == null) continue;
-			BoundingSphereD own = entity.PositionComp.WorldVolume;
-			sphere = sphere.HasValue ? BoundingSphereD.CreateMerged(sphere.Value, own) : own;
-		}
-		return sphere;
-	}
+    /// <summary>Bounding sphere of the members that exist on this node now; null when none does.</summary>
+    private static BoundingSphereD? MemberSphere(long[] members)
+    {
+        BoundingSphereD? sphere = null;
+        foreach (long id in members)
+        {
+            if (
+                !Sandbox.Game.Entities.MyEntities.TryGetEntityById(
+                    id,
+                    out VRage.Game.Entity.MyEntity entity
+                )
+                || entity.PositionComp == null
+            )
+                continue;
+            BoundingSphereD own = entity.PositionComp.WorldVolume;
+            sphere = sphere.HasValue ? BoundingSphereD.CreateMerged(sphere.Value, own) : own;
+        }
+        return sphere;
+    }
 }

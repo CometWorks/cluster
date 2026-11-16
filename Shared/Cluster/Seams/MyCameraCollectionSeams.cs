@@ -10,12 +10,20 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyCameraCollectionSeams
 {
-	/// <summary>
-	/// A player's camera settings have to travel between nodes with the player, and vanilla only ever reads
-	/// them one entity at a time. Returns the live per-entity map (read-only view) or null.
-	/// </summary>
-	public static IReadOnlyDictionary<long, MyEntityCameraSettings> ClusterCameraSettings(this MyCameraCollection self, MyPlayer.PlayerId pid)
-	{
-		return self.m_entityCameraSettings.TryGetValue(pid, out Dictionary<long, MyEntityCameraSettings> settings) ? settings : null;
-	}
+    /// <summary>
+    /// A player's camera settings have to travel between nodes with the player, and vanilla only ever reads
+    /// them one entity at a time. Returns the live per-entity map (read-only view) or null.
+    /// </summary>
+    public static IReadOnlyDictionary<long, MyEntityCameraSettings> ClusterCameraSettings(
+        this MyCameraCollection self,
+        MyPlayer.PlayerId pid
+    )
+    {
+        return self.m_entityCameraSettings.TryGetValue(
+            pid,
+            out Dictionary<long, MyEntityCameraSettings> settings
+        )
+            ? settings
+            : null;
+    }
 }

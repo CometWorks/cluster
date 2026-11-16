@@ -34,53 +34,76 @@ namespace Shared.Patches;
 [HarmonyPatch]
 public static class MyIntergridCommunicationContextPatch
 {
-	private const string SendUnicastMessageName = "Sandbox.ModAPI.Ingame.IMyIntergridCommunicationSystem.SendUnicastMessage";
+    private const string SendUnicastMessageName =
+        "Sandbox.ModAPI.Ingame.IMyIntergridCommunicationSystem.SendUnicastMessage";
 
-	/// <summary>Value types IgcDeliveryCodec.TryEncode can put on the wire; keep in sync with it.</summary>
-	private static readonly Type[] EncodableValueTypes =
-	{
-		typeof(bool), typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint),
-		typeof(long), typeof(ulong), typeof(float), typeof(double), typeof(Vector3D), typeof(Vector3), typeof(Vector3I)
-	};
+    /// <summary>Value types IgcDeliveryCodec.TryEncode can put on the wire; keep in sync with it.</summary>
+    private static readonly Type[] EncodableValueTypes =
+    {
+        typeof(bool),
+        typeof(byte),
+        typeof(sbyte),
+        typeof(short),
+        typeof(ushort),
+        typeof(int),
+        typeof(uint),
+        typeof(long),
+        typeof(ulong),
+        typeof(float),
+        typeof(double),
+        typeof(Vector3D),
+        typeof(Vector3),
+        typeof(Vector3I),
+    };
 
-	[HarmonyTargetMethods]
-	private static IEnumerable<MethodBase> TargetMethods()
-	{
-		MethodInfo definition = AccessTools.Method(typeof(MyIntergridCommunicationContext), SendUnicastMessageName)
-			?? throw new InvalidOperationException("MyIntergridCommunicationContext." + SendUnicastMessageName + " not found");
-		if (!definition.IsGenericMethodDefinition || definition.GetGenericArguments().Length != 1)
-		{
-			throw new InvalidOperationException(SendUnicastMessageName + " is not the expected generic method definition");
-		}
-		// Reference types share one canonical instantiation; patching <string> patches all of them.
-		yield return definition.MakeGenericMethod(typeof(string));
-		foreach (Type valueType in EncodableValueTypes)
-		{
-			yield return definition.MakeGenericMethod(valueType);
-		}
-	}
+    [HarmonyTargetMethods]
+    private static IEnumerable<MethodBase> TargetMethods()
+    {
+        MethodInfo definition =
+            AccessTools.Method(typeof(MyIntergridCommunicationContext), SendUnicastMessageName)
+            ?? throw new InvalidOperationException(
+                "MyIntergridCommunicationContext." + SendUnicastMessageName + " not found"
+            );
+        if (!definition.IsGenericMethodDefinition || definition.GetGenericArguments().Length != 1)
+        {
+            throw new InvalidOperationException(
+                SendUnicastMessageName + " is not the expected generic method definition"
+            );
+        }
+        // Reference types share one canonical instantiation; patching <string> patches all of them.
+        yield return definition.MakeGenericMethod(typeof(string));
+        foreach (Type valueType in EncodableValueTypes)
+        {
+            yield return definition.MakeGenericMethod(valueType);
+        }
+    }
 
-	[HarmonyPrefix]
-	private static bool SendUnicastMessagePrefix(MyIntergridCommunicationContext __instance, long addressee, string tag,
-		object data, ref bool __result)
-	{
-		Func<Sandbox.Game.Entities.Blocks.MyProgrammableBlock, long, string, object, bool> hook =
-			MyIntergridCommunicationContextSeams.ClusterSendRemoteUnicast;
-		if (hook == null)
-		{
-			return true;
-		}
-		MyIGCSystemSessionComponent context = MyIGCSystemSessionComponent.Static;
-		if (context == null || context.GetContextForPB(addressee) != null)
-		{
-			// Locally resolvable (or no session component at all): the vanilla path is untouched.
-			return true;
-		}
-		// ClusterPlugin patch point: MyIntergridCommunicationContextPatch.SendRemoteUnicast
-		// GetContextForPB only resolves blocks loaded on this node, so an addressee one partition away is
-		// indistinguishable from one that does not exist. The hook answers false for both cases it cannot
-		// route, which is exactly what vanilla already returns here.
-		__result = hook(__instance.ProgrammableBlock, addressee, tag, data);
-		return false;
-	}
+    [HarmonyPrefix]
+    private static bool SendUnicastMessagePrefix(
+        MyIntergridCommunicationContext __instance,
+        long addressee,
+        string tag,
+        object data,
+        ref bool __result
+    )
+    {
+        Func<Sandbox.Game.Entities.Blocks.MyProgrammableBlock, long, string, object, bool> hook =
+            MyIntergridCommunicationContextSeams.ClusterSendRemoteUnicast;
+        if (hook == null)
+        {
+            return true;
+        }
+        MyIGCSystemSessionComponent context = MyIGCSystemSessionComponent.Static;
+        if (context == null || context.GetContextForPB(addressee) != null)
+        {
+            // Locally resolvable (or no session component at all): the vanilla path is untouched.
+            return true;
+        }
+        // ClusterPlugin patch point: MyIntergridCommunicationContextPatch.SendRemoteUnicast
+        // GetContextForPB only resolves blocks loaded on this node, so an addressee one partition away is
+        // indistinguishable from one that does not exist. The hook answers false for both cases it cannot
+        // route, which is exactly what vanilla already returns here.
+        __result = hook(__instance.ProgrammableBlock, addressee, tag, data);
+        return false;
+    }
 }

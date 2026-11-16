@@ -24,7 +24,11 @@ public static class MyEntityIdRemapHelperPatch
 
     [HarmonyPrefix]
     [HarmonyPatch(nameof(MyEntityIdRemapHelper.RemapEntityId))]
-    private static bool RemapEntityIdPrefix(MyEntityIdRemapHelper __instance, long oldEntityId, ref long __result)
+    private static bool RemapEntityIdPrefix(
+        MyEntityIdRemapHelper __instance,
+        long oldEntityId,
+        ref long __result
+    )
     {
         if (!EntityIdAllocator.Enabled)
             return true;
@@ -50,6 +54,7 @@ public static class MyEntityIdRemapHelperPatch
     private static void ClearPostfix(MyEntityIdRemapHelper __instance)
     {
         if (Batches.TryGetValue(__instance, out var batch))
-            lock (batch) batch.Ids.Clear();
+            lock (batch)
+                batch.Ids.Clear();
     }
 }

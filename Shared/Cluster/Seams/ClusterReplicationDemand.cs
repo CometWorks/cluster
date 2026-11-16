@@ -9,5 +9,5 @@ namespace VRage.Network;
 // runs another type's static constructor at install time.
 public static class ClusterReplicationDemand
 {
-	public static Action<Endpoint, long, bool, long, long, byte> Request;
+    public static Action<Endpoint, long, bool, long, long, byte> Request;
 }

@@ -16,18 +16,18 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyDedicatedServer), nameof(MyDedicatedServer.OnChatMessage))]
 public static class MyDedicatedServerPatch
 {
-	[HarmonyPrefix]
-	private static bool Prefix(out ulong __state)
-	{
-		ulong sender = MyEventContext.Current.Sender.Value;
-		if (sender == 0L && Sync.IsDedicated && !MyEventContext.Current.IsLocallyInvoked)
-			sender = Sync.MyId;
-		__state = sender;
-		return MyDedicatedServerSeams.ClusterChatSkipAccepted?.Invoke(sender) != true;
-	}
+    [HarmonyPrefix]
+    private static bool Prefix(out ulong __state)
+    {
+        ulong sender = MyEventContext.Current.Sender.Value;
+        if (sender == 0L && Sync.IsDedicated && !MyEventContext.Current.IsLocallyInvoked)
+            sender = Sync.MyId;
+        __state = sender;
+        return MyDedicatedServerSeams.ClusterChatSkipAccepted?.Invoke(sender) != true;
+    }
 
-	// ClusterPlugin patch point: ChatAuthorityPatch.AcceptedPostfix
-	[HarmonyPostfix]
-	private static void Postfix(ref ChatMsg msg, ulong __state)
-		=> MyDedicatedServerSeams.ClusterChatAccepted?.Invoke(msg, __state);
+    // ClusterPlugin patch point: ChatAuthorityPatch.AcceptedPostfix
+    [HarmonyPostfix]
+    private static void Postfix(ref ChatMsg msg, ulong __state) =>
+        MyDedicatedServerSeams.ClusterChatAccepted?.Invoke(msg, __state);
 }

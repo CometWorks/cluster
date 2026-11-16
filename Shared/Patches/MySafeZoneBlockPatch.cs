@@ -12,26 +12,37 @@ namespace Shared.Patches;
 /// </summary>
 public static class MySafeZoneBlockPatch
 {
-	[HarmonyPatch(typeof(MySafeZoneBlock), nameof(MySafeZoneBlock.Init), typeof(MyObjectBuilder_CubeBlock), typeof(MyCubeGrid))]
-	private static class Init
-	{
-		[HarmonyPostfix]
-		private static void Postfix(MySafeZoneBlock __instance, MyObjectBuilder_CubeBlock objectBuilder)
-			=> BlockSafeZones.Initialized(__instance, objectBuilder);
-	}
+    [HarmonyPatch(
+        typeof(MySafeZoneBlock),
+        nameof(MySafeZoneBlock.Init),
+        typeof(MyObjectBuilder_CubeBlock),
+        typeof(MyCubeGrid)
+    )]
+    private static class Init
+    {
+        [HarmonyPostfix]
+        private static void Postfix(
+            MySafeZoneBlock __instance,
+            MyObjectBuilder_CubeBlock objectBuilder
+        ) => BlockSafeZones.Initialized(__instance, objectBuilder);
+    }
 
-	[HarmonyPatch(typeof(MySafeZoneBlock), nameof(MySafeZoneBlock.GetObjectBuilderCubeBlock))]
-	private static class GetObjectBuilder
-	{
-		[HarmonyPostfix]
-		private static void Postfix(MySafeZoneBlock __instance, MyObjectBuilder_CubeBlock __result, bool copy)
-			=> BlockSafeZones.Saving(__instance, __result, copy);
-	}
+    [HarmonyPatch(typeof(MySafeZoneBlock), nameof(MySafeZoneBlock.GetObjectBuilderCubeBlock))]
+    private static class GetObjectBuilder
+    {
+        [HarmonyPostfix]
+        private static void Postfix(
+            MySafeZoneBlock __instance,
+            MyObjectBuilder_CubeBlock __result,
+            bool copy
+        ) => BlockSafeZones.Saving(__instance, __result, copy);
+    }
 
-	[HarmonyPatch(typeof(MySafeZoneBlock), nameof(MySafeZoneBlock.OnAddedToScene))]
-	private static class AddedToScene
-	{
-		[HarmonyPostfix]
-		private static void Postfix(MySafeZoneBlock __instance) => BlockSafeZones.AddedToScene(__instance);
-	}
+    [HarmonyPatch(typeof(MySafeZoneBlock), nameof(MySafeZoneBlock.OnAddedToScene))]
+    private static class AddedToScene
+    {
+        [HarmonyPostfix]
+        private static void Postfix(MySafeZoneBlock __instance) =>
+            BlockSafeZones.AddedToScene(__instance);
+    }
 }

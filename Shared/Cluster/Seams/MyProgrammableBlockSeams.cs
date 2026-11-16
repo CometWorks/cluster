@@ -10,7 +10,7 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyProgrammableBlockSeams
 {
-	// ClusterPlugin seam adapter for ProgrammableBlockMigrationPatch.PrepareProgram: called right
-	// after the vanilla lazy IGC_ContextGetter assignment and before the script constructor runs.
-	public static Action<MyProgrammableBlock, IMyGridProgram> ClusterPrepareProgram;
+    // ClusterPlugin seam adapter for ProgrammableBlockMigrationPatch.PrepareProgram: called right
+    // after the vanilla lazy IGC_ContextGetter assignment and before the script constructor runs.
+    public static Action<MyProgrammableBlock, IMyGridProgram> ClusterPrepareProgram;
 }

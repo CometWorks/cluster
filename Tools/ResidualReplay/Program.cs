@@ -19,12 +19,18 @@ class Program
     {
         if (args.Length < 3)
         {
-            Console.Error.WriteLine("usage: residual-replay <ClusterNode.dll> <source.xml[.gz]> <target.xml[.gz]> [gameDir]\n       residual-replay <ClusterNode.dll> --self-test <section> [gameDir]");
+            Console.Error.WriteLine(
+                "usage: residual-replay <ClusterNode.dll> <source.xml[.gz]> <target.xml[.gz]> [gameDir]\n       residual-replay <ClusterNode.dll> --self-test <section> [gameDir]"
+            );
             return 2;
         }
-        gameDir = args.Length > 3 ? args[3]
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".steam/steam/steamapps/common/SpaceEngineersDedicatedServer/DedicatedServer64");
+        gameDir =
+            args.Length > 3
+                ? args[3]
+                : Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".steam/steam/steamapps/common/SpaceEngineersDedicatedServer/DedicatedServer64"
+                );
         AssemblyLoadContext.Default.Resolving += (context, name) =>
         {
             string candidate = Path.Combine(gameDir, name.Name + ".dll");
@@ -34,10 +40,13 @@ class Program
         Assembly plugin = Assembly.LoadFrom(Path.GetFullPath(args[0]));
         // --self-test SECTION runs one node self-test section that needs no game session (handover-drift,
         // round-trip-normalize) the same way, so a gate rule is checked without starting a node.
-        if (args[1] == "--self-test") return SelfTest(plugin, args[2]);
-        Type type = plugin.GetType("ClusterPlugin.ImportRoundTrip")
+        if (args[1] == "--self-test")
+            return SelfTest(plugin, args[2]);
+        Type type =
+            plugin.GetType("ClusterPlugin.ImportRoundTrip")
             ?? throw new InvalidOperationException("ImportRoundTrip not found in " + args[0]);
-        MethodInfo method = type.GetMethod("ResidualsOfDocuments", BindingFlags.NonPublic | BindingFlags.Static)
+        MethodInfo method =
+            type.GetMethod("ResidualsOfDocuments", BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException("ResidualsOfDocuments not found");
 
         // Timing mode: ITERATIONS=<n> re-runs the walk on freshly loaded documents and reports the
@@ -52,12 +61,15 @@ class Program
         string displacedList = Environment.GetEnvironmentVariable("DISPLACED");
         if (!string.IsNullOrEmpty(displacedList))
             displaced = new HashSet<long>(Array.ConvertAll(displacedList.Split(','), long.Parse));
-        int iterations = int.TryParse(Environment.GetEnvironmentVariable("ITERATIONS"), out int n) ? n : 1;
+        int iterations = int.TryParse(Environment.GetEnvironmentVariable("ITERATIONS"), out int n)
+            ? n
+            : 1;
         List<string> residuals = null;
         List<double> times = new List<double>();
         for (int i = 0; i < iterations; i++)
         {
-            XDocument a = Load(args[1]), b = Load(args[2]);
+            XDocument a = Load(args[1]),
+                b = Load(args[2]);
             System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
             residuals = (List<string>)method.Invoke(null, new object[] { a, b, displaced });
             times.Add(watch.Elapsed.TotalMilliseconds);
@@ -67,22 +79,31 @@ class Program
             times.Sort();
             // Report the MEDIAN and the minimum: the first iterations carry JIT and the median is
             // robust to a GC pause landing in one sample.
-            Console.WriteLine($"compare ms over {iterations} runs: median {times[times.Count / 2]:F2}"
-                + $"  min {times[0]:F2}  max {times[times.Count - 1]:F2}");
+            Console.WriteLine(
+                $"compare ms over {iterations} runs: median {times[times.Count / 2]:F2}"
+                    + $"  min {times[0]:F2}  max {times[times.Count - 1]:F2}"
+            );
         }
 
         Console.WriteLine($"residuals: {residuals.Count}");
-        MethodInfo signature = type.GetMethod("Signature", BindingFlags.NonPublic | BindingFlags.Static);
+        MethodInfo signature = type.GetMethod(
+            "Signature",
+            BindingFlags.NonPublic | BindingFlags.Static
+        );
         if (signature != null)
             Console.WriteLine($"signature: {signature.Invoke(null, new object[] { residuals })}");
         Console.WriteLine();
-        foreach (string entry in residuals) Console.WriteLine("  " + entry);
+        foreach (string entry in residuals)
+            Console.WriteLine("  " + entry);
         return 0;
     }
 
     static int SelfTest(Assembly plugin, string section)
     {
-        MethodInfo run = plugin.GetType("ClusterPlugin.ClusterSelfTest")?.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)
+        MethodInfo run =
+            plugin
+                .GetType("ClusterPlugin.ClusterSelfTest")
+                ?.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)
             ?? throw new InvalidOperationException("ClusterSelfTest.Run not found");
         try
         {
@@ -101,7 +122,8 @@ class Program
     static XDocument Load(string path)
     {
         using Stream file = File.OpenRead(path);
-        if (!path.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)) return XDocument.Load(file);
+        if (!path.EndsWith(".gz", StringComparison.OrdinalIgnoreCase))
+            return XDocument.Load(file);
         using var gzip = new GZipStream(file, CompressionMode.Decompress);
         return XDocument.Load(gzip);
     }

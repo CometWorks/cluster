@@ -18,18 +18,37 @@ namespace ClusterPlugin;
 /// </summary>
 internal static class PublicizedEvents
 {
-	public static readonly Action<MyEntity, Action<MyEntity>> AddOnClosing = Accessor<MyEntity, Action<MyEntity>>("add_OnClosing");
-	public static readonly Action<MyEntity, Action<MyEntity>> RemoveOnClosing = Accessor<MyEntity, Action<MyEntity>>("remove_OnClosing");
-	public static readonly Action<MyDataReceiver, MyDataReceiver.BroadcasterChangeInfo> AddOnBroadcasterFound
-		= Accessor<MyDataReceiver, MyDataReceiver.BroadcasterChangeInfo>("add_OnBroadcasterFound");
-	public static readonly Action<MyDataReceiver, MyDataReceiver.BroadcasterChangeInfo> AddOnBroadcasterLost
-		= Accessor<MyDataReceiver, MyDataReceiver.BroadcasterChangeInfo>("add_OnBroadcasterLost");
+    public static readonly Action<MyEntity, Action<MyEntity>> AddOnClosing = Accessor<
+        MyEntity,
+        Action<MyEntity>
+    >("add_OnClosing");
+    public static readonly Action<MyEntity, Action<MyEntity>> RemoveOnClosing = Accessor<
+        MyEntity,
+        Action<MyEntity>
+    >("remove_OnClosing");
+    public static readonly Action<
+        MyDataReceiver,
+        MyDataReceiver.BroadcasterChangeInfo
+    > AddOnBroadcasterFound = Accessor<MyDataReceiver, MyDataReceiver.BroadcasterChangeInfo>(
+        "add_OnBroadcasterFound"
+    );
+    public static readonly Action<
+        MyDataReceiver,
+        MyDataReceiver.BroadcasterChangeInfo
+    > AddOnBroadcasterLost = Accessor<MyDataReceiver, MyDataReceiver.BroadcasterChangeInfo>(
+        "add_OnBroadcasterLost"
+    );
 
-	private static Action<T, THandler> Accessor<T, THandler>(string name)
-	{
-		MethodInfo accessor = typeof(T).GetMethod(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-			null, new[] { typeof(THandler) }, null)
-			?? throw new MissingMethodException(typeof(T).FullName, name);
-		return (Action<T, THandler>)Delegate.CreateDelegate(typeof(Action<T, THandler>), accessor);
-	}
+    private static Action<T, THandler> Accessor<T, THandler>(string name)
+    {
+        MethodInfo accessor =
+            typeof(T).GetMethod(
+                name,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                null,
+                new[] { typeof(THandler) },
+                null
+            ) ?? throw new MissingMethodException(typeof(T).FullName, name);
+        return (Action<T, THandler>)Delegate.CreateDelegate(typeof(Action<T, THandler>), accessor);
+    }
 }

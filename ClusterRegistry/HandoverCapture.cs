@@ -11,7 +11,11 @@ namespace ClusterRegistry;
 /// where format 1 wrote the client-state length, so a format-1 reader rejects it as an invalid
 /// length instead of silently mis-slicing the payload if gateway and plugin ever ship out of step.
 /// </remarks>
-internal sealed record HandoverCapture(IReadOnlyDictionary<ulong, string> ClientStates, string NetworkState, byte[] Sector)
+internal sealed record HandoverCapture(
+    IReadOnlyDictionary<ulong, string> ClientStates,
+    string NetworkState,
+    byte[] Sector
+)
 {
     // Sanity bounds on lengths read from the payload, so a corrupt length cannot make
     // ReadBytes allocate wildly.  They are NOT a statement about how large a legitimate
@@ -38,10 +42,14 @@ internal sealed record HandoverCapture(IReadOnlyDictionary<ulong, string> Client
         using BinaryReader reader = new(new MemoryStream(payload, writable: false));
         int marker = reader.ReadInt32();
         if (marker != -1)
-            throw new InvalidDataException($"Unrecognised handover capture: expected the format marker, read {marker}");
+            throw new InvalidDataException(
+                $"Unrecognised handover capture: expected the format marker, read {marker}"
+            );
         int format = reader.ReadInt32();
         if (format != Format)
-            throw new InvalidDataException($"Unsupported handover capture format {format}; this gateway reads {Format}");
+            throw new InvalidDataException(
+                $"Unsupported handover capture format {format}; this gateway reads {Format}"
+            );
         int clientCount = reader.ReadInt32();
         if (clientCount < 0 || clientCount > MaxClients)
             throw new InvalidDataException($"Invalid client count: {clientCount}");
@@ -56,8 +64,15 @@ internal sealed record HandoverCapture(IReadOnlyDictionary<ulong, string> Client
         int sectorLength = ReadLength(reader, MaxSectorBytes, "sector");
         Dictionary<ulong, string> states = [];
         for (int i = 0; i < clientCount; i++)
-            if (!states.TryAdd(clients[i], Encoding.UTF8.GetString(ReadExactly(reader, stateLengths[i]))))
-                throw new InvalidDataException($"Duplicate client {clients[i]} in handover capture");
+            if (
+                !states.TryAdd(
+                    clients[i],
+                    Encoding.UTF8.GetString(ReadExactly(reader, stateLengths[i]))
+                )
+            )
+                throw new InvalidDataException(
+                    $"Duplicate client {clients[i]} in handover capture"
+                );
         string network = Encoding.UTF8.GetString(ReadExactly(reader, networkLength));
         byte[] sector = ReadExactly(reader, sectorLength);
         if (reader.BaseStream.Position != reader.BaseStream.Length)
@@ -66,10 +81,15 @@ internal sealed record HandoverCapture(IReadOnlyDictionary<ulong, string> Client
     }
 
     /// <summary>Total client-state bytes, for telemetry that used to report the single client's size.</summary>
-    public int ClientStateBytes => ClientStates.Values.Sum(state => Encoding.UTF8.GetByteCount(state));
+    public int ClientStateBytes =>
+        ClientStates.Values.Sum(state => Encoding.UTF8.GetByteCount(state));
 
-    public string StateFor(ulong client) => ClientStates.TryGetValue(client, out string? state) ? state
-        : throw new InvalidDataException($"Handover capture carries no state for client {client}");
+    public string StateFor(ulong client) =>
+        ClientStates.TryGetValue(client, out string? state)
+            ? state
+            : throw new InvalidDataException(
+                $"Handover capture carries no state for client {client}"
+            );
 
     private static int ReadLength(BinaryReader reader, int maximum, string name)
     {

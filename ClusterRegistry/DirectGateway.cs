@@ -1,5 +1,5 @@
-using System.Collections.Concurrent;
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Net;
@@ -23,17 +23,20 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     private readonly ConcurrentDictionary<ulong, ClientSession> _clients = new();
     private readonly ConcurrentDictionary<IPEndPoint, NodeLink> _nodes = new();
     private readonly ConcurrentDictionary<long, PendingGatewayCommand> _gatewayCommands = new();
-	private readonly object _identitySnapshotLock = new();
-	private long _identitySnapshotGeneration;
-	private long _identitySnapshotSequence;
+    private readonly object _identitySnapshotLock = new();
+    private long _identitySnapshotGeneration;
+    private long _identitySnapshotSequence;
     private readonly ConcurrentDictionary<string, HandoverPause> _handoverPauses = new();
     private readonly HandoverTelemetry _handoverTelemetry = new();
+
     // T-0391: replaceable at run time through POST /balance/cost-model (a live balancer A/B); every pass reads it anew.
     // #1278 (F35): written only by OverrideCostModel under _costModelSwap; a pass reads it ONCE (CostModel model = _costModel).
     private volatile CostModel _costModel;
     private readonly object _costModelSwap = new();
+
     /// <summary>T-0141: per-node load EMA, one step per co-location pass. See SmoothNodeLoads.</summary>
     private readonly Dictionary<string, double> _nodeLoadEma = new();
+
     /// <summary>
     /// EMA weight on the newest pass. 0.25 gives a ~4-pass time constant, which at the observed
     /// pass rate spans the arrival transient that makes the raw signal jump (a partition landing
@@ -43,9 +46,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     private readonly ManualResetEventSlim _stop = new(false);
     private readonly HttpClient _http;
     private readonly SemaphoreSlim _rotation = new(1, 1);
+
     /// <summary>SE1-0084: set by POST /registry/report-now, a node whose member entered or left the fast state.
     /// The automatic loop then starts its next pass at once instead of after its one second wait.</summary>
     private readonly AutoResetEvent _passNow = new(false);
+
     /// <summary>Requested passes still start at least this long after the previous one did, so a flapping
     /// member cannot turn the loop into a busy one.</summary>
     private static readonly TimeSpan MinPassGap = TimeSpan.FromMilliseconds(200);
@@ -74,16 +79,27 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         double ms = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
         if (always || ms >= 1000)
-            Console.WriteLine("rotation_wait source=" + source + " partition=" + (partition?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "-")
-                + " ms=" + ms.ToString("F0", System.Globalization.CultureInfo.InvariantCulture));
+            Console.WriteLine(
+                "rotation_wait source="
+                    + source
+                    + " partition="
+                    + (
+                        partition?.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        ?? "-"
+                    )
+                    + " ms="
+                    + ms.ToString("F0", System.Globalization.CultureInfo.InvariantCulture)
+            );
     }
 
     // A partition the target cannot import repeats every rotation and never resolves - and because the
     // loop always takes the closest pair, the one that cannot move starves every pair that can. A second
     // apart, the freeze/serialize/import cycle it runs is enough to move the simulation speed. Back a
     // failing partition off so the cluster keeps working on what it can and the failure stays visible.
-    private readonly Dictionary<ulong, (int Failures, DateTime NextAttempt)> _handoverBackoff = new();
+    private readonly Dictionary<ulong, (int Failures, DateTime NextAttempt)> _handoverBackoff =
+        new();
     private const double HandoverBackoffCapSeconds = 300;
+
     // SE-1080: a balance migration is optional, but while its crew's adopt-ready poll runs the moving partition
     // is frozen on the source and this loop does nothing else - no co-location, wake or drain. The full budget
     // (30 s + 10 s per extra client) let a trader crew whose binding never matched hold the loop 101-112 s per
@@ -102,9 +118,15 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// The existing guards were a global 60 s cooldown and the 180 s pin. 0 disables it.
     /// </summary>
     private static readonly double BalanceResidenceSeconds =
-        double.TryParse(Environment.GetEnvironmentVariable("CLUSTER_BALANCE_RESIDENCE_SECONDS"),
-            System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double residence)
-            && residence >= 0 ? residence : 600;
+        double.TryParse(
+            Environment.GetEnvironmentVariable("CLUSTER_BALANCE_RESIDENCE_SECONDS"),
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out double residence
+        )
+        && residence >= 0
+            ? residence
+            : 600;
 
     /// <summary>Only a partition whose migration is itself a stall is held: the residence must not freeze
     /// the many small approach loads around the fleet in place. T-0393: the threshold is the cost model's
@@ -116,10 +138,17 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     // there is. 61fbda6 2026-09-26 09:41:18: P517's first report (import-inflated, 1.14M sim-us/s) reached the
     // planner one second before the row dropped at 09:41:19 ('back ONLINE', where the arrival is noted), and
     // the load pinned it node-1->node-3 in that second.
-    private bool RecentlyArrived(ulong partition, IReadOnlyDictionary<ulong, PartitionInfo> reported, CostModel model) =>
+    private bool RecentlyArrived(
+        ulong partition,
+        IReadOnlyDictionary<ulong, PartitionInfo> reported,
+        CostModel model
+    ) =>
         BalanceResidenceSeconds > 0
-        && (_registry?.IsOffline(partition) == true
-            || _registry?.ArrivedAt(partition) is DateTime at && (DateTime.UtcNow - at).TotalSeconds < BalanceResidenceSeconds)
+        && (
+            _registry?.IsOffline(partition) == true
+            || _registry?.ArrivedAt(partition) is DateTime at
+                && (DateTime.UtcNow - at).TotalSeconds < BalanceResidenceSeconds
+        )
         && reported.TryGetValue(partition, out PartitionInfo? info)
         && ResidenceSizeHeld(model, info);
 
@@ -128,17 +157,33 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// without it and a resident partition the planner would have moved is logged (618b165 07:18-07:38:
     /// P517 stayed on node-1, but node-1 was never a source, so its zero did not discriminate).
     /// </summary>
-    private static void LogResidenceHeld(HashSet<ulong> resident, IReadOnlyDictionary<ulong, PartitionInfo> reported,
-        RebalancePlan[] chosen, RebalancePlan[] without)
+    private static void LogResidenceHeld(
+        HashSet<ulong> resident,
+        IReadOnlyDictionary<ulong, PartitionInfo> reported,
+        RebalancePlan[] chosen,
+        RebalancePlan[] without
+    )
     {
         foreach (RebalancePlan plan in without)
         {
             ulong[] held = plan.Members.Select(m => m.Id).Where(resident.Contains).ToArray();
-            if (held.Length == 0) continue;
-            Console.WriteLine($"Balance residence held partition(s) {string.Join(",", held)}: without residence the planner"
-                + $" would move a component of {plan.Members.Length} {plan.Source}->{plan.Target}, peak {plan.OldPeak}->{plan.NewPeak}"
-                + $" {plan.LoadUnit}, estimated lag {plan.CostMs:F0} ms; chosen instead: "
-                + (chosen.Length == 0 ? "nothing" : string.Join("; ", chosen.Select(c => $"{c.Members.Length} partition(s) {c.Source}->{c.Target}"))));
+            if (held.Length == 0)
+                continue;
+            Console.WriteLine(
+                $"Balance residence held partition(s) {string.Join(",", held)}: without residence the planner"
+                    + $" would move a component of {plan.Members.Length} {plan.Source}->{plan.Target}, peak {plan.OldPeak}->{plan.NewPeak}"
+                    + $" {plan.LoadUnit}, estimated lag {plan.CostMs:F0} ms; chosen instead: "
+                    + (
+                        chosen.Length == 0
+                            ? "nothing"
+                            : string.Join(
+                                "; ",
+                                chosen.Select(c =>
+                                    $"{c.Members.Length} partition(s) {c.Source}->{c.Target}"
+                                )
+                            )
+                    )
+            );
         }
     }
 
@@ -148,38 +193,50 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// handover backoff (<paramref name="moverHeld"/>). The planner builds its components per node, so it saw the two
     /// halves of that split component as separate units and could pin the half that is NOT held to a third node.
     /// </summary>
-    internal static bool RebalanceMayStart(bool moveChosen, bool moverHeld) => !moveChosen && !moverHeld;
+    internal static bool RebalanceMayStart(bool moveChosen, bool moverHeld) =>
+        !moveChosen && !moverHeld;
 
     private bool InHandoverBackoff(ulong partition)
     {
         lock (_handoverBackoff)
-            return _handoverBackoff.TryGetValue(partition, out var state) && DateTime.UtcNow < state.NextAttempt;
+            return _handoverBackoff.TryGetValue(partition, out var state)
+                && DateTime.UtcNow < state.NextAttempt;
     }
 
     private void RecordHandoverFailure(ulong partition, bool backOffFully = false)
     {
         lock (_handoverBackoff)
         {
-            int failures = _handoverBackoff.TryGetValue(partition, out var state) ? state.Failures + 1 : 1;
-            double seconds = backOffFully ? HandoverBackoffCapSeconds : Math.Min(HandoverBackoffCapSeconds, Math.Pow(2, Math.Min(failures, 9)));
+            int failures = _handoverBackoff.TryGetValue(partition, out var state)
+                ? state.Failures + 1
+                : 1;
+            double seconds = backOffFully
+                ? HandoverBackoffCapSeconds
+                : Math.Min(HandoverBackoffCapSeconds, Math.Pow(2, Math.Min(failures, 9)));
             _handoverBackoff[partition] = (failures, DateTime.UtcNow.AddSeconds(seconds));
             if (failures == 1 || failures % 10 == 0)
-                Console.Error.WriteLine($"Partition {partition} handover has failed {failures} time(s); next attempt in {seconds:F0}s");
+                Console.Error.WriteLine(
+                    $"Partition {partition} handover has failed {failures} time(s); next attempt in {seconds:F0}s"
+                );
         }
     }
 
     private void RecordHandoverSuccess(ulong partition)
     {
-        lock (_handoverBackoff) _handoverBackoff.Remove(partition);
-        lock (_lastHandover) _lastHandover[partition] = DateTime.UtcNow;
+        lock (_handoverBackoff)
+            _handoverBackoff.Remove(partition);
+        lock (_lastHandover)
+            _lastHandover[partition] = DateTime.UtcNow;
     }
 
     /// <summary>Partitioning §6.10: the durable HandoverBlocked exclusion, distinct from the transient backoff above.</summary>
-    private bool ValidationBlocked(ulong partition) => _registry?.HandoverScheduleBlocked(partition) ?? false;
+    private bool ValidationBlocked(ulong partition) =>
+        _registry?.HandoverScheduleBlocked(partition) ?? false;
 
     // Stamped on every completed handover; read by the --unthrottled admin release only. The old
     // per-partition balance dwell that consumed it is gone with the global rebalance design.
     private readonly Dictionary<ulong, DateTime> _lastHandover = new();
+
     // Pacing between rebalance INITIATIONS, not a limit on what may move: the member transfers of a
     // pinned migration ride the ordinary one-transfer-per-pass loop (Partitioning 7.3's sequential
     // freezes), and reason "balance-migration" re-arms this stamp so a fresh migration is not layered
@@ -187,36 +244,45 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     private const double BalanceCooldownSeconds = 60;
     private const double BalanceDeclineLogSeconds = 300;
     private DateTime _lastBalanceDeclineLogged = DateTime.MinValue;
+
     // T-0409: load-floor held passes (paced planner) and the rate limit of their log line.
     private long _balanceFloorHeldPasses;
     private DateTime _lastBalanceFloorLogged = DateTime.MinValue;
+
     // T-0409 follow-up: candidates the peak-drop guard refused, and passes it left without a plan (paced planner).
     private long _balancePeakDropSkips;
     private long _balancePeakDropHeldPasses;
     private DateTime _lastBudgetExhaustedLogged = DateTime.MinValue;
+
     /// <summary>T-0393: hysteresis, move budget and last-hour counters of the balancer (see BalancePace).</summary>
     private readonly BalancePace _balancePace = new();
+
     /// <summary>
     /// Above this member speed (m/s) a partition is "in flight" and the balancer leaves it alone
     /// (T-0074). Well above a character on foot, well below any ship under way on a leg.
     /// </summary>
     internal const double InFlightSpeed = 20;
     private DateTime _lastBalanceMove = DateTime.MinValue;
+
     // Docs/GlobalLoadBalancing.md 5: an in-flight rebalance pins each member of the moving component
     // to its target node; the co-location chooser treats the pin as the component's home, which is what
     // lets a migration start minority-first without being dragged back. Pins renew on progress and
     // expire on stall, so a dead migration reverts to cost-based homing.
     private const double MigrationPinSeconds = 180;
-    private readonly Dictionary<ulong, (string Target, DateTime Expires)> _balanceMigrations = new();
+    private readonly Dictionary<ulong, (string Target, DateTime Expires)> _balanceMigrations =
+        new();
+
     // Edge-triggered marker for the balance pause (recovery or rotation), so the 1 Hz loop logs
     // the pause once on entry and once on exit instead of every second.
     private string? _balancePauseReason;
     private DateTime _balanceResumedAt = DateTime.MinValue;
+
     // How long after a spare activation the load distribution is treated as rotation-transient.
     // Measured w23 rotations (activation -> node back) run 41-70 s; 90 covers them with slack.
     // Not a balance-behavior limit - an operational filter on WHEN the balancer trusts its
     // snapshot, the same class as the recovery pause.
     private const double RotationSettlingSeconds = 90;
+
     /// <summary>
     /// T-0235: nodes an operator /handover moved a partition OFF, with when. The rotator drains a
     /// node partition by partition through /handover and closes it only at the end, and its paced
@@ -226,12 +292,16 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// and was recovered from its Final save. Every drain move re-arms the entry, so balancing
     /// stays paused, and pins into the node are dropped, for as long as the drain keeps moving.
     /// </summary>
-    private readonly ConcurrentDictionary<string, DateTime> _drainSources = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, DateTime> _drainSources = new(
+        StringComparer.Ordinal
+    );
+
     // A partition younger than this whose gap is under the invariant reads as the join/respawn
     // spawn-adjacency class (fresh character partition next to another node's grids, co-located
     // sub-second) and logs WITHOUT the ALARM prefix, keeping the alarm channel pure signal.
     // Measured w23 19:45-19:53: 27/27 such events on sub-30 s partitions, resolved in 0-17 s.
     private const double SpawnAdjacencySeconds = 30;
+
     // First time each live partition id appeared in a node report; ages the spawn-adjacency
     // demotion. Pruned against the live id set so retired ids do not accumulate.
     private readonly Dictionary<ulong, DateTime> _partitionFirstSeen = new();
@@ -241,7 +311,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         lock (_partitionFirstSeen)
             return _partitionFirstSeen.TryGetValue(partition, out DateTime seen)
-                ? (DateTime.UtcNow - seen).TotalSeconds : 0;
+                ? (DateTime.UtcNow - seen).TotalSeconds
+                : 0;
     }
 
     private void StampFirstSeen(HashSet<ulong> live)
@@ -249,13 +320,16 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         DateTime now = DateTime.UtcNow;
         lock (_partitionFirstSeen)
         {
-            foreach (ulong id in live) _partitionFirstSeen.TryAdd(id, now);
-            if ((now - _lastFirstSeenPrune).TotalSeconds < 300) return;
+            foreach (ulong id in live)
+                _partitionFirstSeen.TryAdd(id, now);
+            if ((now - _lastFirstSeenPrune).TotalSeconds < 300)
+                return;
             _lastFirstSeenPrune = now;
             foreach (ulong id in _partitionFirstSeen.Keys.Where(id => !live.Contains(id)).ToArray())
                 _partitionFirstSeen.Remove(id);
         }
     }
+
     private DateTime _lastCatalogGc = DateTime.MinValue;
 
     /// <summary>
@@ -288,22 +362,38 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     private Thread? _leaseThread;
     private volatile bool _running;
     private volatile bool _paused;
+
     // AdmissionOpen gates new joins. Existing sessions remain routed while their
     // authority binding is current; only an explicit/persistence pause holds relay.
     private bool RelayPaused => _paused || _registry is { PersistenceFailed: true };
+
     /// <summary>Set by the graceful shutdown's notice phase: no new joins while players are told and
     /// sent to the menu. Never persisted, so the next start admits everyone again (no kick cooldown).</summary>
     private volatile bool _joiningClosed;
     private bool JoiningClosed => _joiningClosed || _registry is { AdmissionOpen: false };
+
     /// <summary>Self-test: the first step of the graceful shutdown, alone.</summary>
     internal void CloseJoiningForSelfTest() => _joiningClosed = true;
+
     private volatile bool _automaticSuspended;
     private long? _forceOnlyDrainEpoch;
-    private long _clientPackets, _clientBytes, _nodePackets, _nodeBytes, _relayTicks, _relayAllocations, _duplicateServerData, _queueOverflows;
-    private long _globalMessages, _rejectedGlobalMessages, _admissionRejections, _singleFlightRefusals;
+    private long _clientPackets,
+        _clientBytes,
+        _nodePackets,
+        _nodeBytes,
+        _relayTicks,
+        _relayAllocations,
+        _duplicateServerData,
+        _queueOverflows;
+    private long _globalMessages,
+        _rejectedGlobalMessages,
+        _admissionRejections,
+        _singleFlightRefusals;
+
     /// <summary>A test verdict armed for the next joining client, -1 when none. See §9 items 1-2.</summary>
     private int _armedTicketVerdict = -1;
     private long _gatewayCommandSequence;
+
     //: Round-robin cursor for clients the registry has no partition route for.
     private long _unroutedCursor;
     private readonly AdminTokenFile? _adminTokens;
@@ -313,27 +403,50 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
 
     public DirectGateway(GatewayOptions options)
     {
-        string? expectedVersion = Environment.GetEnvironmentVariable("CLUSTER_DIRECT_TRANSPORT_VERSION");
+        string? expectedVersion = Environment.GetEnvironmentVariable(
+            "CLUSTER_DIRECT_TRANSPORT_VERSION"
+        );
         if (expectedVersion != null && expectedVersion != DirectTransportConstants.VanillaVersion)
-            throw new InvalidOperationException($"Direct Transport codec is pinned to {DirectTransportConstants.VanillaVersion}, not {expectedVersion}");
+            throw new InvalidOperationException(
+                $"Direct Transport codec is pinned to {DirectTransportConstants.VanillaVersion}, not {expectedVersion}"
+            );
         _options = options;
-        _http = new HttpClient(new NodeCallHandler(this) { InnerHandler = new HttpClientHandler() });
+        _http = new HttpClient(
+            new NodeCallHandler(this) { InnerHandler = new HttpClientHandler() }
+        );
         _http.Timeout = TimeSpan.FromSeconds(10);
         if (options.AdminToken != null)
-            _http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", options.AdminToken);
+            _http.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", options.AdminToken);
         _paused = options.Paused;
         _costModel = CostModel.Load(options.CostModelPath);
-        _adminTokens = options.AdminTokensPath == null ? null : AdminTokenFile.Load(options.AdminTokensPath);
+        _adminTokens =
+            options.AdminTokensPath == null ? null : AdminTokenFile.Load(options.AdminTokensPath);
         _events = new EventLog(options.RegistryDirectory);
-        _registry = options.RegistryDirectory == null ? null : new GatewayRegistry(options.RegistryDirectory, options.Admission!, leaseTtl: options.LeaseTtl, managedDeployment: GatewayRegistry.ReadManagedDeployment(),
-            gatewayHost: Environment.GetEnvironmentVariable("CLUSTER_GATEWAY_HOST") is { Length: > 0 } gatewayHost ? gatewayHost : null);
+        _registry =
+            options.RegistryDirectory == null
+                ? null
+                : new GatewayRegistry(
+                    options.RegistryDirectory,
+                    options.Admission!,
+                    leaseTtl: options.LeaseTtl,
+                    managedDeployment: GatewayRegistry.ReadManagedDeployment(),
+                    gatewayHost: Environment.GetEnvironmentVariable("CLUSTER_GATEWAY_HOST")
+                        is { Length: > 0 } gatewayHost
+                        ? gatewayHost
+                        : null
+                );
         if (_registry != null)
         {
             _registry.EventSink = (type, target, data) =>
             {
                 _events.Append(type, target: target, data: data);
                 // Invoked inside the registry lock: only queue the reaction (T-0244).
-                if (type == "node.dead" && data != null && data.TryGetValue("endpoint", out string? endpoint))
+                if (
+                    type == "node.dead"
+                    && data != null
+                    && data.TryGetValue("endpoint", out string? endpoint)
+                )
                     ThreadPool.QueueUserWorkItem(_ => OnRegistryNodeDead(target, endpoint));
             };
             _registry.DrainingNodes = DrainingNodes;
@@ -341,29 +454,40 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // T-0321 P4: lease hold for remote nodes inside the configured network windows (off unless configured).
             _registry.LeaseHold = NetworkWindows.FromEnvironment();
             if (_registry.LeaseHold is { } hold)
-                Console.WriteLine($"Network windows: {string.Join(", ", hold.Windows.Select(w => w.Start.ToString(@"hh\:mm") + "-" + w.End.ToString(@"hh\:mm")))} (+{hold.Grace.TotalSeconds:0} s); "
-                    + $"leases of nodes not on {hold.GatewayHost} are held inside them");
+                Console.WriteLine(
+                    $"Network windows: {string.Join(", ", hold.Windows.Select(w => w.Start.ToString(@"hh\:mm") + "-" + w.End.ToString(@"hh\:mm")))} (+{hold.Grace.TotalSeconds:0} s); "
+                        + $"leases of nodes not on {hold.GatewayHost} are held inside them"
+                );
         }
         _admission = new AdmissionBook(AdmissionSettings.Load(options.AdmissionConfig));
         _banStore = BanStore.Open(options.RegistryDirectory);
         foreach (ulong banned in _banStore?.Load() ?? [])
             _admission.Ban(banned, true);
         _artifacts = options.ExportRoot == null ? null : new ArtifactStore(options.ExportRoot);
-        _eos = options.EosListen == null ? null
-            : new EosFrontend(options.EosListen, DirectTransportConstants.VanillaVersion);
+        _eos =
+            options.EosListen == null
+                ? null
+                : new EosFrontend(options.EosListen, DirectTransportConstants.VanillaVersion);
         // T-0229: with --relay external gateway-rs is the Steam frontend; C# keeps the decisions.
-        _steam = options.SteamListen == null || options.ExternalRelay ? null
-            : new SteamFrontend(options.SteamListen, DirectTransportConstants.VanillaVersion, _admission,
-                acceptAllTag: options.DirectFrontend)
-            {
-                SessionRequested = OpenSteamSession,
-                Received = OnSteamPacket,
-                SessionFailed = (userId, reason) => CloseSteamSession(userId, "steam-session-failed: " + reason),
-                SessionClosed = userId => CloseSteamSession(userId, "steam-session-closed"),
-                TicketValidated = OnSteamTicket,
-                GroupStatus = OnSteamGroupStatus,
-                Players = ClusterPlayers,
-            };
+        _steam =
+            options.SteamListen == null || options.ExternalRelay
+                ? null
+                : new SteamFrontend(
+                    options.SteamListen,
+                    DirectTransportConstants.VanillaVersion,
+                    _admission,
+                    acceptAllTag: options.DirectFrontend
+                )
+                {
+                    SessionRequested = OpenSteamSession,
+                    Received = OnSteamPacket,
+                    SessionFailed = (userId, reason) =>
+                        CloseSteamSession(userId, "steam-session-failed: " + reason),
+                    SessionClosed = userId => CloseSteamSession(userId, "steam-session-closed"),
+                    TicketValidated = OnSteamTicket,
+                    GroupStatus = OnSteamGroupStatus,
+                    Players = ClusterPlayers,
+                };
         _front = CreateManager(this);
         // A client re-streaming its whole world view after a cross-node respawn switch can go silent
         // longer than the default 30s (observed ~50s), and a front timeout tears the session down -
@@ -376,11 +500,25 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     public void Run()
     {
         // SE-842: not Stop(), which disconnects the nodes: they stay up for the respawn.
-        using PosixSignalRegistration sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, _ => ExitOnSigterm(_registry));
-        if (_registry != null && _options.SourceControl != null && _options.TargetControl != null && _options.TargetBackend != null)
+        using PosixSignalRegistration sigterm = PosixSignalRegistration.Create(
+            PosixSignal.SIGTERM,
+            _ => ExitOnSigterm(_registry)
+        );
+        if (
+            _registry != null
+            && _options.SourceControl != null
+            && _options.TargetControl != null
+            && _options.TargetBackend != null
+        )
         {
-            try { ReconcileHandovers().GetAwaiter().GetResult(); }
-            catch (Exception e) { Console.Error.WriteLine("Startup handover reconciliation failed: " + e.Message); }
+            try
+            {
+                ReconcileHandovers().GetAwaiter().GetResult();
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("Startup handover reconciliation failed: " + e.Message);
+            }
         }
         if (_options.ExternalRelay)
             StartExternalRelay();
@@ -389,11 +527,15 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // The v6 socket has to follow the v4 bind: IPv6Any next to a loopback --listen would put the
             // accept-all frontend on every v6 interface, which is exactly what Security.md §3.6 forbids and
             // what the loopback check in GatewayOptions promises against.
-            IPAddress listenV6 = IPAddress.IsLoopback(_options.Listen.Address) ? IPAddress.IPv6Loopback : IPAddress.IPv6Any;
+            IPAddress listenV6 = IPAddress.IsLoopback(_options.Listen.Address)
+                ? IPAddress.IPv6Loopback
+                : IPAddress.IPv6Any;
             if (!_front.Start(_options.Listen.Address, listenV6, _options.Listen.Port))
                 throw new InvalidOperationException($"Failed to bind gateway on {_options.Listen}");
-            Console.WriteLine("WARNING: the Direct Transport frontend is enabled on "
-                + $"{_options.Listen} with accept-all admission (Security.md §3.6)");
+            Console.WriteLine(
+                "WARNING: the Direct Transport frontend is enabled on "
+                    + $"{_options.Listen} with accept-all admission (Security.md §3.6)"
+            );
         }
         if (!_options.ExternalRelay)
         {
@@ -404,18 +546,29 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         }
 
         _running = true;
-        _frontThread = _options.DirectFrontend && !_options.ExternalRelay ? StartPollThread("Gateway-Client-Poll", _front) : null;
+        _frontThread =
+            _options.DirectFrontend && !_options.ExternalRelay
+                ? StartPollThread("Gateway-Client-Poll", _front)
+                : null;
         StartSessionMaintenance();
-        _backThread = _options.ExternalRelay ? null : StartPollThread("Gateway-Backend-Poll", _back);
+        _backThread = _options.ExternalRelay
+            ? null
+            : StartPollThread("Gateway-Backend-Poll", _back);
         StartControl();
         StartLeaseExpiry();
         StartAutomaticHandover();
 
-        Console.WriteLine($"Gateway listening on {(_options.DirectFrontend ? _options.Listen.ToString() + " (direct)" : "")}"
-            + $"{(!SteamEnabled ? "" : (_options.DirectFrontend ? " " : "") + _options.SteamListen + " (steam)")}"
-            + $"{(_eos == null ? "" : " " + _options.EosListen + " (eos, login only)")}"
-            + $", backend {_options.Backend}");
-        Console.CancelKeyPress += (_, e) => { e.Cancel = true; Stop(); };
+        Console.WriteLine(
+            $"Gateway listening on {(_options.DirectFrontend ? _options.Listen.ToString() + " (direct)" : "")}"
+                + $"{(!SteamEnabled ? "" : (_options.DirectFrontend ? " " : "") + _options.SteamListen + " (steam)")}"
+                + $"{(_eos == null ? "" : " " + _options.EosListen + " (eos, login only)")}"
+                + $", backend {_options.Backend}"
+        );
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            Stop();
+        };
         _stop.Wait();
     }
 
@@ -427,8 +580,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     internal static void ExitOnSigterm(GatewayRegistry? registry)
     {
         bool committed = registry?.FlushAndHold(SigtermFlushTimeout) ?? true;
-        Console.WriteLine(committed ? "SIGTERM: Registry state committed, exiting"
-            : $"WARNING: SIGTERM: Registry state not committed within {SigtermFlushTimeout.TotalSeconds:0} s, exiting without it");
+        Console.WriteLine(
+            committed
+                ? "SIGTERM: Registry state committed, exiting"
+                : $"WARNING: SIGTERM: Registry state not committed within {SigtermFlushTimeout.TotalSeconds:0} s, exiting without it"
+        );
         Environment.Exit(143);
     }
 
@@ -437,30 +593,75 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     public void Stop()
     {
         _running = false;
-		foreach (ClientSession session in _clients.Values) session.AdmissionCancellation.Cancel();
+        foreach (ClientSession session in _clients.Values)
+            session.AdmissionCancellation.Cancel();
         foreach (HandoverPause pause in _handoverPauses.Values)
             pause.Release.TrySetResult();
         _stop.Set();
-        try { _front.Stop(); } catch { }
-        try { _eos?.Stop(); } catch { }
-        try { _back.Stop(); } catch { }
+        try
+        {
+            _front.Stop();
+        }
+        catch { }
+        try
+        {
+            _eos?.Stop();
+        }
+        catch { }
+        try
+        {
+            _back.Stop();
+        }
+        catch { }
         foreach (NodeLink link in _nodes.Values)
             link.Connected.Dispose();
         _clients.Clear();
         _nodes.Clear();
-        try { _control?.Stop(); } catch { }
-        try { _steamPublishTimer?.Dispose(); } catch { }
-        try { _relay?.Dispose(); } catch { }
+        try
+        {
+            _control?.Stop();
+        }
+        catch { }
+        try
+        {
+            _steamPublishTimer?.Dispose();
+        }
+        catch { }
+        try
+        {
+            _relay?.Dispose();
+        }
+        catch { }
     }
 
     public void Dispose()
     {
         Stop();
-        try { _frontThread?.Join(500); } catch { }
-        try { _backThread?.Join(500); } catch { }
-        try { _controlThread?.Join(500); } catch { }
-        try { _automaticThread?.Join(500); } catch { }
-        try { _leaseThread?.Join(500); } catch { }
+        try
+        {
+            _frontThread?.Join(500);
+        }
+        catch { }
+        try
+        {
+            _backThread?.Join(500);
+        }
+        catch { }
+        try
+        {
+            _controlThread?.Join(500);
+        }
+        catch { }
+        try
+        {
+            _automaticThread?.Join(500);
+        }
+        catch { }
+        try
+        {
+            _leaseThread?.Join(500);
+        }
+        catch { }
         _steam?.Dispose();
         _stop.Dispose();
         _http.Dispose();
@@ -476,28 +677,68 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         {
             while (_running)
             {
-                try { _registry.ExpireLeases(); }
-                catch (Exception e) { Console.Error.WriteLine("Lease expiry failed: " + e.Message); }
-                try { _registry.CompleteStrandedShutdown(); }
-                catch (Exception e) { Console.Error.WriteLine("Stranded shutdown completion failed: " + e.Message); }
+                try
+                {
+                    _registry.ExpireLeases();
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine("Lease expiry failed: " + e.Message);
+                }
+                try
+                {
+                    _registry.CompleteStrandedShutdown();
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine("Stranded shutdown completion failed: " + e.Message);
+                }
                 // T-0320: node-control lifecycle, drain deadlines and the per-host planner (registry-only, no I/O).
-                try { _registry.NodeControlPass(); }
-                catch (Exception e) { Console.Error.WriteLine("Node control pass failed: " + e.Message); }
-				RefreshPlayerAdmissions();
-                foreach (NodeRegistration node in _registry.Nodes().Where(node => node.State == NodeState.Active))
+                try
+                {
+                    _registry.NodeControlPass();
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine("Node control pass failed: " + e.Message);
+                }
+                RefreshPlayerAdmissions();
+                foreach (
+                    NodeRegistration node in _registry
+                        .Nodes()
+                        .Where(node => node.State == NodeState.Active)
+                )
                 {
                     try
                     {
-                        NodeLink link = GetNodeLink(EndpointParser.Parse(node.Endpoint, DirectTransportConstants.DefaultPort));
+                        NodeLink link = GetNodeLink(
+                            EndpointParser.Parse(
+                                node.Endpoint,
+                                DirectTransportConstants.DefaultPort
+                            )
+                        );
                         ConnectBackend(link);
                     }
-                    catch (Exception e) { Console.Error.WriteLine("Node-link connect failed: " + e.Message); }
+                    catch (Exception e)
+                    {
+                        Console.Error.WriteLine("Node-link connect failed: " + e.Message);
+                    }
                 }
-                try { RefreshExternalRouting(); }
-                catch (Exception e) { Console.Error.WriteLine("Relay routing refresh failed: " + e.Message); }
+                try
+                {
+                    RefreshExternalRouting();
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine("Relay routing refresh failed: " + e.Message);
+                }
                 Thread.Sleep(1000);
             }
-        }) { Name = "Gateway-Lease-Expiry", IsBackground = true };
+        })
+        {
+            Name = "Gateway-Lease-Expiry",
+            IsBackground = true,
+        };
         _leaseThread.Start();
     }
 
@@ -505,9 +746,20 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         // With a registry the serving set comes from node registrations; the fixed CLI pair is
         // only required in the registry-less debug mode.
-        if (_registry == null && (_options.SourceControl == null || _options.TargetControl == null || _options.TargetBackend == null))
+        if (
+            _registry == null
+            && (
+                _options.SourceControl == null
+                || _options.TargetControl == null
+                || _options.TargetBackend == null
+            )
+        )
             return;
-        _automaticThread = new Thread(AutomaticHandoverLoop) { Name = "Gateway-Automatic-Handover", IsBackground = true };
+        _automaticThread = new Thread(AutomaticHandoverLoop)
+        {
+            Name = "Gateway-Automatic-Handover",
+            IsBackground = true,
+        };
         _automaticThread.Start();
     }
 
@@ -515,14 +767,32 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// or one side of the configured pair when running without a registry.</summary>
     private sealed record ServedNode(string Node, long Epoch, string Control, IPEndPoint Backend);
 
-    private ServedNode[] ServedNodes() => _registry != null
-        ? [.. _registry.Nodes()
-            .Where(x => x.Role == NodeRole.Regular && x.State == NodeState.Active && x.Serving && !x.Spare && x.ControlEndpoint != null)
-            .OrderBy(x => x.Node, StringComparer.Ordinal)
-            .Select(x => new ServedNode(x.Node, x.Epoch, StripScheme(x.ControlEndpoint!),
-                EndpointParser.Parse(x.Endpoint, DirectTransportConstants.DefaultPort)))]
-        : [new ServedNode("source", 0, _options.SourceControl!, _options.Backend),
-            new ServedNode("target", 0, _options.TargetControl!, _options.TargetBackend!)];
+    private ServedNode[] ServedNodes() =>
+        _registry != null
+            ?
+            [
+                .. _registry
+                    .Nodes()
+                    .Where(x =>
+                        x.Role == NodeRole.Regular
+                        && x.State == NodeState.Active
+                        && x.Serving
+                        && !x.Spare
+                        && x.ControlEndpoint != null
+                    )
+                    .OrderBy(x => x.Node, StringComparer.Ordinal)
+                    .Select(x => new ServedNode(
+                        x.Node,
+                        x.Epoch,
+                        StripScheme(x.ControlEndpoint!),
+                        EndpointParser.Parse(x.Endpoint, DirectTransportConstants.DefaultPort)
+                    )),
+            ]
+            :
+            [
+                new ServedNode("source", 0, _options.SourceControl!, _options.Backend),
+                new ServedNode("target", 0, _options.TargetControl!, _options.TargetBackend!),
+            ];
 
     /// <summary>
     /// Marks superseded saves for deletion on the schedule the nodes are already polling for.
@@ -535,20 +805,26 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// </summary>
     private void CollectSaveCatalog()
     {
-        if (_registry == null || (DateTime.UtcNow - _lastCatalogGc).TotalSeconds < CatalogGcSeconds) return;
+        if (_registry == null || (DateTime.UtcNow - _lastCatalogGc).TotalSeconds < CatalogGcSeconds)
+            return;
         _lastCatalogGc = DateTime.UtcNow;
         try
         {
             DeleteDirective[] deletions = _registry.PlanRetention();
             if (deletions.Length != 0)
-                Console.WriteLine($"Save catalogue GC marked {deletions.Length} superseded save copies for deletion");
+                Console.WriteLine(
+                    $"Save catalogue GC marked {deletions.Length} superseded save copies for deletion"
+                );
             // T-0323: then the rows of stopped nodes that nothing names any more. Takes the registry lock itself, twice,
             // and scans the archive between the two holds without it.
             _registry.ReleaseGoneRows();
         }
         catch (Exception exception)
         {
-            Console.WriteLine("WARNING: save catalogue GC did not run this round: " + SecretRedactor.Redact(exception.Message));
+            Console.WriteLine(
+                "WARNING: save catalogue GC did not run this round: "
+                    + SecretRedactor.Redact(exception.Message)
+            );
         }
     }
 
@@ -567,7 +843,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // pass, before reconciliation and the catalogue GC: those talk to nodes over
                 // HTTP and can throw for as long as a node is unreachable, and a durability
                 // flush must not be starved by somebody else's network problem.
-                if (_registry?.FlushDue == true) _registry.Flush();
+                if (_registry?.FlushDue == true)
+                    _registry.Flush();
                 if (_registry != null)
                     ReconcileHandovers().GetAwaiter().GetResult();
                 CollectSaveCatalog();
@@ -580,22 +857,41 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     // partition's or a node's ABSENCE waits for a full one: the pin prune, the scale-in settle, the balance
                     // planner, the route-contradiction clock and the published snapshot (offline admission).
                     List<(ServedNode Node, string Error)> silent = [];
-                    (ServedNode Node, PartitionReport Report)[] reports = CollectReports(served, node => GetPartitions(node.Control), silent);
+                    (ServedNode Node, PartitionReport Report)[] reports = CollectReports(
+                        served,
+                        node => GetPartitions(node.Control),
+                        silent
+                    );
                     // SE-1134: everything below - the balancer, scale-in, drains, /diag's balance load - reads a node's
                     // sim ratio only once a dip has lasted (CostModel.SimRatioSustainSeconds).
-                    reports = SustainRatios(reports, node => node.Node, _lowRatioRuns, _costModel.SimRatioSustainSeconds, DateTime.UtcNow);
-                    string? missingReports = MissingReportPause([.. silent.Select(x => x.Node.Node)]);
+                    reports = SustainRatios(
+                        reports,
+                        node => node.Node,
+                        _lowRatioRuns,
+                        _costModel.SimRatioSustainSeconds,
+                        DateTime.UtcNow
+                    );
+                    string? missingReports = MissingReportPause([
+                        .. silent.Select(x => x.Node.Node),
+                    ]);
                     if (missingReports != _missingReports)
                     {
-                        Console.Error.WriteLine(missingReports != null
-                            ? $"Automatic handover pass is partial: {missingReports} ({string.Join("; ", silent.Select(x => x.Node.Node + ": " + x.Error))})"
-                            : "Automatic handover pass is complete again: every serving node reported");
+                        Console.Error.WriteLine(
+                            missingReports != null
+                                ? $"Automatic handover pass is partial: {missingReports} ({string.Join("; ", silent.Select(x => x.Node.Node + ": " + x.Error))})"
+                                : "Automatic handover pass is complete again: every serving node reported"
+                        );
                         _missingReports = missingReports;
                     }
                     if (reports.Select(x => x.Report.SyncDistance).Distinct().Count() > 1)
-                        throw new InvalidOperationException("Cluster nodes have different sync distances");
-                    StampFirstSeen([.. reports.SelectMany(x => x.Report.Partitions).Select(p => p.Id)]);
-                    if (missingReports == null) PruneMigrationPins(reports);
+                        throw new InvalidOperationException(
+                            "Cluster nodes have different sync distances"
+                        );
+                    StampFirstSeen([
+                        .. reports.SelectMany(x => x.Report.Partitions).Select(p => p.Id),
+                    ]);
+                    if (missingReports == null)
+                        PruneMigrationPins(reports);
                     // A node's partition report re-associates a freshly switched client only after
                     // the player binding settles, so for seconds after a switch its own partition
                     // reads as clientless. The registry's client routes are the authority: a
@@ -628,16 +924,31 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                             // RouteOverReportGrace still bounds a stale one.
                             else if (_registry.GetCharacterHome(clientId) is { } home)
                                 routes.Add((clientId, home.Partition));
-                        HashSet<ulong> reportsClients = ClientBearingAsReported([.. reports.SelectMany(x => x.Report.Partitions)],
-                            routes, partial: missingReports != null);
-                        routed = RoutedClientBearing(routes, reportsClients, _routeContradictedSince,
-                            DateTimeOffset.UtcNow, RouteOverReportGrace, out var expired);
+                        HashSet<ulong> reportsClients = ClientBearingAsReported(
+                            [.. reports.SelectMany(x => x.Report.Partitions)],
+                            routes,
+                            partial: missingReports != null
+                        );
+                        routed = RoutedClientBearing(
+                            routes,
+                            reportsClients,
+                            _routeContradictedSince,
+                            DateTimeOffset.UtcNow,
+                            RouteOverReportGrace,
+                            out var expired
+                        );
                         foreach ((ulong client, ulong partition, double seconds) in expired)
                             if (_routePinLogged.Add(partition))
-                                Console.WriteLine($"Partition {partition} is routed to client {client} but no node "
-                                    + $"has reported it client-bearing for {seconds:F0}s; trusting the node report "
-                                    + $"so the partition can be handed over again");
-                        foreach (ulong partition in _routePinLogged.Where(x => !_routeContradictedSince.ContainsKey(x)).ToArray())
+                                Console.WriteLine(
+                                    $"Partition {partition} is routed to client {client} but no node "
+                                        + $"has reported it client-bearing for {seconds:F0}s; trusting the node report "
+                                        + $"so the partition can be handed over again"
+                                );
+                        foreach (
+                            ulong partition in _routePinLogged
+                                .Where(x => !_routeContradictedSince.ContainsKey(x))
+                                .ToArray()
+                        )
                             _routePinLogged.Remove(partition);
                         ReconnectSessionsAwayFromBody(served);
                     }
@@ -646,9 +957,18 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     // must not wait behind a failing handover.
                     // Not from a partial pass: the offline admission would read the silent node's players as nobody near.
                     if (missingReports == null)
-                        _lastPartitionReports = (DateTime.UtcNow, reports.Select(x => (x.Node.Node, x.Report)).ToArray());
-                    try { WakeOfflinePartitions(reports, routed); }
-                    catch (Exception exception) { Console.Error.WriteLine("Offline wake pass failed: " + exception.Message); }
+                        _lastPartitionReports = (
+                            DateTime.UtcNow,
+                            reports.Select(x => (x.Node.Node, x.Report)).ToArray()
+                        );
+                    try
+                    {
+                        WakeOfflinePartitions(reports, routed);
+                    }
+                    catch (Exception exception)
+                    {
+                        Console.Error.WriteLine("Offline wake pass failed: " + exception.Message);
+                    }
                     // Partitioning.md 7.1: co-locate everything inside the D + m envelope. Which is not a
                     // pairwise property, and treating it as one is why three partitions could thrash a node
                     // pair indefinitely: with A and B on this node and C on the other, and B within envelope
@@ -659,7 +979,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     // one node, so solve the component and move a partition that is on the wrong side of it.
                     // With more than two nodes the component solve stays pairwise per node pair - the most
                     // urgent (smallest-gap) move across all pairs runs first, and the next pass re-evaluates.
-                    (Move Move, (ServedNode Node, PartitionReport Report) From, (ServedNode Node, PartitionReport Report) To)? decision = null;
+                    (
+                        Move Move,
+                        (ServedNode Node, PartitionReport Report) From,
+                        (ServedNode Node, PartitionReport Report) To
+                    )? decision = null;
                     // T-0141: advance each node's load EMA ONCE for this pass, before the pair loop.
                     // Doing it inside the loop would step a node's EMA once per PAIR it appears in -
                     // three times a pass on four nodes - which makes the smoothing constant depend on
@@ -669,11 +993,18 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     CostModel model = _costModel;
                     CostModel gapModel = GapModel(model);
                     // #1454: the heavy units of this pass, before anything below decides a move.
-                    IReadOnlySet<ulong> heavy = UpdateHeavy(reports, routed, gapModel, partial: missingReports != null);
+                    IReadOnlySet<ulong> heavy = UpdateHeavy(
+                        reports,
+                        routed,
+                        gapModel,
+                        partial: missingReports != null
+                    );
                     // T-0312: scale-in picks and drains retiring nodes by pinning their components (NodeScaling.cs).
                     // Not on a partial pass: SettleRetiring reads a retiring node without a report as "owns nothing" and closes it.
-                    HashSet<string> retiring = _registry == null ? []
-                        : missingReports == null ? ScaleInPass(reports, passLoad, routed, gapModel) : [.. _registry.RetiringNodes()];
+                    HashSet<string> retiring =
+                        _registry == null ? []
+                        : missingReports == null ? ScaleInPass(reports, passLoad, routed, gapModel)
+                        : [.. _registry.RetiringNodes()];
                     // T-0296 r3: ChooseMove asks this only about a member that has to move, so a "true" means a
                     // component is NOT co-located and merely waits out its backoff (see RebalanceMayStart).
                     HashSet<ulong> voidedPins = [];
@@ -681,38 +1012,66 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     bool moverHeld = false;
                     bool HeldMover(ulong id)
                     {
-                        if (!InHandoverBackoff(id)) return false;
+                        if (!InHandoverBackoff(id))
+                            return false;
                         moverHeld = true;
                         return true;
                     }
                     // T-0327: a node whose lease is lapsed and held by a network window takes part in no automatic handover.
-                    IReadOnlySet<string> leaseHeld = _registry?.LapsedHeldNodes() ?? new HashSet<string>();
+                    IReadOnlySet<string> leaseHeld =
+                        _registry?.LapsedHeldNodes() ?? new HashSet<string>();
                     LogLeaseHeldExclusion(leaseHeld);
                     for (int i = 0; i < reports.Length; i++)
-                        for (int j = i + 1; j < reports.Length; j++)
-                        {
-                            if (leaseHeld.Contains(reports[i].Node.Node) || leaseHeld.Contains(reports[j].Node.Node)) continue;
-                            double pairEnvelope = reports[i].Report.SyncDistance
-                                + Math.Min(reports[i].Report.Margin, reports[j].Report.Margin);
-                            string sourceNode = reports[i].Node.Node, targetNode = reports[j].Node.Node;
-                            MigrationSide PairMigrationSide(ulong id) => MigrationTarget(id) switch
+                    for (int j = i + 1; j < reports.Length; j++)
+                    {
+                        if (
+                            leaseHeld.Contains(reports[i].Node.Node)
+                            || leaseHeld.Contains(reports[j].Node.Node)
+                        )
+                            continue;
+                        double pairEnvelope =
+                            reports[i].Report.SyncDistance
+                            + Math.Min(reports[i].Report.Margin, reports[j].Report.Margin);
+                        string sourceNode = reports[i].Node.Node,
+                            targetNode = reports[j].Node.Node;
+                        MigrationSide PairMigrationSide(ulong id) =>
+                            MigrationTarget(id) switch
                             {
                                 null => MigrationSide.None,
                                 var pin when pin == targetNode => MigrationSide.Target,
                                 var pin when pin == sourceNode => MigrationSide.Source,
                                 _ => MigrationSide.Elsewhere,
                             };
-                            if (ChooseMove(reports[i].Report, reports[j].Report, pairEnvelope, routed, HeldMover, gapModel, TravellingClients(), ValidationBlocked, PairMigrationSide,
-                                    passLoad[sourceNode], passLoad[targetNode], voidedPins.UnionWith, trains.Add, heavy,
-                                    retiring.Contains(sourceNode), retiring.Contains(targetNode))
-                                is { } candidate && (decision is not { } current || candidate.Gap < current.Move.Gap))
-                                decision = candidate.ToTarget
-                                    ? (candidate, reports[i], reports[j])
-                                    : (candidate, reports[j], reports[i]);
-                        }
+                        if (
+                            ChooseMove(
+                                reports[i].Report,
+                                reports[j].Report,
+                                pairEnvelope,
+                                routed,
+                                HeldMover,
+                                gapModel,
+                                TravellingClients(),
+                                ValidationBlocked,
+                                PairMigrationSide,
+                                passLoad[sourceNode],
+                                passLoad[targetNode],
+                                voidedPins.UnionWith,
+                                trains.Add,
+                                heavy,
+                                retiring.Contains(sourceNode),
+                                retiring.Contains(targetNode)
+                            )
+                                is { } candidate
+                            && (decision is not { } current || candidate.Gap < current.Move.Gap)
+                        )
+                            decision = candidate.ToTarget
+                                ? (candidate, reports[i], reports[j])
+                                : (candidate, reports[j], reports[i]);
+                    }
                     _migrationTrains = [.. trains];
                     // Not during a scale-in drain: ScaleInPass re-pins every component of a retiring node each pass.
-                    if (retiring.Count == 0) DropVoidedPins(voidedPins);
+                    if (retiring.Count == 0)
+                        DropVoidedPins(voidedPins);
                     // 7.1 preempts load balancing, so a rebalance is only ever INITIATED once every
                     // component is already co-located (Docs/GlobalLoadBalancing.md). The chooser pins a
                     // whole component to a target; from the NEXT pass the co-location loop above carries
@@ -724,27 +1083,40 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     // while any partition is still unowned or recovering the balancer waits. It also
                     // waits out node rotations (see GatewayRegistry.RotationInFlight): the drain's
                     // transient loads made the balancer pin 80k PCU into the node being drained.
-                    string? pauseReason = missingReports != null ? missingReports
+                    string? pauseReason =
+                        missingReports != null ? missingReports
                         : _registry?.RecoveryPending() == true
-                        ? "partitions are still unowned or recovering"
-                        : _registry?.RotationInFlight(TimeSpan.FromSeconds(RotationSettlingSeconds)) == true
-                            || DrainingNodes().Length != 0
+                            ? "partitions are still unowned or recovering"
+                        : _registry?.RotationInFlight(TimeSpan.FromSeconds(RotationSettlingSeconds))
+                            == true
+                        || DrainingNodes().Length != 0
                             ? "node rotation in flight"
-                            : retiring.Count != 0 ? "scale-in drain in flight"
-                            : _registry?.LeaseHoldActive() == true ? "network window: remote node leases held"
-                            : null;
+                        : retiring.Count != 0 ? "scale-in drain in flight"
+                        : _registry?.LeaseHoldActive() == true
+                            ? "network window: remote node leases held"
+                        : null;
                     if (pauseReason != _balancePauseReason)
                     {
-                        Console.WriteLine(pauseReason != null
-                            ? $"Balancing paused: {pauseReason}"
+                        Console.WriteLine(
+                            pauseReason != null ? $"Balancing paused: {pauseReason}"
                             : _balancePauseReason == "node rotation in flight"
                                 ? "Balancing resumed: rotation settled"
-                                : "Balancing resumed: recovery drained");
+                            : "Balancing resumed: recovery drained"
+                        );
                         // T-0312: BalancerIdle counts quiet time from the end of a rotation or scale-in pause.
-                        if (_balancePauseReason is "node rotation in flight" or "scale-in drain in flight") _balanceResumedAt = DateTime.UtcNow;
+                        if (
+                            _balancePauseReason
+                            is "node rotation in flight"
+                                or "scale-in drain in flight"
+                        )
+                            _balanceResumedAt = DateTime.UtcNow;
                         _balancePauseReason = pauseReason;
                     }
-                    if (RebalanceMayStart(decision != null, moverHeld) && reports.Length >= 2 && pauseReason == null)
+                    if (
+                        RebalanceMayStart(decision != null, moverHeld)
+                        && reports.Length >= 2
+                        && pauseReason == null
+                    )
                     {
                         // Viktor 2026-08-24: with ZERO clients connected - startup before the fleet
                         // joins, the nightly idle window - migration lag has no audience, so the whole
@@ -757,16 +1129,26 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         // for a projected 316k->309k peak at a 15 s migration lag. The first train is not
                         // affected: a restart's recovery claim is not an arrival.
                         Dictionary<ulong, PartitionInfo> reported = [];
-                        foreach (var x in reports) foreach (PartitionInfo info in x.Report.Partitions) reported[info.Id] = info;
+                        foreach (var x in reports)
+                        foreach (PartitionInfo info in x.Report.Partitions)
+                            reported[info.Id] = info;
                         HashSet<ulong> resident = [];
                         // #1454 case 4: the residence does not keep a component on a heavy node - it leaves for good.
                         HashSet<string> heavyNodes = [.. _heavyNodes];
-                        HashSet<ulong> evacuees = [.. reports.Where(x => heavyNodes.Contains(x.Node.Node))
-                            .SelectMany(x => x.Report.Partitions).Select(p => p.Id).Where(id => !heavy.Contains(id))];
+                        HashSet<ulong> evacuees =
+                        [
+                            .. reports
+                                .Where(x => heavyNodes.Contains(x.Node.Node))
+                                .SelectMany(x => x.Report.Partitions)
+                                .Select(p => p.Id)
+                                .Where(id => !heavy.Contains(id)),
+                        ];
                         bool Held(ulong id)
                         {
-                            if (InHandoverBackoff(id)) return true;
-                            if (evacuees.Contains(id) || !RecentlyArrived(id, reported, model)) return false;
+                            if (InHandoverBackoff(id))
+                                return true;
+                            if (evacuees.Contains(id) || !RecentlyArrived(id, reported, model))
+                                return false;
                             resident.Add(id);
                             return true;
                         }
@@ -777,21 +1159,70 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         double gate = _balancePace.Gate(model);
                         if (_clients.IsEmpty)
                         {
-                            RebalancePlan[] plans = ChooseRebalancePlans(planNodes, gapModel, routed,
-                                Held, ValidationBlocked, MigrationPinned, fullPlan: true, null, out var diag, gate, null, heavy, HeavyCooling);
-                            if (resident.Count != 0) LogResidenceHeld(resident, reported, plans, ChooseRebalancePlans(planNodes, gapModel, routed,
-                                InHandoverBackoff, ValidationBlocked, MigrationPinned, fullPlan: true, null, gate, null, heavy, HeavyCooling));
-                            _balancePace.Passed(model, gate, diag.WorstDeviation, diag.WorstClientDeviation,
-                                plans.Length, diag.MinGainSkipped, diag.BudgetSkipped, resident.Count, paceNow);
-                            _balanceDiagnostics = new BalanceDiagnostics(DateTime.UtcNow, diag.Excess,
-                                diag.AchievableExcess, diag.WorstDeviation, diag.ClientExcess,
-                                diag.WorstClientDeviation, plans.Length, null);
+                            RebalancePlan[] plans = ChooseRebalancePlans(
+                                planNodes,
+                                gapModel,
+                                routed,
+                                Held,
+                                ValidationBlocked,
+                                MigrationPinned,
+                                fullPlan: true,
+                                null,
+                                out var diag,
+                                gate,
+                                null,
+                                heavy,
+                                HeavyCooling
+                            );
+                            if (resident.Count != 0)
+                                LogResidenceHeld(
+                                    resident,
+                                    reported,
+                                    plans,
+                                    ChooseRebalancePlans(
+                                        planNodes,
+                                        gapModel,
+                                        routed,
+                                        InHandoverBackoff,
+                                        ValidationBlocked,
+                                        MigrationPinned,
+                                        fullPlan: true,
+                                        null,
+                                        gate,
+                                        null,
+                                        heavy,
+                                        HeavyCooling
+                                    )
+                                );
+                            _balancePace.Passed(
+                                model,
+                                gate,
+                                diag.WorstDeviation,
+                                diag.WorstClientDeviation,
+                                plans.Length,
+                                diag.MinGainSkipped,
+                                diag.BudgetSkipped,
+                                resident.Count,
+                                paceNow
+                            );
+                            _balanceDiagnostics = new BalanceDiagnostics(
+                                DateTime.UtcNow,
+                                diag.Excess,
+                                diag.AchievableExcess,
+                                diag.WorstDeviation,
+                                diag.ClientExcess,
+                                diag.WorstClientDeviation,
+                                plans.Length,
+                                null
+                            );
                             if (plans.Length != 0)
                             {
-                                Console.WriteLine($"Idle-cluster rebalance plan: {plans.Length} component(s),"
-                                    + $" {plans.Sum(p => p.Members.Length)} partition(s), projected peak load"
-                                    + $" {plans[0].OldPeak}->{plans[^1].NewPeak} {plans[0].LoadUnit}, estimated total migration lag"
-                                    + $" {plans.Sum(p => p.CostMs):F0} ms");
+                                Console.WriteLine(
+                                    $"Idle-cluster rebalance plan: {plans.Length} component(s),"
+                                        + $" {plans.Sum(p => p.Members.Length)} partition(s), projected peak load"
+                                        + $" {plans[0].OldPeak}->{plans[^1].NewPeak} {plans[0].LoadUnit}, estimated total migration lag"
+                                        + $" {plans.Sum(p => p.CostMs):F0} ms"
+                                );
                                 foreach (RebalancePlan step in plans)
                                 {
                                     PinMigration(step.Members, step.Target);
@@ -800,17 +1231,65 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                                 _lastBalanceMove = DateTime.UtcNow;
                             }
                         }
-                        else if ((DateTime.UtcNow - _lastBalanceMove).TotalSeconds >= (ScaleUnsettled() ? ScaleBalanceCooldownSeconds : BalanceCooldownSeconds))
+                        else if (
+                            (DateTime.UtcNow - _lastBalanceMove).TotalSeconds
+                            >= (
+                                ScaleUnsettled()
+                                    ? ScaleBalanceCooldownSeconds
+                                    : BalanceCooldownSeconds
+                            )
+                        )
                         {
                             IReadOnlySet<string> busy = BusyMigrationNodes(reports);
-                            IReadOnlySet<string>? overBudget = _balancePace.OverBudget(model, paceNow);
-                            RebalancePlan[] plans = ChooseRebalancePlans(planNodes, gapModel, routed, Held,
-                                ValidationBlocked, MigrationPinned, fullPlan: false, busy, out var diag, gate, overBudget, heavy, HeavyCooling);
-                            if (resident.Count != 0) LogResidenceHeld(resident, reported, plans, ChooseRebalancePlans(planNodes, gapModel, routed,
-                                InHandoverBackoff, ValidationBlocked, MigrationPinned, fullPlan: false, busy, gate, overBudget, heavy, HeavyCooling));
-                            _balanceDiagnostics = new BalanceDiagnostics(DateTime.UtcNow, diag.Excess,
-                                diag.AchievableExcess, diag.WorstDeviation, diag.ClientExcess,
-                                diag.WorstClientDeviation, plans.Length, null);
+                            IReadOnlySet<string>? overBudget = _balancePace.OverBudget(
+                                model,
+                                paceNow
+                            );
+                            RebalancePlan[] plans = ChooseRebalancePlans(
+                                planNodes,
+                                gapModel,
+                                routed,
+                                Held,
+                                ValidationBlocked,
+                                MigrationPinned,
+                                fullPlan: false,
+                                busy,
+                                out var diag,
+                                gate,
+                                overBudget,
+                                heavy,
+                                HeavyCooling
+                            );
+                            if (resident.Count != 0)
+                                LogResidenceHeld(
+                                    resident,
+                                    reported,
+                                    plans,
+                                    ChooseRebalancePlans(
+                                        planNodes,
+                                        gapModel,
+                                        routed,
+                                        InHandoverBackoff,
+                                        ValidationBlocked,
+                                        MigrationPinned,
+                                        fullPlan: false,
+                                        busy,
+                                        gate,
+                                        overBudget,
+                                        heavy,
+                                        HeavyCooling
+                                    )
+                                );
+                            _balanceDiagnostics = new BalanceDiagnostics(
+                                DateTime.UtcNow,
+                                diag.Excess,
+                                diag.AchievableExcess,
+                                diag.WorstDeviation,
+                                diag.ClientExcess,
+                                diag.WorstClientDeviation,
+                                plans.Length,
+                                null
+                            );
                             // The planner returns a per-node-disjoint SET (each node in at most one
                             // migration, in-flight ones counted via BusyMigrationNodes) - pin them
                             // all; no node pays two concurrent stalls.
@@ -820,15 +1299,32 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                                 _lastBalanceMove = DateTime.UtcNow;
                                 _balancePace.Pinned(plan.Target, paceNow);
                                 LogBalancePin(plan, model);
-                                if (plan.Kind is RebalanceKind.HeavySplit or RebalanceKind.HeavyDedicate)
-                                    HeavyMoved(plan.Members.Select(m => m.Id), plan.Members.Sum(m => ClientCount(m, routed)));
+                                if (
+                                    plan.Kind
+                                    is RebalanceKind.HeavySplit
+                                        or RebalanceKind.HeavyDedicate
+                                )
+                                    HeavyMoved(
+                                        plan.Members.Select(m => m.Id),
+                                        plan.Members.Sum(m => ClientCount(m, routed))
+                                    );
                             }
-                            _balancePace.Passed(model, gate, diag.WorstDeviation, diag.WorstClientDeviation,
-                                plans.Length, diag.MinGainSkipped, diag.BudgetSkipped, resident.Count, paceNow);
+                            _balancePace.Passed(
+                                model,
+                                gate,
+                                diag.WorstDeviation,
+                                diag.WorstClientDeviation,
+                                plans.Length,
+                                diag.MinGainSkipped,
+                                diag.BudgetSkipped,
+                                resident.Count,
+                                paceNow
+                            );
                             if (diag.PeakDropSkipped > 0)
                             {
                                 Interlocked.Add(ref _balancePeakDropSkips, diag.PeakDropSkipped);
-                                if (plans.Length == 0) Interlocked.Increment(ref _balancePeakDropHeldPasses);
+                                if (plans.Length == 0)
+                                    Interlocked.Increment(ref _balancePeakDropHeldPasses);
                             }
                             // T-0073: a refusal logs as loudly as an action - a balancer that saw the
                             // misplacement and declined is otherwise indistinguishable from one that never
@@ -837,51 +1333,84 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                             if (diag.FloorHeldPeak > 0)
                             {
                                 Interlocked.Increment(ref _balanceFloorHeldPasses);
-                                if ((DateTime.UtcNow - _lastBalanceFloorLogged).TotalSeconds >= BalanceDeclineLogSeconds)
+                                if (
+                                    (DateTime.UtcNow - _lastBalanceFloorLogged).TotalSeconds
+                                    >= BalanceDeclineLogSeconds
+                                )
                                 {
                                     _lastBalanceFloorLogged = DateTime.UtcNow;
-                                    Console.WriteLine($"Balancing held by the load floor: peak {diag.FloorHeldPeak} < BalanceMinPeakLoad"
-                                        + $" {model.BalanceMinPeakLoad:F0} sim-us/s, worst deviation {diag.WorstDeviation:F2},"
-                                        + $" client deviation {diag.WorstClientDeviation:F2} vs gate {gate:F2}; {Interlocked.Read(ref _balanceFloorHeldPasses)} held pass(es)"
-                                        + $" since start; {diag.Explain}");
+                                    Console.WriteLine(
+                                        $"Balancing held by the load floor: peak {diag.FloorHeldPeak} < BalanceMinPeakLoad"
+                                            + $" {model.BalanceMinPeakLoad:F0} sim-us/s, worst deviation {diag.WorstDeviation:F2},"
+                                            + $" client deviation {diag.WorstClientDeviation:F2} vs gate {gate:F2}; {Interlocked.Read(ref _balanceFloorHeldPasses)} held pass(es)"
+                                            + $" since start; {diag.Explain}"
+                                    );
                                 }
                             }
-                            else if (plans.Length == 0 && (diag.WorstDeviation > gate
-                                    || diag.WorstClientDeviation > gate)
-                                && (DateTime.UtcNow - _lastBalanceDeclineLogged).TotalSeconds >= BalanceDeclineLogSeconds)
+                            else if (
+                                plans.Length == 0
+                                && (diag.WorstDeviation > gate || diag.WorstClientDeviation > gate)
+                                && (DateTime.UtcNow - _lastBalanceDeclineLogged).TotalSeconds
+                                    >= BalanceDeclineLogSeconds
+                            )
                             {
                                 _lastBalanceDeclineLogged = DateTime.UtcNow;
-                                Console.WriteLine($"Balancing declined: excess {diag.Excess:F2}, worst deviation {diag.WorstDeviation:F2},"
-                                    + $" client deviation {diag.WorstClientDeviation:F2} vs tolerance {model.BalanceRiskTolerance:F2},"
-                                    + (gate != model.BalanceRiskTolerance ? $" (balancing active, low water {gate:F2})," : "")
-                                    + $" but no movable component lowers over-optimal load without raising the peak; {diag.Explain}"
-                                    + (diag.MinGainSkipped + diag.BudgetSkipped + diag.PeakDropSkipped > 0
-                                        ? $"; candidates skipped: min-gain {diag.MinGainSkipped}, budget {diag.BudgetSkipped},"
-                                            + $" peak-drop {diag.PeakDropSkipped} (BalanceMinPeakDrop {model.BalanceMinPeakDrop:F3})" : ""));
+                                Console.WriteLine(
+                                    $"Balancing declined: excess {diag.Excess:F2}, worst deviation {diag.WorstDeviation:F2},"
+                                        + $" client deviation {diag.WorstClientDeviation:F2} vs tolerance {model.BalanceRiskTolerance:F2},"
+                                        + (
+                                            gate != model.BalanceRiskTolerance
+                                                ? $" (balancing active, low water {gate:F2}),"
+                                                : ""
+                                        )
+                                        + $" but no movable component lowers over-optimal load without raising the peak; {diag.Explain}"
+                                        + (
+                                            diag.MinGainSkipped
+                                                + diag.BudgetSkipped
+                                                + diag.PeakDropSkipped
+                                            > 0
+                                                ? $"; candidates skipped: min-gain {diag.MinGainSkipped}, budget {diag.BudgetSkipped},"
+                                                    + $" peak-drop {diag.PeakDropSkipped} (BalanceMinPeakDrop {model.BalanceMinPeakDrop:F3})"
+                                                : ""
+                                        )
+                                );
                             }
                             // T-0393: the budget's refusals, rate-limited like the decline above.
-                            if (diag.BudgetSkipped > 0
-                                && (DateTime.UtcNow - _lastBudgetExhaustedLogged).TotalSeconds >= BalanceDeclineLogSeconds)
+                            if (
+                                diag.BudgetSkipped > 0
+                                && (DateTime.UtcNow - _lastBudgetExhaustedLogged).TotalSeconds
+                                    >= BalanceDeclineLogSeconds
+                            )
                             {
                                 _lastBudgetExhaustedLogged = DateTime.UtcNow;
-                                Console.WriteLine($"Balancing budget exhausted: {diag.BudgetSkipped} candidate(s) skipped, target(s) at"
-                                    + $" {model.BudgetMovesPerNodeHour} paced pins in the last hour: {string.Join(" ", overBudget!.Order())};"
-                                    + $" worst deviation {diag.WorstDeviation:F2}, client deviation {diag.WorstClientDeviation:F2}"
-                                    + $" under the budget threshold {model.BudgetUnderDeviation:F2}; pinned {plans.Length} other move(s); {diag.Explain}");
+                                Console.WriteLine(
+                                    $"Balancing budget exhausted: {diag.BudgetSkipped} candidate(s) skipped, target(s) at"
+                                        + $" {model.BudgetMovesPerNodeHour} paced pins in the last hour: {string.Join(" ", overBudget!.Order())};"
+                                        + $" worst deviation {diag.WorstDeviation:F2}, client deviation {diag.WorstClientDeviation:F2}"
+                                        + $" under the budget threshold {model.BudgetUnderDeviation:F2}; pinned {plans.Length} other move(s); {diag.Explain}"
+                                );
                             }
                         }
                     }
                     else if (pauseReason != null)
-                        _balanceDiagnostics = new BalanceDiagnostics(DateTime.UtcNow,
-                            _balanceDiagnostics?.Excess ?? 0, _balanceDiagnostics?.AchievableExcess ?? 0,
-                            _balanceDiagnostics?.WorstDeviation ?? 0, _balanceDiagnostics?.ClientExcess ?? 0,
-                            _balanceDiagnostics?.WorstClientDeviation ?? 0, 0, pauseReason);
+                        _balanceDiagnostics = new BalanceDiagnostics(
+                            DateTime.UtcNow,
+                            _balanceDiagnostics?.Excess ?? 0,
+                            _balanceDiagnostics?.AchievableExcess ?? 0,
+                            _balanceDiagnostics?.WorstDeviation ?? 0,
+                            _balanceDiagnostics?.ClientExcess ?? 0,
+                            _balanceDiagnostics?.WorstClientDeviation ?? 0,
+                            0,
+                            pauseReason
+                        );
                     if (decision is { Move.Reason: "co-location-blocked" } stuck)
                     {
                         // Partitioning §6.10: both sides of this component are HandoverBlocked. Escalate as
                         // an operator-visible incident once a pass instead of retrying the failing transfer.
-                        Console.WriteLine($"INCIDENT: co-location involving partition {stuck.Move.Moving.Id} is blocked on both sides"
-                            + $" (HandoverBlocked, component of {stuck.Move.ComponentSize}); no further transfers will be scheduled until a block clears");
+                        Console.WriteLine(
+                            $"INCIDENT: co-location involving partition {stuck.Move.Moving.Id} is blocked on both sides"
+                                + $" (HandoverBlocked, component of {stuck.Move.ComponentSize}); no further transfers will be scheduled until a block clears"
+                        );
                     }
                     else if (decision is { } chosen)
                     {
@@ -900,21 +1429,35 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                             // That expected class logs without the ALARM prefix, keyed on
                             // partition age; a sub-invariant gap on an ESTABLISHED partition
                             // remains the real alarm.
-                            Console.WriteLine(PartitionAgeSeconds(moving.Id) < SpawnAdjacencySeconds
-                                ? $"Spawn-adjacent cross-node gap {chosen.Move.RawGap:F1}m for partition {moving.Id} (below the {syncDistance:F0}m invariant); accelerating co-location"
-                                : $"ALARM: cross-node sphere gap {chosen.Move.RawGap:F1}m for partition {moving.Id} is below the {syncDistance:F0}m invariant; accelerating co-location");
+                            Console.WriteLine(
+                                PartitionAgeSeconds(moving.Id) < SpawnAdjacencySeconds
+                                    ? $"Spawn-adjacent cross-node gap {chosen.Move.RawGap:F1}m for partition {moving.Id} (below the {syncDistance:F0}m invariant); accelerating co-location"
+                                    : $"ALARM: cross-node sphere gap {chosen.Move.RawGap:F1}m for partition {moving.Id} is below the {syncDistance:F0}m invariant; accelerating co-location"
+                            );
                         }
-                        Console.WriteLine($"Automatic partition handover triggered for {moving.Id}, reason {chosen.Move.Reason}, envelope gap {chosen.Move.Gap:F1}m, raw gap {chosen.Move.RawGap:F1}m, direction {(toTarget ? "source->target" : "target->source")}, clients {movingClients}, component home {(chosen.Move.HomeIsTarget ? "target" : "source")} of {chosen.Move.ComponentSize}, route {chosen.From.Node.Node}->{chosen.To.Node.Node}; why: {chosen.Move.Why}");
+                        Console.WriteLine(
+                            $"Automatic partition handover triggered for {moving.Id}, reason {chosen.Move.Reason}, envelope gap {chosen.Move.Gap:F1}m, raw gap {chosen.Move.RawGap:F1}m, direction {(toTarget ? "source->target" : "target->source")}, clients {movingClients}, component home {(chosen.Move.HomeIsTarget ? "target" : "source")} of {chosen.Move.ComponentSize}, route {chosen.From.Node.Node}->{chosen.To.Node.Node}; why: {chosen.Move.Why}"
+                        );
                         attempting = moving.Id;
                         attemptingBalance = chosen.Move.Reason.StartsWith("balance");
                         if (movingClients == 0)
-                            FencedClientlessHandover(chosen.From.Node.Control, chosen.To.Node.Control, chosen.To.Node.Backend, moving.Id, allowRemoteUse: chosen.Move.Reason == "co-location").GetAwaiter().GetResult();
+                            FencedClientlessHandover(
+                                    chosen.From.Node.Control,
+                                    chosen.To.Node.Control,
+                                    chosen.To.Node.Backend,
+                                    moving.Id,
+                                    allowRemoteUse: chosen.Move.Reason == "co-location"
+                                )
+                                .GetAwaiter()
+                                .GetResult();
                         else if (moving.Clients.Length == 0)
                         {
                             // Deferred is not free: the pin survives the pass and the same plan is
                             // chosen again next second (w29 09:49:05-09:49:40: 22 triggers of
                             // partition 29558 in 35 s, one per pass). Back off like a failure.
-                            Console.WriteLine($"Partition {moving.Id} has a routed client missing from its node report; automatic handover deferred");
+                            Console.WriteLine(
+                                $"Partition {moving.Id} has a routed client missing from its node report; automatic handover deferred"
+                            );
                             RecordHandoverFailure(moving.Id);
                         }
                         // T-0238: CLIENT_READY is not the end of a join - the node still hands the client its
@@ -922,10 +1465,15 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         // with no local character on the new node (w32 2026-09-25 14:24:43, 8 failed recoveries);
                         // over 154 post-ready handovers on w32, NO_CHARACTER followed 3 of 19 moved within 5 s
                         // of ready, 0 of 25 at 6-15 s. An automatic move waits out the settle.
-                        else if (moving.Clients.FirstOrDefault(JoinStillSettling) is var settling && settling != 0)
+                        else if (
+                            moving.Clients.FirstOrDefault(JoinStillSettling) is var settling
+                            && settling != 0
+                        )
                         {
-                            Console.WriteLine($"Partition {moving.Id} carries client {settling}, world-ready under "
-                                + $"{PostReadySettle.TotalSeconds:F0}s ago; automatic handover deferred");
+                            Console.WriteLine(
+                                $"Partition {moving.Id} carries client {settling}, world-ready under "
+                                    + $"{PostReadySettle.TotalSeconds:F0}s ago; automatic handover deferred"
+                            );
                             RecordHandoverFailure(moving.Id);
                         }
                         // T-0237: the node reports only clients bound to a character in the partition, so a client
@@ -937,31 +1485,50 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         // client's placement and home, so it defers the move until that client has settled.
                         else if (JoiningClientPlacedIn(moving.Id) is var joining && joining != 0)
                         {
-                            Console.WriteLine($"Partition {moving.Id} is the placement or home of client {joining}, which is still joining "
-                                + $"(not world-ready or under {PostReadySettle.TotalSeconds:F0}s ready); automatic handover deferred");
+                            Console.WriteLine(
+                                $"Partition {moving.Id} is the placement or home of client {joining}, which is still joining "
+                                    + $"(not world-ready or under {PostReadySettle.TotalSeconds:F0}s ready); automatic handover deferred"
+                            );
                             RecordHandoverFailure(moving.Id);
                         }
                         // Every client on the partition moves in one transfer, so a shared grid never
                         // leaves half its crew behind; a partition is deferred only when the gateway
                         // cannot see a switchable session for ALL of them.
-                        else if (ResolveMovingSessions(moving.Clients, chosen.From.Node.Backend) is not { } movingSessions)
+                        else if (
+                            ResolveMovingSessions(moving.Clients, chosen.From.Node.Backend)
+                            is not { } movingSessions
+                        )
                         {
-                            Console.WriteLine($"Partition {moving.Id} has a client with no connected, ready source session; automatic handover deferred");
+                            Console.WriteLine(
+                                $"Partition {moving.Id} has a client with no connected, ready source session; automatic handover deferred"
+                            );
                             RecordHandoverFailure(moving.Id);
                         }
                         else
                         {
-                            Handover(movingSessions, chosen.From.Node.Control, chosen.To.Node.Control, chosen.To.Node.Backend, moving.Id,
-                                readinessBudget: attemptingBalance ? BalanceReadinessBudget : null).GetAwaiter().GetResult();
+                            Handover(
+                                    movingSessions,
+                                    chosen.From.Node.Control,
+                                    chosen.To.Node.Control,
+                                    chosen.To.Node.Backend,
+                                    moving.Id,
+                                    readinessBudget: attemptingBalance
+                                        ? BalanceReadinessBudget
+                                        : null
+                                )
+                                .GetAwaiter()
+                                .GetResult();
                             // The directed §7.4 move landed; the next encounter for this client is priced normally.
-                            foreach (ulong client in moving.Clients) ClearTeleportIntent(client);
+                            foreach (ulong client in moving.Clients)
+                                ClearTeleportIntent(client);
                             handedOver = true;
                         }
                         // Only a completed handover clears the backoff; a deferral steps it up.
                         if (attempting is ulong moved && (movingClients == 0 || handedOver))
                         {
                             RecordHandoverSuccess(moved);
-                            if (chosen.Move.Reason.StartsWith("balance")) _lastBalanceMove = DateTime.UtcNow;
+                            if (chosen.Move.Reason.StartsWith("balance"))
+                                _lastBalanceMove = DateTime.UtcNow;
                             OnMigrationProgress(moved, chosen.To.Node.Node);
                         }
                     }
@@ -974,10 +1541,24 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     // when somebody approaches them: gather the reports for the wake pass alone.
                     ServedNode[] served = ServedNodes();
                     List<(ServedNode Node, string Error)> silent = [];
-                    (ServedNode Node, PartitionReport Report)[] reports = CollectReports(served, node => GetPartitions(node.Control), silent);
-                    HashSet<ulong> routed = [.. _clients.Keys.Select(client => _registry.GetClientPartition(client)?.Partition ?? 0).Where(x => x != 0)];
+                    (ServedNode Node, PartitionReport Report)[] reports = CollectReports(
+                        served,
+                        node => GetPartitions(node.Control),
+                        silent
+                    );
+                    HashSet<ulong> routed =
+                    [
+                        .. _clients
+                            .Keys.Select(client =>
+                                _registry.GetClientPartition(client)?.Partition ?? 0
+                            )
+                            .Where(x => x != 0),
+                    ];
                     if (silent.Count == 0)
-                        _lastPartitionReports = (DateTime.UtcNow, reports.Select(x => (x.Node.Node, x.Report)).ToArray());
+                        _lastPartitionReports = (
+                            DateTime.UtcNow,
+                            reports.Select(x => (x.Node.Node, x.Report)).ToArray()
+                        );
                     WakeOfflinePartitions(reports, routed);
                 }
             }
@@ -987,12 +1568,26 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // T-0373: the message alone could not name the site of "Value cannot be null. (Parameter 'key')"
                 // (live 2026-10-02 07:04:35). The type and the first frame of ours, once a minute per distinct message.
                 if (PassLogDue(_passFailureLogged, "pass|" + e.Message, DateTime.UtcNow))
-                    Console.Error.WriteLine("Automatic handover check failure detail: " + DescribeFailure(e));
-                if (attempting is ulong failed) RecordHandoverFailure(failed, backOffFully: attemptingBalance && e is TimeoutException);
+                    Console.Error.WriteLine(
+                        "Automatic handover check failure detail: " + DescribeFailure(e)
+                    );
+                if (attempting is ulong failed)
+                    RecordHandoverFailure(
+                        failed,
+                        backOffFully: attemptingBalance && e is TimeoutException
+                    );
             }
-            finally { if (_rotation.CurrentCount == 0) _rotation.Release(); }
+            finally
+            {
+                if (_rotation.CurrentCount == 0)
+                    _rotation.Release();
+            }
             // SE1-0084: one second between passes, unless a node asks for one now (its fast state changed).
-            if (_passNow.WaitOne(1000) && Stopwatch.GetElapsedTime(passStarted) is { } since && since < MinPassGap)
+            if (
+                _passNow.WaitOne(1000)
+                && Stopwatch.GetElapsedTime(passStarted) is { } since
+                && since < MinPassGap
+            )
                 Thread.Sleep(MinPassGap - since);
         }
     }
@@ -1009,27 +1604,45 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // #1277 (T-0327 class): a lapsed lease held by a network window takes part in no automatic handover, here as in
         // the pair loop; Begin refuses it in any case. A held node still answers /partitions and, drained, is the lightest.
         IReadOnlySet<string> leaseHeld = _registry.LapsedHeldNodes();
-        foreach (NodeRegistration closedNode in _registry.Nodes().Where(x => x.Role == NodeRole.Regular
-            && x.State == NodeState.Closed && x.ForceDrainAt > DateTimeOffset.UtcNow
-            && _forceOnlyDrainEpoch != x.Epoch && x.ControlEndpoint != null && !leaseHeld.Contains(x.Node)))
+        foreach (
+            NodeRegistration closedNode in _registry
+                .Nodes()
+                .Where(x =>
+                    x.Role == NodeRole.Regular
+                    && x.State == NodeState.Closed
+                    && x.ForceDrainAt > DateTimeOffset.UtcNow
+                    && _forceOnlyDrainEpoch != x.Epoch
+                    && x.ControlEndpoint != null
+                    && !leaseHeld.Contains(x.Node)
+                )
+        )
         {
             // CLUSTER-SIM-COST: lightest by measured load when the whole set reports it, PCU otherwise.
             bool drainSimLoad = active.All(x => x.Report.SimLoadSupported);
             // T-0296 r3: never INTO a retiring node (see LightestDrainTarget) nor a lease-held one; with nothing else
             // serving, the crew stays for the force drain.
             HashSet<string> excluded = new(_registry.RetiringNodes().Concat(leaseHeld));
-            (string Node, long Load)[] loads = [.. active.Select(x => (x.Node.Node, EffectiveNodeLoad(x.Report, drainSimLoad)))];
+            (string Node, long Load)[] loads =
+            [
+                .. active.Select(x => (x.Node.Node, EffectiveNodeLoad(x.Report, drainSimLoad))),
+            ];
             if (LightestDrainTarget(loads, excluded) is not { } lightest)
                 return;
             string closedControl = StripScheme(closedNode.ControlEndpoint!);
-            IPEndPoint closedBackend = EndpointParser.Parse(closedNode.Endpoint, DirectTransportConstants.DefaultPort);
+            IPEndPoint closedBackend = EndpointParser.Parse(
+                closedNode.Endpoint,
+                DirectTransportConstants.DefaultPort
+            );
             // T-0373: one closed node or one of its partitions that cannot be drained this pass no longer ends the
             // drain catch-up for everything after it. r116b 2026-10-01 18:22:11-18:24:06: node-79 was Closed and
             // reported a client-bearing partition with no registry row; FencedHandover claims such a partition for
             // its source, ClaimPartition refuses a Closed node, and "Node 'node-79' epoch 1 is Closed" escaped
             // from here in 85 passes in a row (4 more on r124, node-98), until the node went Empty.
             PartitionReport report;
-            try { report = GetPartitions(closedControl); }
+            try
+            {
+                report = GetPartitions(closedControl);
+            }
             catch (Exception e)
             {
                 LogDrainSkip($"closed node {closedNode.Node}", "its partition report", e);
@@ -1041,25 +1654,52 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             string heavyDest = lightest;
             if (report.Partitions.Any(p => heavy.Contains(p.Id)))
             {
-                heavyDest = HeavyDrainTarget(loads.Where(x => !excluded.Contains(x.Node)).Select(x => (x.Node, (double)x.Load)), heavyNodes)
-                    ?? lightest;
+                heavyDest =
+                    HeavyDrainTarget(
+                        loads
+                            .Where(x => !excluded.Contains(x.Node))
+                            .Select(x => (x.Node, (double)x.Load)),
+                        heavyNodes
+                    ) ?? lightest;
                 heavyNodes.Add(heavyDest);
             }
-            string lightDest = LightestDrainTarget(loads, new HashSet<string>(excluded.Concat(heavyNodes))) ?? lightest;
+            string lightDest =
+                LightestDrainTarget(loads, new HashSet<string>(excluded.Concat(heavyNodes)))
+                ?? lightest;
             // One transfer per partition, carrying its whole crew: iterating clients would offer a
             // shared partition once per rider and move the first one alone.
             foreach (PartitionInfo partition in report.Partitions.Where(x => x.Clients.Length != 0))
             {
-                if (ResolveMovingSessions(partition.Clients, closedBackend) is not { } moving) continue;
-                if (DrainDeferredForJoin(partition.Id, moving, closedNode.Node)) continue;
+                if (ResolveMovingSessions(partition.Clients, closedBackend) is not { } moving)
+                    continue;
+                if (DrainDeferredForJoin(partition.Id, moving, closedNode.Node))
+                    continue;
                 bool heavyPartition = heavy.Contains(partition.Id);
-                (ServedNode Node, PartitionReport Report) target = active.First(x => x.Node.Node == (heavyPartition ? heavyDest : lightDest));
+                (ServedNode Node, PartitionReport Report) target = active.First(x =>
+                    x.Node.Node == (heavyPartition ? heavyDest : lightDest)
+                );
                 try
                 {
-                    Handover(moving, closedControl, target.Node.Control, target.Node.Backend, partition.Id).GetAwaiter().GetResult();
-                    if (heavyPartition) HeavyMoved([partition.Id], moving.Length);
+                    Handover(
+                            moving,
+                            closedControl,
+                            target.Node.Control,
+                            target.Node.Backend,
+                            partition.Id
+                        )
+                        .GetAwaiter()
+                        .GetResult();
+                    if (heavyPartition)
+                        HeavyMoved([partition.Id], moving.Length);
                 }
-                catch (Exception e) { LogDrainSkip($"partition {partition.Id}", $"its drain handover off closed node {closedNode.Node}", e); }
+                catch (Exception e)
+                {
+                    LogDrainSkip(
+                        $"partition {partition.Id}",
+                        $"its drain handover off closed node {closedNode.Node}",
+                        e
+                    );
+                }
             }
         }
     }
@@ -1073,17 +1713,28 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     private void LogDrainSkip(string item, string what, Exception e)
     {
         if (PassLogDue(_passFailureLogged, item + "|" + e.Message, DateTime.UtcNow))
-            Console.Error.WriteLine($"Automatic handover pass skipped {item}: {what} failed, the pass goes on with the rest "
-                + $"(logged once per {PassFailureLogSeconds:F0}s): {DescribeFailure(e)}");
+            Console.Error.WriteLine(
+                $"Automatic handover pass skipped {item}: {what} failed, the pass goes on with the rest "
+                    + $"(logged once per {PassFailureLogSeconds:F0}s): {DescribeFailure(e)}"
+            );
     }
 
     /// <summary>T-0373: whether <paramref name="key"/> is due a log line: not logged within <see cref="PassFailureLogSeconds"/>.</summary>
     internal static bool PassLogDue(Dictionary<string, DateTime> logged, string key, DateTime now)
     {
-        if (logged.TryGetValue(key, out DateTime last) && (now - last).TotalSeconds < PassFailureLogSeconds) return false;
+        if (
+            logged.TryGetValue(key, out DateTime last)
+            && (now - last).TotalSeconds < PassFailureLogSeconds
+        )
+            return false;
         // Bounded: messages can carry ids, so the distinct keys of a long run are swept once they are stale.
         if (logged.Count >= 256)
-            foreach (string stale in logged.Where(x => (now - x.Value).TotalSeconds >= PassFailureLogSeconds).Select(x => x.Key).ToArray())
+            foreach (
+                string stale in logged
+                    .Where(x => (now - x.Value).TotalSeconds >= PassFailureLogSeconds)
+                    .Select(x => x.Key)
+                    .ToArray()
+            )
                 logged.Remove(stale);
         logged[key] = now;
         return true;
@@ -1092,8 +1743,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// <summary>T-0373: an exception as type, message and the first stack frame inside this assembly.</summary>
     internal static string DescribeFailure(Exception e)
     {
-        string? frame = e.StackTrace?.Split('\n').Select(line => line.Trim())
-            .FirstOrDefault(line => line.StartsWith("at ClusterRegistry.", StringComparison.Ordinal));
+        string? frame = e
+            .StackTrace?.Split('\n')
+            .Select(line => line.Trim())
+            .FirstOrDefault(line =>
+                line.StartsWith("at ClusterRegistry.", StringComparison.Ordinal)
+            );
         return $"{e.GetType().FullName}: {SecretRedactor.Redact(e.Message)}; first frame: {frame ?? "none of ours"}";
     }
 
@@ -1103,11 +1758,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     private void LogLeaseHeldExclusion(IReadOnlySet<string> held)
     {
         string now = string.Join(", ", held.Order(StringComparer.Ordinal));
-        if (now == _leaseHeldExcluded) return;
+        if (now == _leaseHeldExcluded)
+            return;
         _leaseHeldExcluded = now;
-        Console.WriteLine(now.Length != 0
-            ? $"network window: no automatic handover into or out of lease-held node(s) {now}"
-            : "network window: automatic handovers resume for every node (no lease is held)");
+        Console.WriteLine(
+            now.Length != 0
+                ? $"network window: no automatic handover into or out of lease-held node(s) {now}"
+                : "network window: automatic handovers resume for every node (no lease is held)"
+        );
     }
 
     /// <summary>
@@ -1117,7 +1775,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// scale-in pass pinned it straight out again (R -> T), two blackouts for one drain. CloseNode's own target
     /// already excludes retiring nodes. #1277: the caller adds the lease-held nodes to <paramref name="excluded"/>.
     /// </summary>
-    internal static string? LightestDrainTarget((string Node, long Load)[] active, IReadOnlySet<string> excluded)
+    internal static string? LightestDrainTarget(
+        (string Node, long Load)[] active,
+        IReadOnlySet<string> excluded
+    )
     {
         (string Node, long Load)[] candidates = [.. active.Where(x => !excluded.Contains(x.Node))];
         return candidates.Length == 0 ? null : candidates.MinBy(x => x.Load).Node;
@@ -1134,13 +1795,21 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// transport is listed in <paramref name="silent"/> and the pass goes on with the others; anything else (a
     /// malformed report) still fails the pass.
     /// </summary>
-    internal static (T Node, PartitionReport Report)[] CollectReports<T>(IEnumerable<T> served, Func<T, PartitionReport> fetch,
-        List<(T Node, string Error)> silent)
+    internal static (T Node, PartitionReport Report)[] CollectReports<T>(
+        IEnumerable<T> served,
+        Func<T, PartitionReport> fetch,
+        List<(T Node, string Error)> silent
+    )
     {
         List<(T, PartitionReport)> reports = [];
         foreach (T node in served)
-            try { reports.Add((node, fetch(node))); }
-            catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or IOException)
+            try
+            {
+                reports.Add((node, fetch(node)));
+            }
+            catch (Exception exception)
+                when (exception is HttpRequestException or OperationCanceledException or IOException
+                )
             {
                 silent.Add((node, SecretRedactor.Redact(exception.Message)));
             }
@@ -1149,27 +1818,41 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
 
     /// <summary>Why a pass with silent nodes plans no rebalance, or null for a full pass. Loads and components of a
     /// silent node are unknown, and a plan made without them is the half-loaded-data plan the recovery pause exists for.</summary>
-    internal static string? MissingReportPause(IReadOnlyCollection<string> silent)
-        => silent.Count == 0 ? null : "no partition report from " + string.Join(", ", silent.Order(StringComparer.Ordinal));
+    internal static string? MissingReportPause(IReadOnlyCollection<string> silent) =>
+        silent.Count == 0
+            ? null
+            : "no partition report from " + string.Join(", ", silent.Order(StringComparer.Ordinal));
 
     /// <summary>
     /// The partitions the reports show with a client. On a partial pass a routed partition that NO report lists also
     /// counts: it may be on the silent node, and "contradicted by every node report" (RoutedClientBearing, RoutePinStale)
     /// must not start counting from a report that never came.
     /// </summary>
-    internal static HashSet<ulong> ClientBearingAsReported(IReadOnlyCollection<PartitionInfo> reported,
-        IEnumerable<(ulong Client, ulong Partition)> routes, bool partial)
+    internal static HashSet<ulong> ClientBearingAsReported(
+        IReadOnlyCollection<PartitionInfo> reported,
+        IEnumerable<(ulong Client, ulong Partition)> routes,
+        bool partial
+    )
     {
-        HashSet<ulong> bearing = [.. reported.Where(partition => partition.Clients.Length != 0).Select(partition => partition.Id)];
-        if (!partial) return bearing;
+        HashSet<ulong> bearing =
+        [
+            .. reported
+                .Where(partition => partition.Clients.Length != 0)
+                .Select(partition => partition.Id),
+        ];
+        if (!partial)
+            return bearing;
         HashSet<ulong> listed = [.. reported.Select(partition => partition.Id)];
-        bearing.UnionWith(routes.Select(route => route.Partition).Where(partition => !listed.Contains(partition)));
+        bearing.UnionWith(
+            routes.Select(route => route.Partition).Where(partition => !listed.Contains(partition))
+        );
         return bearing;
     }
 
     private PartitionReport GetPartitions(string endpoint) =>
-        JsonSerializer.Deserialize<PartitionReport>(_http.GetStringAsync(ClusterUrl(endpoint, "partitions")).GetAwaiter().GetResult())
-        ?? throw new InvalidDataException("Empty partition report from " + endpoint);
+        JsonSerializer.Deserialize<PartitionReport>(
+            _http.GetStringAsync(ClusterUrl(endpoint, "partitions")).GetAwaiter().GetResult()
+        ) ?? throw new InvalidDataException("Empty partition report from " + endpoint);
 
     private static double SphereGap(PartitionSphere a, PartitionSphere b)
     {
@@ -1179,8 +1862,16 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         return Math.Sqrt(x * x + y * y + z * z) - a.Radius - b.Radius;
     }
 
-    internal readonly record struct Move(PartitionInfo Moving, bool ToTarget, double Gap, double RawGap,
-        bool HomeIsTarget, int ComponentSize, string Reason, string Why = "");
+    internal readonly record struct Move(
+        PartitionInfo Moving,
+        bool ToTarget,
+        double Gap,
+        double RawGap,
+        bool HomeIsTarget,
+        int ComponentSize,
+        string Reason,
+        string Why = ""
+    );
 
     /// <summary>
     /// A target-side import refusal with its body preserved: when the Partitioning §6.10 round-trip gate
@@ -1193,15 +1884,32 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             : base($"Import of partition {partition} failed with HTTP {status}: {FirstLine(body)}")
         {
             Partition = partition;
-            Signature = System.Text.RegularExpressions.Regex.Match(body, "residual-signature=([0-9a-f]+)") is { Success: true } match
-                ? match.Groups[1].Value : null;
+            Signature = System.Text.RegularExpressions.Regex.Match(
+                body,
+                "residual-signature=([0-9a-f]+)"
+            )
+                is { Success: true } match
+                ? match.Groups[1].Value
+                : null;
             Reason = FirstLine(body);
-            Entities = System.Text.RegularExpressions.Regex.Match(body, "residual-entities=([0-9,]+)") is { Success: true } entities
-                ? [.. entities.Groups[1].Value.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(long.Parse)] : null;
+            Entities = System.Text.RegularExpressions.Regex.Match(
+                body,
+                "residual-entities=([0-9,]+)"
+            )
+                is { Success: true } entities
+                ?
+                [
+                    .. entities
+                        .Groups[1]
+                        .Value.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(long.Parse),
+                ]
+                : null;
         }
 
         public ulong Partition { get; }
         public string? Signature { get; }
+
         /// <summary>SE-1134: the top-level entities holding the residuals, from a node that names them.</summary>
         public long[]? Entities { get; }
         public string Reason { get; }
@@ -1219,8 +1927,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// report wins. Override with CLUSTER_ROUTE_OVER_REPORT_GRACE_SECONDS.
     /// </summary>
     private static readonly TimeSpan RouteOverReportGrace = TimeSpan.FromSeconds(
-        int.TryParse(Environment.GetEnvironmentVariable("CLUSTER_ROUTE_OVER_REPORT_GRACE_SECONDS"),
-            out int graceSeconds) && graceSeconds > 0 ? graceSeconds : 120);
+        int.TryParse(
+            Environment.GetEnvironmentVariable("CLUSTER_ROUTE_OVER_REPORT_GRACE_SECONDS"),
+            out int graceSeconds
+        )
+        && graceSeconds > 0
+            ? graceSeconds
+            : 120
+    );
 
     /// <summary>
     /// When each partition's route first disagreed with every node report. Written by the
@@ -1243,8 +1957,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         IReadOnlyCollection<(ulong Client, ulong Partition)> routes,
         HashSet<ulong> reportedWithClients,
         IDictionary<ulong, DateTimeOffset> contradictedSince,
-        DateTimeOffset now, TimeSpan grace,
-        out List<(ulong Client, ulong Partition, double Seconds)> expired)
+        DateTimeOffset now,
+        TimeSpan grace,
+        out List<(ulong Client, ulong Partition, double Seconds)> expired
+    )
     {
         HashSet<ulong> routed = [];
         HashSet<ulong> stillRouted = [];
@@ -1265,7 +1981,9 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             else
                 expired.Add((client, partition, (now - since).TotalSeconds));
         }
-        foreach (ulong partition in contradictedSince.Keys.Where(x => !stillRouted.Contains(x)).ToArray())
+        foreach (
+            ulong partition in contradictedSince.Keys.Where(x => !stillRouted.Contains(x)).ToArray()
+        )
             contradictedSince.Remove(partition);
         return routed;
     }
@@ -1282,14 +2000,26 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// home to the node that has the body. Override with CLUSTER_SESSION_AWAY_GRACE_SECONDS.
     /// </summary>
     private static readonly TimeSpan SessionAwayGrace = TimeSpan.FromSeconds(
-        int.TryParse(Environment.GetEnvironmentVariable("CLUSTER_SESSION_AWAY_GRACE_SECONDS"),
-            out int awaySeconds) && awaySeconds > 0 ? awaySeconds : 30);
+        int.TryParse(
+            Environment.GetEnvironmentVariable("CLUSTER_SESSION_AWAY_GRACE_SECONDS"),
+            out int awaySeconds
+        )
+        && awaySeconds > 0
+            ? awaySeconds
+            : 30
+    );
 
     /// <summary>When each connected client's session was first seen on a node other than its routed partition's owner.</summary>
     private readonly Dictionary<ulong, DateTimeOffset> _sessionAwaySince = [];
 
-    internal readonly record struct SessionPlacement(ulong Client, string? SessionNode, ulong Partition,
-        string? OwnerNode, bool OwnerRecovering, bool Switching);
+    internal readonly record struct SessionPlacement(
+        ulong Client,
+        string? SessionNode,
+        ulong Partition,
+        string? OwnerNode,
+        bool OwnerRecovering,
+        bool Switching
+    );
 
     /// <summary>
     /// Which connected clients have sat, for at least <paramref name="grace"/>, on a node other
@@ -1299,16 +2029,29 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// switch itself. Mutates <paramref name="awaySince"/> exactly like RoutedClientBearing
     /// mutates its map: dates the first disagreement, forgets clients that agree again or are gone.
     /// </summary>
-    internal static List<(ulong Client, ulong Partition, string OwnerNode, string SessionNode, double Seconds)> SessionsAwayFromBody(
-        IReadOnlyCollection<SessionPlacement> placements, IDictionary<ulong, DateTimeOffset> awaySince,
-        DateTimeOffset now, TimeSpan grace)
+    internal static List<(
+        ulong Client,
+        ulong Partition,
+        string OwnerNode,
+        string SessionNode,
+        double Seconds
+    )> SessionsAwayFromBody(
+        IReadOnlyCollection<SessionPlacement> placements,
+        IDictionary<ulong, DateTimeOffset> awaySince,
+        DateTimeOffset now,
+        TimeSpan grace
+    )
     {
         List<(ulong, ulong, string, string, double)> due = [];
         HashSet<ulong> seen = [];
         foreach (SessionPlacement each in placements)
         {
             seen.Add(each.Client);
-            bool away = !each.Switching && each.SessionNode != null && each.OwnerNode != null && !each.OwnerRecovering
+            bool away =
+                !each.Switching
+                && each.SessionNode != null
+                && each.OwnerNode != null
+                && !each.OwnerRecovering
                 && !string.Equals(each.SessionNode, each.OwnerNode, StringComparison.Ordinal);
             if (!away)
             {
@@ -1318,7 +2061,15 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             if (!awaySince.TryGetValue(each.Client, out DateTimeOffset since))
                 awaySince[each.Client] = since = now;
             if (now - since >= grace)
-                due.Add((each.Client, each.Partition, each.OwnerNode!, each.SessionNode!, (now - since).TotalSeconds));
+                due.Add(
+                    (
+                        each.Client,
+                        each.Partition,
+                        each.OwnerNode!,
+                        each.SessionNode!,
+                        (now - since).TotalSeconds
+                    )
+                );
         }
         foreach (ulong client in awaySince.Keys.Where(x => !seen.Contains(x)).ToArray())
             awaySince.Remove(client);
@@ -1333,28 +2084,71 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// </summary>
     private void ReconnectSessionsAwayFromBody(ServedNode[] served)
     {
-        if (_registry == null) return;
+        if (_registry == null)
+            return;
         List<SessionPlacement> placements = [];
         foreach (ClientSession session in _clients.Values)
         {
-            if (session.Client == null) continue;
-            if (_registry.GetClientPartition(session.ClientId) is not { } location) continue;
+            if (session.Client == null)
+                continue;
+            if (_registry.GetClientPartition(session.ClientId) is not { } location)
+                continue;
             PartitionOwnership? owner;
-            try { owner = _registry.GetPartitionOwner(location.Partition); }
-            catch (ArgumentException) { owner = null; }
+            try
+            {
+                owner = _registry.GetPartitionOwner(location.Partition);
+            }
+            catch (ArgumentException)
+            {
+                owner = null;
+            }
             string backend = session.BackendEndpoint.ToString();
-            string? sessionNode = served.FirstOrDefault(node => node.Backend.ToString() == backend)?.Node;
-            placements.Add(new SessionPlacement(session.ClientId, sessionNode, location.Partition,
-                owner?.Node, owner?.Recovering ?? true, session.SwitchingBackend));
+            string? sessionNode = served
+                .FirstOrDefault(node => node.Backend.ToString() == backend)
+                ?.Node;
+            placements.Add(
+                new SessionPlacement(
+                    session.ClientId,
+                    sessionNode,
+                    location.Partition,
+                    owner?.Node,
+                    owner?.Recovering ?? true,
+                    session.SwitchingBackend
+                )
+            );
         }
-        List<(ulong Client, ulong Partition, string OwnerNode, string SessionNode, double Seconds)> due;
+        List<(
+            ulong Client,
+            ulong Partition,
+            string OwnerNode,
+            string SessionNode,
+            double Seconds
+        )> due;
         lock (_sessionAwaySince)
-            due = SessionsAwayFromBody(placements, _sessionAwaySince, DateTimeOffset.UtcNow, SessionAwayGrace);
-        foreach ((ulong client, ulong partition, string ownerNode, string sessionNode, double seconds) in due)
+            due = SessionsAwayFromBody(
+                placements,
+                _sessionAwaySince,
+                DateTimeOffset.UtcNow,
+                SessionAwayGrace
+            );
+        foreach (
+            (
+                ulong client,
+                ulong partition,
+                string ownerNode,
+                string sessionNode,
+                double seconds
+            ) in due
+        )
         {
-            if (!_clients.TryGetValue(client, out ClientSession? session)) continue;
-            lock (_sessionAwaySince) _sessionAwaySince.Remove(client);
-            ForceReconnect(session, $"session on {sessionNode} but routed partition {partition} is owned by {ownerNode} for {seconds:F0}s");
+            if (!_clients.TryGetValue(client, out ClientSession? session))
+                continue;
+            lock (_sessionAwaySince)
+                _sessionAwaySince.Remove(client);
+            ForceReconnect(
+                session,
+                $"session on {sessionNode} but routed partition {partition} is owned by {ownerNode} for {seconds:F0}s"
+            );
         }
     }
 
@@ -1394,8 +2188,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         lock (_teleportIntents)
         {
-            foreach (ulong stale in _teleportIntents.Where(x => DateTimeOffset.UtcNow - x.Value > TimeSpan.FromSeconds(120))
-                         .Select(x => x.Key).ToArray())
+            foreach (
+                ulong stale in _teleportIntents
+                    .Where(x => DateTimeOffset.UtcNow - x.Value > TimeSpan.FromSeconds(120))
+                    .Select(x => x.Key)
+                    .ToArray()
+            )
                 _teleportIntents.Remove(stale);
             return new HashSet<ulong>(_teleportIntents.Keys);
         }
@@ -1403,7 +2201,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
 
     private void ClearTeleportIntent(ulong client)
     {
-        lock (_teleportIntents) _teleportIntents.Remove(client);
+        lock (_teleportIntents)
+            _teleportIntents.Remove(client);
     }
 
     /// <summary>
@@ -1425,8 +2224,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         DateTimeOffset first = _homeRecoveryWaits.GetOrAdd(clientId, _ => DateTimeOffset.UtcNow);
         // T-0193: a home in an offline partition is a directed load in flight (PendingHomeRecovery asked
         // for it); a big base can take longer than a drain's re-home to come up, so it gets the longer hold.
-        TimeSpan hold = _registry.HomeOffline(clientId) ? TimeSpan.FromSeconds(120) : TimeSpan.FromSeconds(30);
-        if (DateTimeOffset.UtcNow - first >= hold) return false;
+        TimeSpan hold = _registry.HomeOffline(clientId)
+            ? TimeSpan.FromSeconds(120)
+            : TimeSpan.FromSeconds(30);
+        if (DateTimeOffset.UtcNow - first >= hold)
+            return false;
         Console.WriteLine($"Join of client {clientId} deferred: its character home is recovering");
         return true;
     }
@@ -1434,8 +2236,21 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// <summary>T-0292: the fast partitions of the latest reports, for the diag registry section.</summary>
     private object[] FastPartitionsNow() =>
         _lastPartitionReports is { } snapshot
-            ? snapshot.Reports.SelectMany(report => report.Report.Partitions.Where(info => info.Fast)
-                .Select(info => (object)new { partition = info.Id, node = report.Node, speed = info.FastSpeed, members = info.MemberCount }))
+            ? snapshot
+                .Reports.SelectMany(report =>
+                    report
+                        .Report.Partitions.Where(info => info.Fast)
+                        .Select(info =>
+                            (object)
+                                new
+                                {
+                                    partition = info.Id,
+                                    node = report.Node,
+                                    speed = info.FastSpeed,
+                                    members = info.MemberCount,
+                                }
+                        )
+                )
                 .ToArray()
             : [];
 
@@ -1443,24 +2258,47 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// registry's routes, for the World Authority's wake check (the offline table's FastClients).</summary>
     private ulong[] FastClientsNow()
     {
-        if (_lastPartitionReports is not { } snapshot || DateTime.UtcNow - snapshot.At > TimeSpan.FromSeconds(5)) return [];
-        PartitionInfo[] fast = [.. snapshot.Reports.SelectMany(report => report.Report.Partitions).Where(info => info.Fast)];
-        if (fast.Length == 0) return [];
+        if (
+            _lastPartitionReports is not { } snapshot
+            || DateTime.UtcNow - snapshot.At > TimeSpan.FromSeconds(5)
+        )
+            return [];
+        PartitionInfo[] fast =
+        [
+            .. snapshot
+                .Reports.SelectMany(report => report.Report.Partitions)
+                .Where(info => info.Fast),
+        ];
+        if (fast.Length == 0)
+            return [];
         HashSet<ulong> ids = [.. fast.Select(info => info.Id)];
         HashSet<ulong> clients = [.. fast.SelectMany(info => info.Clients ?? [])];
         if (_registry != null)
             foreach (ulong client in _clients.Keys)
-                if (_registry.GetClientPartition(client) is { } location && ids.Contains(location.Partition)) clients.Add(client);
+                if (
+                    _registry.GetClientPartition(client) is { } location
+                    && ids.Contains(location.Partition)
+                )
+                    clients.Add(client);
         return [.. clients.Order()];
     }
 
     /// <summary>T-0292: the latest partition reports (at most 15 s old) say this partition is fast.</summary>
     private bool IsFastPartition(ulong partition) =>
-        _lastPartitionReports is { } snapshot && DateTime.UtcNow - snapshot.At <= TimeSpan.FromSeconds(15)
-        && snapshot.Reports.Any(report => report.Report.Partitions.Any(info => info.Id == partition && info.Fast));
+        _lastPartitionReports is { } snapshot
+        && DateTime.UtcNow - snapshot.At <= TimeSpan.FromSeconds(15)
+        && snapshot.Reports.Any(report =>
+            report.Report.Partitions.Any(info => info.Id == partition && info.Fast)
+        );
 
-    private static (PartitionInfo Partition, bool OnSource)[] Located(PartitionReport source, PartitionReport target) =>
-        source.Partitions.Select(p => (p, true)).Concat(target.Partitions.Select(p => (p, false))).ToArray();
+    private static (PartitionInfo Partition, bool OnSource)[] Located(
+        PartitionReport source,
+        PartitionReport target
+    ) =>
+        source
+            .Partitions.Select(p => (p, true))
+            .Concat(target.Partitions.Select(p => (p, false)))
+            .ToArray();
 
     /// <summary>
     /// Labels each partition with its envelope-connected component. Two partitions inside one another's
@@ -1470,14 +2308,23 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// <para>#1304: <paramref name="units"/> links every pair at the engage distance, same node or not. That groups
     /// partitions into balance units: a unit moved to another node leaves no cross-node pair co-location would drag back
     /// (it engages only below the engage distance). At ColocationEngageFraction 1.0 the units are the components.</para>
-    private static int[] Components((PartitionInfo Partition, bool OnSource)[] all, double envelope,
-        CostModel model, bool units = false)
+    private static int[] Components(
+        (PartitionInfo Partition, bool OnSource)[] all,
+        double envelope,
+        CostModel model,
+        bool units = false
+    )
     {
         // ponytail: O(n^2) union-find over a node pair's partitions - a few dozen at most, once a second,
         // and the sphere exclusion inside EnvelopeGap keeps far pairs O(1). A cluster-wide uniform grid
         // (Plan/EntityGapPlacement.md) if a node ever carries thousands.
         int[] parent = Enumerable.Range(0, all.Length).ToArray();
-        int Find(int i) { while (parent[i] != i) i = parent[i] = parent[parent[i]]; return i; }
+        int Find(int i)
+        {
+            while (parent[i] != i)
+                i = parent[i] = parent[parent[i]];
+            return i;
+        }
         // T-0141 third attempt: HYSTERESIS. A pair already on the same node stays linked out to the
         // full envelope; a pair on different nodes must close to `engage` before co-location drags
         // them together. Placement is the memory, so no history is kept. At the default fraction of
@@ -1485,21 +2332,23 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // See CostModel.ColocationEngageFraction for the measurements and the invariant bound.
         double engage = envelope * model.ColocationEngageFraction;
         for (int i = 0; i < all.Length; i++)
-            for (int j = i + 1; j < all.Length; j++)
+        for (int j = i + 1; j < all.Length; j++)
+        {
+            // T-0292: a fast partition links to nothing - it is its own component, so co-location
+            // never merges it with, or hands it over towards, the content it flies past.
+            double link = all[i].OnSource == all[j].OnSource && !units ? envelope : engage;
+            if (all[i].Partition.Fast || all[j].Partition.Fast)
             {
-                // T-0292: a fast partition links to nothing - it is its own component, so co-location
-                // never merges it with, or hands it over towards, the content it flies past.
-                double link = all[i].OnSource == all[j].OnSource && !units ? envelope : engage;
-                if (all[i].Partition.Fast || all[j].Partition.Fast)
-                {
-                    if (EnvelopeGap(all[i].Partition, all[j].Partition, link, model) < link) FastPartitionCounters.ColocationLink();
-                    continue;
-                }
                 if (EnvelopeGap(all[i].Partition, all[j].Partition, link, model) < link)
-                    parent[Find(i)] = Find(j);
+                    FastPartitionCounters.ColocationLink();
+                continue;
             }
+            if (EnvelopeGap(all[i].Partition, all[j].Partition, link, model) < link)
+                parent[Find(i)] = Find(j);
+        }
         int[] labels = new int[all.Length];
-        for (int i = 0; i < all.Length; i++) labels[i] = Find(i);
+        for (int i = 0; i < all.Length; i++)
+            labels[i] = Find(i);
         return labels;
     }
 
@@ -1508,7 +2357,13 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// of view (Docs/GlobalLoadBalancing.md §5). <c>Elsewhere</c> means pinned to a node outside the
     /// pair - that component is another pass's business.
     /// </summary>
-    internal enum MigrationSide { None, Source, Target, Elsewhere }
+    internal enum MigrationSide
+    {
+        None,
+        Source,
+        Target,
+        Elsewhere,
+    }
 
     /// <summary>
     /// Picks the next partition to move so that every envelope-connected component ends up on one node.
@@ -1517,12 +2372,24 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// its home dictated by the pin - including a fully co-located component being moved off its node
     /// minority-first - so the migration is carried member-by-member instead of being dragged back.
     /// </summary>
-    internal static Move? ChooseMove(PartitionReport source, PartitionReport target, double envelope,
-        HashSet<ulong> routed, Func<ulong, bool> blocked, CostModel? model = null,
-        HashSet<ulong>? travelling = null, Func<ulong, bool>? validationBlocked = null,
-        Func<ulong, MigrationSide>? migration = null, double loadSource = 0, double loadTarget = 0,
-        Action<ulong[]>? pinVoided = null, Action<ulong[]>? carried = null, IReadOnlySet<ulong>? heavy = null,
-        bool sourceRetiring = false, bool targetRetiring = false)
+    internal static Move? ChooseMove(
+        PartitionReport source,
+        PartitionReport target,
+        double envelope,
+        HashSet<ulong> routed,
+        Func<ulong, bool> blocked,
+        CostModel? model = null,
+        HashSet<ulong>? travelling = null,
+        Func<ulong, bool>? validationBlocked = null,
+        Func<ulong, MigrationSide>? migration = null,
+        double loadSource = 0,
+        double loadTarget = 0,
+        Action<ulong[]>? pinVoided = null,
+        Action<ulong[]>? carried = null,
+        IReadOnlySet<ulong>? heavy = null,
+        bool sourceRetiring = false,
+        bool targetRetiring = false
+    )
     {
         model ??= new CostModel();
         Func<ulong, bool> hardBlocked = validationBlocked ?? (_ => false);
@@ -1531,17 +2398,26 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
 
         Move? best = null;
         Move? blockedIncident = null;
-        foreach (IGrouping<int, int> component in Enumerable.Range(0, all.Length).GroupBy(i => labels[i]))
+        foreach (
+            IGrouping<int, int> component in Enumerable.Range(0, all.Length).GroupBy(i => labels[i])
+        )
         {
-            (PartitionInfo Partition, bool OnSource)[] members = component.Select(i => all[i]).ToArray();
+            (PartitionInfo Partition, bool OnSource)[] members = component
+                .Select(i => all[i])
+                .ToArray();
             MigrationSide pinned = MigrationSide.None;
             if (migration != null)
                 foreach ((PartitionInfo partition, _) in members)
                 {
                     MigrationSide side = migration(partition.Id);
-                    if (side != MigrationSide.None) { pinned = side; break; }
+                    if (side != MigrationSide.None)
+                    {
+                        pinned = side;
+                        break;
+                    }
                 }
-            if (pinned == MigrationSide.Elsewhere) continue;
+            if (pinned == MigrationSide.Elsewhere)
+                continue;
             // #1304: the planner pins balance units (Components with units: true), so a pin carries the units holding a
             // member pinned this way and leaves the rest of the envelope component where it is. At ColocationEngageFraction
             // 1.0 the units are the component and nothing changes.
@@ -1549,9 +2425,20 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             if (pinned is MigrationSide.Source or MigrationSide.Target)
             {
                 int[] units = Components(members, envelope, model, units: true);
-                HashSet<int> pinnedUnits = [.. Enumerable.Range(0, members.Length)
-                    .Where(i => migration!(members[i].Partition.Id) == pinned).Select(i => units[i])];
-                members = [.. Enumerable.Range(0, members.Length).Where(i => pinnedUnits.Contains(units[i])).Select(i => members[i])];
+                HashSet<int> pinnedUnits =
+                [
+                    .. Enumerable
+                        .Range(0, members.Length)
+                        .Where(i => migration!(members[i].Partition.Id) == pinned)
+                        .Select(i => units[i]),
+                ];
+                members =
+                [
+                    .. Enumerable
+                        .Range(0, members.Length)
+                        .Where(i => pinnedUnits.Contains(units[i]))
+                        .Select(i => members[i]),
+                ];
             }
             // T-0249: a validation-blocked member cannot follow the pin, so the pin is not honoured for
             // this component: cost-based co-location decides instead. A component not yet split stays
@@ -1559,8 +2446,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // Before this, the pin kept carrying the other members away from the blocked one.
             // T-0296 r4: and the pins END there (pinVoided). Left in place they outlived the block (60 s first, the
             // pin 180 s and renewed by any other train): the reunited group was carried apart again by the old plan.
-            if (pinned is MigrationSide.Source or MigrationSide.Target
-                && members.Any(m => m.OnSource == (pinned == MigrationSide.Target) && hardBlocked(m.Partition.Id)))
+            if (
+                pinned is MigrationSide.Source or MigrationSide.Target
+                && members.Any(m =>
+                    m.OnSource == (pinned == MigrationSide.Target) && hardBlocked(m.Partition.Id)
+                )
+            )
             {
                 pinned = MigrationSide.None;
                 pinVoided?.Invoke([.. members.Select(m => m.Partition.Id)]);
@@ -1568,21 +2459,43 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             }
             bool migrating = pinned != MigrationSide.None;
             if (!migrating && (members.All(m => m.OnSource) || members.All(m => !m.OnSource)))
-                continue;   // already co-located
+                continue; // already co-located
             // #1454 case 5: a heavy side stays, and a merge that makes a heavy component keeps its bigger crew in place.
             string heavyWhy = "";
-            bool? heavyHome = migrating ? null
-                : HeavyHome(members, routed, model, heavy, travelling, loadSource, loadTarget, out heavyWhy);
-            bool homeIsTarget = migrating ? pinned == MigrationSide.Target
-                : heavyHome ?? HomeIsTarget(members, routed, model, travelling, loadSource, loadTarget);
+            bool? heavyHome = migrating
+                ? null
+                : HeavyHome(
+                    members,
+                    routed,
+                    model,
+                    heavy,
+                    travelling,
+                    loadSource,
+                    loadTarget,
+                    out heavyWhy
+                );
+            bool homeIsTarget = migrating
+                ? pinned == MigrationSide.Target
+                : heavyHome
+                    ?? HomeIsTarget(members, routed, model, travelling, loadSource, loadTarget);
             // T-0073: the decision, with its inputs, at the decision point. The handover line used to
             // carry only the winner; why node X and not the reverse was unrecoverable from the logs.
-            string why = migrating
-                ? $"pinned migration to {(pinned == MigrationSide.Target ? "target" : "source")}"
+            string why =
+                migrating
+                    ? $"pinned migration to {(pinned == MigrationSide.Target ? "target" : "source")}"
                 : heavyHome != null ? heavyWhy
-                : ExplainHome(members, routed, model, travelling, homeIsTarget, loadSource, loadTarget);
+                : ExplainHome(
+                    members,
+                    routed,
+                    model,
+                    travelling,
+                    homeIsTarget,
+                    loadSource,
+                    loadTarget
+                );
             // Nothing left on the wrong side (a migration that has fully arrived within this pair).
-            if (!members.Any(m => m.OnSource == homeIsTarget)) continue;
+            if (!members.Any(m => m.OnSource == homeIsTarget))
+                continue;
             // Partitioning §6.10/§7.1: a HandoverBlocked side is not a candidate, so a side holding a
             // blocked member is the home; when both sides hold one the co-location escalates as an
             // incident instead of retrying every round. Only the durable validation block decides the
@@ -1595,23 +2508,48 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // carried back - 172 round trips in 13 min, 4689 of the run's 10217 co-location moves.
             if (migrating)
             {
-                if (members.Where(m => m.OnSource == homeIsTarget).All(m => hardBlocked(m.Partition.Id))) continue;
+                if (
+                    members
+                        .Where(m => m.OnSource == homeIsTarget)
+                        .All(m => hardBlocked(m.Partition.Id))
+                )
+                    continue;
             }
             else
             {
-                ulong[] blockedOnSource = [.. members.Where(m => m.OnSource && hardBlocked(m.Partition.Id)).Select(m => m.Partition.Id)];
-                ulong[] blockedOnTarget = [.. members.Where(m => !m.OnSource && hardBlocked(m.Partition.Id)).Select(m => m.Partition.Id)];
+                ulong[] blockedOnSource =
+                [
+                    .. members
+                        .Where(m => m.OnSource && hardBlocked(m.Partition.Id))
+                        .Select(m => m.Partition.Id),
+                ];
+                ulong[] blockedOnTarget =
+                [
+                    .. members
+                        .Where(m => !m.OnSource && hardBlocked(m.Partition.Id))
+                        .Select(m => m.Partition.Id),
+                ];
                 if (blockedOnSource.Length != 0 && blockedOnTarget.Length != 0)
                 {
-                    blockedIncident ??= new Move(members.First(m => m.OnSource == homeIsTarget && hardBlocked(m.Partition.Id)).Partition,
-                        homeIsTarget, double.MaxValue, double.MaxValue, homeIsTarget, members.Length, "co-location-blocked");
+                    blockedIncident ??= new Move(
+                        members
+                            .First(m => m.OnSource == homeIsTarget && hardBlocked(m.Partition.Id))
+                            .Partition,
+                        homeIsTarget,
+                        double.MaxValue,
+                        double.MaxValue,
+                        homeIsTarget,
+                        members.Length,
+                        "co-location-blocked"
+                    );
                     continue;
                 }
                 if (blockedOnSource.Length + blockedOnTarget.Length != 0)
                 {
                     bool blockedIsTarget = blockedOnTarget.Length != 0;
                     if (blockedIsTarget != homeIsTarget)
-                        why += $"; HandoverBlocked {string.Join(",", blockedIsTarget ? blockedOnTarget : blockedOnSource)}"
+                        why +=
+                            $"; HandoverBlocked {string.Join(",", blockedIsTarget ? blockedOnTarget : blockedOnSource)}"
                             + $" -> home {(blockedIsTarget ? "target" : "source")}";
                     homeIsTarget = blockedIsTarget;
                 }
@@ -1621,11 +2559,16 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // 2026-11-14 19:01-19:11 CET: 9 handovers into local-node-3 during its drain, 27 of 29 partitions
                 // still there at the forced close). The other side is the home; the blocked member stays behind
                 // until its block clears or the node closes, and the per-member loop below skips it.
-                if ((homeIsTarget ? targetRetiring : sourceRetiring) && !(homeIsTarget ? sourceRetiring : targetRetiring))
+                if (
+                    (homeIsTarget ? targetRetiring : sourceRetiring)
+                    && !(homeIsTarget ? sourceRetiring : targetRetiring)
+                )
                 {
                     homeIsTarget = !homeIsTarget;
-                    why += $"; {(homeIsTarget ? "source" : "target")} is retiring -> home {(homeIsTarget ? "target" : "source")}";
-                    if (!members.Any(m => m.OnSource == homeIsTarget)) continue;
+                    why +=
+                        $"; {(homeIsTarget ? "source" : "target")} is retiring -> home {(homeIsTarget ? "target" : "source")}";
+                    if (!members.Any(m => m.OnSource == homeIsTarget))
+                        continue;
                 }
             }
             // T-0249 (w33 2026-09-26 01:46): a migration moves its component member by member, so while it
@@ -1638,18 +2581,28 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             //    arrived, so the window a client spends apart from its neighbours is one planner pass,
             //    not the whole transfer of the biggest member.
             // T-0296 r4: the members a migration still has to carry, for the loop's stalled-train rule (StalledMigrationPins).
-            if (migrating) carried?.Invoke([.. members.Where(m => m.OnSource == homeIsTarget).Select(m => m.Partition.Id)]);
-            if (migrating && members.Any(m => m.OnSource == homeIsTarget && blocked(m.Partition.Id)))
+            if (migrating)
+                carried?.Invoke([
+                    .. members.Where(m => m.OnSource == homeIsTarget).Select(m => m.Partition.Id),
+                ]);
+            if (
+                migrating && members.Any(m => m.OnSource == homeIsTarget && blocked(m.Partition.Id))
+            )
                 continue;
-            bool clientlessToMove = migrating
+            bool clientlessToMove =
+                migrating
                 && members.Any(m => m.OnSource == homeIsTarget && m.Partition.Clients.Length == 0);
             foreach ((PartitionInfo partition, bool onSource) in members)
             {
-                if (onSource != homeIsTarget) continue;                      // already home
-                if (blocked(partition.Id) || hardBlocked(partition.Id)) continue;
-                if (clientlessToMove && partition.Clients.Length > 0) continue;
+                if (onSource != homeIsTarget)
+                    continue; // already home
+                if (blocked(partition.Id) || hardBlocked(partition.Id))
+                    continue;
+                if (clientlessToMove && partition.Clients.Length > 0)
+                    continue;
                 // Urgency is distance to the nearest partition it is failing to be co-located with.
-                double gap = double.MaxValue, rawGap = double.MaxValue;
+                double gap = double.MaxValue,
+                    rawGap = double.MaxValue;
                 foreach ((PartitionInfo other, bool otherOnSource) in members)
                 {
                     double candidate = EnvelopeGap(partition, other, envelope, model);
@@ -1661,16 +2614,26 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 }
                 if (gap == double.MaxValue)
                 {
-                    if (!migrating) continue;
+                    if (!migrating)
+                        continue;
                     // A migrating member with no cross-pair neighbour yet (the minority-first move off
                     // a fully co-located component): floor the urgency at the envelope, so any real
                     // cross-node violation - gap under the envelope by definition - always wins.
                     gap = envelope;
                     rawGap = envelope;
                 }
-                if (best is { } current && current.Gap <= gap) continue;
-                best = new Move(partition, homeIsTarget, gap, rawGap, homeIsTarget, members.Length,
-                    migrating ? "balance-migration" : "co-location", why);
+                if (best is { } current && current.Gap <= gap)
+                    continue;
+                best = new Move(
+                    partition,
+                    homeIsTarget,
+                    gap,
+                    rawGap,
+                    homeIsTarget,
+                    members.Length,
+                    migrating ? "balance-migration" : "co-location",
+                    why
+                );
             }
         }
         return best ?? blockedIncident;
@@ -1688,12 +2651,31 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// gate: "evacuate" moves another component off a heavy component's node, "heavy-split" moves the heavy component with
     /// fewer clients off a node holding two, "heavy-dedicate" moves a heavy component onto an empty node when
     /// evacuating its neighbours would move more clients than it carries.</summary>
-    internal enum RebalanceKind { Load, Client, Idle, Evacuate, HeavySplit, HeavyDedicate }
+    internal enum RebalanceKind
+    {
+        Load,
+        Client,
+        Idle,
+        Evacuate,
+        HeavySplit,
+        HeavyDedicate,
+    }
 
-    internal readonly record struct RebalancePlan(PartitionInfo[] Members, string Source, string Target,
-        long ComponentLoad, long OldPeak, long NewPeak, double CostMs, double Excess,
-        string LoadUnit = "PCU", string Explain = "", RebalanceKind Kind = RebalanceKind.Load,
-        long OverloadReduction = 0, double MeanLoad = 0);
+    internal readonly record struct RebalancePlan(
+        PartitionInfo[] Members,
+        string Source,
+        string Target,
+        long ComponentLoad,
+        long OldPeak,
+        long NewPeak,
+        double CostMs,
+        double Excess,
+        string LoadUnit = "PCU",
+        string Explain = "",
+        RebalanceKind Kind = RebalanceKind.Load,
+        long OverloadReduction = 0,
+        double MeanLoad = 0
+    );
 
     /// <summary>One envelope-connected component as the placement optimizer sees it: an indivisible
     /// bag item with a home node, a weight and a price to move it anywhere else. Unmovable components
@@ -1703,9 +2685,18 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// <para>#1454: <c>Heavy</c> marks a heavy component (never Movable); <c>Free</c> is "nothing but the balance rules keeps
     /// it in place" (not blocked, pinned, fast or in flight) and <c>Content</c> "carries PCU or a client", which is what
     /// the heavy moves (<see cref="PlanHeavyMoves"/>) read instead of Movable.</para>
-    internal readonly record struct PlacementComponent(PartitionInfo[] Members, int Node, long Load,
-        double CostMs, bool Movable, int Clients = 0, bool LoadUnit = true, bool Heavy = false, bool Free = false,
-        bool Content = false);
+    internal readonly record struct PlacementComponent(
+        PartitionInfo[] Members,
+        int Node,
+        long Load,
+        double CostMs,
+        bool Movable,
+        int Clients = 0,
+        bool LoadUnit = true,
+        bool Heavy = false,
+        bool Free = false,
+        bool Content = false
+    );
 
     /// <summary>
     /// CLUSTER-SIM-COST: the balance load of one partition. The measured per-partition simulation
@@ -1714,8 +2705,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// in one arithmetic: a 1,204-PCU parked Visitor outweighs a piloted 500-PCU tug in PCU and
     /// underweighs it ~50x in measured cost.
     /// </summary>
-    private static long PartitionLoad(PartitionInfo partition, bool simLoad)
-        => simLoad ? partition.SimLoadUs : partition.Pcu;
+    private static long PartitionLoad(PartitionInfo partition, bool simLoad) =>
+        simLoad ? partition.SimLoadUs : partition.Pcu;
 
     /// <summary>
     /// The /partitions report samples SimulationRatio alongside its partition costs. Below 0.98,
@@ -1731,7 +2722,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // T-0355: a node that owns nothing is dormant - it ticks at 4 Hz and reports a ratio near 0.07, which the
         // reciprocal below turned into 12.5-14 M us/s. The empty node then read as the PEAK of the cluster, nothing was
         // ever balanced or woken onto it, and a returning host's fresh nodes stayed empty while a loaded node ran at 0.52x.
-        if (report.Partitions.Length == 0) return 0;
+        if (report.Partitions.Length == 0)
+            return 0;
         if (!simLoad || !double.IsFinite(speed) || speed <= 0 || speed >= 0.98)
             return measured;
         long elapsed = (long)Math.Min(1_000_000.0 / speed, 1_000_000_000_000.0);
@@ -1749,8 +2741,13 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// bound the node really ran under for the whole window. One hitch is one or two low samples at a pass a second,
     /// a saturated node stays low. A healthy or unusable sample ends the run. 0 seconds returns the reports unchanged.
     /// </summary>
-    internal static (T Node, PartitionReport Report)[] SustainRatios<T>((T Node, PartitionReport Report)[] reports,
-        Func<T, string> name, Dictionary<string, List<(DateTime At, double Ratio)>> runs, double sustainSeconds, DateTime now)
+    internal static (T Node, PartitionReport Report)[] SustainRatios<T>(
+        (T Node, PartitionReport Report)[] reports,
+        Func<T, string> name,
+        Dictionary<string, List<(DateTime At, double Ratio)>> runs,
+        double sustainSeconds,
+        DateTime now
+    )
     {
         if (sustainSeconds <= 0)
         {
@@ -1769,9 +2766,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 sustained[i] = reports[i];
                 continue;
             }
-            if (!runs.TryGetValue(key, out var run)) runs[key] = run = [];
+            if (!runs.TryGetValue(key, out var run))
+                runs[key] = run = [];
             // A gap in the samples (a silent node, suspended passes) is no evidence the node stayed slow.
-            if (run.Count != 0 && (now - run[^1].At).TotalSeconds > sustainSeconds) run.Clear();
+            if (run.Count != 0 && (now - run[^1].At).TotalSeconds > sustainSeconds)
+                run.Clear();
             run.Add((now, ratio));
             double effective = 1;
             if ((now - run[0].At).TotalSeconds >= sustainSeconds)
@@ -1800,7 +2799,9 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// from a pass keeps its last value rather than decaying toward zero - absence means "no report
     /// this pass", not "idle", and decaying would quietly make a silent node look like a good home.
     /// </summary>
-    private Dictionary<string, double> SmoothNodeLoads((ServedNode Node, PartitionReport Report)[] reports)
+    private Dictionary<string, double> SmoothNodeLoads(
+        (ServedNode Node, PartitionReport Report)[] reports
+    )
     {
         // Mixed fleets are not commensurable - PCU and measured sim-us are different units - so the
         // whole pass falls back to PCU unless every node reports measured cost, exactly as
@@ -1830,18 +2831,32 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// same moves on every pass. Exact optimality is explicitly not a goal - a near-optimal peak
     /// found cheaply beats an optimal one found never.
     /// </summary>
-    internal static int[] OptimizePlacement(PlacementComponent[] components, int nodeCount, CostModel model,
-        long[]? nodeClients = null, bool[]? closed = null)
+    internal static int[] OptimizePlacement(
+        PlacementComponent[] components,
+        int nodeCount,
+        CostModel model,
+        long[]? nodeClients = null,
+        bool[]? closed = null
+    )
     {
         // #1454: a node holding a heavy component takes no movable component (the heavy component gets the node to itself).
         bool Closed(int n) => closed?[n] == true;
         long[] fixedLoad = new long[nodeCount];
         long[] fixedClients = new long[nodeCount];
         foreach (PlacementComponent c in components)
-            if (!c.Movable) { fixedLoad[c.Node] += c.Load; fixedClients[c.Node] += c.Clients; }
-        int[] movable = Enumerable.Range(0, components.Length).Where(i => components[i].Movable).ToArray();
+            if (!c.Movable)
+            {
+                fixedLoad[c.Node] += c.Load;
+                fixedClients[c.Node] += c.Clients;
+            }
+        int[] movable = Enumerable
+            .Range(0, components.Length)
+            .Where(i => components[i].Movable)
+            .ToArray();
 
-        (bool LoadGood, bool ClientGood, long[] Load, long[] Cl, double MoveCost) Score(int[] assign)
+        (bool LoadGood, bool ClientGood, long[] Load, long[] Cl, double MoveCost) Score(
+            int[] assign
+        )
         {
             long[] load = (long[])fixedLoad.Clone();
             long[] cl = (long[])fixedClients.Clone();
@@ -1875,13 +2890,19 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             Array.Reverse(load);
             Array.Sort(cl);
             Array.Reverse(cl);
-            return (excess <= model.BalanceRiskTolerance, clExcess <= model.BalanceRiskTolerance,
-                load, cl, cost);
+            return (
+                excess <= model.BalanceRiskTolerance,
+                clExcess <= model.BalanceRiskTolerance,
+                load,
+                cl,
+                cost
+            );
         }
         static int CompareSorted(long[] a, long[] b)
         {
             for (int i = 0; i < a.Length; i++)
-                if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
+                if (a[i] != b[i])
+                    return a[i] < b[i] ? -1 : 1;
             return 0;
         }
         // Viktor 2026-08-24 evening: connected clients are load too - constant traffic and
@@ -1889,27 +2910,34 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // quantized by the same single tunable: first bring PCU inside the tolerance, then bring
         // clients inside the tolerance (PCU differences within the tolerance are by definition
         // not worth caring about while doing so), then pay as little migration as possible.
-        static bool Better((bool LoadGood, bool ClientGood, long[] Load, long[] Cl, double MoveCost) a,
-            (bool LoadGood, bool ClientGood, long[] Load, long[] Cl, double MoveCost) b)
+        static bool Better(
+            (bool LoadGood, bool ClientGood, long[] Load, long[] Cl, double MoveCost) a,
+            (bool LoadGood, bool ClientGood, long[] Load, long[] Cl, double MoveCost) b
+        )
         {
-            if (a.LoadGood != b.LoadGood) return a.LoadGood;
-            if (!a.LoadGood)   // both beyond tolerance: load vector, then client vector, then cost
+            if (a.LoadGood != b.LoadGood)
+                return a.LoadGood;
+            if (!a.LoadGood) // both beyond tolerance: load vector, then client vector, then cost
             {
                 int order = CompareSorted(a.Load, b.Load);
-                if (order != 0) return order < 0;
+                if (order != 0)
+                    return order < 0;
                 order = CompareSorted(a.Cl, b.Cl);
                 return order < 0 || (order == 0 && a.MoveCost < b.MoveCost);
             }
-            if (a.ClientGood != b.ClientGood) return a.ClientGood;
-            if (!a.ClientGood)   // PCU good, clients not: client vector, then cost, then PCU vector
+            if (a.ClientGood != b.ClientGood)
+                return a.ClientGood;
+            if (!a.ClientGood) // PCU good, clients not: client vector, then cost, then PCU vector
             {
                 int order = CompareSorted(a.Cl, b.Cl);
-                if (order != 0) return order < 0;
+                if (order != 0)
+                    return order < 0;
                 return a.MoveCost < b.MoveCost
                     || (a.MoveCost == b.MoveCost && CompareSorted(a.Load, b.Load) < 0);
             }
             // good enough on both: the cheapest wins, balance breaking the tie
-            if (a.MoveCost != b.MoveCost) return a.MoveCost < b.MoveCost;
+            if (a.MoveCost != b.MoveCost)
+                return a.MoveCost < b.MoveCost;
             int loadOrder = CompareSorted(a.Load, b.Load);
             return loadOrder < 0 || (loadOrder == 0 && CompareSorted(a.Cl, b.Cl) < 0);
         }
@@ -1921,8 +2949,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         for (int r = 0; r < Restarts; r++)
         {
             // Longest-processing-time greedy over a (jittered) weight order; restart 0 is pure LPT.
-            int[] order = movable.OrderByDescending(i =>
-                components[i].Load * (r == 0 ? 1.0 : 0.8 + 0.4 * rng.NextDouble())).ToArray();
+            int[] order = movable
+                .OrderByDescending(i =>
+                    components[i].Load * (r == 0 ? 1.0 : 0.8 + 0.4 * rng.NextDouble())
+                )
+                .ToArray();
             int[] assign = components.Select(c => c.Node).ToArray();
             long[] load = (long[])fixedLoad.Clone();
             foreach (int i in order)
@@ -1931,13 +2962,15 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // zero moves instead of shuffling equal alternatives.
                 int target = Closed(components[i].Node) ? -1 : components[i].Node;
                 for (int n = 0; n < nodeCount; n++)
-                    if (!Closed(n) && (target < 0 || load[n] < load[target])) target = n;
-                if (target < 0) target = components[i].Node;
+                    if (!Closed(n) && (target < 0 || load[n] < load[target]))
+                        target = n;
+                if (target < 0)
+                    target = components[i].Node;
                 assign[i] = target;
                 load[target] += components[i].Load;
             }
             // Local search: single relocations and pairwise swaps until a sweep improves nothing.
-            for (bool improved = true; improved;)
+            for (bool improved = true; improved; )
             {
                 improved = false;
                 var score = Score(assign);
@@ -1946,26 +2979,44 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     int was = assign[i];
                     for (int n = 0; n < nodeCount; n++)
                     {
-                        if (n == was || Closed(n)) continue;
+                        if (n == was || Closed(n))
+                            continue;
                         assign[i] = n;
                         var moved = Score(assign);
-                        if (Better(moved, score)) { score = moved; was = n; improved = true; }
-                        else assign[i] = was;
+                        if (Better(moved, score))
+                        {
+                            score = moved;
+                            was = n;
+                            improved = true;
+                        }
+                        else
+                            assign[i] = was;
                     }
                 }
                 for (int a = 0; a < movable.Length && !improved; a++)
-                    for (int b = a + 1; b < movable.Length; b++)
+                for (int b = a + 1; b < movable.Length; b++)
+                {
+                    int i = movable[a],
+                        j = movable[b];
+                    if (assign[i] == assign[j] || Closed(assign[i]) || Closed(assign[j]))
+                        continue;
+                    (assign[i], assign[j]) = (assign[j], assign[i]);
+                    var swapped = Score(assign);
+                    if (Better(swapped, score))
                     {
-                        int i = movable[a], j = movable[b];
-                        if (assign[i] == assign[j] || Closed(assign[i]) || Closed(assign[j])) continue;
-                        (assign[i], assign[j]) = (assign[j], assign[i]);
-                        var swapped = Score(assign);
-                        if (Better(swapped, score)) { score = swapped; improved = true; break; }
-                        (assign[i], assign[j]) = (assign[j], assign[i]);
+                        score = swapped;
+                        improved = true;
+                        break;
                     }
+                    (assign[i], assign[j]) = (assign[j], assign[i]);
+                }
             }
             var candidate = Score(assign);
-            if (Better(candidate, bestScore)) { bestScore = candidate; best = assign; }
+            if (Better(candidate, bestScore))
+            {
+                bestScore = candidate;
+                best = assign;
+            }
         }
         return best;
     }
@@ -1984,12 +3035,23 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// optimum: a world whose mass is one component cannot be balanced by any mover).
     /// </summary>
     internal static RebalancePlan? ChooseGlobalRebalance(
-        (PartitionReport Report, string Node)[] nodes, CostModel model, HashSet<ulong> routed,
-        Func<ulong, bool> blocked, Func<ulong, bool>? validationBlocked = null,
-        Func<ulong, bool>? alreadyPinned = null)
+        (PartitionReport Report, string Node)[] nodes,
+        CostModel model,
+        HashSet<ulong> routed,
+        Func<ulong, bool> blocked,
+        Func<ulong, bool>? validationBlocked = null,
+        Func<ulong, bool>? alreadyPinned = null
+    )
     {
-        RebalancePlan[] plans = ChooseRebalancePlans(nodes, model, routed, blocked, validationBlocked,
-            alreadyPinned, fullPlan: false);
+        RebalancePlan[] plans = ChooseRebalancePlans(
+            nodes,
+            model,
+            routed,
+            blocked,
+            validationBlocked,
+            alreadyPinned,
+            fullPlan: false
+        );
         return plans.Length == 0 ? null : plans[0];
     }
 
@@ -2011,29 +3073,75 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// w23 20:14: twelve pilots at the base drove excess 1.41->3.76 with nothing misplaced); high
     /// deviation is a genuine placement backlog. The value alone cannot tell them apart - this can.
     /// </summary>
-    internal sealed record BalanceDiagnostics(DateTime EvaluatedUtc, double Excess,
-        double AchievableExcess, double WorstDeviation, double ClientExcess,
-        double WorstClientDeviation, int MovesPlanned, string? PauseReason);
+    internal sealed record BalanceDiagnostics(
+        DateTime EvaluatedUtc,
+        double Excess,
+        double AchievableExcess,
+        double WorstDeviation,
+        double ClientExcess,
+        double WorstClientDeviation,
+        int MovesPlanned,
+        string? PauseReason
+    );
+
     private volatile BalanceDiagnostics? _balanceDiagnostics;
 
     internal static RebalancePlan[] ChooseRebalancePlans(
-        (PartitionReport Report, string Node)[] nodes, CostModel model, HashSet<ulong> routed,
-        Func<ulong, bool> blocked, Func<ulong, bool>? validationBlocked = null,
-        Func<ulong, bool>? alreadyPinned = null, bool fullPlan = false,
-        IReadOnlySet<string>? busyNodes = null, double? gate = null, IReadOnlySet<string>? overBudget = null,
-        IReadOnlySet<ulong>? heavy = null, Func<ulong, bool>? heavyCooling = null)
-        => ChooseRebalancePlans(nodes, model, routed, blocked, validationBlocked, alreadyPinned,
-            fullPlan, busyNodes, out _, gate, overBudget, heavy, heavyCooling);
+        (PartitionReport Report, string Node)[] nodes,
+        CostModel model,
+        HashSet<ulong> routed,
+        Func<ulong, bool> blocked,
+        Func<ulong, bool>? validationBlocked = null,
+        Func<ulong, bool>? alreadyPinned = null,
+        bool fullPlan = false,
+        IReadOnlySet<string>? busyNodes = null,
+        double? gate = null,
+        IReadOnlySet<string>? overBudget = null,
+        IReadOnlySet<ulong>? heavy = null,
+        Func<ulong, bool>? heavyCooling = null
+    ) =>
+        ChooseRebalancePlans(
+            nodes,
+            model,
+            routed,
+            blocked,
+            validationBlocked,
+            alreadyPinned,
+            fullPlan,
+            busyNodes,
+            out _,
+            gate,
+            overBudget,
+            heavy,
+            heavyCooling
+        );
 
     internal static RebalancePlan[] ChooseRebalancePlans(
-        (PartitionReport Report, string Node)[] nodes, CostModel model, HashSet<ulong> routed,
-        Func<ulong, bool> blocked, Func<ulong, bool>? validationBlocked,
-        Func<ulong, bool>? alreadyPinned, bool fullPlan, IReadOnlySet<string>? busyNodes,
-        out (double Excess, double AchievableExcess, double WorstDeviation,
-            double ClientExcess, double WorstClientDeviation, string Explain,
-            int MinGainSkipped, int BudgetSkipped, long FloorHeldPeak, int PeakDropSkipped) diagnostics,
-        double? gate = null, IReadOnlySet<string>? overBudget = null,
-        IReadOnlySet<ulong>? heavy = null, Func<ulong, bool>? heavyCooling = null)
+        (PartitionReport Report, string Node)[] nodes,
+        CostModel model,
+        HashSet<ulong> routed,
+        Func<ulong, bool> blocked,
+        Func<ulong, bool>? validationBlocked,
+        Func<ulong, bool>? alreadyPinned,
+        bool fullPlan,
+        IReadOnlySet<string>? busyNodes,
+        out (
+            double Excess,
+            double AchievableExcess,
+            double WorstDeviation,
+            double ClientExcess,
+            double WorstClientDeviation,
+            string Explain,
+            int MinGainSkipped,
+            int BudgetSkipped,
+            long FloorHeldPeak,
+            int PeakDropSkipped
+        ) diagnostics,
+        double? gate = null,
+        IReadOnlySet<string>? overBudget = null,
+        IReadOnlySet<ulong>? heavy = null,
+        Func<ulong, bool>? heavyCooling = null
+    )
     {
         // #1454: heavy (HeavyMembers: the member ids of the heavy units) and heavyCooling (a heavy unit moved recently)
         // come from the caller's latch, so the planner stays stateless; null plans exactly as before.
@@ -2041,10 +3149,17 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // the tolerance while idle, the low water while balancing); null is the tolerance, as before. The planner
         // itself stays stateless. overBudget names the targets out of their move budget (BalancePace.OverBudget).
         double gateThreshold = gate ?? model.BalanceRiskTolerance;
-        int minGainSkipped = 0, budgetSkipped = 0, peakDropSkipped = 0;
+        int minGainSkipped = 0,
+            budgetSkipped = 0,
+            peakDropSkipped = 0;
         diagnostics = (0, 0, 0, 0, 0, "", 0, 0, 0, 0);
-        int inFlightCount = 0, pinnedCount = 0, blockedCount = 0, emptyCount = 0, heavyCount = 0;
-        if (nodes.Length < 2) return [];
+        int inFlightCount = 0,
+            pinnedCount = 0,
+            blockedCount = 0,
+            emptyCount = 0,
+            heavyCount = 0;
+        if (nodes.Length < 2)
+            return [];
         // CLUSTER-SIM-COST: measured sim cost is the load dimension when every node reports it;
         // any pre-field node in the pass drops the whole pass back to PCU (units must not mix).
         bool simLoad = nodes.All(n => n.Report.SimLoadSupported);
@@ -2061,7 +3176,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // the pin lands. Client-bearing components move only when the CLIENT dimension is what is
         // out of balance (that is what they are the unit of); they weigh on their node either way.
         long[] nodeClientLoad = nodes
-            .Select(n => (long)n.Report.Partitions.Sum(p => ClientCount(p, routed))).ToArray();
+            .Select(n => (long)n.Report.Partitions.Sum(p => ClientCount(p, routed)))
+            .ToArray();
         // "Out of balance" here is THIS node holding more clients than the even split (2 on one
         // of two nodes is; 1 next to an empty node is not) - the ratio gate used for the load
         // dimension reads a single pilot next to an empty node as a 100 % excess and would leave
@@ -2078,21 +3194,30 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             long overhead = EffectiveNodeLoad(report, simLoad) - measured;
             if (overhead > 0)
                 components.Add(new PlacementComponent([], n, overhead, 0, false));
-            (PartitionInfo Partition, bool OnSource)[] all =
-                report.Partitions.Select(p => (p, true)).ToArray();
+            (PartitionInfo Partition, bool OnSource)[] all = report
+                .Partitions.Select(p => (p, true))
+                .ToArray();
             // #1304: balance units, not envelope components. On octahedron-1191 the lane chains link at 3-4 km (over the
             // node's merge distance D, under the 4000 m envelope) into 21-24-partition components of 230-290 s estimated
             // lag, which the planner could only move whole and so never moved.
             int[] labels = Components(all, report.SyncDistance + report.Margin, model, units: true);
-            foreach (IGrouping<int, int> group in Enumerable.Range(0, all.Length).GroupBy(i => labels[i]))
+            foreach (
+                IGrouping<int, int> group in Enumerable.Range(0, all.Length).GroupBy(i => labels[i])
+            )
             {
                 PartitionInfo[] members = group.Select(i => all[i].Partition).ToArray();
                 // A component already migrating, in backoff, or HandoverBlocked still weighs on its
                 // node but is not reassignable this pass; it stays fully moveable later.
                 // T-0292: a fast partition stays with its owner until it slows down - never migrated.
-                bool movable = !members.Any(m => blocked(m.Id) || (validationBlocked?.Invoke(m.Id) ?? false)
-                    || (alreadyPinned?.Invoke(m.Id) ?? false) || m.Fast || m.RemoteUsers is { Length: > 0 });
-                if (members.Any(m => m.Fast)) FastPartitionCounters.Migration();
+                bool movable = !members.Any(m =>
+                    blocked(m.Id)
+                    || (validationBlocked?.Invoke(m.Id) ?? false)
+                    || (alreadyPinned?.Invoke(m.Id) ?? false)
+                    || m.Fast
+                    || m.RemoteUsers is { Length: > 0 }
+                );
+                if (members.Any(m => m.Fast))
+                    FastPartitionCounters.Migration();
                 // T-0074: a partition in flight is not a placement unit. Its load is the flying
                 // ship's own physics, which leaves the node with the ship inside the time a migration
                 // takes (a 10 km leg is ~100 s), and co-location re-homes it wherever it lands - so
@@ -2103,39 +3228,77 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // the optimizer plans around it exactly as around a pinned component.
                 // T-0141 (2026-09-15): only a SMALL component is exempt - the ship itself, not the
                 // 31-member lattice cluster it is leaving (CostModel.InFlightMaxMembers).
-                bool inFlight = members.Any(m => m.MaxMemberSpeed > InFlightSpeed)
-                    && (model.InFlightMaxMembers <= 0 || members.Sum(m => m.MemberCount) <= model.InFlightMaxMembers);
-                if (inFlight) inFlightCount++;
-                if (members.Any(m => alreadyPinned?.Invoke(m.Id) ?? false)) pinnedCount++;
-                else if (!movable) blockedCount++;
+                bool inFlight =
+                    members.Any(m => m.MaxMemberSpeed > InFlightSpeed)
+                    && (
+                        model.InFlightMaxMembers <= 0
+                        || members.Sum(m => m.MemberCount) <= model.InFlightMaxMembers
+                    );
+                if (inFlight)
+                    inFlightCount++;
+                if (members.Any(m => alreadyPinned?.Invoke(m.Id) ?? false))
+                    pinnedCount++;
+                else if (!movable)
+                    blockedCount++;
                 long pcu = members.Sum(m => (long)m.Pcu);
                 long componentLoad = members.Sum(m => PartitionLoad(m, simLoad));
                 int clients = members.Sum(m => ClientCount(m, routed));
                 // T-0385: the client rule is for the pilot's ship, not for the base the pilots
                 // stand on - a client-bearing component above ClientBoundMaxMembers stays a load
                 // unit (its load does not leave with any one client).
-                bool isLoadUnit = clients == 0 || (model.ClientBoundMaxMembers > 0
-                    && members.Sum(m => m.MemberCount) > model.ClientBoundMaxMembers);
+                bool isLoadUnit =
+                    clients == 0
+                    || (
+                        model.ClientBoundMaxMembers > 0
+                        && members.Sum(m => m.MemberCount) > model.ClientBoundMaxMembers
+                    );
                 bool clientBound = !isLoadUnit && nodeClientLoad[n] <= evenSplit;
-                if (clientBound && movable && !inFlight) clientBoundCount++;
-                double cost = members.Sum(m => model.FreezeMs(m.EstimatedSnapshotBytes, m.MemberCount)
-                    + model.GammaPerSwitch * ClientCount(m, routed));
+                if (clientBound && movable && !inFlight)
+                    clientBoundCount++;
+                double cost = members.Sum(m =>
+                    model.FreezeMs(m.EstimatedSnapshotBytes, m.MemberCount)
+                    + model.GammaPerSwitch * ClientCount(m, routed)
+                );
                 // The pebble gate stays on PCU: content-bearing is what "worth moving at all"
                 // means, and a parked partition's measured load is legitimately ~0.
-                if (pcu == 0 && clients == 0) emptyCount++;
+                if (pcu == 0 && clients == 0)
+                    emptyCount++;
                 // #1454: a heavy unit weighs on its node and is never the optimizer's to move. Its own clients count too: mid-handover
                 // both nodes report the moving partition (1191e 18:12:57Z: hub 2332 with 36 clients on node-0, a 0-client copy
                 // on node-3), and the copy must not make its node a heavy node.
-                bool isHeavy = heavy != null && members.Any(m => heavy.Contains(m.Id)) && model.IsHeavy(clients, latched: true);
-                if (isHeavy) heavyCount++;
-                components.Add(new PlacementComponent(members, n, componentLoad, cost,
-                    movable && !inFlight && !clientBound && (pcu > 0 || clients > 0) && !isHeavy, clients, isLoadUnit,
-                    isHeavy, movable && !inFlight, pcu > 0 || clients > 0));
+                bool isHeavy =
+                    heavy != null
+                    && members.Any(m => heavy.Contains(m.Id))
+                    && model.IsHeavy(clients, latched: true);
+                if (isHeavy)
+                    heavyCount++;
+                components.Add(
+                    new PlacementComponent(
+                        members,
+                        n,
+                        componentLoad,
+                        cost,
+                        movable
+                            && !inFlight
+                            && !clientBound
+                            && (pcu > 0 || clients > 0)
+                            && !isHeavy,
+                        clients,
+                        isLoadUnit,
+                        isHeavy,
+                        movable && !inFlight,
+                        pcu > 0 || clients > 0
+                    )
+                );
             }
         }
         long[] load = new long[nodes.Length];
         long[] clLoad = new long[nodes.Length];
-        foreach (PlacementComponent c in components) { load[c.Node] += c.Load; clLoad[c.Node] += c.Clients; }
+        foreach (PlacementComponent c in components)
+        {
+            load[c.Node] += c.Load;
+            clLoad[c.Node] += c.Clients;
+        }
         long oldPeak = load.Max();
         double meanOthers = (load.Sum() - oldPeak) / (double)(nodes.Length - 1);
         double excess = (oldPeak - meanOthers) / Math.Max(meanOthers, 1.0);
@@ -2146,11 +3309,22 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         double clMeanOthers = (clLoad.Sum() - clPeak) / (double)(nodes.Length - 1);
         double clientExcess = (clPeak - clMeanOthers) / Math.Max(clMeanOthers, 1.0);
         // T-0073: the inputs of every balance decision, printed with the pin and with a decline.
-        string Explain(long[]? optimal) => "loads [" + string.Join(" ", nodes.Select((n, i) => $"{n.Node}={load[i]}"))
-            + "]" + (optimal == null ? "" : " optimal [" + string.Join(" ", nodes.Select((n, i) => $"{n.Node}={optimal[i]}")) + "]")
+        string Explain(long[]? optimal) =>
+            "loads ["
+            + string.Join(" ", nodes.Select((n, i) => $"{n.Node}={load[i]}"))
+            + "]"
+            + (
+                optimal == null
+                    ? ""
+                    : " optimal ["
+                        + string.Join(" ", nodes.Select((n, i) => $"{n.Node}={optimal[i]}"))
+                        + "]"
+            )
             + $" {loadUnit}; components {components.Count}, not movable {components.Count(c => !c.Movable)}"
             + $" (in flight {inFlightCount}, with clients {clientBoundCount}, pinned {pinnedCount},"
-            + $" blocked {blockedCount}, empty {emptyCount}" + (heavyCount != 0 ? $", heavy {heavyCount}" : "") + ")";
+            + $" blocked {blockedCount}, empty {emptyCount}"
+            + (heavyCount != 0 ? $", heavy {heavyCount}" : "")
+            + ")";
         // #1454: the heavy moves pass no gate - the tolerance, the floor and the peak-drop guard are about whether a
         // relative imbalance is worth a move, and a heavy node's neighbours leave whatever the balance reads (case 4).
         // They engage their nodes like any paced plan, and no other plan targets a heavy node (closed below).
@@ -2159,11 +3333,25 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         if (heavyCount != 0)
         {
             closed = new bool[nodes.Length];
-            foreach (PlacementComponent c in components) if (c.Heavy) closed[c.Node] = true;
+            foreach (PlacementComponent c in components)
+                if (c.Heavy)
+                    closed[c.Node] = true;
             if (!fullPlan)
             {
-                heavyPlans = PlanHeavyMoves(components, nodes, load, busyNodes, heavyCooling, loadUnit, excess, Explain(null), out var engaged);
-                foreach (RebalancePlan plan in heavyPlans.Where(p => p.Kind != RebalanceKind.Evacuate))
+                heavyPlans = PlanHeavyMoves(
+                    components,
+                    nodes,
+                    load,
+                    busyNodes,
+                    heavyCooling,
+                    loadUnit,
+                    excess,
+                    Explain(null),
+                    out var engaged
+                );
+                foreach (
+                    RebalancePlan plan in heavyPlans.Where(p => p.Kind != RebalanceKind.Evacuate)
+                )
                     closed[Array.FindIndex(nodes, x => x.Node == plan.Target)] = true;
                 busyNodes = engaged;
             }
@@ -2174,7 +3362,13 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             return [.. heavyPlans];
         }
 
-        int[] assign = OptimizePlacement(components.ToArray(), nodes.Length, model, nodeClientLoad, closed);
+        int[] assign = OptimizePlacement(
+            components.ToArray(),
+            nodes.Length,
+            model,
+            nodeClientLoad,
+            closed
+        );
         long[] optLoad = new long[nodes.Length];
         long[] optClients = new long[nodes.Length];
         for (int i = 0; i < components.Count; i++)
@@ -2192,17 +3386,32 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // 177k node next to a 2.4k one), and still stops the pebble churn at the floor: a peak node
         // whose only surplus over its optimal load is a pebble is idle by the same arithmetic.
         double deviationUnit = Math.Max(optMeanOthers, 1.0);
-        double worstDeviation = Enumerable.Range(0, nodes.Length)
+        double worstDeviation = Enumerable
+            .Range(0, nodes.Length)
             .Max(n => (load[n] - optLoad[n]) / deviationUnit);
         long optClPeak = optClients.Max();
-        double clDeviationUnit = Math.Max((optClients.Sum() - optClPeak) / (double)(nodes.Length - 1), 1.0);
-        double worstClientDeviation = Enumerable.Range(0, nodes.Length)
+        double clDeviationUnit = Math.Max(
+            (optClients.Sum() - optClPeak) / (double)(nodes.Length - 1),
+            1.0
+        );
+        double worstClientDeviation = Enumerable
+            .Range(0, nodes.Length)
             .Max(n => (clLoad[n] - optClients[n]) / clDeviationUnit);
         string explain = Explain(optLoad);
-        diagnostics = (excess, (optPeak - optMeanOthers) / Math.Max(optMeanOthers, 1.0), worstDeviation,
-            clientExcess, worstClientDeviation, explain, 0, 0, 0, 0);
-        if (worstDeviation <= gateThreshold
-            && worstClientDeviation <= gateThreshold) return [.. heavyPlans];
+        diagnostics = (
+            excess,
+            (optPeak - optMeanOthers) / Math.Max(optMeanOthers, 1.0),
+            worstDeviation,
+            clientExcess,
+            worstClientDeviation,
+            explain,
+            0,
+            0,
+            0,
+            0
+        );
+        if (worstDeviation <= gateThreshold && worstClientDeviation <= gateThreshold)
+            return [.. heavyPlans];
         // T-0409: the load floor. Below it no node is short of sim time, and a paced LOAD move costs its pilots lag for no
         // sim gain, so tier 1 idles. The diagnostics above stay complete (the deviations feed /diag and the pace
         // hysteresis); FloorHeldPeak tells the caller why nothing was planned.
@@ -2212,7 +3421,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // restart of 2026-11-12 the same cluster balanced only because slow nodes (sim 0.25-0.6) lifted the peak over
         // the floor. Below the floor every candidate takes the tier-2 rules (it must even out the players and pay for
         // its lag, SE-1134), and nothing is planned unless the client deviation is over the gate.
-        bool floorHeld = !fullPlan && simLoad && model.BalanceMinPeakLoad > 0 && oldPeak < model.BalanceMinPeakLoad;
+        bool floorHeld =
+            !fullPlan
+            && simLoad
+            && model.BalanceMinPeakLoad > 0
+            && oldPeak < model.BalanceMinPeakLoad;
         if (floorHeld && worstClientDeviation <= gateThreshold)
         {
             diagnostics.FloorHeldPeak = oldPeak;
@@ -2221,7 +3434,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // T-0393: the pin log's gain = overload reduction / mean node load, the unit MinGainFraction is in.
         double meanLoad = load.Sum() / (double)nodes.Length;
 
-        var moves = Enumerable.Range(0, components.Count)
+        var moves = Enumerable
+            .Range(0, components.Count)
             .Where(i => assign[i] != components[i].Node)
             .OrderByDescending(i => components[i].Load)
             .ToArray();
@@ -2236,10 +3450,23 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 long before = running.Max();
                 running[components[i].Node] -= components[i].Load;
                 running[assign[i]] += components[i].Load;
-                plans.Add(new RebalancePlan(components[i].Members, nodes[components[i].Node].Node,
-                    nodes[assign[i]].Node, components[i].Load, before, running.Max(),
-                    components[i].CostMs, excess, loadUnit, explain, RebalanceKind.Idle,
-                    before - running.Max(), meanLoad));
+                plans.Add(
+                    new RebalancePlan(
+                        components[i].Members,
+                        nodes[components[i].Node].Node,
+                        nodes[assign[i]].Node,
+                        components[i].Load,
+                        before,
+                        running.Max(),
+                        components[i].CostMs,
+                        excess,
+                        loadUnit,
+                        explain,
+                        RebalanceKind.Idle,
+                        before - running.Max(),
+                        meanLoad
+                    )
+                );
             }
             return plans.ToArray();
         }
@@ -2254,10 +3481,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // peak-only mover leaves it stranded forever. No selected move may raise the cluster peak;
         // node-disjointness makes the guarantee compositional (a source only sheds, a target's
         // resulting load was individually checked against the pre-pass peak).
-        long Overload(long[] loads) => Enumerable.Range(0, nodes.Length)
-            .Sum(n => Math.Max(0, loads[n] - optLoad[n]));
-        long ClientOverload(long[] cls) => Enumerable.Range(0, nodes.Length)
-            .Sum(n => Math.Max(0, cls[n] - optClients[n]));
+        long Overload(long[] loads) =>
+            Enumerable.Range(0, nodes.Length).Sum(n => Math.Max(0, loads[n] - optLoad[n]));
+        long ClientOverload(long[] cls) =>
+            Enumerable.Range(0, nodes.Length).Sum(n => Math.Max(0, cls[n] - optClients[n]));
         long oldOverload = Overload(load);
         long oldClientOverload = ClientOverload(clLoad);
         // T-0393 knob 2: the minimum gains, in each tier's own unit (CostModel.MinGainFraction). At 0 both are 0,
@@ -2265,22 +3492,32 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         double minLoadGain = model.MinGainFraction * meanLoad;
         double minClientGain = model.MinGainFraction * (clLoad.Sum() / (double)nodes.Length);
         // T-0393 knob 5: the move budget applies only below its deviation threshold - a real overload is served at once.
-        bool budgeted = overBudget is { Count: > 0 }
+        bool budgeted =
+            overBudget is { Count: > 0 }
             && Math.Max(worstDeviation, worstClientDeviation) < model.BudgetUnderDeviation;
         List<(int Tier, double Score, long TargetLoad, RebalancePlan Plan)> candidates = [];
         foreach (int i in moves)
         {
-            int s = components[i].Node, t = assign[i];
-            if (busyNodes != null && (busyNodes.Contains(nodes[s].Node) || busyNodes.Contains(nodes[t].Node)))
+            int s = components[i].Node,
+                t = assign[i];
+            if (
+                busyNodes != null
+                && (busyNodes.Contains(nodes[s].Node) || busyNodes.Contains(nodes[t].Node))
+            )
                 continue;
-            if (closed?[t] == true) continue;
+            if (closed?[t] == true)
+                continue;
             long[] adjusted = (long[])load.Clone();
             adjusted[s] -= components[i].Load;
             adjusted[t] += components[i].Load;
             long newPeak = adjusted.Max();
             // T-0409 follow-up: the peak-drop guard (CostModel.BalanceMinPeakDrop). A paced sim-load move of either tier
             // must lower the cluster peak by the margin; at 0 nothing is skipped.
-            if (simLoad && model.BalanceMinPeakDrop > 0 && newPeak > oldPeak * (1 - model.BalanceMinPeakDrop))
+            if (
+                simLoad
+                && model.BalanceMinPeakDrop > 0
+                && newPeak > oldPeak * (1 - model.BalanceMinPeakDrop)
+            )
             {
                 peakDropSkipped++;
                 continue;
@@ -2292,8 +3529,18 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // pilot's ship and leaves with it (T-0074), so it never pays for a route switch with
             // load; it moves when it evens the client split and the load picture tolerates it.
             // T-0393: a load move whose gain is inside the noise does not qualify for tier 1 (it may still be a client move).
-            bool belowGain = components[i].LoadUnit && reduction > 0 && newPeak <= oldPeak && reduction < minLoadGain;
-            if (floorHeld || !components[i].LoadUnit || reduction <= 0 || newPeak > oldPeak || belowGain)   // tier 1: never trade peak for spread
+            bool belowGain =
+                components[i].LoadUnit
+                && reduction > 0
+                && newPeak <= oldPeak
+                && reduction < minLoadGain;
+            if (
+                floorHeld
+                || !components[i].LoadUnit
+                || reduction <= 0
+                || newPeak > oldPeak
+                || belowGain
+            ) // tier 1: never trade peak for spread
             {
                 // Tier 2 - a move that helps only the CLIENT dimension (Viktor 2026-08-24: clients
                 // are load too). Eligible while it strictly reduces client over-optimal load and
@@ -2304,29 +3551,104 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 adjustedCl[s] -= components[i].Clients;
                 adjustedCl[t] += components[i].Clients;
                 long clientReduction = oldClientOverload - ClientOverload(adjustedCl);
-                if (clientReduction <= 0) { if (belowGain) minGainSkipped++; continue; }
-                if (clientReduction < minClientGain) { minGainSkipped++; continue; }
+                if (clientReduction <= 0)
+                {
+                    if (belowGain)
+                        minGainSkipped++;
+                    continue;
+                }
+                if (clientReduction < minClientGain)
+                {
+                    minGainSkipped++;
+                    continue;
+                }
                 // SE-1134: its players sit through the whole estimated lag, so the load picture has to gain in proportion.
-                if (model.ClientMinGainPerLagSecond > 0
-                    && reduction / Math.Max(meanLoad, 1.0) < model.ClientMinGainPerLagSecond * components[i].CostMs / 1000)
-                { minGainSkipped++; continue; }
+                if (
+                    model.ClientMinGainPerLagSecond > 0
+                    && reduction / Math.Max(meanLoad, 1.0)
+                        < model.ClientMinGainPerLagSecond * components[i].CostMs / 1000
+                )
+                {
+                    minGainSkipped++;
+                    continue;
+                }
                 double adjMeanOthers = (adjusted.Sum() - newPeak) / (double)(nodes.Length - 1);
-                if (newPeak > oldPeak
+                if (
+                    newPeak > oldPeak
                     && (newPeak - adjMeanOthers) / Math.Max(adjMeanOthers, 1.0)
-                        > model.BalanceRiskTolerance) { if (belowGain) minGainSkipped++; continue; }
-                if (budgeted && overBudget!.Contains(nodes[t].Node)) { budgetSkipped++; continue; }
+                        > model.BalanceRiskTolerance
+                )
+                {
+                    if (belowGain)
+                        minGainSkipped++;
+                    continue;
+                }
+                if (budgeted && overBudget!.Contains(nodes[t].Node))
+                {
+                    budgetSkipped++;
+                    continue;
+                }
                 // T-0393 knob 1: the fixed hitch price joins the estimated lag in the score (0 adds exactly nothing).
-                double clScore = clientReduction / (1.0 + (components[i].CostMs + model.HitchMsPerMove) * (1 + nodeClientLoad[t]));
-                candidates.Add((2, clScore, load[t], new RebalancePlan(components[i].Members,
-                    nodes[s].Node, nodes[t].Node, components[i].Load, oldPeak, newPeak,
-                    components[i].CostMs, excess, loadUnit, explain, RebalanceKind.Client, reduction, meanLoad)));
+                double clScore =
+                    clientReduction
+                    / (
+                        1.0
+                        + (components[i].CostMs + model.HitchMsPerMove) * (1 + nodeClientLoad[t])
+                    );
+                candidates.Add(
+                    (
+                        2,
+                        clScore,
+                        load[t],
+                        new RebalancePlan(
+                            components[i].Members,
+                            nodes[s].Node,
+                            nodes[t].Node,
+                            components[i].Load,
+                            oldPeak,
+                            newPeak,
+                            components[i].CostMs,
+                            excess,
+                            loadUnit,
+                            explain,
+                            RebalanceKind.Client,
+                            reduction,
+                            meanLoad
+                        )
+                    )
+                );
                 continue;
             }
-            if (budgeted && overBudget!.Contains(nodes[t].Node)) { budgetSkipped++; continue; }
-            double score = reduction / (1.0 + (components[i].CostMs + model.HitchMsPerMove) * (1 + nodeClientLoad[t]));
-            candidates.Add((1, score, load[t], new RebalancePlan(components[i].Members,
-                nodes[s].Node, nodes[t].Node, components[i].Load, oldPeak, newPeak,
-                components[i].CostMs, excess, loadUnit, explain, RebalanceKind.Load, reduction, meanLoad)));
+            if (budgeted && overBudget!.Contains(nodes[t].Node))
+            {
+                budgetSkipped++;
+                continue;
+            }
+            double score =
+                reduction
+                / (1.0 + (components[i].CostMs + model.HitchMsPerMove) * (1 + nodeClientLoad[t]));
+            candidates.Add(
+                (
+                    1,
+                    score,
+                    load[t],
+                    new RebalancePlan(
+                        components[i].Members,
+                        nodes[s].Node,
+                        nodes[t].Node,
+                        components[i].Load,
+                        oldPeak,
+                        newPeak,
+                        components[i].CostMs,
+                        excess,
+                        loadUnit,
+                        explain,
+                        RebalanceKind.Load,
+                        reduction,
+                        meanLoad
+                    )
+                )
+            );
         }
         diagnostics.MinGainSkipped = minGainSkipped;
         diagnostics.BudgetSkipped = budgetSkipped;
@@ -2337,53 +3659,73 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // with hot spares in play, the youngest serving node's residence time.
         List<RebalancePlan> selected = [];
         HashSet<string> used = busyNodes != null ? [.. busyNodes] : [];
-        foreach (var c in candidates
-                     .OrderBy(c => c.Tier).ThenByDescending(c => c.Score).ThenBy(c => c.TargetLoad))
+        foreach (
+            var c in candidates
+                .OrderBy(c => c.Tier)
+                .ThenByDescending(c => c.Score)
+                .ThenBy(c => c.TargetLoad)
+        )
         {
-            if (!used.Add(c.Plan.Source)) continue;
-            if (!used.Add(c.Plan.Target)) { used.Remove(c.Plan.Source); continue; }
+            if (!used.Add(c.Plan.Source))
+                continue;
+            if (!used.Add(c.Plan.Target))
+            {
+                used.Remove(c.Plan.Source);
+                continue;
+            }
             selected.Add(c.Plan);
         }
-        if (floorHeld && selected.Count == 0) diagnostics.FloorHeldPeak = oldPeak;
+        if (floorHeld && selected.Count == 0)
+            diagnostics.FloorHeldPeak = oldPeak;
         return [.. heavyPlans, .. selected];
     }
 
     /// <summary>The §7.5 price of moving one partition: its snapshot, its freeze, its client switches.</summary>
-    private static double MoveCost(CostModel model, PartitionInfo partition, HashSet<ulong> routed)
-        => model.Cost(partition.EstimatedSnapshotBytes, ClientCount(partition, routed));
+    private static double MoveCost(
+        CostModel model,
+        PartitionInfo partition,
+        HashSet<ulong> routed
+    ) => model.Cost(partition.EstimatedSnapshotBytes, ClientCount(partition, routed));
 
-    private void LogBalancePin(RebalancePlan plan, CostModel model)
-        => Console.WriteLine($"Automatic balance migration pinned: component of {plan.Members.Length}"
-            + $" partition(s), kind {plan.Kind switch { RebalanceKind.HeavySplit => "heavy-split", RebalanceKind.HeavyDedicate => "heavy-dedicate", var k => k.ToString().ToLowerInvariant() }},"
-            + $" load {plan.ComponentLoad} {plan.LoadUnit}, {plan.Source}->{plan.Target},"
-            + $" peak load {plan.OldPeak}->{plan.NewPeak} {plan.LoadUnit}"
-            // The quantity the load tier is actually SCORED on, and it is not the peak: reduction
-            // is oldOverload - Overload(adjusted), the drop in total over-optimal load summed
-            // across nodes. A load plan that leaves the peak untouched while shedding secondary
-            // misplacement is the DESIGNED behaviour - "any over-loaded SOURCE qualifies, not only
-            // the peak node: with the peak node at its atomic floor the remaining misplacement is
-            // all secondary, and a peak-only mover leaves it stranded forever". An earlier version
-            // of this line flagged those as "(NO PEAK REDUCTION)", which named the deliberate case
-            // as a defect; printing the real score instead makes the plan auditable without
-            // asserting anything about it.
-            + $", overload reduction {plan.OverloadReduction} {plan.LoadUnit}"
-            + $", estimated migration lag {plan.CostMs:F0} ms,"
-            + $" excess {plan.Excess:F2} vs tolerance {model.BalanceRiskTolerance:F2};"
-            + $" members [{string.Join(" ", plan.Members.Take(8).Select(m => m.Id))}{(plan.Members.Length > 8 ? " ..." : "")}]; {plan.Explain}"
-            // T-0393: the gain in MinGainFraction's unit (overload reduction / mean node load) and, with a budget
-            // configured, how much of its target's hourly budget the pin leaves used. Appended last: the analysis
-            // scripts read the fields above by position.
-            + $"; gain={(plan.MeanLoad > 0 ? (plan.OverloadReduction / plan.MeanLoad).ToString("F3") : "n/a")}"
-            + (model.BudgetMovesPerNodeHour > 0
-                ? $", target budget {_balancePace.TargetPinsLastHour(DateTime.UtcNow).GetValueOrDefault(plan.Target)}/{model.BudgetMovesPerNodeHour} per hour"
-                    + $" (applies below deviation {model.BudgetUnderDeviation:F2})"
-                : ""));
+    private void LogBalancePin(RebalancePlan plan, CostModel model) =>
+        Console.WriteLine(
+            $"Automatic balance migration pinned: component of {plan.Members.Length}"
+                + $" partition(s), kind {plan.Kind switch { RebalanceKind.HeavySplit => "heavy-split", RebalanceKind.HeavyDedicate => "heavy-dedicate", var k => k.ToString().ToLowerInvariant() }},"
+                + $" load {plan.ComponentLoad} {plan.LoadUnit}, {plan.Source}->{plan.Target},"
+                + $" peak load {plan.OldPeak}->{plan.NewPeak} {plan.LoadUnit}"
+                // The quantity the load tier is actually SCORED on, and it is not the peak: reduction
+                // is oldOverload - Overload(adjusted), the drop in total over-optimal load summed
+                // across nodes. A load plan that leaves the peak untouched while shedding secondary
+                // misplacement is the DESIGNED behaviour - "any over-loaded SOURCE qualifies, not only
+                // the peak node: with the peak node at its atomic floor the remaining misplacement is
+                // all secondary, and a peak-only mover leaves it stranded forever". An earlier version
+                // of this line flagged those as "(NO PEAK REDUCTION)", which named the deliberate case
+                // as a defect; printing the real score instead makes the plan auditable without
+                // asserting anything about it.
+                + $", overload reduction {plan.OverloadReduction} {plan.LoadUnit}"
+                + $", estimated migration lag {plan.CostMs:F0} ms,"
+                + $" excess {plan.Excess:F2} vs tolerance {model.BalanceRiskTolerance:F2};"
+                + $" members [{string.Join(" ", plan.Members.Take(8).Select(m => m.Id))}{(plan.Members.Length > 8 ? " ..." : "")}]; {plan.Explain}"
+                // T-0393: the gain in MinGainFraction's unit (overload reduction / mean node load) and, with a budget
+                // configured, how much of its target's hourly budget the pin leaves used. Appended last: the analysis
+                // scripts read the fields above by position.
+                + $"; gain={(plan.MeanLoad > 0 ? (plan.OverloadReduction / plan.MeanLoad).ToString("F3") : "n/a")}"
+                + (
+                    model.BudgetMovesPerNodeHour > 0
+                        ? $", target budget {_balancePace.TargetPinsLastHour(DateTime.UtcNow).GetValueOrDefault(plan.Target)}/{model.BudgetMovesPerNodeHour} per hour"
+                            + $" (applies below deviation {model.BudgetUnderDeviation:F2})"
+                        : ""
+                )
+        );
 
     private void PinMigration(PartitionInfo[] members, string target)
     {
         lock (_balanceMigrations)
             foreach (PartitionInfo member in members)
-                _balanceMigrations[member.Id] = (target, DateTime.UtcNow.AddSeconds(MigrationPinSeconds));
+                _balanceMigrations[member.Id] = (
+                    target,
+                    DateTime.UtcNow.AddSeconds(MigrationPinSeconds)
+                );
     }
 
     /// <summary>
@@ -2396,15 +3738,17 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         Dictionary<ulong, string> owner = [];
         foreach ((ServedNode node, PartitionReport report) in reports)
-            foreach (PartitionInfo partition in report.Partitions)
-                owner[partition.Id] = node.Node;
+        foreach (PartitionInfo partition in report.Partitions)
+            owner[partition.Id] = node.Node;
         HashSet<string> busy = [];
         lock (_balanceMigrations)
             foreach ((ulong partition, (string target, DateTime expires)) in _balanceMigrations)
             {
-                if (expires < DateTime.UtcNow) continue;
+                if (expires < DateTime.UtcNow)
+                    continue;
                 busy.Add(target);
-                if (owner.TryGetValue(partition, out string? source)) busy.Add(source);
+                if (owner.TryGetValue(partition, out string? source))
+                    busy.Add(source);
             }
         return busy;
     }
@@ -2413,18 +3757,28 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         lock (_balanceMigrations)
         {
-            if (!_balanceMigrations.TryGetValue(partition, out (string Target, DateTime Expires) pin)) return null;
+            if (
+                !_balanceMigrations.TryGetValue(
+                    partition,
+                    out (string Target, DateTime Expires) pin
+                )
+            )
+                return null;
             if (pin.Expires < DateTime.UtcNow)
             {
                 _balanceMigrations.Remove(partition);
                 return null;
             }
             // T-0235: a pin made before a drain began must not keep carrying members into the node.
-            if (_drainSources.TryGetValue(pin.Target, out DateTime drained)
-                && DateTime.UtcNow - drained < TimeSpan.FromSeconds(RotationSettlingSeconds))
+            if (
+                _drainSources.TryGetValue(pin.Target, out DateTime drained)
+                && DateTime.UtcNow - drained < TimeSpan.FromSeconds(RotationSettlingSeconds)
+            )
             {
                 _balanceMigrations.Remove(partition);
-                Console.WriteLine($"Dropped balance migration pin of partition {partition}: its target {pin.Target} is being drained (operator handover)");
+                Console.WriteLine(
+                    $"Dropped balance migration pin of partition {partition}: its target {pin.Target} is being drained (operator handover)"
+                );
                 return null;
             }
             return pin.Target;
@@ -2440,8 +3794,9 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// it off the demanding node again, one second after the pull was answered "accepted". A pull TO the pin's own
     /// target is the migration's move and goes ahead.
     /// </summary>
-    internal static string? PullPinRefusal(string? pinTarget, string pullTarget)
-        => pinTarget == null || pinTarget == pullTarget ? null
+    internal static string? PullPinRefusal(string? pinTarget, string pullTarget) =>
+        pinTarget == null || pinTarget == pullTarget
+            ? null
             : $"partition is in a balance migration to {pinTarget}; it stays with its group until that has arrived";
 
     /// <summary>T-0235: record the node an operator /handover drains (its control endpoint, as the
@@ -2449,17 +3804,41 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     private void NoteDrainSource(string sourceControl)
     {
         string wanted = StripScheme(sourceControl);
-        string? node = _registry == null ? null : GatewayRegistry.LiveFirst(_registry.Nodes()
-            .Where(x => x.ControlEndpoint != null && StripScheme(x.ControlEndpoint) == wanted))?.Node;
+        string? node =
+            _registry == null
+                ? null
+                : GatewayRegistry
+                    .LiveFirst(
+                        _registry
+                            .Nodes()
+                            .Where(x =>
+                                x.ControlEndpoint != null
+                                && StripScheme(x.ControlEndpoint) == wanted
+                            )
+                    )
+                    ?.Node;
         if (node != null)
             _drainSources[node] = DateTime.UtcNow;
     }
 
-    private string[] DrainingNodes()
-        => RecentDrainSources(_drainSources, DateTime.UtcNow, TimeSpan.FromSeconds(RotationSettlingSeconds));
+    private string[] DrainingNodes() =>
+        RecentDrainSources(
+            _drainSources,
+            DateTime.UtcNow,
+            TimeSpan.FromSeconds(RotationSettlingSeconds)
+        );
 
-    internal static string[] RecentDrainSources(IEnumerable<KeyValuePair<string, DateTime>> sources, DateTime now, TimeSpan window)
-        => [.. sources.Where(x => now - x.Value < window).Select(x => x.Key).Order(StringComparer.Ordinal)];
+    internal static string[] RecentDrainSources(
+        IEnumerable<KeyValuePair<string, DateTime>> sources,
+        DateTime now,
+        TimeSpan window
+    ) =>
+        [
+            .. sources
+                .Where(x => now - x.Value < window)
+                .Select(x => x.Key)
+                .Order(StringComparer.Ordinal),
+        ];
 
     /// <summary>
     /// A member of a pinned migration completed a handover: renew every sibling pin bound for the same
@@ -2469,15 +3848,26 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         lock (_balanceMigrations)
         {
-            if (!_balanceMigrations.TryGetValue(partition, out (string Target, DateTime Expires) pin)) return;
+            if (
+                !_balanceMigrations.TryGetValue(
+                    partition,
+                    out (string Target, DateTime Expires) pin
+                )
+            )
+                return;
             // Renew EVERY pin, not just the arrived member's target group: an idle-cluster full plan
             // pins trains toward several targets at once, and the one-transfer-per-pass loop can spend
             // longer than the pin lifetime on one train before touching another. The expiry guards a
             // DEAD migration system reverting to cost-based homing; any progress proves it alive.
             // T-0296 r4: except the pins of a train whose own mover keeps failing (see StalledMigrationPins).
-            RenewMigrationPins(_balanceMigrations, DateTime.UtcNow, MigrationPinSeconds,
-                StalledMigrationPins(_migrationTrains, RecentlyFailedHandover));
-            if (pin.Target == arrivedOn) _balanceMigrations.Remove(partition);
+            RenewMigrationPins(
+                _balanceMigrations,
+                DateTime.UtcNow,
+                MigrationPinSeconds,
+                StalledMigrationPins(_migrationTrains, RecentlyFailedHandover)
+            );
+            if (pin.Target == arrivedOn)
+                _balanceMigrations.Remove(partition);
         }
     }
 
@@ -2502,18 +3892,26 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// expired and its group stayed split. A train with a failing mover is renewed only by its own progress: the
     /// mover's success clears its failure record before the renewal is computed.
     /// </summary>
-    internal static HashSet<ulong> StalledMigrationPins(IEnumerable<ulong[]> trains, Func<ulong, bool> failing)
-        => [.. trains.Where(train => train.Any(failing)).SelectMany(train => train)];
+    internal static HashSet<ulong> StalledMigrationPins(
+        IEnumerable<ulong[]> trains,
+        Func<ulong, bool> failing
+    ) => [.. trains.Where(train => train.Any(failing)).SelectMany(train => train)];
 
     /// <summary>T-0311: progress renews the LIVE pins only. An expired pin nobody queried since (expiry is
     /// enforced lazily in <see cref="MigrationTarget"/>) used to be revived here, so a pin whose migration
     /// had died lived on for as long as any other train made progress.</summary>
-    internal static void RenewMigrationPins(Dictionary<ulong, (string Target, DateTime Expires)> pins, DateTime now, double seconds,
-        IReadOnlySet<ulong>? stalled = null)
+    internal static void RenewMigrationPins(
+        Dictionary<ulong, (string Target, DateTime Expires)> pins,
+        DateTime now,
+        double seconds,
+        IReadOnlySet<ulong>? stalled = null
+    )
     {
         foreach (ulong id in pins.Keys.ToArray())
-            if (pins[id].Expires < now) pins.Remove(id);
-            else if (stalled?.Contains(id) != true) pins[id] = (pins[id].Target, now.AddSeconds(seconds));
+            if (pins[id].Expires < now)
+                pins.Remove(id);
+            else if (stalled?.Contains(id) != true)
+                pins[id] = (pins[id].Target, now.AddSeconds(seconds));
     }
 
     /// <summary>T-0311 (race review F6): a pin is transition state bound to a partition and a target, so it
@@ -2522,9 +3920,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// no longer serves (closed, dead, spare). Left in place, such a pin kept its target out of the paced
     /// planner's move set (<see cref="BusyMigrationNodes"/>) and made every pair skip the component as
     /// pinned Elsewhere, so a half-moved group stayed split. Returns one log line per dropped live pin.</summary>
-    internal static List<string> PruneMigrationPins(Dictionary<ulong, (string Target, DateTime Expires)> pins,
-        IReadOnlySet<ulong> reported, IReadOnlySet<string> serving, DateTime now, IReadOnlySet<string>? retiring = null,
-        IReadOnlySet<ulong>? fast = null)
+    internal static List<string> PruneMigrationPins(
+        Dictionary<ulong, (string Target, DateTime Expires)> pins,
+        IReadOnlySet<ulong> reported,
+        IReadOnlySet<string> serving,
+        DateTime now,
+        IReadOnlySet<string>? retiring = null,
+        IReadOnlySet<ulong>? fast = null
+    )
     {
         List<string> dropped = [];
         foreach ((ulong id, (string target, DateTime expires)) in pins.ToArray())
@@ -2532,17 +3935,24 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // T-0296 r2: a retiring target (node-control remove/recycle/decrease, T-0312 scale-in) still serves and reports,
             // but it is draining: a pin made before its stop would keep carrying members INTO it, and the scale-in pass would
             // pin them straight out again (the T-0235 rule for operator drains, which node control's drain path bypasses).
-            string? why = expires < now ? ""
+            string? why =
+                expires < now ? ""
                 : !serving.Contains(target) ? $"its target {target} no longer serves"
-                : retiring?.Contains(target) == true ? $"its target {target} is retiring (draining for node control)"
+                : retiring?.Contains(target) == true
+                    ? $"its target {target} is retiring (draining for node control)"
                 : !reported.Contains(id) ? "no node reports it"
                 // T-0296 r4: fast is checked when the planner pins (T-0292: "never migrated") and was not looked at again.
                 // A pinned member that turned fast is its own component in ChooseMove and was carried as
                 // "balance-migration" at over 1000 m/s. It stays with its owner and follows its group once slow.
-                : fast?.Contains(id) == true ? "it is fast now (a fast partition is not migrated)" : null;
-            if (why == null) continue;
+                : fast?.Contains(id) == true ? "it is fast now (a fast partition is not migrated)"
+                : null;
+            if (why == null)
+                continue;
             pins.Remove(id);
-            if (why.Length != 0) dropped.Add($"Dropped balance migration pin of partition {id} (target {target}): {why}");
+            if (why.Length != 0)
+                dropped.Add(
+                    $"Dropped balance migration pin of partition {id} (target {target}): {why}"
+                );
         }
         return dropped;
     }
@@ -2554,33 +3964,60 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// side was carried apart again as "balance-migration", by a plan made before the block. Dropped here, the
     /// group stays where co-location put it until the planner plans it afresh. Returns one log line per dropped pin.
     /// </summary>
-    internal static List<string> DropVoidedPins(Dictionary<ulong, (string Target, DateTime Expires)> pins, IEnumerable<ulong> component)
+    internal static List<string> DropVoidedPins(
+        Dictionary<ulong, (string Target, DateTime Expires)> pins,
+        IEnumerable<ulong> component
+    )
     {
         List<string> dropped = [];
         foreach (ulong id in component)
             if (pins.Remove(id, out (string Target, DateTime Expires) pin))
-                dropped.Add($"Dropped balance migration pin of partition {id} (target {pin.Target}): a member of its group still to move is HandoverBlocked");
+                dropped.Add(
+                    $"Dropped balance migration pin of partition {id} (target {pin.Target}): a member of its group still to move is HandoverBlocked"
+                );
         return dropped;
     }
 
     private void DropVoidedPins(HashSet<ulong> component)
     {
-        if (component.Count == 0) return;
+        if (component.Count == 0)
+            return;
         List<string> dropped;
-        lock (_balanceMigrations) dropped = DropVoidedPins(_balanceMigrations, component);
-        foreach (string line in dropped) Console.WriteLine(line);
+        lock (_balanceMigrations)
+            dropped = DropVoidedPins(_balanceMigrations, component);
+        foreach (string line in dropped)
+            Console.WriteLine(line);
     }
 
     private void PruneMigrationPins((ServedNode Node, PartitionReport Report)[] reports)
     {
-        HashSet<ulong> reported = [.. reports.SelectMany(x => x.Report.Partitions).Select(p => p.Id)];
+        HashSet<ulong> reported =
+        [
+            .. reports.SelectMany(x => x.Report.Partitions).Select(p => p.Id),
+        ];
         HashSet<string> serving = [.. reports.Select(x => x.Node.Node)];
         HashSet<string> retiring = _registry == null ? [] : [.. _registry.RetiringNodes()];
         // A retiring node has to drain whatever it holds: ScaleInPass pins its fast partitions too, every pass.
-        HashSet<ulong> fast = [.. reports.Where(x => !retiring.Contains(x.Node.Node)).SelectMany(x => x.Report.Partitions).Where(p => p.Fast).Select(p => p.Id)];
+        HashSet<ulong> fast =
+        [
+            .. reports
+                .Where(x => !retiring.Contains(x.Node.Node))
+                .SelectMany(x => x.Report.Partitions)
+                .Where(p => p.Fast)
+                .Select(p => p.Id),
+        ];
         List<string> dropped;
-        lock (_balanceMigrations) dropped = PruneMigrationPins(_balanceMigrations, reported, serving, DateTime.UtcNow, retiring, fast);
-        foreach (string line in dropped) Console.WriteLine(line);
+        lock (_balanceMigrations)
+            dropped = PruneMigrationPins(
+                _balanceMigrations,
+                reported,
+                serving,
+                DateTime.UtcNow,
+                retiring,
+                fast
+            );
+        foreach (string line in dropped)
+            Console.WriteLine(line);
     }
 
     /// <summary>
@@ -2592,33 +4029,69 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// One line naming the component's members per side (id, member count, clients, snapshot KB),
     /// the two §7.5 side costs and, when it decided, the travelling-client rule (T-0073).
     /// </summary>
-    private static string ExplainHome((PartitionInfo Partition, bool OnSource)[] members, HashSet<ulong> routed,
-        CostModel model, HashSet<ulong>? travelling, bool homeIsTarget,
-        double loadSource = 0, double loadTarget = 0)
+    private static string ExplainHome(
+        (PartitionInfo Partition, bool OnSource)[] members,
+        HashSet<ulong> routed,
+        CostModel model,
+        HashSet<ulong>? travelling,
+        bool homeIsTarget,
+        double loadSource = 0,
+        double loadTarget = 0
+    )
     {
-        static string Side((PartitionInfo Partition, bool OnSource)[] members, bool onSource, HashSet<ulong> routed)
-            => string.Join(" ", members.Where(m => m.OnSource == onSource).Take(8).Select(m =>
-                $"{m.Partition.Id}(m{m.Partition.MemberCount},c{ClientCount(m.Partition, routed)},{m.Partition.EstimatedSnapshotBytes / 1024}KB)"))
-               + (members.Count(m => m.OnSource == onSource) > 8 ? " ..." : "");
-        double onSource = members.Where(m => m.OnSource).Sum(m => MoveCost(model, m.Partition, routed));
-        double onTarget = members.Where(m => !m.OnSource).Sum(m => MoveCost(model, m.Partition, routed));
-        (double priceTarget, double priceSource) = HomePrices(members, routed, model, loadSource, loadTarget);
+        static string Side(
+            (PartitionInfo Partition, bool OnSource)[] members,
+            bool onSource,
+            HashSet<ulong> routed
+        ) =>
+            string.Join(
+                " ",
+                members
+                    .Where(m => m.OnSource == onSource)
+                    .Take(8)
+                    .Select(m =>
+                        $"{m.Partition.Id}(m{m.Partition.MemberCount},c{ClientCount(m.Partition, routed)},{m.Partition.EstimatedSnapshotBytes / 1024}KB)"
+                    )
+            ) + (members.Count(m => m.OnSource == onSource) > 8 ? " ..." : "");
+        double onSource = members
+            .Where(m => m.OnSource)
+            .Sum(m => MoveCost(model, m.Partition, routed));
+        double onTarget = members
+            .Where(m => !m.OnSource)
+            .Sum(m => MoveCost(model, m.Partition, routed));
+        (double priceTarget, double priceSource) = HomePrices(
+            members,
+            routed,
+            model,
+            loadSource,
+            loadTarget
+        );
         // T-0141: the congestion term appears on EVERY co-location line, and says when it CHANGED the
         // answer. The reverted first attempt was a bare `continue` with no observation point, and a
         // whole afternoon went on not being able to tell "never fired" from "fired and churned".
-        string congestion = priceTarget != onSource || priceSource != onTarget
-            ? $"; load {loadSource:F0} vs {loadTarget:F0} prices it {priceSource:F0}/{priceTarget:F0}"
-              + ((priceTarget < priceSource) != (onSource < onTarget) ? " (CHANGED the home)" : "")
-            : "";
-        bool travellingRule = travelling is { Count: > 0 }
+        string congestion =
+            priceTarget != onSource || priceSource != onTarget
+                ? $"; load {loadSource:F0} vs {loadTarget:F0} prices it {priceSource:F0}/{priceTarget:F0}"
+                    + (
+                        (priceTarget < priceSource) != (onSource < onTarget)
+                            ? " (CHANGED the home)"
+                            : ""
+                    )
+                : "";
+        bool travellingRule =
+            travelling is { Count: > 0 }
             && members.Any(m => m.OnSource && m.Partition.Clients.Any(travelling.Contains))
-               != members.Any(m => !m.OnSource && m.Partition.Clients.Any(travelling.Contains));
-        bool nearTie = !travellingRule && NearTie(model, priceTarget, priceSource, loadSource, loadTarget);
+                != members.Any(m => !m.OnSource && m.Partition.Clients.Any(travelling.Contains));
+        bool nearTie =
+            !travellingRule && NearTie(model, priceTarget, priceSource, loadSource, loadTarget);
         return $"source [{Side(members, true, routed)}] cost {onSource:F0}ms vs target [{Side(members, false, routed)}] cost {onTarget:F0}ms"
             + congestion
-            + (travellingRule ? "; travelling client decides"
+            + (
+                travellingRule ? "; travelling client decides"
                 : nearTie ? $"; near-tie, load {loadSource:F0} vs {loadTarget:F0} -> lighter node"
-                : priceTarget == priceSource ? "; tie-break" : "")
+                : priceTarget == priceSource ? "; tie-break"
+                : ""
+            )
             + $" -> home {(homeIsTarget ? "target" : "source")}";
     }
 
@@ -2628,9 +4101,21 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// and they differ. Equal loads (or a pass without load, as in the self-tests' default) fall
     /// through to the exact price comparison and the §7.1 tie-breaks, so nothing changes there.
     /// </summary>
-    private static bool NearTie(CostModel model, double priceTarget, double priceSource, double loadSource, double loadTarget)
+    private static bool NearTie(
+        CostModel model,
+        double priceTarget,
+        double priceSource,
+        double loadSource,
+        double loadTarget
+    )
     {
-        if (model.HomeTieFraction <= 0 || loadSource <= 0 || loadTarget <= 0 || loadSource == loadTarget) return false;
+        if (
+            model.HomeTieFraction <= 0
+            || loadSource <= 0
+            || loadTarget <= 0
+            || loadSource == loadTarget
+        )
+            return false;
         double higher = Math.Max(priceTarget, priceSource);
         return higher > 0 && Math.Abs(priceTarget - priceSource) <= model.HomeTieFraction * higher;
     }
@@ -2646,25 +4131,43 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// attempt - see CostModel.LoadHomeWeight.
     /// </summary>
     private static (double Target, double Source) HomePrices(
-        (PartitionInfo Partition, bool OnSource)[] members, HashSet<ulong> routed, CostModel model,
-        double loadSource, double loadTarget)
+        (PartitionInfo Partition, bool OnSource)[] members,
+        HashSet<ulong> routed,
+        CostModel model,
+        double loadSource,
+        double loadTarget
+    )
     {
-        double onSource = members.Where(m => m.OnSource).Sum(m => MoveCost(model, m.Partition, routed));
-        double onTarget = members.Where(m => !m.OnSource).Sum(m => MoveCost(model, m.Partition, routed));
+        double onSource = members
+            .Where(m => m.OnSource)
+            .Sum(m => MoveCost(model, m.Partition, routed));
+        double onTarget = members
+            .Where(m => !m.OnSource)
+            .Sum(m => MoveCost(model, m.Partition, routed));
         // Choosing target as home costs moving the source side, and vice versa.
-        double priceTarget = onSource, priceSource = onTarget;
+        double priceTarget = onSource,
+            priceSource = onTarget;
         double heavier = Math.Max(loadSource, loadTarget);
         if (model.LoadHomeWeight > 0 && heavier > 0 && loadSource > 0 && loadTarget > 0)
         {
             double imbalance = Math.Abs(loadTarget - loadSource) / heavier;
             double penalty = model.LoadHomeWeight * imbalance * (onSource + onTarget);
-            if (loadTarget > loadSource) priceTarget += penalty; else priceSource += penalty;
+            if (loadTarget > loadSource)
+                priceTarget += penalty;
+            else
+                priceSource += penalty;
         }
         return (priceTarget, priceSource);
     }
 
-    private static bool HomeIsTarget((PartitionInfo Partition, bool OnSource)[] members, HashSet<ulong> routed,
-        CostModel model, HashSet<ulong>? travelling = null, double loadSource = 0, double loadTarget = 0)
+    private static bool HomeIsTarget(
+        (PartitionInfo Partition, bool OnSource)[] members,
+        HashSet<ulong> routed,
+        CostModel model,
+        HashSet<ulong>? travelling = null,
+        double loadSource = 0,
+        double loadTarget = 0
+    )
     {
         // Partitioning.md §7.4: a teleported (or admin-moved) character travels to the node owning its
         // destination - direction comes from the trigger, not the price, and destination partitions are
@@ -2672,9 +4175,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // every ordinary drift encounter below stays §7.5-priced.
         if (travelling is { Count: > 0 })
         {
-            bool travellingSource = members.Any(m => m.OnSource && m.Partition.Clients.Any(travelling.Contains));
-            bool travellingTarget = members.Any(m => !m.OnSource && m.Partition.Clients.Any(travelling.Contains));
-            if (travellingSource != travellingTarget) return travellingSource;
+            bool travellingSource = members.Any(m =>
+                m.OnSource && m.Partition.Clients.Any(travelling.Contains)
+            );
+            bool travellingTarget = members.Any(m =>
+                !m.OnSource && m.Partition.Clients.Any(travelling.Contains)
+            );
+            if (travellingSource != travellingTarget)
+                return travellingSource;
         }
         // §7.5: home is the side that costs more to move - snapshot bytes, the freeze they imply, and
         // client switches, all through one price. That single rule carries what used to be three special
@@ -2684,20 +4192,38 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // component's costliest partition flips this majority, and co-location pulls the remainder).
         // A client-bearing side no longer pins its node outright - that was the one-way client switch
         // talking, and the switch is symmetric now; the γ term is what a switch is actually worth.
-        (double priceTarget, double priceSource) = HomePrices(members, routed, model, loadSource, loadTarget);
+        (double priceTarget, double priceSource) = HomePrices(
+            members,
+            routed,
+            model,
+            loadSource,
+            loadTarget
+        );
         // T-0141 (2026-09-15): prices within HomeTieFraction of each other are a tie, and a tie goes
         // to the LIGHTER node - see CostModel.HomeTieFraction and NearTie.
-        if (NearTie(model, priceTarget, priceSource, loadSource, loadTarget)) return loadTarget < loadSource;
-        if (priceTarget != priceSource) return priceTarget < priceSource;
+        if (NearTie(model, priceTarget, priceSource, loadSource, loadTarget))
+            return loadTarget < loadSource;
+        if (priceTarget != priceSource)
+            return priceTarget < priceSource;
         // §7.1 tie-breaks: the side with more attached clients stays, then the larger snapshot stays,
         // then the target - so the choice never depends on report order. (Away-from-a-closing-node needs
         // no branch here: the automatic loop only pairs Active nodes, and drains bypass the chooser.)
-        int clientsSource = members.Where(m => m.OnSource).Sum(m => ClientCount(m.Partition, routed));
-        int clientsTarget = members.Where(m => !m.OnSource).Sum(m => ClientCount(m.Partition, routed));
-        if (clientsSource != clientsTarget) return clientsTarget > clientsSource;
-        long bytesSource = members.Where(m => m.OnSource).Sum(m => m.Partition.EstimatedSnapshotBytes);
-        long bytesTarget = members.Where(m => !m.OnSource).Sum(m => m.Partition.EstimatedSnapshotBytes);
-        if (bytesSource != bytesTarget) return bytesTarget > bytesSource;
+        int clientsSource = members
+            .Where(m => m.OnSource)
+            .Sum(m => ClientCount(m.Partition, routed));
+        int clientsTarget = members
+            .Where(m => !m.OnSource)
+            .Sum(m => ClientCount(m.Partition, routed));
+        if (clientsSource != clientsTarget)
+            return clientsTarget > clientsSource;
+        long bytesSource = members
+            .Where(m => m.OnSource)
+            .Sum(m => m.Partition.EstimatedSnapshotBytes);
+        long bytesTarget = members
+            .Where(m => !m.OnSource)
+            .Sum(m => m.Partition.EstimatedSnapshotBytes);
+        if (bytesSource != bytesTarget)
+            return bytesTarget > bytesSource;
         return true;
     }
 
@@ -2711,7 +4237,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// must be co-located preemptively when its time-to-contact is inside the mover's relocation
     /// time, which is this same inequality rearranged.
     /// </summary>
-    private static double EnvelopeGap(PartitionInfo a, PartitionInfo b, double envelope, CostModel model)
+    private static double EnvelopeGap(
+        PartitionInfo a,
+        PartitionInfo b,
+        double envelope,
+        CostModel model
+    )
     {
         double lead = RelocationLeadSeconds(model, a, b);
         // The bounding sphere + partition-level max speed lower-bound every member pair's
@@ -2721,9 +4252,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // smaller of the two. Capping each side at MaxGridSpeed instead was not a bound: one
         // member above the cap closing on a static one reached up to 2 x the cap below.
         double cap = model.MaxGridSpeed;
-        double bound = SphereGap(a.Sphere, b.Sphere)
+        double bound =
+            SphereGap(a.Sphere, b.Sphere)
             - Math.Min(a.MaxMemberSpeed + b.MaxMemberSpeed, 2 * cap) * lead;
-        if (bound >= envelope) return bound;   // exclusion: the exact value can only be larger
+        if (bound >= envelope)
+            return bound; // exclusion: the exact value can only be larger
         if (a.MemberSpheres is not { Length: > 0 } ma || b.MemberSpheres is not { Length: > 0 } mb)
             return bound;
         // Velocity applies PER MEMBER PAIR: one flying ship inside a base partition must not
@@ -2739,28 +4272,35 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // speed sum, so the sphere exclusion above stays a sound lower bound.
         double min = double.MaxValue;
         foreach (double[] x in ma)
-            foreach (double[] y in mb)
+        foreach (double[] y in mb)
+        {
+            double dx = x[0] - y[0],
+                dy = x[1] - y[1],
+                dz = x[2] - y[2];
+            double distance = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+            double reach;
+            if (x.Length >= 8 && y.Length >= 8)
             {
-                double dx = x[0] - y[0], dy = x[1] - y[1], dz = x[2] - y[2];
-                double distance = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-                double reach;
-                if (x.Length >= 8 && y.Length >= 8)
-                {
-                    // d points from y to x; the pair closes when x moves toward y relative to it.
-                    double wx = x[5] - y[5], wy = x[6] - y[6], wz = x[7] - y[7];
-                    double closing = distance > 0 ? -(wx * dx + wy * dy + wz * dz) / distance
+                // d points from y to x; the pair closes when x moves toward y relative to it.
+                double wx = x[5] - y[5],
+                    wy = x[6] - y[6],
+                    wz = x[7] - y[7];
+                double closing =
+                    distance > 0
+                        ? -(wx * dx + wy * dy + wz * dz) / distance
                         : Math.Sqrt(wx * wx + wy * wy + wz * wz);
-                    reach = Math.Min(Math.Max(closing, 0), 2 * cap);
-                }
-                else
-                {
-                    double sx = x.Length > 4 ? Math.Min(x[4], cap) : 0;
-                    double sy = y.Length > 4 ? Math.Min(y[4], cap) : 0;
-                    reach = sx + sy;
-                }
-                double gap = distance - x[3] - y[3] - reach * lead;
-                if (gap < min) min = gap;
+                reach = Math.Min(Math.Max(closing, 0), 2 * cap);
             }
+            else
+            {
+                double sx = x.Length > 4 ? Math.Min(x[4], cap) : 0;
+                double sy = y.Length > 4 ? Math.Min(y[4], cap) : 0;
+                reach = sx + sy;
+            }
+            double gap = distance - x[3] - y[3] - reach * lead;
+            if (gap < min)
+                min = gap;
+        }
         return min;
     }
 
@@ -2777,12 +4317,15 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             return SphereGap(a.Sphere, b.Sphere);
         double min = double.MaxValue;
         foreach (double[] x in ma)
-            foreach (double[] y in mb)
-            {
-                double dx = x[0] - y[0], dy = x[1] - y[1], dz = x[2] - y[2];
-                double gap = Math.Sqrt(dx * dx + dy * dy + dz * dz) - x[3] - y[3];
-                if (gap < min) min = gap;
-            }
+        foreach (double[] y in mb)
+        {
+            double dx = x[0] - y[0],
+                dy = x[1] - y[1],
+                dz = x[2] - y[2];
+            double gap = Math.Sqrt(dx * dx + dy * dy + dz * dz) - x[3] - y[3];
+            if (gap < min)
+                min = gap;
+        }
         return min;
     }
 
@@ -2796,8 +4339,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// </summary>
     private static double RelocationLeadSeconds(CostModel model, PartitionInfo a, PartitionInfo b)
     {
-        double mover = Math.Min(model.FreezeMs(a.EstimatedSnapshotBytes, a.MemberCount),
-            model.FreezeMs(b.EstimatedSnapshotBytes, b.MemberCount));
+        double mover = Math.Min(
+            model.FreezeMs(a.EstimatedSnapshotBytes, a.MemberCount),
+            model.FreezeMs(b.EstimatedSnapshotBytes, b.MemberCount)
+        );
         return Math.Max(5, 3 * mover / 1000 + 2) * LeadScale;
     }
 
@@ -2808,15 +4353,28 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// lookahead - and 41 of them moved into the node that became the pile.
     /// </summary>
     private static readonly double LeadScale =
-        double.TryParse(Environment.GetEnvironmentVariable("CLUSTER_COLOCATION_LEAD_SCALE"), System.Globalization.NumberStyles.Float,
-            System.Globalization.CultureInfo.InvariantCulture, out double scale) && scale >= 0 ? scale : 1.0;
+        double.TryParse(
+            Environment.GetEnvironmentVariable("CLUSTER_COLOCATION_LEAD_SCALE"),
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out double scale
+        )
+        && scale >= 0
+            ? scale
+            : 1.0;
 
     /// <summary>
     /// A join the registry could not route YET, kept until it can be answered properly (T-0197).
     /// The deadline travels with the request so a retry that is still transient does not start the
     /// clock again - otherwise a partition that stays recovering holds the request forever.
     /// </summary>
-    private sealed record HeldJoin(IJoinRequest Request, ulong ClientId, string? AssertedName, DateTimeOffset Deadline, string Reason);
+    private sealed record HeldJoin(
+        IJoinRequest Request,
+        ulong ClientId,
+        string? AssertedName,
+        DateTimeOffset Deadline,
+        string Reason
+    );
 
     /// <summary>Joins held for a transient registry state. Touched only from the frontend poll
     /// thread and from OnConnectionRequest, which runs on it, so the lock guards the retry drain
@@ -2842,11 +4400,20 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     private static TimeSpan ParseJoinHold()
     {
         string? raw = Environment.GetEnvironmentVariable("CLUSTER_JOIN_HOLD");
-        return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds)
-            && seconds >= 0 ? TimeSpan.FromSeconds(seconds) : TimeSpan.FromSeconds(120);
+        return
+            double.TryParse(
+                raw,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out double seconds
+            )
+            && seconds >= 0
+            ? TimeSpan.FromSeconds(seconds)
+            : TimeSpan.FromSeconds(120);
     }
 
-    public void OnConnectionRequest(ConnectionRequest request) => OnConnectionRequest(new LiteNetLibJoinRequest(request), null, null);
+    public void OnConnectionRequest(ConnectionRequest request) =>
+        OnConnectionRequest(new LiteNetLibJoinRequest(request), null, null);
 
     /// <summary>
     /// <paramref name="decoded"/> carries the identity a HELD request already decoded, and passing it
@@ -2866,8 +4433,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// The single-flight check and the admission test ARE still the right questions on a retry. Only
     /// the decode is one the reader can answer exactly once.
     /// </summary>
-    private void OnConnectionRequest(IJoinRequest request, DateTimeOffset? holdUntil,
-        (ulong ClientId, string? AssertedName)? decoded)
+    private void OnConnectionRequest(
+        IJoinRequest request,
+        DateTimeOffset? holdUntil,
+        (ulong ClientId, string? AssertedName)? decoded
+    )
     {
         ClientSession? session = null;
         try
@@ -2883,16 +4453,27 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             {
                 (clientId, assertedName) = already;
             }
-            else if (request.Data == null || !DirectTransportCodec.TryDecodeHandshake(request.Data, out clientId, out assertedName))
+            else if (
+                request.Data == null
+                || !DirectTransportCodec.TryDecodeHandshake(
+                    request.Data,
+                    out clientId,
+                    out assertedName
+                )
+            )
             {
-                Console.Error.WriteLine($"Rejected {request.RemoteEndPoint}: bad Direct Transport handshake");
+                Console.Error.WriteLine(
+                    $"Rejected {request.RemoteEndPoint}: bad Direct Transport handshake"
+                );
                 request.Reject();
                 return;
             }
 
             if (clientId == DirectTransportCodec.NodeLinkId)
             {
-                Console.Error.WriteLine($"Rejected reserved client {clientId} from {request.RemoteEndPoint}");
+                Console.Error.WriteLine(
+                    $"Rejected reserved client {clientId} from {request.RemoteEndPoint}"
+                );
                 request.Reject();
                 return;
             }
@@ -2904,14 +4485,24 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             if (_clients.TryGetValue(clientId, out ClientSession? existing))
             {
                 Interlocked.Increment(ref _singleFlightRefusals);
-                Console.Error.WriteLine($"Refused second join for identity {clientId} from {request.RemoteEndPoint}: "
-                    + $"single-flight (existing session on {existing.BackendEndpoint}, switching={existing.SwitchingBackend})");
+                Console.Error.WriteLine(
+                    $"Refused second join for identity {clientId} from {request.RemoteEndPoint}: "
+                        + $"single-flight (existing session on {existing.BackendEndpoint}, switching={existing.SwitchingBackend})"
+                );
                 request.Reject();
                 return;
             }
 
-            if (_admission.Reject(clientId, clientId, ClusterPlayers().Count, _clients.ContainsKey(clientId),
-                isProfiling: false) is JoinResult refusal)
+            if (
+                _admission.Reject(
+                    clientId,
+                    clientId,
+                    ClusterPlayers().Count,
+                    _clients.ContainsKey(clientId),
+                    isProfiling: false
+                )
+                is JoinResult refusal
+            )
             {
                 Console.Error.WriteLine($"Rejected Direct Transport client {clientId}: {refusal}");
                 request.Reject();
@@ -2923,7 +4514,13 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // reject, on the assumption that the client comes back. The measurement says it
                 // makes one attempt and stops, so a deferral delivered as a refusal is a lockout
                 // with a comment on it. Hold the request and answer it when the home is claimed.
-                HoldJoin(request, clientId, assertedName, "character home partition is recovering", holdUntil);
+                HoldJoin(
+                    request,
+                    clientId,
+                    assertedName,
+                    "character home partition is recovering",
+                    holdUntil
+                );
                 return;
             }
             ClientRoute? route;
@@ -2943,15 +4540,23 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 HoldJoin(request, clientId, assertedName, busy.Message, holdUntil);
                 return;
             }
-            IPEndPoint backend = route == null ? UnroutedBackend() : EndpointParser.Parse(route.Endpoint, DirectTransportConstants.DefaultPort);
+            IPEndPoint backend =
+                route == null
+                    ? UnroutedBackend()
+                    : EndpointParser.Parse(route.Endpoint, DirectTransportConstants.DefaultPort);
             session = new ClientSession(clientId, backend, route)
             {
                 // The Direct Transport frontend binds the identity from the handshake's asserted id
                 // (Security.md §3.6 test-accept-all); only the ticket step is bypassed. The name is
                 // asserted the same way - without it the player is named after the id, which is what
                 // every headless client showed up as in chat and the player list.
-                Credential = new ClientCredential(DirectTransportService, clientId, clientId,
-                    assertedName ?? clientId.ToString(), _admission.IsAdmin(clientId)),
+                Credential = new ClientCredential(
+                    DirectTransportService,
+                    clientId,
+                    clientId,
+                    assertedName ?? clientId.ToString(),
+                    _admission.IsAdmin(clientId)
+                ),
             };
             if (!_clients.TryAdd(clientId, session))
             {
@@ -2961,13 +4566,17 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             session.Client = request.Accept(session);
             if (session.Client == null)
             {
-                Console.Error.WriteLine($"Dropped the join of client {clientId} from {request.RemoteEndPoint}: no new connection to bind it to; its next attempt joins afresh");
+                Console.Error.WriteLine(
+                    $"Dropped the join of client {clientId} from {request.RemoteEndPoint}: no new connection to bind it to; its next attempt joins afresh"
+                );
                 RemoveSession(session);
                 return;
             }
             Console.WriteLine($"Accepted client {clientId} from {request.RemoteEndPoint}");
             if (route != null)
-                Console.WriteLine($"Resolved client {clientId} partition {route.Partition} to {route.Node} epoch {route.Epoch} at {backend}");
+                Console.WriteLine(
+                    $"Resolved client {clientId} partition {route.Partition} to {route.Node} epoch {route.Epoch} at {backend}"
+                );
             if (!RelayPaused && (_registry == null || _registry.WorldAuthority().Generation <= 0))
                 Attach(session, GetNodeLink(session.BackendEndpoint));
         }
@@ -3009,12 +4618,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// <summary>A node link came up: re-attach its clients. Shared by the in-process and the external relay.</summary>
     private void OnLinkConnected(NodeLink link)
     {
-		foreach (ClientSession session in link.Clients.Values)
-		{
-			SendAttach(link, session);
-			if (!session.SwitchingBackend)
-				FlushClientBacklog(session);
-		}
+        foreach (ClientSession session in link.Clients.Values)
+        {
+            SendAttach(link, session);
+            if (!session.SwitchingBackend)
+                FlushClientBacklog(session);
+        }
     }
 
     public void OnPeerDisconnected(NetPeer peer, DisconnectInfo disconnectInfo)
@@ -3046,32 +4655,39 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// clients off it. Shared by the in-process and the external relay.</summary>
     private void OnLinkDisconnected(NodeLink link, string reason)
     {
-            Console.WriteLine($"Node link {link.Endpoint} disconnected: {reason}");
-            link.DisconnectedAt = DateTimeOffset.UtcNow;
-            link.LastDisconnectReason = reason;
-            foreach (ClientSession attached in link.Clients.Values)
+        Console.WriteLine($"Node link {link.Endpoint} disconnected: {reason}");
+        link.DisconnectedAt = DateTimeOffset.UtcNow;
+        link.LastDisconnectReason = reason;
+        foreach (ClientSession attached in link.Clients.Values)
+        {
+            lock (attached.RelayLock)
             {
-                lock (attached.RelayLock)
-                {
-                    bool attachChanged = ReferenceEquals(attached.AttachedLink, link) || ReferenceEquals(attached.AttachingLink, link);
-                    if (ReferenceEquals(attached.AttachedLink, link))
-                        attached.AttachedLink = null;
-                    if (ReferenceEquals(attached.AttachingLink, link))
-                        attached.AttachingLink = null;
-                    bool detachChanged = ReferenceEquals(attached.DetachingLink, link);
-                    if (detachChanged)
-                        attached.DetachingLink = null;
-                    if (attachChanged)
-                        attached.AttachCompleted.Set();
-                    if (detachChanged)
-                        attached.DetachCompleted.Set();
-                }
-                if (ReferenceEquals(attached.Link, link) && !attached.SwitchingBackend)
-                    ForceReconnect(attached, "node-link-lost");
+                bool attachChanged =
+                    ReferenceEquals(attached.AttachedLink, link)
+                    || ReferenceEquals(attached.AttachingLink, link);
+                if (ReferenceEquals(attached.AttachedLink, link))
+                    attached.AttachedLink = null;
+                if (ReferenceEquals(attached.AttachingLink, link))
+                    attached.AttachingLink = null;
+                bool detachChanged = ReferenceEquals(attached.DetachingLink, link);
+                if (detachChanged)
+                    attached.DetachingLink = null;
+                if (attachChanged)
+                    attached.AttachCompleted.Set();
+                if (detachChanged)
+                    attached.DetachCompleted.Set();
             }
+            if (ReferenceEquals(attached.Link, link) && !attached.SwitchingBackend)
+                ForceReconnect(attached, "node-link-lost");
+        }
     }
 
-    public void OnNetworkReceive(NetPeer peer, NetPacketReader reader, byte channel, DeliveryMethod deliveryMethod)
+    public void OnNetworkReceive(
+        NetPeer peer,
+        NetPacketReader reader,
+        byte channel,
+        DeliveryMethod deliveryMethod
+    )
     {
         long started = Stopwatch.GetTimestamp();
         long allocated = GC.GetAllocatedBytesForCurrentThread();
@@ -3079,15 +4695,29 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         {
             byte[] wirePayload = reader.GetRemainingBytes();
 
-            if (peer.Tag is ClientSession session && session.Client is DirectClientChannel direct && ReferenceEquals(peer, direct.Peer))
-                OnClientPacket(session, DirectTransportCodec.DecodePacket(session.ClientId, wirePayload, deliveryMethod));
+            if (
+                peer.Tag is ClientSession session
+                && session.Client is DirectClientChannel direct
+                && ReferenceEquals(peer, direct.Peer)
+            )
+                OnClientPacket(
+                    session,
+                    DirectTransportCodec.DecodePacket(session.ClientId, wirePayload, deliveryMethod)
+                );
             else if (peer.Tag is NodeLink link && ReferenceEquals(peer, link.Peer))
             {
                 link.LastActivity = DateTimeOffset.UtcNow;
                 Interlocked.Increment(ref _nodePackets);
                 Interlocked.Add(ref _nodeBytes, wirePayload.Length);
-                NodeLinkPacket envelope = DirectTransportCodec.DecodeNodeLink(wirePayload, deliveryMethod);
-                if (envelope.Kind == NodeLinkMessage.Plugin) { RoutePluginMessage(link, envelope.Payload); return; }
+                NodeLinkPacket envelope = DirectTransportCodec.DecodeNodeLink(
+                    wirePayload,
+                    deliveryMethod
+                );
+                if (envelope.Kind == NodeLinkMessage.Plugin)
+                {
+                    RoutePluginMessage(link, envelope.Payload);
+                    return;
+                }
                 if (envelope.Kind == NodeLinkMessage.Global)
                 {
                     RouteGlobalMessage(link, envelope.Payload);
@@ -3099,7 +4729,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 {
                     if (!ReferenceEquals(target.Link, link))
                         return;
-                    if (envelope.Kind is NodeLinkMessage.AttachAck or NodeLinkMessage.DetachAck or NodeLinkMessage.Detach)
+                    if (
+                        envelope.Kind
+                        is NodeLinkMessage.AttachAck
+                            or NodeLinkMessage.DetachAck
+                            or NodeLinkMessage.Detach
+                    )
                     {
                         OnNodeControl(target, link, envelope.Kind);
                         return;
@@ -3107,11 +4742,19 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     if (envelope.Kind != NodeLinkMessage.Relay)
                         return;
                     target.LastNodeActivity = DateTimeOffset.UtcNow;
-                    GatewayPacket packet = new(envelope.ClientId, envelope.Channel, envelope.Payload, envelope.Delivery);
+                    GatewayPacket packet = new(
+                        envelope.ClientId,
+                        envelope.Channel,
+                        envelope.Payload,
+                        envelope.Delivery
+                    );
                     if (!ShouldRelayServerPacket(target, packet))
                         return;
-                    if (ReferenceEquals(target.ValidationLink, link) && DirectTransportCodec.TryGetGameMessageId(packet, out byte targetMessage)
-                        && targetMessage == 7)
+                    if (
+                        ReferenceEquals(target.ValidationLink, link)
+                        && DirectTransportCodec.TryGetGameMessageId(packet, out byte targetMessage)
+                        && targetMessage == 7
+                    )
                     {
                         target.TargetServerPacketSeen = true;
                         CompleteTargetReadiness(target);
@@ -3135,7 +4778,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         finally
         {
             Interlocked.Add(ref _relayTicks, Stopwatch.GetTimestamp() - started);
-            Interlocked.Add(ref _relayAllocations, GC.GetAllocatedBytesForCurrentThread() - allocated);
+            Interlocked.Add(
+                ref _relayAllocations,
+                GC.GetAllocatedBytesForCurrentThread() - allocated
+            );
         }
     }
 
@@ -3156,30 +4802,44 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     return;
                 }
                 target.AttachedLink = link;
-							target.AttachedAdmissionGeneration = target.AttachingAdmissionGeneration;
-							target.AttachedIdentityId = target.AttachingIdentityId;
-							target.AttachedBindingRevision = target.AttachingBindingRevision;
+                target.AttachedAdmissionGeneration = target.AttachingAdmissionGeneration;
+                target.AttachedIdentityId = target.AttachingIdentityId;
+                target.AttachedBindingRevision = target.AttachingBindingRevision;
                 target.RegistryRouteValidated = true;
-							if (target.AttachedBindingRevision != target.BindingRevision)
-							{
-								byte[] binding = AttachBinding(target);
-								target.AttachingAdmissionGeneration = target.PlayerReady?.AuthorityGeneration ?? 0;
-								target.AttachingIdentityId = target.PlayerReady?.Identity.IdentityId ?? 0;
-								target.AttachingBindingRevision = target.BindingRevision;
-								target.AttachCompleted.Reset();
-								SendNodeLink(link, new(NodeLinkMessage.Attach, target.ClientId, 0, binding, DeliveryMethod.ReliableOrdered));
-								return;
-							}
-							target.AttachingLink = null;
+                if (target.AttachedBindingRevision != target.BindingRevision)
+                {
+                    byte[] binding = AttachBinding(target);
+                    target.AttachingAdmissionGeneration =
+                        target.PlayerReady?.AuthorityGeneration ?? 0;
+                    target.AttachingIdentityId = target.PlayerReady?.Identity.IdentityId ?? 0;
+                    target.AttachingBindingRevision = target.BindingRevision;
+                    target.AttachCompleted.Reset();
+                    SendNodeLink(
+                        link,
+                        new(
+                            NodeLinkMessage.Attach,
+                            target.ClientId,
+                            0,
+                            binding,
+                            DeliveryMethod.ReliableOrdered
+                        )
+                    );
+                    return;
+                }
+                target.AttachingLink = null;
                 target.AttachCompleted.Set();
-							if (target.PlayerReady is PlayerReady ready
-								&& target.AttachedBindingRevision == target.BindingRevision)
-							{
-								target.AdmissionState = "Ready";
-								target.AdmissionError = null;
-								Interlocked.Exchange(ref target.AdmissionStarted, 0);
-								Console.WriteLine($"Player admission ready client {target.ClientId} identity {ready.Identity.IdentityId} generation {ready.AuthorityGeneration}");
-							}
+                if (
+                    target.PlayerReady is PlayerReady ready
+                    && target.AttachedBindingRevision == target.BindingRevision
+                )
+                {
+                    target.AdmissionState = "Ready";
+                    target.AdmissionError = null;
+                    Interlocked.Exchange(ref target.AdmissionStarted, 0);
+                    Console.WriteLine(
+                        $"Player admission ready client {target.ClientId} identity {ready.Identity.IdentityId} generation {ready.AuthorityGeneration}"
+                    );
+                }
                 SendCredit(link, target.ClientId, 4 * 1024 * 1024);
                 if (!target.SwitchingBackend)
                     FlushClientBacklog(target);
@@ -3197,14 +4857,17 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         }
         if (kind == NodeLinkMessage.Detach)
         {
-						if (target.SwitchingBackend || target.AdmissionState is "Attaching" or "Refreshing" or "Granted")
-						{
-							target.AttachedLink = null;
-							target.AttachingLink = null;
-							target.AttachCompleted.Reset();
-							RetryPlayerAttach(target, link);
-							return;
-						}
+            if (
+                target.SwitchingBackend
+                || target.AdmissionState is "Attaching" or "Refreshing" or "Granted"
+            )
+            {
+                target.AttachedLink = null;
+                target.AttachingLink = null;
+                target.AttachCompleted.Reset();
+                RetryPlayerAttach(target, link);
+                return;
+            }
             target.Client?.Disconnect();
             return;
         }
@@ -3213,15 +4876,24 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     public void OnNetworkError(IPEndPoint endPoint, SocketError socketError) =>
         Console.Error.WriteLine($"UDP socket error from {endPoint}: {socketError}");
 
-    public void OnNetworkReceiveUnconnected(IPEndPoint remoteEndPoint, NetPacketReader reader, UnconnectedMessageType messageType) { }
+    public void OnNetworkReceiveUnconnected(
+        IPEndPoint remoteEndPoint,
+        NetPacketReader reader,
+        UnconnectedMessageType messageType
+    ) { }
+
     public void OnNetworkLatencyUpdate(NetPeer peer, int latency) { }
 
     private NodeLink GetNodeLink(IPEndPoint endpoint) =>
-        _nodes.GetOrAdd(endpoint, value => new NodeLink(value, external: _relay != null) { Relay = _relay });
+        _nodes.GetOrAdd(
+            endpoint,
+            value => new NodeLink(value, external: _relay != null) { Relay = _relay }
+        );
 
     private void RouteGlobalMessage(NodeLink sourceLink, byte[] payload)
     {
-        if (_registry == null) return;
+        if (_registry == null)
+            return;
         try
         {
             using JsonDocument document = JsonDocument.Parse(payload);
@@ -3229,48 +4901,110 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             string kind = root.GetProperty("Kind").GetString() ?? string.Empty;
             long generation = root.GetProperty("Generation").GetInt64();
             string origin = root.GetProperty("Origin").GetString() ?? string.Empty;
-            string? target = root.TryGetProperty("Target", out JsonElement targetElement) && targetElement.ValueKind == JsonValueKind.String
-                ? targetElement.GetString() : null;
+            string? target =
+                root.TryGetProperty("Target", out JsonElement targetElement)
+                && targetElement.ValueKind == JsonValueKind.String
+                    ? targetElement.GetString()
+                    : null;
             NodeRegistration source = _registry.GetNodeByEndpoint(sourceLink.Endpoint.ToString());
             WorldAuthority authority = _registry.WorldAuthority();
             if (source.Role == NodeRole.WA)
             {
-                if (authority.Node != source.Node || authority.Epoch != source.Epoch || generation != authority.Generation
+                if (
+                    authority.Node != source.Node
+                    || authority.Epoch != source.Epoch
+                    || generation != authority.Generation
                     || kind is not ("Broadcast" or "Snapshot" or "Response")
-                    || (kind == "Response" && (target == null || root.GetProperty("Sequence").GetInt64() <= 0)))
-                    throw new InvalidDataException("Global broadcast is not from the live World Authority generation");
+                    || (
+                        kind == "Response"
+                        && (target == null || root.GetProperty("Sequence").GetInt64() <= 0)
+                    )
+                )
+                    throw new InvalidDataException(
+                        "Global broadcast is not from the live World Authority generation"
+                    );
                 if (kind == "Response" && target == "$gateway")
                 {
                     long sequence = root.GetProperty("Sequence").GetInt64();
-					Guid operationId = root.GetProperty("OperationId").GetGuid();
-					if (!root.TryGetProperty("Payload", out JsonElement responsePayloadElement)
-						|| responsePayloadElement.ValueKind != JsonValueKind.String)
-						throw new InvalidDataException("Global response payload is invalid");
-					string responsePayload = responsePayloadElement.GetString() ?? string.Empty;
-                    if (!_gatewayCommands.TryGetValue(sequence, out PendingGatewayCommand? pending)
-                        || pending.Generation != generation || pending.Subsystem != root.GetProperty("Subsystem").GetString()
-						|| pending.OperationId != operationId
-                        || !_gatewayCommands.TryRemove(sequence, out PendingGatewayCommand? removed) || !ReferenceEquals(removed, pending))
-                        throw new InvalidDataException("Global response has no pending Gateway command");
-					pending.Completion.TrySetResult(responsePayload);
+                    Guid operationId = root.GetProperty("OperationId").GetGuid();
+                    if (
+                        !root.TryGetProperty("Payload", out JsonElement responsePayloadElement)
+                        || responsePayloadElement.ValueKind != JsonValueKind.String
+                    )
+                        throw new InvalidDataException("Global response payload is invalid");
+                    string responsePayload = responsePayloadElement.GetString() ?? string.Empty;
+                    if (
+                        !_gatewayCommands.TryGetValue(sequence, out PendingGatewayCommand? pending)
+                        || pending.Generation != generation
+                        || pending.Subsystem != root.GetProperty("Subsystem").GetString()
+                        || pending.OperationId != operationId
+                        || !_gatewayCommands.TryRemove(sequence, out PendingGatewayCommand? removed)
+                        || !ReferenceEquals(removed, pending)
+                    )
+                        throw new InvalidDataException(
+                            "Global response has no pending Gateway command"
+                        );
+                    pending.Completion.TrySetResult(responsePayload);
                 }
                 else
-				{
-					if (kind is "Broadcast" or "Snapshot" && root.GetProperty("Subsystem").GetString() == "identities"
-						&& AcceptIdentitySnapshot(generation, root.GetProperty("Sequence").GetInt64()))
-						UpdatePlayerBindings(root.GetProperty("Payload").GetString() ?? string.Empty, generation);
-                    foreach (NodeRegistration node in _registry.Nodes().Where(node => ReceivesGlobal(node, target)))
-                        SendGlobal(GetNodeLink(EndpointParser.Parse(node.Endpoint, DirectTransportConstants.DefaultPort)), payload, GlobalDelivery(kind));
-				}
+                {
+                    if (
+                        kind is "Broadcast" or "Snapshot"
+                        && root.GetProperty("Subsystem").GetString() == "identities"
+                        && AcceptIdentitySnapshot(
+                            generation,
+                            root.GetProperty("Sequence").GetInt64()
+                        )
+                    )
+                        UpdatePlayerBindings(
+                            root.GetProperty("Payload").GetString() ?? string.Empty,
+                            generation
+                        );
+                    foreach (
+                        NodeRegistration node in _registry
+                            .Nodes()
+                            .Where(node => ReceivesGlobal(node, target))
+                    )
+                        SendGlobal(
+                            GetNodeLink(
+                                EndpointParser.Parse(
+                                    node.Endpoint,
+                                    DirectTransportConstants.DefaultPort
+                                )
+                            ),
+                            payload,
+                            GlobalDelivery(kind)
+                        );
+                }
             }
             else
             {
-                if (origin != source.Node || generation != authority.Generation || kind is not ("Request" or "Resync" or "Command")
-					|| (kind == "Command" && (root.GetProperty("Sequence").GetInt64() <= 0
-						|| root.GetProperty("OperationId").GetGuid() == Guid.Empty)) || authority.Node == null)
-                    throw new InvalidDataException("Global request is not valid for the live World Authority generation");
-                NodeRegistration wa = _registry.Nodes().Single(node => node.Node == authority.Node && node.Epoch == authority.Epoch);
-                SendGlobal(GetNodeLink(EndpointParser.Parse(wa.Endpoint, DirectTransportConstants.DefaultPort)), payload, GlobalDelivery(kind));
+                if (
+                    origin != source.Node
+                    || generation != authority.Generation
+                    || kind is not ("Request" or "Resync" or "Command")
+                    || (
+                        kind == "Command"
+                        && (
+                            root.GetProperty("Sequence").GetInt64() <= 0
+                            || root.GetProperty("OperationId").GetGuid() == Guid.Empty
+                        )
+                    )
+                    || authority.Node == null
+                )
+                    throw new InvalidDataException(
+                        "Global request is not valid for the live World Authority generation"
+                    );
+                NodeRegistration wa = _registry
+                    .Nodes()
+                    .Single(node => node.Node == authority.Node && node.Epoch == authority.Epoch);
+                SendGlobal(
+                    GetNodeLink(
+                        EndpointParser.Parse(wa.Endpoint, DirectTransportConstants.DefaultPort)
+                    ),
+                    payload,
+                    GlobalDelivery(kind)
+                );
             }
             Interlocked.Increment(ref _globalMessages);
         }
@@ -3287,8 +5021,13 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// and with only Active nodes served every answer was dropped, the command timed out and the drain ended the node
     /// unsaved (SE-1091).
     /// </summary>
-    internal static bool ReceivesGlobal(NodeRegistration node, string? target) => node.Role == NodeRole.Regular
-        && (target == null ? node.State == NodeState.Active : node.Node == target && node.State is NodeState.Active or NodeState.Closed);
+    internal static bool ReceivesGlobal(NodeRegistration node, string? target) =>
+        node.Role == NodeRole.Regular
+        && (
+            target == null
+                ? node.State == NodeState.Active
+                : node.Node == target && node.State is NodeState.Active or NodeState.Closed
+        );
 
     /// <summary>
     /// T-0154: bulk global frames (publishes, snapshots, node reports) go ReliableOrdered; a command
@@ -3296,39 +5035,59 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// so it never waits behind the megabytes of antenna snapshots the ordered channel carries
     /// during a rebalancing wave. Commands and responses are matched by sequence and operation id.
     /// </summary>
-    private static void SendGlobal(NodeLink link, byte[] payload, DeliveryMethod delivery = DeliveryMethod.ReliableOrdered)
+    private static void SendGlobal(
+        NodeLink link,
+        byte[] payload,
+        DeliveryMethod delivery = DeliveryMethod.ReliableOrdered
+    )
     {
         lock (link.Sync)
         {
             if (!link.IsConnected)
-                throw new IOException("Global-state target node link is disconnected: " + link.Endpoint);
+                throw new IOException(
+                    "Global-state target node link is disconnected: " + link.Endpoint
+                );
             var packet = new NodeLinkPacket(NodeLinkMessage.Global, 0, 0, payload, delivery);
-            if (link.External) SendExternalNodeLink(link, packet);   // T-0229: gateway-rs holds the link
-            else link.Peer.Send(DirectTransportCodec.EncodeNodeLink(packet), 0, packet.Delivery);
+            if (link.External)
+                SendExternalNodeLink(link, packet); // T-0229: gateway-rs holds the link
+            else
+                link.Peer.Send(DirectTransportCodec.EncodeNodeLink(packet), 0, packet.Delivery);
         }
     }
 
-    private static DeliveryMethod GlobalDelivery(string kind)
-        => kind is "Command" or "Response" ? DeliveryMethod.ReliableUnordered : DeliveryMethod.ReliableOrdered;
+    private static DeliveryMethod GlobalDelivery(string kind) =>
+        kind is "Command" or "Response"
+            ? DeliveryMethod.ReliableUnordered
+            : DeliveryMethod.ReliableOrdered;
 
     /// <summary>
     /// Cluster-wide player list, the only one that exists (§4.2): every browser-visible count and
     /// the ServerFull cap read it. The vanilla per-node "chat bot" member is not reproduced.
     /// </summary>
     private IReadOnlyList<(ulong UserId, string Name, bool Steam)> ClusterPlayers() =>
-        _clients.Values.Where(session => session.Credential != null)
+        _clients
+            .Values.Where(session => session.Credential != null)
             // A Direct Transport client is admitted on an asserted identity with no Steam auth
             // session behind it, so the browser row cannot name it - only count it. See
             // SteamFrontend.Publish.
-            .Select(session => (session.Credential!.UserId, session.Credential!.Name,
-                session.Credential!.ServiceName != DirectTransportService)).ToArray();
+            .Select(session =>
+                (
+                    session.Credential!.UserId,
+                    session.Credential!.Name,
+                    session.Credential!.ServiceName != DirectTransportService
+                )
+            )
+            .ToArray();
 
     private void OnClientPacket(ClientSession session, GatewayPacket packet)
     {
         session.LastClientActivity = DateTimeOffset.UtcNow;
         Interlocked.Increment(ref _clientPackets);
         Interlocked.Add(ref _clientBytes, packet.Payload.Length + 1);
-        if (DirectTransportCodec.TryGetGameMessageId(packet, out byte messageId) && !OnClientMessage(session, packet, messageId))
+        if (
+            DirectTransportCodec.TryGetGameMessageId(packet, out byte messageId)
+            && !OnClientMessage(session, packet, messageId)
+        )
             return;
         SendToBackend(session, packet);
     }
@@ -3358,8 +5117,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 }
                 session.ClientConnectedPacket = packet;
                 NoteSteamLoginPresented(session);
-                if (session.Credential != null) BeginPlayerAdmission(session);
-                else if (!BeginTicketValidation(session, packet)) return false;
+                if (session.Credential != null)
+                    BeginPlayerAdmission(session);
+                else if (!BeginTicketValidation(session, packet))
+                    return false;
             }
             // CLIENT_READY is the client's world-loaded signal: only from here on may this session's
             // backend be switched under join-message suppression - before it, the client still needs
@@ -3394,30 +5155,54 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         if (_registry is { AdmissionOpen: false })
         {
-            Console.Error.WriteLine($"Refused Steam session with {userId}: cluster admission is closed");
+            Console.Error.WriteLine(
+                $"Refused Steam session with {userId}: cluster admission is closed"
+            );
             return false;
         }
         if (_clients.ContainsKey(userId))
         {
-            Console.Error.WriteLine($"Refused Steam session with {userId}: a session is already open");
+            Console.Error.WriteLine(
+                $"Refused Steam session with {userId}: a session is already open"
+            );
             return false;
         }
         if (JoinHeldForHomeRecovery(userId))
             return false;
         ClientRoute? route = null;
         string? deferred = null;
-        try { route = _registry?.ResolveClientRoute(userId); }
-        catch (RegistryBusyException busy) { deferred = busy.Message; Console.Error.WriteLine($"Route lookup for {userId} deferred to admission: {busy.Message}"); }
-        catch (Exception e) { Console.Error.WriteLine($"Route lookup for {userId} failed: {e.Message}"); }
-        IPEndPoint backend = route == null ? UnroutedBackend()
-            : EndpointParser.Parse(route.Endpoint, DirectTransportConstants.DefaultPort);
-        var session = new ClientSession(userId, backend, route) { AdmissionState = "TicketPending", RouteDeferred = deferred };
+        try
+        {
+            route = _registry?.ResolveClientRoute(userId);
+        }
+        catch (RegistryBusyException busy)
+        {
+            deferred = busy.Message;
+            Console.Error.WriteLine(
+                $"Route lookup for {userId} deferred to admission: {busy.Message}"
+            );
+        }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine($"Route lookup for {userId} failed: {e.Message}");
+        }
+        IPEndPoint backend =
+            route == null
+                ? UnroutedBackend()
+                : EndpointParser.Parse(route.Endpoint, DirectTransportConstants.DefaultPort);
+        var session = new ClientSession(userId, backend, route)
+        {
+            AdmissionState = "TicketPending",
+            RouteDeferred = deferred,
+        };
         if (!_clients.TryAdd(userId, session))
             return false;
         session.Client = _steam!.Channel(userId);
         Console.WriteLine($"Accepted client {userId} from steam:{userId}");
         if (route != null)
-            Console.WriteLine($"Resolved client {userId} partition {route.Partition} to {route.Node} epoch {route.Epoch} at {backend}");
+            Console.WriteLine(
+                $"Resolved client {userId} partition {route.Partition} to {route.Node} epoch {route.Epoch} at {backend}"
+            );
         return true;
     }
 
@@ -3453,8 +5238,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             }
             lock (session.RelayLock)
             {
-                session.AssertedName = string.IsNullOrWhiteSpace(data.Name) ? session.ClientId.ToString() : data.Name!;
-                session.AssertedServiceName = string.IsNullOrWhiteSpace(data.ServiceName) ? "Steam" : data.ServiceName!;
+                session.AssertedName = string.IsNullOrWhiteSpace(data.Name)
+                    ? session.ClientId.ToString()
+                    : data.Name!;
+                session.AssertedServiceName = string.IsNullOrWhiteSpace(data.ServiceName)
+                    ? "Steam"
+                    : data.ServiceName!;
                 session.IsProfiling = data.IsProfiling;
             }
             SteamBeginAuth(session.ClientId, token);
@@ -3462,13 +5251,20 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         }
         catch (InvalidDataException e)
         {
-            Console.Error.WriteLine($"Client {session.ClientId} sent an undecodable CLIENT_CONNECTED: {e.Message}");
+            Console.Error.WriteLine(
+                $"Client {session.ClientId} sent an undecodable CLIENT_CONNECTED: {e.Message}"
+            );
             RejectClient(session, JoinResult.TicketInvalid);
             return false;
         }
     }
 
-    private void OnSteamTicket(ulong userId, JoinResult result, ulong ownerId, uint[]? missingDlcs = null)
+    private void OnSteamTicket(
+        ulong userId,
+        JoinResult result,
+        ulong ownerId,
+        uint[]? missingDlcs = null
+    )
     {
         if (!_clients.TryGetValue(userId, out ClientSession? session))
             return;
@@ -3482,22 +5278,34 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             if (armed >= 0)
             {
                 result = (JoinResult)armed;
-                Console.WriteLine($"Replaced the ticket verdict for joining client {userId}"
-                    + $" with {result} (test)");
+                Console.WriteLine(
+                    $"Replaced the ticket verdict for joining client {userId}"
+                        + $" with {result} (test)"
+                );
             }
         }
         if (result != JoinResult.OK)
         {
             // §2.6: the auth session lives for the whole client session, so a later verdict is a
             // revocation and drops exactly this client - others are untouched.
-            if (admitted) ForceReconnect(session, "ticket-revoked-" + result);
-            else RejectClient(session, result);
+            if (admitted)
+                ForceReconnect(session, "ticket-revoked-" + result);
+            else
+                RejectClient(session, result);
             return;
         }
         if (admitted)
             return;
-        if (_admission.Reject(userId, ownerId, ClusterPlayers().Count, alreadyJoined: false, session.IsProfiling)
-            is JoinResult refusal)
+        if (
+            _admission.Reject(
+                userId,
+                ownerId,
+                ClusterPlayers().Count,
+                alreadyJoined: false,
+                session.IsProfiling
+            )
+            is JoinResult refusal
+        )
         {
             RejectClient(session, refusal);
             return;
@@ -3517,8 +5325,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         if (!_clients.TryGetValue(userId, out ClientSession? session) || session.Credential != null)
             return;
-        if (!member) RejectClient(session, JoinResult.NotInGroup);
-        else AdmitValidatedClient(session);
+        if (!member)
+            RejectClient(session, JoinResult.NotInGroup);
+        else
+            AdmitValidatedClient(session);
     }
 
     /// <summary>
@@ -3541,18 +5351,29 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         DateTimeOffset started = DateTimeOffset.UtcNow;
         (ClientRoute? route, string? last, bool gaveUp) = await WaitForRoute(
-            () => _registry?.ResolveClientRoute(session.ClientId), session.RouteDeferred,
-            TimeSpan.FromSeconds(SteamRouteWaitSeconds), TimeSpan.FromSeconds(1), () => session.DisconnectReason != null);
+            () => _registry?.ResolveClientRoute(session.ClientId),
+            session.RouteDeferred,
+            TimeSpan.FromSeconds(SteamRouteWaitSeconds),
+            TimeSpan.FromSeconds(1),
+            () => session.DisconnectReason != null
+        );
         double waited = (DateTimeOffset.UtcNow - started).TotalSeconds;
         if (route != null)
         {
             session.RegistryRoute = route;
-            session.BackendEndpoint = EndpointParser.Parse(route.Endpoint, DirectTransportConstants.DefaultPort);
-            Console.WriteLine($"Resolved client {session.ClientId} partition {route.Partition} to {route.Node} epoch {route.Epoch}"
-                + $" at {session.BackendEndpoint} after {waited:F0}s (deferred: {session.RouteDeferred})");
+            session.BackendEndpoint = EndpointParser.Parse(
+                route.Endpoint,
+                DirectTransportConstants.DefaultPort
+            );
+            Console.WriteLine(
+                $"Resolved client {session.ClientId} partition {route.Partition} to {route.Node} epoch {route.Epoch}"
+                    + $" at {session.BackendEndpoint} after {waited:F0}s (deferred: {session.RouteDeferred})"
+            );
         }
         else if (gaveUp)
-            Console.Error.WriteLine($"Route of client {session.ClientId} still unavailable after {waited:F0}s ({last}); admitting on the default backend");
+            Console.Error.WriteLine(
+                $"Route of client {session.ClientId} still unavailable after {waited:F0}s ({last}); admitting on the default backend"
+            );
         else if (last != null)
             Console.Error.WriteLine($"Route lookup for {session.ClientId} failed: {last}");
         session.RouteDeferred = null;
@@ -3563,17 +5384,32 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// <paramref name="wait"/>. Returns the route (null = the registry has none: default backend), the last
     /// reason, and whether it gave up on a still-busy answer. Any other failure ends the wait at once.
     /// </summary>
-    internal static async Task<(ClientRoute? Route, string? Last, bool GaveUp)> WaitForRoute(Func<ClientRoute?> resolve,
-        string? first, TimeSpan wait, TimeSpan step, Func<bool> abandoned)
+    internal static async Task<(ClientRoute? Route, string? Last, bool GaveUp)> WaitForRoute(
+        Func<ClientRoute?> resolve,
+        string? first,
+        TimeSpan wait,
+        TimeSpan step,
+        Func<bool> abandoned
+    )
     {
         Stopwatch elapsed = Stopwatch.StartNew();
         string? last = first;
         while (true)
         {
-            try { return (resolve(), last, false); }
-            catch (RegistryBusyException busy) { last = busy.Message; }
-            catch (Exception e) { return (null, e.Message, false); }
-            if (elapsed.Elapsed >= wait || abandoned()) return (null, last, true);
+            try
+            {
+                return (resolve(), last, false);
+            }
+            catch (RegistryBusyException busy)
+            {
+                last = busy.Message;
+            }
+            catch (Exception e)
+            {
+                return (null, e.Message, false);
+            }
+            if (elapsed.Elapsed >= wait || abandoned())
+                return (null, last, true);
             await Task.Delay(step);
         }
     }
@@ -3584,26 +5420,42 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         {
             // One wait per session: a second verdict (group status, a repeated ticket) arriving
             // meanwhile returns here, and the wait's own call below admits exactly once.
-            if (Interlocked.Exchange(ref session.RouteWaitStarted, 1) != 0) return;
+            if (Interlocked.Exchange(ref session.RouteWaitStarted, 1) != 0)
+                return;
             _ = Task.Run(async () =>
             {
                 await ResolveDeferredSteamRoute(session);
-                if (_clients.TryGetValue(session.ClientId, out ClientSession? current) && ReferenceEquals(current, session))
+                if (
+                    _clients.TryGetValue(session.ClientId, out ClientSession? current)
+                    && ReferenceEquals(current, session)
+                )
                     AdmitValidatedClient(session);
             });
             return;
         }
         lock (session.RelayLock)
-            session.Credential = new ClientCredential(session.AssertedServiceName ?? "Steam", session.ClientId,
+            session.Credential = new ClientCredential(
+                session.AssertedServiceName ?? "Steam",
+                session.ClientId,
                 session.TicketOwnerId == 0 ? session.ClientId : session.TicketOwnerId,
-                session.AssertedName ?? session.ClientId.ToString(), _admission.IsAdmin(session.ClientId));
+                session.AssertedName ?? session.ClientId.ToString(),
+                _admission.IsAdmin(session.ClientId)
+            );
         ClientCredential credential = session.Credential!;
-        Console.WriteLine($"Admitted {credential.ServiceName} client {credential.UserId} owner {credential.OwnerId}"
-            + $" name '{credential.Name}' admin {credential.IsAdmin}");
+        Console.WriteLine(
+            $"Admitted {credential.ServiceName} client {credential.UserId} owner {credential.OwnerId}"
+                + $" name '{credential.Name}' admin {credential.IsAdmin}"
+        );
         EndSteamReconnectStreak(credential.UserId);
         SteamPublishDirty();
-        if (_registry != null) BeginPlayerAdmission(session);
-        else lock (_pauseLock) { if (!RelayPaused) Attach(session, GetNodeLink(session.BackendEndpoint)); }
+        if (_registry != null)
+            BeginPlayerAdmission(session);
+        else
+            lock (_pauseLock)
+            {
+                if (!RelayPaused)
+                    Attach(session, GetNodeLink(session.BackendEndpoint));
+            }
     }
 
     /// <summary>
@@ -3622,309 +5474,474 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             session.DisconnectReason ??= "admission-" + reason;
         }
         _disconnects.Enqueue(new(session.ClientId, DateTimeOffset.UtcNow, "admission-" + reason));
-        while (_disconnects.Count > 100) _disconnects.TryDequeue(out _);
+        while (_disconnects.Count > 100)
+            _disconnects.TryDequeue(out _);
         if (channel?.Connected == true)
-            channel.Send(new GatewayPacket(session.ClientId, 2, VanillaJoinCodec.EncodeJoinResultFrame(reason),
-                DeliveryMethod.ReliableOrdered));
+            channel.Send(
+                new GatewayPacket(
+                    session.ClientId,
+                    2,
+                    VanillaJoinCodec.EncodeJoinResultFrame(reason),
+                    DeliveryMethod.ReliableOrdered
+                )
+            );
         RemoveSession(session);
         if (channel != null)
-            ThreadPool.QueueUserWorkItem(_ => { Thread.Sleep(250); channel.Disconnect(); });
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                Thread.Sleep(250);
+                channel.Disconnect();
+            });
     }
 
     private void BeginPlayerAdmission(ClientSession session)
     {
-		if (_registry == null) return;
-		// Security.md §3.2: a session in TicketPending has no validated credential to bind an identity
-		// from. The World Authority refresh sweep sees its CLIENT_CONNECTED and would otherwise race
-		// the ticket callback; the ticket path starts admission itself once the credential lands.
-		if (session.Credential == null) return;
-		if (!PlayerAdmissionRequired(session))
-		{
-			session.AdmissionState = "Disabled";
-			lock (_pauseLock)
-				if (!RelayPaused) Attach(session, GetNodeLink(session.BackendEndpoint));
-			return;
-		}
-		if (Interlocked.CompareExchange(ref session.AdmissionStarted, 1, 0) != 0) return;
-		bool refresh = session.PlayerReady != null;
-		long existingIdentityId = session.PlayerReady?.Identity.IdentityId ?? 0;
-		long existingGeneration = session.PlayerReady?.AuthorityGeneration ?? 0;
-		session.AdmissionState = refresh ? "Refreshing" : "Binding";
+        if (_registry == null)
+            return;
+        // Security.md §3.2: a session in TicketPending has no validated credential to bind an identity
+        // from. The World Authority refresh sweep sees its CLIENT_CONNECTED and would otherwise race
+        // the ticket callback; the ticket path starts admission itself once the credential lands.
+        if (session.Credential == null)
+            return;
+        if (!PlayerAdmissionRequired(session))
+        {
+            session.AdmissionState = "Disabled";
+            lock (_pauseLock)
+                if (!RelayPaused)
+                    Attach(session, GetNodeLink(session.BackendEndpoint));
+            return;
+        }
+        if (Interlocked.CompareExchange(ref session.AdmissionStarted, 1, 0) != 0)
+            return;
+        bool refresh = session.PlayerReady != null;
+        long existingIdentityId = session.PlayerReady?.Identity.IdentityId ?? 0;
+        long existingGeneration = session.PlayerReady?.AuthorityGeneration ?? 0;
+        session.AdmissionState = refresh ? "Refreshing" : "Binding";
         _ = Task.Run(async () =>
         {
             try
             {
                 WorldAuthority authority = _registry.WorldAuthority();
-                if (authority.Node == null || authority.Generation <= 0) throw new InvalidOperationException("World Authority is unavailable");
+                if (authority.Node == null || authority.Generation <= 0)
+                    throw new InvalidOperationException("World Authority is unavailable");
                 // ExpectedIdentityId tells a replacement World Authority which identity this session was
                 // granted under the previous generation, so it can restore the binding even when its
                 // journaled save predates the player's admission.
                 // Security.md §3.5: every field here comes from the credential the Gateway validated,
                 // never from client-asserted data - the identity is bound to the platform userId.
-                ClientCredential credential = session.Credential
+                ClientCredential credential =
+                    session.Credential
                     ?? throw new InvalidOperationException("Client has no validated credential");
-                var request = new PlayerBindingRequest(credential.ServiceName, credential.UserId, credential.OwnerId, 0,
-                    credential.Name, credential.IsAdmin, existingIdentityId);
-                string payload = await SendGatewayCommand(authority, "players", JsonSerializer.Serialize(request), session.AdmissionCancellation.Token);
-                GlobalCommandResult result = JsonSerializer.Deserialize<GlobalCommandResult>(payload)
+                var request = new PlayerBindingRequest(
+                    credential.ServiceName,
+                    credential.UserId,
+                    credential.OwnerId,
+                    0,
+                    credential.Name,
+                    credential.IsAdmin,
+                    existingIdentityId
+                );
+                string payload = await SendGatewayCommand(
+                    authority,
+                    "players",
+                    JsonSerializer.Serialize(request),
+                    session.AdmissionCancellation.Token
+                );
+                GlobalCommandResult result =
+                    JsonSerializer.Deserialize<GlobalCommandResult>(payload)
                     ?? throw new InvalidDataException("Empty player binding response");
-                if (!result.Success) throw new InvalidOperationException(result.Error);
-                PlayerReady ready = JsonSerializer.Deserialize<PlayerReady>(result.Payload)
+                if (!result.Success)
+                    throw new InvalidOperationException(result.Error);
+                PlayerReady ready =
+                    JsonSerializer.Deserialize<PlayerReady>(result.Payload)
                     ?? throw new InvalidDataException("Empty player readiness response");
                 WorldAuthority currentAuthority = _registry.WorldAuthority();
-                if (currentAuthority.Node != authority.Node || currentAuthority.Epoch != authority.Epoch
-                    || currentAuthority.Generation != authority.Generation || ready.AuthorityGeneration != authority.Generation
-                    || ready.ServiceName != request.ServiceName || ready.UserId != request.UserId || ready.OwnerId != request.OwnerId
-                    || ready.SerialId != request.SerialId || ready.IsAdmin != request.IsAdmin || ready.Identity.IdentityId <= 0
-					|| existingIdentityId != 0 && existingGeneration != authority.Generation
-						&& ready.Identity.IdentityId != existingIdentityId
-                    || ready.Identity.Name == null || ready.Identity.Name.Length > 256 || ready.Identity.Model?.Length > 256)
-                    throw new InvalidDataException("Player readiness response does not match the admission request");
-				lock (session.RelayLock)
-				{
-					session.PlayerReady = ready;
-					session.BindingRevision++;
-					session.AdmissionState = "Attaching";
-					session.AdmissionError = null;
-				}
-				Console.WriteLine($"Player binding granted client {session.ClientId} identity {ready.Identity.IdentityId} generation {ready.AuthorityGeneration}");
-				AttachGrantedPlayer(session);
+                if (
+                    currentAuthority.Node != authority.Node
+                    || currentAuthority.Epoch != authority.Epoch
+                    || currentAuthority.Generation != authority.Generation
+                    || ready.AuthorityGeneration != authority.Generation
+                    || ready.ServiceName != request.ServiceName
+                    || ready.UserId != request.UserId
+                    || ready.OwnerId != request.OwnerId
+                    || ready.SerialId != request.SerialId
+                    || ready.IsAdmin != request.IsAdmin
+                    || ready.Identity.IdentityId <= 0
+                    || existingIdentityId != 0
+                        && existingGeneration != authority.Generation
+                        && ready.Identity.IdentityId != existingIdentityId
+                    || ready.Identity.Name == null
+                    || ready.Identity.Name.Length > 256
+                    || ready.Identity.Model?.Length > 256
+                )
+                    throw new InvalidDataException(
+                        "Player readiness response does not match the admission request"
+                    );
+                lock (session.RelayLock)
+                {
+                    session.PlayerReady = ready;
+                    session.BindingRevision++;
+                    session.AdmissionState = "Attaching";
+                    session.AdmissionError = null;
+                }
+                Console.WriteLine(
+                    $"Player binding granted client {session.ClientId} identity {ready.Identity.IdentityId} generation {ready.AuthorityGeneration}"
+                );
+                AttachGrantedPlayer(session);
             }
             catch (OperationCanceledException) { }
             catch (Exception exception)
             {
-				session.AdmissionState = refresh ? "Stale" : "Rejected";
+                session.AdmissionState = refresh ? "Stale" : "Rejected";
                 session.AdmissionError = exception.Message;
-                Console.Error.WriteLine($"Player admission failed for {session.ClientId}: {exception.Message}");
-				if (refresh) Interlocked.Exchange(ref session.AdmissionStarted, 0);
-				else ForceReconnect(session, "player-admission-failed");
+                Console.Error.WriteLine(
+                    $"Player admission failed for {session.ClientId}: {exception.Message}"
+                );
+                if (refresh)
+                    Interlocked.Exchange(ref session.AdmissionStarted, 0);
+                else
+                    ForceReconnect(session, "player-admission-failed");
             }
         });
     }
 
-	private void RefreshPlayerAdmissions()
-	{
-		WorldAuthority authority = _registry!.WorldAuthority();
-		if (authority.Node == null || authority.Generation <= 0) return;
-		foreach (ClientSession session in _clients.Values)
-		{
-			bool refresh;
-			lock (session.RelayLock)
-			{
-				refresh = session.ClientConnectedPacket != null && session.Credential != null
-					&& (session.PlayerReady == null || session.PlayerReady.AuthorityGeneration != authority.Generation)
-					&& Volatile.Read(ref session.AdmissionStarted) == 0;
-				if (refresh)
-					session.AdmissionState = "Refreshing";
-			}
-			if (refresh) BeginPlayerAdmission(session);
-		}
-	}
-
-	private void UpdatePlayerBindings(string payload, long generation)
-	{
-		IdentityAuthoritySnapshot snapshot = JsonSerializer.Deserialize<IdentityAuthoritySnapshot>(payload)
-			?? throw new InvalidDataException("Empty identity snapshot");
-		Dictionary<long, IdentityAuthorityEntry> identities = snapshot.Identities.ToDictionary(identity => identity.IdentityId);
-		// Bindings indexed the same way the identities already were. The lookup below ran per connected
-		// client over the WHOLE binding table - which holds every player ever registered, not just the
-		// connected ones - on every identity broadcast from the World Authority.
-		Dictionary<(ulong UserId, int SerialId), PlayerBindingEntry> bindings = [];
-		foreach (PlayerBindingEntry entry in snapshot.Bindings) bindings[(entry.UserId, entry.SerialId)] = entry;
-		foreach (ClientSession session in _clients.Values)
-		{
-			bool attach;
-			lock (session.RelayLock)
-			{
-				PlayerReady? ready = session.PlayerReady;
-				if (ready == null || ready.AuthorityGeneration != generation) continue;
-				PlayerBindingEntry? binding = bindings.GetValueOrDefault((ready.UserId, ready.SerialId));
-				if (binding == null || !identities.TryGetValue(binding.IdentityId, out IdentityAuthorityEntry? identity)
-					|| ready.Identity == identity) continue;
-				session.PlayerReady = ready with { Identity = identity };
-				session.BindingRevision++;
-				session.AdmissionState = "Attaching";
-				attach = !session.SwitchingBackend;
-			}
-			if (attach)
-				lock (_pauseLock)
-					if (!RelayPaused) Attach(session, GetNodeLink(session.BackendEndpoint));
-		}
-	}
-
-	private bool AcceptIdentitySnapshot(long generation, long sequence)
-	{
-		lock (_identitySnapshotLock)
-		{
-			if (generation < _identitySnapshotGeneration
-				|| generation == _identitySnapshotGeneration && sequence <= _identitySnapshotSequence) return false;
-			_identitySnapshotGeneration = generation;
-			_identitySnapshotSequence = sequence;
-			return true;
-		}
-	}
-
-	/// <summary>
-	/// T-0357: what follows "Player binding granted". <see cref="RetryPlayerAttach"/> on EVERY outcome. Before, a
-	/// binding granted while the relay was paused or the backend was switching only set "Granted" and started
-	/// nothing: 2026-10-01 23:44:39 a Steam join was bound while the gateway was still --paused for the boot (the
-	/// CLI posts /resume when the node set has settled, 23:44:50), no Attach was sent, nothing was logged, and the
-	/// 10 s client backlog age force-reconnected it at 23:44:48.
-	/// SE1-0102: the retry sends the first Attach too, so the backlog age is held before it goes out. An Attach
-	/// sent here first left a gap until the retry started in which a backlogExpired ended the session at once.
-	/// </summary>
-	private void AttachGrantedPlayer(ClientSession session)
-	{
-		lock (_pauseLock)
-			if (RelayPaused || session.SwitchingBackend) session.AdmissionState = "Granted";
-		RetryPlayerAttach(session);
-	}
-
-	/// <summary>How long an admitted client may wait for its node's AttachAck outside a deliberate hold.</summary>
-	internal static TimeSpan AttachRetryTimeout = TimeSpan.FromSeconds(90);
-
-	/// <summary>
-	/// Why an admitted session is not attached right now; null = nothing to say (attached, or the Attach
-	/// was sent a moment ago). <paramref name="held"/>: a deliberate hold (the relay pause, a backend
-	/// switch), which its owner ends and which does not count against <see cref="AttachRetryTimeout"/>.
-	/// </summary>
-	private string? AttachWaitReason(ClientSession session, NodeLink link, TimeSpan waited, bool switchHold, out bool held)
-	{
-		held = true;
-		if (RelayPaused) return "held: the relay is paused";
-		if (switchHold) return "held: its backend is being switched";
-		held = false;
-		if (!link.IsConnected) return "not sent: node link not connected";
-		if (_registry != null && session.PlayerReady is PlayerReady ready
-			&& ready.AuthorityGeneration != _registry.WorldAuthorityGeneration)
-			return "not sent: its player binding is being refreshed for a new World Authority generation";
-		if (ReferenceEquals(session.AttachingLink, link))
-			return waited >= TimeSpan.FromSeconds(2) ? "sent, the node has not acknowledged it" : null;
-		// Whatever SendAttach named (and logged) itself.
-		return session.AttachSkipped is string skipped ? "not sent: " + skipped : null;
-	}
-
-	/// <summary>
-	/// T-0357: an admitted client is attached, or this keeps trying every 250 ms until the node acknowledges
-	/// (a duplicate Attach is re-acknowledged by the node), the session ends, or
-	/// <see cref="AttachRetryTimeout"/> of waiting outside a deliberate hold has passed. Every reason it waits is
-	/// logged once per session and reason, the timeout and an unexpected failure have their own lines. While it
-	/// runs the client backlog's age does not end the session (<see cref="ClientBacklogHeld"/>): the bound is this
-	/// deadline, not the 10 s that used to pre-empt it.
-	/// </summary>
-	/// <param name="detachedBy">The link whose node sent Detach: re-attached even during a backend switch, as
-	/// before (the switch waits for exactly that acknowledgement), until this retry ends. A granted binding is NOT
-	/// attached during a switch, also as before: the switch attaches its own target.</param>
-	private void RetryPlayerAttach(ClientSession session, NodeLink? detachedBy = null)
-	{
-		if (detachedBy != null) session.AttachRetryDetachedBy = detachedBy;
-		if (Interlocked.CompareExchange(ref session.AttachRetryStarted, 1, 0) != 0) return;
-		PushRouting(session);
-		_ = Task.Run(async () =>
-		{
-			NodeLink? link = null;
-			string? last = null;
-			try
-			{
-				Stopwatch waited = Stopwatch.StartNew();
-				DateTimeOffset deadline = DateTimeOffset.UtcNow + AttachRetryTimeout;
-				while (true)
-				{
-					if (!_clients.TryGetValue(session.ClientId, out ClientSession? current) || !ReferenceEquals(current, session)
-						|| session.DisconnectReason != null)
-						return;
-					link = session.Link ?? GetNodeLink(session.BackendEndpoint);
-					bool switchHold;
-					lock (_pauseLock)
-					{
-						switchHold = session.SwitchingBackend && !ReferenceEquals(session.AttachRetryDetachedBy, link);
-						if (!RelayPaused && !switchHold) Attach(session, link);
-					}
-					lock (session.RelayLock)
-						if (session.AdmissionState == "Ready"
-							|| ReferenceEquals(session.AttachedLink, link) && session.AttachedBindingRevision == session.BindingRevision)
-						{
-							if (session.AttachWaitLogged != null)
-								Console.WriteLine($"Attach of client {session.ClientId} to {link.Endpoint} acknowledged after {waited.Elapsed.TotalSeconds:0.0}s");
-							session.AttachWaitLogged = null;
-							return;
-						}
-					string? reason = AttachWaitReason(session, link, waited.Elapsed, switchHold, out bool held);
-					if (reason != null)
-					{
-						last = reason;
-						// SendAttach logs its own "not sent" reasons; the others are named here, once each.
-						if (session.AttachWaitLogged != reason && !(session.AttachSkipped is string skipped && reason == "not sent: " + skipped))
-							Console.WriteLine($"Attach of client {session.ClientId} to {link.Endpoint} {reason}; retrying");
-						session.AttachWaitLogged = reason;
-					}
-					if (held) deadline = DateTimeOffset.UtcNow + AttachRetryTimeout;
-					else if (DateTimeOffset.UtcNow >= deadline) break;
-					await Task.Delay(250, session.AdmissionCancellation.Token);
-				}
-				Console.WriteLine($"Attach of client {session.ClientId} to {link.Endpoint} timed out after {AttachRetryTimeout.TotalSeconds:0}s"
-					+ $" outside a hold ({last ?? "no reason seen"}); ending the session");
-				ForceReconnect(session, "player-admission-attach-timeout");
-			}
-			catch (OperationCanceledException) { }
-			// Attach() says so when the session ended under it: the disconnect has its own line.
-			catch (IOException) when (!_clients.TryGetValue(session.ClientId, out ClientSession? current) || !ReferenceEquals(current, session)) { }
-			catch (Exception exception)
-			{
-				// A retry that dies leaves an admitted client nobody attaches, and the backlog age no longer ends it.
-				Console.Error.WriteLine($"Attach retry of client {session.ClientId} to {link?.Endpoint} failed: {exception}");
-				ForceReconnect(session, "player-admission-attach-failed");
-			}
-			finally
-			{
-				// #1279: the exemption belongs to this retry. Left set, every later switch let a granted binding
-				// attach to that link mid-switch. Cleared before the retry is released, so a new one starts clean.
-				session.AttachRetryDetachedBy = null;
-				Interlocked.Exchange(ref session.AttachRetryStarted, 0);
-				PushRouting(session);
-			}
-		});
-	}
-
-	/// <summary>
-	/// T-0357: the client backlog's age is evidence of a stuck client only when nothing is deliberately holding
-	/// it. Held = the relay pause or a backend switch (what the relay itself already exempts when a packet arrives
-	/// in the hold) or an attach that is still being retried, which <see cref="RetryPlayerAttach"/> bounds. Says
-	/// so once per session and reason. External relay only.
-	/// </summary>
-	private bool ClientBacklogHeld(ClientSession session)
-	{
-		string? reason = RelayPaused ? "the relay is paused"
-			: session.SwitchingBackend ? "its backend is being switched"
-			: Volatile.Read(ref session.AttachRetryStarted) != 0 ? "its attach is still being retried"
-			: null;
-		if (reason != null && session.BacklogHoldLogged != reason)
-			Console.WriteLine($"Client {session.ClientId} backlog age not enforced: {reason}");
-		session.BacklogHoldLogged = reason;
-		return reason != null;
-	}
-
-    private async Task<string> SendGatewayCommand(WorldAuthority authority, string subsystem, string payload, CancellationToken cancellationToken,
-        Guid? stableOperationId = null)
+    private void RefreshPlayerAdmissions()
     {
-        NodeRegistration wa = _registry!.Nodes().Single(node => node.Node == authority.Node && node.Epoch == authority.Epoch
-            && node.Role == NodeRole.WA && node.State == NodeState.Active);
-        NodeLink link = GetNodeLink(EndpointParser.Parse(wa.Endpoint, DirectTransportConstants.DefaultPort));
+        WorldAuthority authority = _registry!.WorldAuthority();
+        if (authority.Node == null || authority.Generation <= 0)
+            return;
+        foreach (ClientSession session in _clients.Values)
+        {
+            bool refresh;
+            lock (session.RelayLock)
+            {
+                refresh =
+                    session.ClientConnectedPacket != null
+                    && session.Credential != null
+                    && (
+                        session.PlayerReady == null
+                        || session.PlayerReady.AuthorityGeneration != authority.Generation
+                    )
+                    && Volatile.Read(ref session.AdmissionStarted) == 0;
+                if (refresh)
+                    session.AdmissionState = "Refreshing";
+            }
+            if (refresh)
+                BeginPlayerAdmission(session);
+        }
+    }
+
+    private void UpdatePlayerBindings(string payload, long generation)
+    {
+        IdentityAuthoritySnapshot snapshot =
+            JsonSerializer.Deserialize<IdentityAuthoritySnapshot>(payload)
+            ?? throw new InvalidDataException("Empty identity snapshot");
+        Dictionary<long, IdentityAuthorityEntry> identities = snapshot.Identities.ToDictionary(
+            identity => identity.IdentityId
+        );
+        // Bindings indexed the same way the identities already were. The lookup below ran per connected
+        // client over the WHOLE binding table - which holds every player ever registered, not just the
+        // connected ones - on every identity broadcast from the World Authority.
+        Dictionary<(ulong UserId, int SerialId), PlayerBindingEntry> bindings = [];
+        foreach (PlayerBindingEntry entry in snapshot.Bindings)
+            bindings[(entry.UserId, entry.SerialId)] = entry;
+        foreach (ClientSession session in _clients.Values)
+        {
+            bool attach;
+            lock (session.RelayLock)
+            {
+                PlayerReady? ready = session.PlayerReady;
+                if (ready == null || ready.AuthorityGeneration != generation)
+                    continue;
+                PlayerBindingEntry? binding = bindings.GetValueOrDefault(
+                    (ready.UserId, ready.SerialId)
+                );
+                if (
+                    binding == null
+                    || !identities.TryGetValue(
+                        binding.IdentityId,
+                        out IdentityAuthorityEntry? identity
+                    )
+                    || ready.Identity == identity
+                )
+                    continue;
+                session.PlayerReady = ready with { Identity = identity };
+                session.BindingRevision++;
+                session.AdmissionState = "Attaching";
+                attach = !session.SwitchingBackend;
+            }
+            if (attach)
+                lock (_pauseLock)
+                    if (!RelayPaused)
+                        Attach(session, GetNodeLink(session.BackendEndpoint));
+        }
+    }
+
+    private bool AcceptIdentitySnapshot(long generation, long sequence)
+    {
+        lock (_identitySnapshotLock)
+        {
+            if (
+                generation < _identitySnapshotGeneration
+                || generation == _identitySnapshotGeneration
+                    && sequence <= _identitySnapshotSequence
+            )
+                return false;
+            _identitySnapshotGeneration = generation;
+            _identitySnapshotSequence = sequence;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// T-0357: what follows "Player binding granted". <see cref="RetryPlayerAttach"/> on EVERY outcome. Before, a
+    /// binding granted while the relay was paused or the backend was switching only set "Granted" and started
+    /// nothing: 2026-10-01 23:44:39 a Steam join was bound while the gateway was still --paused for the boot (the
+    /// CLI posts /resume when the node set has settled, 23:44:50), no Attach was sent, nothing was logged, and the
+    /// 10 s client backlog age force-reconnected it at 23:44:48.
+    /// SE1-0102: the retry sends the first Attach too, so the backlog age is held before it goes out. An Attach
+    /// sent here first left a gap until the retry started in which a backlogExpired ended the session at once.
+    /// </summary>
+    private void AttachGrantedPlayer(ClientSession session)
+    {
+        lock (_pauseLock)
+            if (RelayPaused || session.SwitchingBackend)
+                session.AdmissionState = "Granted";
+        RetryPlayerAttach(session);
+    }
+
+    /// <summary>How long an admitted client may wait for its node's AttachAck outside a deliberate hold.</summary>
+    internal static TimeSpan AttachRetryTimeout = TimeSpan.FromSeconds(90);
+
+    /// <summary>
+    /// Why an admitted session is not attached right now; null = nothing to say (attached, or the Attach
+    /// was sent a moment ago). <paramref name="held"/>: a deliberate hold (the relay pause, a backend
+    /// switch), which its owner ends and which does not count against <see cref="AttachRetryTimeout"/>.
+    /// </summary>
+    private string? AttachWaitReason(
+        ClientSession session,
+        NodeLink link,
+        TimeSpan waited,
+        bool switchHold,
+        out bool held
+    )
+    {
+        held = true;
+        if (RelayPaused)
+            return "held: the relay is paused";
+        if (switchHold)
+            return "held: its backend is being switched";
+        held = false;
+        if (!link.IsConnected)
+            return "not sent: node link not connected";
+        if (
+            _registry != null
+            && session.PlayerReady is PlayerReady ready
+            && ready.AuthorityGeneration != _registry.WorldAuthorityGeneration
+        )
+            return "not sent: its player binding is being refreshed for a new World Authority generation";
+        if (ReferenceEquals(session.AttachingLink, link))
+            return waited >= TimeSpan.FromSeconds(2)
+                ? "sent, the node has not acknowledged it"
+                : null;
+        // Whatever SendAttach named (and logged) itself.
+        return session.AttachSkipped is string skipped ? "not sent: " + skipped : null;
+    }
+
+    /// <summary>
+    /// T-0357: an admitted client is attached, or this keeps trying every 250 ms until the node acknowledges
+    /// (a duplicate Attach is re-acknowledged by the node), the session ends, or
+    /// <see cref="AttachRetryTimeout"/> of waiting outside a deliberate hold has passed. Every reason it waits is
+    /// logged once per session and reason, the timeout and an unexpected failure have their own lines. While it
+    /// runs the client backlog's age does not end the session (<see cref="ClientBacklogHeld"/>): the bound is this
+    /// deadline, not the 10 s that used to pre-empt it.
+    /// </summary>
+    /// <param name="detachedBy">The link whose node sent Detach: re-attached even during a backend switch, as
+    /// before (the switch waits for exactly that acknowledgement), until this retry ends. A granted binding is NOT
+    /// attached during a switch, also as before: the switch attaches its own target.</param>
+    private void RetryPlayerAttach(ClientSession session, NodeLink? detachedBy = null)
+    {
+        if (detachedBy != null)
+            session.AttachRetryDetachedBy = detachedBy;
+        if (Interlocked.CompareExchange(ref session.AttachRetryStarted, 1, 0) != 0)
+            return;
+        PushRouting(session);
+        _ = Task.Run(async () =>
+        {
+            NodeLink? link = null;
+            string? last = null;
+            try
+            {
+                Stopwatch waited = Stopwatch.StartNew();
+                DateTimeOffset deadline = DateTimeOffset.UtcNow + AttachRetryTimeout;
+                while (true)
+                {
+                    if (
+                        !_clients.TryGetValue(session.ClientId, out ClientSession? current)
+                        || !ReferenceEquals(current, session)
+                        || session.DisconnectReason != null
+                    )
+                        return;
+                    link = session.Link ?? GetNodeLink(session.BackendEndpoint);
+                    bool switchHold;
+                    lock (_pauseLock)
+                    {
+                        switchHold =
+                            session.SwitchingBackend
+                            && !ReferenceEquals(session.AttachRetryDetachedBy, link);
+                        if (!RelayPaused && !switchHold)
+                            Attach(session, link);
+                    }
+                    lock (session.RelayLock)
+                        if (
+                            session.AdmissionState == "Ready"
+                            || ReferenceEquals(session.AttachedLink, link)
+                                && session.AttachedBindingRevision == session.BindingRevision
+                        )
+                        {
+                            if (session.AttachWaitLogged != null)
+                                Console.WriteLine(
+                                    $"Attach of client {session.ClientId} to {link.Endpoint} acknowledged after {waited.Elapsed.TotalSeconds:0.0}s"
+                                );
+                            session.AttachWaitLogged = null;
+                            return;
+                        }
+                    string? reason = AttachWaitReason(
+                        session,
+                        link,
+                        waited.Elapsed,
+                        switchHold,
+                        out bool held
+                    );
+                    if (reason != null)
+                    {
+                        last = reason;
+                        // SendAttach logs its own "not sent" reasons; the others are named here, once each.
+                        if (
+                            session.AttachWaitLogged != reason
+                            && !(
+                                session.AttachSkipped is string skipped
+                                && reason == "not sent: " + skipped
+                            )
+                        )
+                            Console.WriteLine(
+                                $"Attach of client {session.ClientId} to {link.Endpoint} {reason}; retrying"
+                            );
+                        session.AttachWaitLogged = reason;
+                    }
+                    if (held)
+                        deadline = DateTimeOffset.UtcNow + AttachRetryTimeout;
+                    else if (DateTimeOffset.UtcNow >= deadline)
+                        break;
+                    await Task.Delay(250, session.AdmissionCancellation.Token);
+                }
+                Console.WriteLine(
+                    $"Attach of client {session.ClientId} to {link.Endpoint} timed out after {AttachRetryTimeout.TotalSeconds:0}s"
+                        + $" outside a hold ({last ?? "no reason seen"}); ending the session"
+                );
+                ForceReconnect(session, "player-admission-attach-timeout");
+            }
+            catch (OperationCanceledException) { }
+            // Attach() says so when the session ended under it: the disconnect has its own line.
+            catch (IOException)
+                when (!_clients.TryGetValue(session.ClientId, out ClientSession? current)
+                    || !ReferenceEquals(current, session)
+                ) { }
+            catch (Exception exception)
+            {
+                // A retry that dies leaves an admitted client nobody attaches, and the backlog age no longer ends it.
+                Console.Error.WriteLine(
+                    $"Attach retry of client {session.ClientId} to {link?.Endpoint} failed: {exception}"
+                );
+                ForceReconnect(session, "player-admission-attach-failed");
+            }
+            finally
+            {
+                // #1279: the exemption belongs to this retry. Left set, every later switch let a granted binding
+                // attach to that link mid-switch. Cleared before the retry is released, so a new one starts clean.
+                session.AttachRetryDetachedBy = null;
+                Interlocked.Exchange(ref session.AttachRetryStarted, 0);
+                PushRouting(session);
+            }
+        });
+    }
+
+    /// <summary>
+    /// T-0357: the client backlog's age is evidence of a stuck client only when nothing is deliberately holding
+    /// it. Held = the relay pause or a backend switch (what the relay itself already exempts when a packet arrives
+    /// in the hold) or an attach that is still being retried, which <see cref="RetryPlayerAttach"/> bounds. Says
+    /// so once per session and reason. External relay only.
+    /// </summary>
+    private bool ClientBacklogHeld(ClientSession session)
+    {
+        string? reason =
+            RelayPaused ? "the relay is paused"
+            : session.SwitchingBackend ? "its backend is being switched"
+            : Volatile.Read(ref session.AttachRetryStarted) != 0
+                ? "its attach is still being retried"
+            : null;
+        if (reason != null && session.BacklogHoldLogged != reason)
+            Console.WriteLine($"Client {session.ClientId} backlog age not enforced: {reason}");
+        session.BacklogHoldLogged = reason;
+        return reason != null;
+    }
+
+    private async Task<string> SendGatewayCommand(
+        WorldAuthority authority,
+        string subsystem,
+        string payload,
+        CancellationToken cancellationToken,
+        Guid? stableOperationId = null
+    )
+    {
+        NodeRegistration wa = _registry!
+            .Nodes()
+            .Single(node =>
+                node.Node == authority.Node
+                && node.Epoch == authority.Epoch
+                && node.Role == NodeRole.WA
+                && node.State == NodeState.Active
+            );
+        NodeLink link = GetNodeLink(
+            EndpointParser.Parse(wa.Endpoint, DirectTransportConstants.DefaultPort)
+        );
         ConnectBackend(link);
-        if (!link.Connected.Wait(TimeSpan.FromSeconds(10), cancellationToken)) throw new TimeoutException("Timed out connecting to the World Authority");
+        if (!link.Connected.Wait(TimeSpan.FromSeconds(10), cancellationToken))
+            throw new TimeoutException("Timed out connecting to the World Authority");
         long sequence = Interlocked.Increment(ref _gatewayCommandSequence);
-		Guid operationId = stableOperationId ?? Guid.NewGuid();
-		var pending = new PendingGatewayCommand(authority.Generation, subsystem, operationId,
-			new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously));
-        if (!_gatewayCommands.TryAdd(sequence, pending)) throw new InvalidOperationException("Duplicate Gateway command sequence");
+        Guid operationId = stableOperationId ?? Guid.NewGuid();
+        var pending = new PendingGatewayCommand(
+            authority.Generation,
+            subsystem,
+            operationId,
+            new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously)
+        );
+        if (!_gatewayCommands.TryAdd(sequence, pending))
+            throw new InvalidOperationException("Duplicate Gateway command sequence");
         try
         {
-            byte[] envelope = JsonSerializer.SerializeToUtf8Bytes(new GlobalEnvelope("Command", authority.Generation, subsystem,
-				sequence, "$gateway", null, payload, operationId));
+            byte[] envelope = JsonSerializer.SerializeToUtf8Bytes(
+                new GlobalEnvelope(
+                    "Command",
+                    authority.Generation,
+                    subsystem,
+                    sequence,
+                    "$gateway",
+                    null,
+                    payload,
+                    operationId
+                )
+            );
             SendGlobal(link, envelope, DeliveryMethod.ReliableUnordered);
-			return await pending.Completion.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+            return await pending.Completion.Task.WaitAsync(
+                TimeSpan.FromSeconds(10),
+                cancellationToken
+            );
         }
-        finally { _gatewayCommands.TryRemove(sequence, out _); }
+        finally
+        {
+            _gatewayCommands.TryRemove(sequence, out _);
+        }
     }
 
     private void ConnectBackend(NodeLink link)
@@ -3932,7 +5949,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         if (link.External)
         {
             if (!link.ExternalConnected)
-                try { _relay?.Send(RelayIpcType.EnsureLink, 0, new { endpoint = link.Endpoint.ToString() }); }
+                try
+                {
+                    _relay?.Send(
+                        RelayIpcType.EnsureLink,
+                        0,
+                        new { endpoint = link.Endpoint.ToString() }
+                    );
+                }
                 catch (IOException) { }
             return;
         }
@@ -3941,8 +5965,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             if (link.Peer?.ConnectionState is ConnectionState.Connected or ConnectionState.Outgoing)
                 return;
             link.Connected.Reset();
-            link.Peer = _back.Connect(link.Endpoint.Address.ToString(), link.Endpoint.Port,
-                DirectTransportCodec.EncodeNodeLinkHandshake(_options.JoinToken ?? string.Empty));
+            link.Peer = _back.Connect(
+                link.Endpoint.Address.ToString(),
+                link.Endpoint.Port,
+                DirectTransportCodec.EncodeNodeLinkHandshake(_options.JoinToken ?? string.Empty)
+            );
             link.Peer.Tag = link;
         }
     }
@@ -3951,7 +5978,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         lock (session.RelayLock)
         {
-            if (!_clients.TryGetValue(session.ClientId, out ClientSession? current) || !ReferenceEquals(current, session))
+            if (
+                !_clients.TryGetValue(session.ClientId, out ClientSession? current)
+                || !ReferenceEquals(current, session)
+            )
                 throw new IOException("Client disconnected during backend attach");
             link.Clients[session.ClientId] = session;
             session.Link = link;
@@ -3968,11 +5998,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         bool completed = false;
         try
         {
-			if (ownsSwitch)
-			{
-				EnsurePlayerAdmissionReady(session);
-				session.SwitchingBackend = true;
-			}
+            if (ownsSwitch)
+            {
+                EnsurePlayerAdmissionReady(session);
+                session.SwitchingBackend = true;
+            }
             NodeLink target = GetNodeLink(backend);
             ConnectBackend(target);
             if (!target.Connected.Wait(10000))
@@ -3988,7 +6018,9 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             if (source != null && !ReferenceEquals(source, target))
             {
                 if (SendDetach(source, session) && !session.DetachCompleted.Wait(10000))
-                    throw new TimeoutException("Timed out detaching source backend " + source.Endpoint);
+                    throw new TimeoutException(
+                        "Timed out detaching source backend " + source.Endpoint
+                    );
                 source.Clients.TryRemove(session.ClientId, out _);
             }
             lock (target.Sync)
@@ -3996,142 +6028,196 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 if (!target.IsConnected)
                     throw new IOException("Backend disconnected during switch " + backend);
             }
-			DateTimeOffset attachDeadline = DateTimeOffset.UtcNow.AddSeconds(10);
-			while (true)
-			{
-				Attach(session, target);
-				TimeSpan remaining = attachDeadline - DateTimeOffset.UtcNow;
-				if (remaining <= TimeSpan.Zero || !session.AttachCompleted.Wait(remaining))
-					throw new IOException("Backend failed to attach client during switch " + backend);
-				lock (session.RelayLock)
-					if (ReferenceEquals(session.AttachedLink, target)
-						&& session.AttachedBindingRevision == session.BindingRevision) break;
-			}
+            DateTimeOffset attachDeadline = DateTimeOffset.UtcNow.AddSeconds(10);
+            while (true)
+            {
+                Attach(session, target);
+                TimeSpan remaining = attachDeadline - DateTimeOffset.UtcNow;
+                if (remaining <= TimeSpan.Zero || !session.AttachCompleted.Wait(remaining))
+                    throw new IOException(
+                        "Backend failed to attach client during switch " + backend
+                    );
+                lock (session.RelayLock)
+                    if (
+                        ReferenceEquals(session.AttachedLink, target)
+                        && session.AttachedBindingRevision == session.BindingRevision
+                    )
+                        break;
+            }
             completed = true;
         }
         finally
         {
             if (ownsSwitch)
             {
-				bool healthy = FinishSwitching(session, () =>
-				{
-					if (RouteHealthy(session)) FlushClientBacklog(session);
-				});
+                bool healthy = FinishSwitching(
+                    session,
+                    () =>
+                    {
+                        if (RouteHealthy(session))
+                            FlushClientBacklog(session);
+                    }
+                );
                 if (!healthy)
                     session.Client?.Disconnect();
                 if (completed && !healthy)
-                    throw new IOException("Backend disconnected while completing switch " + backend);
+                    throw new IOException(
+                        "Backend disconnected while completing switch " + backend
+                    );
             }
         }
     }
 
-	private void EnsurePlayerAdmissionReady(ClientSession session)
-	{
-		if (_registry == null || !PlayerAdmissionRequired(session)) return;
-		if (Volatile.Read(ref session.AdmissionStarted) == 0) BeginPlayerAdmission(session);
-		DateTimeOffset deadline = DateTimeOffset.UtcNow.AddSeconds(90);
-		while (DateTimeOffset.UtcNow < deadline)
-		{
-			WorldAuthority authority = _registry.WorldAuthority();
-			if (authority.Node != null && session.PlayerReady is PlayerReady ready
-				&& ready.AuthorityGeneration == authority.Generation && session.AdmissionState == "Ready"
-				&& session.AttachedBindingRevision == session.BindingRevision
-				&& session.AttachedAdmissionGeneration == ready.AuthorityGeneration
-				&& session.AttachedIdentityId == ready.Identity.IdentityId) return;
-			if (authority.Node != null && Volatile.Read(ref session.AdmissionStarted) == 0) BeginPlayerAdmission(session);
-			if (session.Client?.Connected != true)
-				throw new IOException("Client disconnected while waiting for current World Authority admission");
-			Thread.Sleep(50);
-		}
-		throw new TimeoutException("Timed out waiting for current World Authority player admission");
-	}
+    private void EnsurePlayerAdmissionReady(ClientSession session)
+    {
+        if (_registry == null || !PlayerAdmissionRequired(session))
+            return;
+        if (Volatile.Read(ref session.AdmissionStarted) == 0)
+            BeginPlayerAdmission(session);
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.AddSeconds(90);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            WorldAuthority authority = _registry.WorldAuthority();
+            if (
+                authority.Node != null
+                && session.PlayerReady is PlayerReady ready
+                && ready.AuthorityGeneration == authority.Generation
+                && session.AdmissionState == "Ready"
+                && session.AttachedBindingRevision == session.BindingRevision
+                && session.AttachedAdmissionGeneration == ready.AuthorityGeneration
+                && session.AttachedIdentityId == ready.Identity.IdentityId
+            )
+                return;
+            if (authority.Node != null && Volatile.Read(ref session.AdmissionStarted) == 0)
+                BeginPlayerAdmission(session);
+            if (session.Client?.Connected != true)
+                throw new IOException(
+                    "Client disconnected while waiting for current World Authority admission"
+                );
+            Thread.Sleep(50);
+        }
+        throw new TimeoutException(
+            "Timed out waiting for current World Authority player admission"
+        );
+    }
 
-	private bool PlayerAdmissionRequired(ClientSession session) =>
-		_registry != null && (_registry.WorldAuthorityGeneration > 0 || session.PlayerReady != null);
+    private bool PlayerAdmissionRequired(ClientSession session) =>
+        _registry != null
+        && (_registry.WorldAuthorityGeneration > 0 || session.PlayerReady != null);
 
-	private bool AttachedBindingCurrent(ClientSession session)
-	{
-		if (!PlayerAdmissionRequired(session)) return true;
-		// Lock-free: this runs for every client-to-node packet (see WorldAuthorityGeneration).
-		long generation = _registry!.WorldAuthorityGeneration;
-		return session.PlayerReady is PlayerReady ready && ready.AuthorityGeneration == generation
-			&& session.AttachedBindingRevision == session.BindingRevision
-			&& session.AttachedAdmissionGeneration == ready.AuthorityGeneration
-			&& session.AttachedIdentityId == ready.Identity.IdentityId;
-	}
+    private bool AttachedBindingCurrent(ClientSession session)
+    {
+        if (!PlayerAdmissionRequired(session))
+            return true;
+        // Lock-free: this runs for every client-to-node packet (see WorldAuthorityGeneration).
+        long generation = _registry!.WorldAuthorityGeneration;
+        return session.PlayerReady is PlayerReady ready
+            && ready.AuthorityGeneration == generation
+            && session.AttachedBindingRevision == session.BindingRevision
+            && session.AttachedAdmissionGeneration == ready.AuthorityGeneration
+            && session.AttachedIdentityId == ready.Identity.IdentityId;
+    }
 
-	// A fully attached session stays routable while an authority replacement refreshes its
-	// admission: the node already acknowledged this client under this identity, the admission
-	// validation rejects any identity change across generations, and the backend link is
-	// unchanged — so the packets go to the same node under the same identity either way.
-	// Buffering them instead would overflow ClientBacklog during the outage window and turn a
-	// World Authority outage into a client disconnect.
-	private bool AttachedBindingRoutable(ClientSession session)
-	{
-		if (AttachedBindingCurrent(session)) return true;
-		return session.PlayerReady is PlayerReady ready
-			&& session.AttachedIdentityId != 0
-			&& session.AttachedIdentityId == ready.Identity.IdentityId;
-	}
+    // A fully attached session stays routable while an authority replacement refreshes its
+    // admission: the node already acknowledged this client under this identity, the admission
+    // validation rejects any identity change across generations, and the backend link is
+    // unchanged — so the packets go to the same node under the same identity either way.
+    // Buffering them instead would overflow ClientBacklog during the outage window and turn a
+    // World Authority outage into a client disconnect.
+    private bool AttachedBindingRoutable(ClientSession session)
+    {
+        if (AttachedBindingCurrent(session))
+            return true;
+        return session.PlayerReady is PlayerReady ready
+            && session.AttachedIdentityId != 0
+            && session.AttachedIdentityId == ready.Identity.IdentityId;
+    }
 
-	private void EnsureAttachedBindingCurrent(ClientSession session)
-	{
-		DateTimeOffset deadline = DateTimeOffset.UtcNow.AddSeconds(10);
-		while (true)
-		{
-			NodeLink? link;
-			lock (session.RelayLock)
-			{
-				if (AttachedBindingCurrent(session)) return;
-				link = session.Link;
-			}
-			if (link == null) throw new IOException("Client has no backend for player admission");
-			if (session.PlayerReady?.AuthorityGeneration != _registry!.WorldAuthority().Generation)
-				EnsurePlayerAdmissionReady(session);
-			else
-				Attach(session, link);
-			TimeSpan remaining = deadline - DateTimeOffset.UtcNow;
-			if (remaining <= TimeSpan.Zero || !session.AttachCompleted.Wait(remaining))
-				throw new TimeoutException("Timed out attaching the current player binding");
-		}
-	}
+    private void EnsureAttachedBindingCurrent(ClientSession session)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (true)
+        {
+            NodeLink? link;
+            lock (session.RelayLock)
+            {
+                if (AttachedBindingCurrent(session))
+                    return;
+                link = session.Link;
+            }
+            if (link == null)
+                throw new IOException("Client has no backend for player admission");
+            if (session.PlayerReady?.AuthorityGeneration != _registry!.WorldAuthority().Generation)
+                EnsurePlayerAdmissionReady(session);
+            else
+                Attach(session, link);
+            TimeSpan remaining = deadline - DateTimeOffset.UtcNow;
+            if (remaining <= TimeSpan.Zero || !session.AttachCompleted.Wait(remaining))
+                throw new TimeoutException("Timed out attaching the current player binding");
+        }
+    }
 
-	private bool FinishSwitching(ClientSession session, Action completion)
-		=> FinishSwitching(session.RelayLock, () => RouteHealthy(session), () => EnsureAttachedBindingCurrent(session),
-			() => AttachedBindingCurrent(session), () => session.SwitchingBackend = false, completion,
-			failure => Console.WriteLine($"Client {session.ClientId} could not re-attach its player binding while completing a switch: "
-				+ $"{failure.Message}; ending the switch as unhealthy"));
+    private bool FinishSwitching(ClientSession session, Action completion) =>
+        FinishSwitching(
+            session.RelayLock,
+            () => RouteHealthy(session),
+            () => EnsureAttachedBindingCurrent(session),
+            () => AttachedBindingCurrent(session),
+            () => session.SwitchingBackend = false,
+            completion,
+            failure =>
+                Console.WriteLine(
+                    $"Client {session.ClientId} could not re-attach its player binding while completing a switch: "
+                        + $"{failure.Message}; ending the switch as unhealthy"
+                )
+        );
 
-	/// <summary>
-	/// The end of every backend switch: clears <c>SwitchingBackend</c> and runs <paramref name="completion"/> under
-	/// the relay lock; false when the route is not healthy (the caller disconnects the client).
-	/// </summary>
-	internal static bool FinishSwitching(object relayLock, Func<bool> routeHealthy, Action ensureBindingCurrent,
-		Func<bool> bindingCurrent, Action clearSwitching, Action completion, Action<Exception> report)
-	{
-		while (true)
-		{
-			bool healthy;
-			lock (relayLock) healthy = routeHealthy();
-			// T-0296 r3: the re-attach throws when the binding cannot be made current in time (the World Authority
-			// replaced or away while the switch completes). The switch still has to END: the exception used to leave
-			// SwitchingBackend set, so the relay kept buffering the client both ways with the backlog age bound off,
-			// the rest of a crew was never un-frozen, and RespawnSwitch never released its SwitchLock.
-			Exception? failure = null;
-			if (healthy)
-				try { ensureBindingCurrent(); }
-				catch (Exception e) { failure = e; }
-			lock (relayLock)
-			{
-				healthy = failure == null && routeHealthy();
-				if (failure != null) report(failure);
-				if (healthy && !bindingCurrent()) continue;
-				clearSwitching();
-				completion();
-				return healthy;
-			}
-		}
-	}
+    /// <summary>
+    /// The end of every backend switch: clears <c>SwitchingBackend</c> and runs <paramref name="completion"/> under
+    /// the relay lock; false when the route is not healthy (the caller disconnects the client).
+    /// </summary>
+    internal static bool FinishSwitching(
+        object relayLock,
+        Func<bool> routeHealthy,
+        Action ensureBindingCurrent,
+        Func<bool> bindingCurrent,
+        Action clearSwitching,
+        Action completion,
+        Action<Exception> report
+    )
+    {
+        while (true)
+        {
+            bool healthy;
+            lock (relayLock)
+                healthy = routeHealthy();
+            // T-0296 r3: the re-attach throws when the binding cannot be made current in time (the World Authority
+            // replaced or away while the switch completes). The switch still has to END: the exception used to leave
+            // SwitchingBackend set, so the relay kept buffering the client both ways with the backlog age bound off,
+            // the rest of a crew was never un-frozen, and RespawnSwitch never released its SwitchLock.
+            Exception? failure = null;
+            if (healthy)
+                try
+                {
+                    ensureBindingCurrent();
+                }
+                catch (Exception e)
+                {
+                    failure = e;
+                }
+            lock (relayLock)
+            {
+                healthy = failure == null && routeHealthy();
+                if (failure != null)
+                    report(failure);
+                if (healthy && !bindingCurrent())
+                    continue;
+                clearSwitching();
+                completion();
+                return healthy;
+            }
+        }
+    }
 
     private void StartControl()
     {
@@ -4141,16 +6227,23 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         _control = new HttpListener();
         // T-0321: a LAN --control also listens on 127.0.0.1:<port>, so every loopback tool keeps working unchanged;
         // the credential is decided per request from the prefix it arrived on (LoopbackExempt).
-        string[] prefixes = ClusterProtocol.ClusterNet.ControlPrefixes(_options.Control.Address, _options.Control.Port, "/");
-        foreach (string prefix in prefixes) _control.Prefixes.Add(prefix);
+        string[] prefixes = ClusterProtocol.ClusterNet.ControlPrefixes(
+            _options.Control.Address,
+            _options.Control.Port,
+            "/"
+        );
+        foreach (string prefix in prefixes)
+            _control.Prefixes.Add(prefix);
         _control.Start();
         // T-0324: without TCP_NODELAY a 16-65 KB Content-Length response (or a chunked tail) waited ~44 ms for the
         // client's delayed ACK on a same-host kept-alive connection.
         ClusterProtocol.HttpListenerNoDelay.Apply(_control, Console.WriteLine);
         _controlThread = new Thread(ControlLoop) { Name = "Gateway-Control", IsBackground = true };
         _controlThread.Start();
-        Console.WriteLine($"Gateway control listening on {_options.Control}"
-            + (prefixes.Length > 1 ? $" and 127.0.0.1:{_options.Control.Port} (loopback)" : ""));
+        Console.WriteLine(
+            $"Gateway control listening on {_options.Control}"
+                + (prefixes.Length > 1 ? $" and 127.0.0.1:{_options.Control.Port} (loopback)" : "")
+        );
     }
 
     internal CostModel CurrentCostModel => _costModel;
@@ -4174,43 +6267,87 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 HttpListenerContext context = _control.GetContext();
                 ThreadPool.QueueUserWorkItem(_ =>
                 {
-                    try { HandleControl(context); }
-                    catch (Exception e) { Console.Error.WriteLine("Control request failed: " + e); }
+                    try
+                    {
+                        HandleControl(context);
+                    }
+                    catch (Exception e)
+                    {
+                        Console.Error.WriteLine("Control request failed: " + e);
+                    }
                 });
             }
-            catch (HttpListenerException) { return; }
-            catch (Exception e) { Console.Error.WriteLine("Control failed: " + e); }
+            catch (HttpListenerException)
+            {
+                return;
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("Control failed: " + e);
+            }
         }
     }
 
     private void HandleControl(HttpListenerContext context)
     {
         // T-0411: a request the listener already refused with 411 must not run: the caller was told it failed.
-        if (ClusterProtocol.HttpListenerLengthRequired.AlreadyAnswered(context.Request.HttpMethod,
-                context.Request.Headers["Content-Length"], context.Request.Headers["Transfer-Encoding"]))
+        if (
+            ClusterProtocol.HttpListenerLengthRequired.AlreadyAnswered(
+                context.Request.HttpMethod,
+                context.Request.Headers["Content-Length"],
+                context.Request.Headers["Transfer-Encoding"]
+            )
+        )
         {
-            Console.Error.WriteLine("Control request refused: "
-                + ClusterProtocol.HttpListenerLengthRequired.Describe(context.Request.HttpMethod, context.Request.Url?.AbsolutePath));
+            Console.Error.WriteLine(
+                "Control request refused: "
+                    + ClusterProtocol.HttpListenerLengthRequired.Describe(
+                        context.Request.HttpMethod,
+                        context.Request.Url?.AbsolutePath
+                    )
+            );
             return;
         }
         try
         {
             string path = context.Request.Url?.AbsolutePath.TrimEnd('/') ?? string.Empty;
-            try { _registry?.EnsurePersistenceHealthy(); }
+            try
+            {
+                _registry?.EnsurePersistenceHealthy();
+            }
             catch (IOException)
             {
-                WriteAdminError(context, 503, "registry_persistence_failed", "Registry requires restart and durable recovery.");
+                WriteAdminError(
+                    context,
+                    503,
+                    "registry_persistence_failed",
+                    "Registry requires restart and durable recovery."
+                );
                 return;
             }
             // T-0321 P4 fault injection: a silenced host's nodes and executor get no answer at all (a cut, not a refusal).
-            if (FaultSilenced(context, path)) return;
-            if (path.Equals(CometWorks.ClusterGateway.AdminContract.V1.ExecutorProtocol.HeartbeatRoute, StringComparison.OrdinalIgnoreCase))
+            if (FaultSilenced(context, path))
+                return;
+            if (
+                path.Equals(
+                    CometWorks.ClusterGateway.AdminContract.V1.ExecutorProtocol.HeartbeatRoute,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 HandleExecutorRequest(context);
                 return;
             }
-            if (path == "/registry/plugins/v1") { HandlePluginOperation(context, path); return; }
-            if (path.Equals(SkinCheckRoute, StringComparison.OrdinalIgnoreCase)) { HandleSkinCheck(context, path); return; }
+            if (path == "/registry/plugins/v1")
+            {
+                HandlePluginOperation(context, path);
+                return;
+            }
+            if (path.Equals(SkinCheckRoute, StringComparison.OrdinalIgnoreCase))
+            {
+                HandleSkinCheck(context, path);
+                return;
+            }
             if (IsAdminRequestPath(path))
             {
                 // The admin contract has its own credential resolution: scoped tokens from the
@@ -4219,7 +6356,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 string? refusal = null;
                 // SE-1197: a node acting for an admin is held to the moderator rules even where loopback would let
                 // it in unauthenticated; an admin token (Quasar, the CLI) never names a moderator.
-                if (context.Request.Headers[ClusterProtocol.ClusterNet.ModeratorHeader] != null && actor is null or { Name: "loopback" })
+                if (
+                    context.Request.Headers[ClusterProtocol.ClusterNet.ModeratorHeader] != null
+                    && actor is null or { Name: "loopback" }
+                )
                     actor = NodeModerator(context, path, loopback: actor != null, out refusal);
                 if (actor == null && refusal != null)
                 {
@@ -4229,20 +6369,35 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 if (actor == null)
                 {
                     context.Response.Headers["WWW-Authenticate"] = "Bearer";
-                    WriteAdminError(context, 401, "bearer_token_required", "A valid admin bearer token is required.");
+                    WriteAdminError(
+                        context,
+                        401,
+                        "bearer_token_required",
+                        "A valid admin bearer token is required."
+                    );
                     return;
                 }
                 HandleAdminRequest(context, path, actor);
                 return;
             }
-            if ((_options.AdminToken is not null || _adminTokens is not null
-                    || _options.Control != null && !IPAddress.IsLoopback(_options.Control.Address))
-                && !LoopbackExempt(context) && !Authorized(context) && !NodeAuthorized(context, path))
+            if (
+                (
+                    _options.AdminToken is not null
+                    || _adminTokens is not null
+                    || _options.Control != null && !IPAddress.IsLoopback(_options.Control.Address)
+                )
+                && !LoopbackExempt(context)
+                && !Authorized(context)
+                && !NodeAuthorized(context, path)
+            )
             {
                 RefuseControlCredential(context, path);
                 return;
             }
-            if (context.Request.HttpMethod == "GET" && path.Equals("/transport/status", StringComparison.OrdinalIgnoreCase))
+            if (
+                context.Request.HttpMethod == "GET"
+                && path.Equals("/transport/status", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, TransportStatus());
                 return;
@@ -4250,82 +6405,120 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // The balancer's own view of the last evaluation, so monitors can tell gameplay
             // concentration (high excess, deviation ~0) from a placement backlog (high deviation)
             // without re-deriving the optimizer's result. See BalanceDiagnostics.
-            if (context.Request.HttpMethod == "GET" && path.Equals("/balance/status", StringComparison.OrdinalIgnoreCase))
+            if (
+                context.Request.HttpMethod == "GET"
+                && path.Equals("/balance/status", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 BalanceDiagnostics? d = _balanceDiagnostics;
                 CostModel model = _costModel;
                 DateTime statusNow = DateTime.UtcNow;
                 var hour = _balancePace.LastHour(statusNow);
-                WriteJson(context, 200, d == null
-                    ? new { evaluated = false }
-                    : (object)new
-                    {
-                        evaluated = true,
-                        evaluatedUtc = d.EvaluatedUtc,
-                        excess = d.Excess,
-                        achievableExcess = d.AchievableExcess,
-                        worstDeviation = d.WorstDeviation,
-                        clientExcess = d.ClientExcess,
-                        worstClientDeviation = d.WorstClientDeviation,
-                        movesPlanned = d.MovesPlanned,
-                        pauseReason = d.PauseReason,
-                        tolerance = model.BalanceRiskTolerance,
-                        // T-0393: the hysteresis state and the pace counters over the last 3600 s (BalancePace.LastHour).
-                        lowWater = model.EffectiveLowWater(),
-                        balancingActive = _balancePace.Active,
-                        pinsLastHour = hour.Pins,
-                        minGainSkipsLastHour = hour.MinGainSkips,
-                        budgetSkipsLastHour = hour.BudgetSkips,
-                        deadbandHoldsLastHour = hour.DeadbandHolds,
-                        residenceHoldsLastHour = hour.ResidenceHolds,
-                        budgetMovesPerNodeHour = model.BudgetMovesPerNodeHour,
-                        budgetUnderDeviation = model.BudgetUnderDeviation,
-                        targetPinsLastHour = _balancePace.TargetPinsLastHour(statusNow),
-                        // T-0409: the load floor and the paced passes it has held since start.
-                        balanceMinPeakLoad = model.BalanceMinPeakLoad,
-                        floorHeldPasses = Interlocked.Read(ref _balanceFloorHeldPasses),
-                        // T-0409 follow-up: the peak-drop guard, its refused candidates and the passes it left planless.
-                        balanceMinPeakDrop = model.BalanceMinPeakDrop,
-                        peakDropSkips = Interlocked.Read(ref _balancePeakDropSkips),
-                        peakDropHeldPasses = Interlocked.Read(ref _balancePeakDropHeldPasses),
-                        // #1454: the heavy components of the last pass (keyed by their smallest member id).
-                        heavyClients = model.HeavyClients,
-                        heavyReleaseClients = model.HeavyReleaseClients,
-                        heavy = _heavyLogged.Select(x => new { partition = x.Key, node = x.Value.Node, clients = x.Value.Clients }).ToArray(),
-                    });
+                WriteJson(
+                    context,
+                    200,
+                    d == null
+                        ? new { evaluated = false }
+                        : (object)
+                            new
+                            {
+                                evaluated = true,
+                                evaluatedUtc = d.EvaluatedUtc,
+                                excess = d.Excess,
+                                achievableExcess = d.AchievableExcess,
+                                worstDeviation = d.WorstDeviation,
+                                clientExcess = d.ClientExcess,
+                                worstClientDeviation = d.WorstClientDeviation,
+                                movesPlanned = d.MovesPlanned,
+                                pauseReason = d.PauseReason,
+                                tolerance = model.BalanceRiskTolerance,
+                                // T-0393: the hysteresis state and the pace counters over the last 3600 s (BalancePace.LastHour).
+                                lowWater = model.EffectiveLowWater(),
+                                balancingActive = _balancePace.Active,
+                                pinsLastHour = hour.Pins,
+                                minGainSkipsLastHour = hour.MinGainSkips,
+                                budgetSkipsLastHour = hour.BudgetSkips,
+                                deadbandHoldsLastHour = hour.DeadbandHolds,
+                                residenceHoldsLastHour = hour.ResidenceHolds,
+                                budgetMovesPerNodeHour = model.BudgetMovesPerNodeHour,
+                                budgetUnderDeviation = model.BudgetUnderDeviation,
+                                targetPinsLastHour = _balancePace.TargetPinsLastHour(statusNow),
+                                // T-0409: the load floor and the paced passes it has held since start.
+                                balanceMinPeakLoad = model.BalanceMinPeakLoad,
+                                floorHeldPasses = Interlocked.Read(ref _balanceFloorHeldPasses),
+                                // T-0409 follow-up: the peak-drop guard, its refused candidates and the passes it left planless.
+                                balanceMinPeakDrop = model.BalanceMinPeakDrop,
+                                peakDropSkips = Interlocked.Read(ref _balancePeakDropSkips),
+                                peakDropHeldPasses = Interlocked.Read(
+                                    ref _balancePeakDropHeldPasses
+                                ),
+                                // #1454: the heavy components of the last pass (keyed by their smallest member id).
+                                heavyClients = model.HeavyClients,
+                                heavyReleaseClients = model.HeavyReleaseClients,
+                                heavy = _heavyLogged
+                                    .Select(x => new
+                                    {
+                                        partition = x.Key,
+                                        node = x.Value.Node,
+                                        clients = x.Value.Clients,
+                                    })
+                                    .ToArray(),
+                            }
+                );
                 return;
             }
             // T-0391: read or override the balancer's cost model live, e.g. POST /balance/cost-model?ClientBoundMaxMembers=0.
             // Not persisted: a restart reads --cost-model again.
-            if (path.Equals("/balance/cost-model", StringComparison.OrdinalIgnoreCase)
-                && (context.Request.HttpMethod == "GET" || context.Request.HttpMethod == "POST"))
+            if (
+                path.Equals("/balance/cost-model", StringComparison.OrdinalIgnoreCase)
+                && (context.Request.HttpMethod == "GET" || context.Request.HttpMethod == "POST")
+            )
             {
                 if (context.Request.HttpMethod == "POST")
                 {
-                    var overrides = context.Request.QueryString.AllKeys.Where(key => key != null)
-                        .Select(key => new KeyValuePair<string, string>(key!, context.Request.QueryString[key] ?? "")).ToArray();
-                    if (overrides.Length == 0) throw new ArgumentException("POST /balance/cost-model needs at least one Field=value");
+                    var overrides = context
+                        .Request.QueryString.AllKeys.Where(key => key != null)
+                        .Select(key => new KeyValuePair<string, string>(
+                            key!,
+                            context.Request.QueryString[key] ?? ""
+                        ))
+                        .ToArray();
+                    if (overrides.Length == 0)
+                        throw new ArgumentException(
+                            "POST /balance/cost-model needs at least one Field=value"
+                        );
                     CostModel after = OverrideCostModel(overrides);
-                    Console.WriteLine($"Cost model overridden live ({string.Join(", ", overrides.Select(o => o.Key + "=" + o.Value))}): {JsonSerializer.Serialize(after)}");
+                    Console.WriteLine(
+                        $"Cost model overridden live ({string.Join(", ", overrides.Select(o => o.Key + "=" + o.Value))}): {JsonSerializer.Serialize(after)}"
+                    );
                     WriteJson(context, 200, after);
                     return;
                 }
                 WriteJson(context, 200, _costModel);
                 return;
             }
-            if (context.Request.HttpMethod == "GET" && path.Equals("/diag", StringComparison.OrdinalIgnoreCase))
+            if (
+                context.Request.HttpMethod == "GET"
+                && path.Equals("/diag", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, DiagSnapshot(context));
                 return;
             }
-            if (context.Request.HttpMethod == "POST" && path.StartsWith("/trigger/", StringComparison.OrdinalIgnoreCase))
+            if (
+                context.Request.HttpMethod == "POST"
+                && path.StartsWith("/trigger/", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, RunTrigger(context, path["/trigger/".Length..]));
                 return;
             }
             // The ban and kick books are cluster-scoped and authoritative at the perimeter
             // (Security.md §3.4), so admin actions on them land here, not on a node.
-            if (context.Request.HttpMethod == "POST" && path.Equals("/admission/ban", StringComparison.OrdinalIgnoreCase))
+            if (
+                context.Request.HttpMethod == "POST"
+                && path.Equals("/admission/ban", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 ulong user = ulong.Parse(Required(context, "user"));
                 bool banned = context.Request.QueryString["banned"] != "false";
@@ -4336,7 +6529,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 WriteJson(context, 200, new { user, banned });
                 return;
             }
-            if (context.Request.HttpMethod == "POST" && path.Equals("/admission/kick", StringComparison.OrdinalIgnoreCase))
+            if (
+                context.Request.HttpMethod == "POST"
+                && path.Equals("/admission/kick", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 ulong user = ulong.Parse(Required(context, "user"));
                 // An admin kick is punitive and arms the anti-flap cooldown. A §6.6 control-liveness
@@ -4344,19 +6540,37 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // that they come straight back through the vanilla join path. Sending it down the
                 // punitive path locked the stuck player out for the whole KickTimeout - the fix
                 // undoing the very promise it exists to keep.
-                bool reconnect = string.Equals(context.Request.QueryString["reason"], "reconnect",
-                    StringComparison.OrdinalIgnoreCase);
+                bool reconnect = string.Equals(
+                    context.Request.QueryString["reason"],
+                    "reconnect",
+                    StringComparison.OrdinalIgnoreCase
+                );
                 // SE-1199: a node names why it gives a client up (cause=spawn-switch-restore-failed); the
                 // control-liveness rescue sends none. Logged and listed in recentDisconnects only.
-                string cause = context.Request.QueryString["cause"] is { Length: > 0 and <= 64 } named
-                    && named.All(c => char.IsAsciiLetterOrDigit(c) || c == '-') ? named : "control-liveness-reconnect";
-                if (!reconnect) _admission.Kick(user);
+                string cause =
+                    context.Request.QueryString["cause"] is { Length: > 0 and <= 64 } named
+                    && named.All(c => char.IsAsciiLetterOrDigit(c) || c == '-')
+                        ? named
+                        : "control-liveness-reconnect";
+                if (!reconnect)
+                    _admission.Kick(user);
                 if (_clients.TryGetValue(user, out ClientSession? kicked))
                     ForceReconnect(kicked, reconnect ? cause : "kicked-by-admins");
-                Console.WriteLine(reconnect
-                    ? $"Forced reconnect for user {user} ({cause}); admission cooldown not armed"
-                    : $"Admin kicked user {user}");
-                WriteJson(context, 200, new { user, kicked = true, cooldown = !reconnect });
+                Console.WriteLine(
+                    reconnect
+                        ? $"Forced reconnect for user {user} ({cause}); admission cooldown not armed"
+                        : $"Admin kicked user {user}"
+                );
+                WriteJson(
+                    context,
+                    200,
+                    new
+                    {
+                        user,
+                        kicked = true,
+                        cooldown = !reconnect,
+                    }
+                );
                 return;
             }
             // Security.md §9 items 1-2: every rejection path and the mid-session revocation have to
@@ -4365,10 +6579,15 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // rejection paths, with a real client and a real ticket); with a user it injects the
             // verdict into that live session (the revocation path). Debug frontend only - the same
             // fail-closed gate as accept-all admission (§3.6).
-            if (context.Request.HttpMethod == "POST" && path.Equals("/admission/test-ticket-verdict", StringComparison.OrdinalIgnoreCase))
+            if (
+                context.Request.HttpMethod == "POST"
+                && path.Equals("/admission/test-ticket-verdict", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 if (!_options.DirectFrontend || !SteamEnabled)
-                    throw new ArgumentException("Test ticket verdicts require --direct and a Steam frontend");
+                    throw new ArgumentException(
+                        "Test ticket verdicts require --direct and a Steam frontend"
+                    );
                 var result = Enum.Parse<JoinResult>(Required(context, "result"), ignoreCase: true);
                 string? user = context.Request.QueryString["user"];
                 if (user == null)
@@ -4386,73 +6605,153 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 return;
             }
             // SE1-0084: a node's member entered or left the fast state; pull every report now (AutomaticHandoverLoop).
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/report-now", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/report-now", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 _passNow.Set();
                 FastPartitionCounters.PassRequest();
                 WriteJson(context, 200, new { requested = true });
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/status", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/status", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, _registry.Status());
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/node-plan", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/node-plan", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, _registry.NodePlan());
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/node-plan", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/node-plan", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 _registry.EnsureLegacyExecutorAllowed();
                 NodeSlotRequest request = ReadJson<NodeSlotRequest>(context);
-                WriteJson(context, 200, _registry.PutNodeSlot(request.SlotKey, request.Host, request.Role, request.Desired));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.PutNodeSlot(
+                        request.SlotKey,
+                        request.Host,
+                        request.Role,
+                        request.Desired
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/executors/heartbeat", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/executors/heartbeat", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 ExecutorHeartbeatRequest request = ReadJson<ExecutorHeartbeatRequest>(context);
-                WriteJson(context, 200, _registry.ExecutorHeartbeat(request.Executor, request.Observations));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.ExecutorHeartbeat(request.Executor, request.Observations)
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/shutdown/graceful", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/shutdown/graceful", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 double timeout = PositiveSeconds(context, "timeoutSeconds", 900);
                 double forceAfter = PositiveSeconds(context, "forceAfterSeconds", 900);
-                WriteJson(context, 200, ShutdownCluster(false, TimeSpan.FromSeconds(timeout), TimeSpan.FromSeconds(forceAfter)));
-                ThreadPool.QueueUserWorkItem(_ => { Thread.Sleep(100); Stop(); });
+                WriteJson(
+                    context,
+                    200,
+                    ShutdownCluster(
+                        false,
+                        TimeSpan.FromSeconds(timeout),
+                        TimeSpan.FromSeconds(forceAfter)
+                    )
+                );
+                ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    Thread.Sleep(100);
+                    Stop();
+                });
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/shutdown/emergency", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/shutdown/emergency", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 double timeout = PositiveSeconds(context, "timeoutSeconds", 30);
-                WriteJson(context, 200, ShutdownCluster(true, TimeSpan.FromSeconds(timeout), TimeSpan.Zero));
-                ThreadPool.QueueUserWorkItem(_ => { Thread.Sleep(100); Stop(); });
+                WriteJson(
+                    context,
+                    200,
+                    ShutdownCluster(true, TimeSpan.FromSeconds(timeout), TimeSpan.Zero)
+                );
+                ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    Thread.Sleep(100);
+                    Stop();
+                });
                 return;
             }
-            if (context.Request.HttpMethod == "GET" && path.Equals("/handover/paused", StringComparison.OrdinalIgnoreCase))
+            if (
+                context.Request.HttpMethod == "GET"
+                && path.Equals("/handover/paused", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 // With gateway-rs the held client packets queue there, not in this process.
                 Dictionary<ulong, (long Count, long Bytes)> external = _handoverPauses.IsEmpty
-                    ? new Dictionary<ulong, (long Count, long Bytes)>() : ExternalClientBacklog(ExternalRelayStatus().Status);
-                WriteJson(context, 200, _handoverPauses.Values.Select(pause =>
-                {
-                    (long Count, long Bytes) held = default;
-                    bool relayed = pause.Session != null && external.TryGetValue(pause.Session.ClientId, out held);
-                    return new
-                    {
-                        transferId = pause.TransferId,
-                        partition = pause.Partition,
-                        client = pause.Session?.ClientId,
-                        paused = !pause.Release.Task.IsCompleted,
-                        queuedPacketCount = relayed ? held.Count : pause.Session?.ClientBacklog.Count ?? 0,
-                        queuedBytes = relayed ? held.Bytes : pause.Session?.ClientBacklog.Bytes ?? 0,
-                    };
-                }).ToArray());
+                    ? new Dictionary<ulong, (long Count, long Bytes)>()
+                    : ExternalClientBacklog(ExternalRelayStatus().Status);
+                WriteJson(
+                    context,
+                    200,
+                    _handoverPauses
+                        .Values.Select(pause =>
+                        {
+                            (long Count, long Bytes) held = default;
+                            bool relayed =
+                                pause.Session != null
+                                && external.TryGetValue(pause.Session.ClientId, out held);
+                            return new
+                            {
+                                transferId = pause.TransferId,
+                                partition = pause.Partition,
+                                client = pause.Session?.ClientId,
+                                paused = !pause.Release.Task.IsCompleted,
+                                queuedPacketCount = relayed
+                                    ? held.Count
+                                    : pause.Session?.ClientBacklog.Count ?? 0,
+                                queuedBytes = relayed
+                                    ? held.Bytes
+                                    : pause.Session?.ClientBacklog.Bytes ?? 0,
+                            };
+                        })
+                        .ToArray()
+                );
                 return;
             }
-            if (IsControlVerb(context) && path.Equals("/handover/release", StringComparison.OrdinalIgnoreCase))
+            if (
+                IsControlVerb(context)
+                && path.Equals("/handover/release", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 string transferId = Required(context, "transferId");
                 if (!_handoverPauses.TryGetValue(transferId, out HandoverPause? pause))
@@ -4464,71 +6763,153 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 WriteJson(context, 200, new { released = true, transferId });
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/checkpoint", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/checkpoint", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 _registry.Checkpoint();
                 WriteJson(context, 200, _registry.Status());
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/nodes", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/nodes", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                NodeRegistration registered = _registry.RegisterNode(ReadJson<NodeJoinRequest>(context));
+                NodeRegistration registered = _registry.RegisterNode(
+                    ReadJson<NodeJoinRequest>(context)
+                );
                 // §2: a relaunched or rotated node starts with the current handover-config document.
-                System.Text.Json.Nodes.JsonObject registration = (System.Text.Json.Nodes.JsonObject)System.Text.Json.JsonSerializer.SerializeToNode(registered)!;
-                registration["HandoverConfig"] = System.Text.Json.JsonSerializer.SerializeToNode(_registry.HandoverConfig());
+                System.Text.Json.Nodes.JsonObject registration = (System.Text.Json.Nodes.JsonObject)
+                    System.Text.Json.JsonSerializer.SerializeToNode(registered)!;
+                registration["HandoverConfig"] = System.Text.Json.JsonSerializer.SerializeToNode(
+                    _registry.HandoverConfig()
+                );
                 WriteJson(context, 200, registration);
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/network-id-blocks", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/network-id-blocks", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                WriteJson(context, 200, _registry.AllocateNetworkIdBlock(Required(context, "node"), long.Parse(Required(context, "epoch"))));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.AllocateNetworkIdBlock(
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch"))
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/network-id-blocks", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/network-id-blocks", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, _registry.NetworkIdBlocks());
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/entity-id-ranges", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/entity-id-ranges", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                WriteJson(context, 200, _registry.AllocateEntityIdRange(Required(context, "node"), long.Parse(Required(context, "epoch"))));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.AllocateEntityIdRange(
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch"))
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/entity-id-ranges", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/entity-id-ranges", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, _registry.EntityIdRanges());
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/client-diagnostics", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/client-diagnostics", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 string node = Required(context, "node");
-                long epoch = long.Parse(Required(context, "epoch"), System.Globalization.CultureInfo.InvariantCulture);
+                long epoch = long.Parse(
+                    Required(context, "epoch"),
+                    System.Globalization.CultureInfo.InvariantCulture
+                );
                 WriteJson(context, 200, _registry.ClientDiagnostics(node, epoch));
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/nodes", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/nodes", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, _registry.Nodes());
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/world-authority", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/world-authority", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, _registry.WorldAuthority());
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/client-routes", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/client-routes", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                WriteJson(context, 200, _registry.RouteClient(ulong.Parse(Required(context, "client")), ulong.Parse(Required(context, "partition")),
-                    long.TryParse(context.Request.QueryString["entity"], out long entity) ? entity : 0));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.RouteClient(
+                        ulong.Parse(Required(context, "client")),
+                        ulong.Parse(Required(context, "partition")),
+                        long.TryParse(context.Request.QueryString["entity"], out long entity)
+                            ? entity
+                            : 0
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/client-routes", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/client-routes", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                WriteJson(context, 200, _registry.ResolveClientRoute(ulong.Parse(Required(context, "client")))
-                    ?? throw new ArgumentException("Client route is unavailable"));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.ResolveClientRoute(ulong.Parse(Required(context, "client")))
+                        ?? throw new ArgumentException("Client route is unavailable")
+                );
                 return;
             }
-            if (_registry != null && path.Equals("/registry/character-homes", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && path.Equals("/registry/character-homes", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 // Where a client's character lives, so a rejoin can be answered with the node holding
                 // the body instead of the default backend (Clustering §6.4). Nodes report it for the
@@ -4536,67 +6917,135 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 ulong homeClient = ulong.Parse(Required(context, "client"));
                 if (context.Request.HttpMethod == "GET")
                 {
-                    WriteJson(context, 200, _registry.GetCharacterHome(homeClient)
-                        ?? throw new ArgumentException($"No character home for client {homeClient}"));
+                    WriteJson(
+                        context,
+                        200,
+                        _registry.GetCharacterHome(homeClient)
+                            ?? throw new ArgumentException(
+                                $"No character home for client {homeClient}"
+                            )
+                    );
                     return;
                 }
                 if (IsControlVerb(context))
                 {
                     try
                     {
-                        long version = _registry.SetCharacterHome(homeClient, long.Parse(Required(context, "identity")),
-                            long.Parse(Required(context, "entity")), ulong.Parse(Required(context, "partition")),
-                            Required(context, "node"), long.Parse(Required(context, "epoch")),
-                            long.Parse(Required(context, "generation")), long.Parse(Required(context, "expectedVersion")),
-                            long.Parse(Required(context, "expectedWriteRevision")));
-                        WriteJson(context, 200, new { stored = true, version,
-                            writeRevision = _registry.GetCharacterHome(homeClient)!.WriteRevision });
+                        long version = _registry.SetCharacterHome(
+                            homeClient,
+                            long.Parse(Required(context, "identity")),
+                            long.Parse(Required(context, "entity")),
+                            ulong.Parse(Required(context, "partition")),
+                            Required(context, "node"),
+                            long.Parse(Required(context, "epoch")),
+                            long.Parse(Required(context, "generation")),
+                            long.Parse(Required(context, "expectedVersion")),
+                            long.Parse(Required(context, "expectedWriteRevision"))
+                        );
+                        WriteJson(
+                            context,
+                            200,
+                            new
+                            {
+                                stored = true,
+                                version,
+                                writeRevision = _registry
+                                    .GetCharacterHome(homeClient)!
+                                    .WriteRevision,
+                            }
+                        );
                     }
                     catch (RegistryConflictException error)
                     {
                         CharacterHome? current = _registry.GetCharacterHome(homeClient);
-                        WriteJson(context, 409, new { stored = false, error = error.Message,
-                            version = current?.Version ?? 0, writeRevision = current?.WriteRevision ?? 0 });
+                        WriteJson(
+                            context,
+                            409,
+                            new
+                            {
+                                stored = false,
+                                error = error.Message,
+                                version = current?.Version ?? 0,
+                                writeRevision = current?.WriteRevision ?? 0,
+                            }
+                        );
                     }
                     return;
                 }
             }
-            if (_registry != null && path.Equals("/registry/character-reaps", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && path.Equals("/registry/character-reaps", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 if (context.Request.HttpMethod == "GET")
-                    WriteJson(context, 200, _registry.PendingCharacterReaps(Required(context, "node"),
-                        long.Parse(Required(context, "epoch"))));
+                    WriteJson(
+                        context,
+                        200,
+                        _registry.PendingCharacterReaps(
+                            Required(context, "node"),
+                            long.Parse(Required(context, "epoch"))
+                        )
+                    );
                 else if (context.Request.HttpMethod == "POST")
-                    WriteJson(context, 200, _registry.AuthorizeCharacterReap(ulong.Parse(Required(context, "client")),
-                        long.Parse(Required(context, "identity")), long.Parse(Required(context, "entity")),
-                        Required(context, "node"), long.Parse(Required(context, "epoch")),
-                        ulong.Parse(Required(context, "partition")), long.Parse(Required(context, "generation")),
-                        long.Parse(Required(context, "homeVersion")), long.Parse(Required(context, "writeRevision"))));
-                else throw new ArgumentException("Character reap expects GET or POST");
+                    WriteJson(
+                        context,
+                        200,
+                        _registry.AuthorizeCharacterReap(
+                            ulong.Parse(Required(context, "client")),
+                            long.Parse(Required(context, "identity")),
+                            long.Parse(Required(context, "entity")),
+                            Required(context, "node"),
+                            long.Parse(Required(context, "epoch")),
+                            ulong.Parse(Required(context, "partition")),
+                            long.Parse(Required(context, "generation")),
+                            long.Parse(Required(context, "homeVersion")),
+                            long.Parse(Required(context, "writeRevision"))
+                        )
+                    );
+                else
+                    throw new ArgumentException("Character reap expects GET or POST");
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST"
-                && path.Equals("/registry/character-reaps/resolve", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals(
+                    "/registry/character-reaps/resolve",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 using var reader = new StreamReader(context.Request.InputStream);
-                var permit = JsonSerializer.Deserialize<ClusterProtocol.CharacterReapPermit>(reader.ReadToEnd())
-                    ?? throw new ArgumentException("Character reap permit is required");
+                var permit =
+                    JsonSerializer.Deserialize<ClusterProtocol.CharacterReapPermit>(
+                        reader.ReadToEnd()
+                    ) ?? throw new ArgumentException("Character reap permit is required");
                 _registry.ResolveCharacterReap(ulong.Parse(Required(context, "client")), permit);
                 WriteJson(context, 200, new { resolved = true });
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/teleport-intents", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/teleport-intents", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 // Partitioning.md §7.4: the node that just teleported (or admin-moved) a character
                 // registers the client here, so the co-location that resolves the resulting cross-node
                 // gap moves the CHARACTER side to the destination's owner instead of §7.5-pricing the
                 // encounter (which would pull a small destination partition to the player).
                 ulong travellingClient = ulong.Parse(Required(context, "client"));
-                lock (_teleportIntents) _teleportIntents[travellingClient] = DateTimeOffset.UtcNow;
+                lock (_teleportIntents)
+                    _teleportIntents[travellingClient] = DateTimeOffset.UtcNow;
                 WriteJson(context, 200, new { accepted = true, client = travellingClient });
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/pull-demands", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/pull-demands", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 // WA-4/WA-6 on-demand partition pull: a node reports that a client it hosts demanded a grid
                 // another node antenna-publishes. The gateway owns the transfer: a fenced clientless handover
@@ -4606,23 +7055,46 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 string pullSource = Required(context, "source");
                 string pullTarget = Required(context, "target");
                 PartitionOwnership pullOwner;
-                try { pullOwner = _registry.GetPartitionOwner(pullPartition); }
+                try
+                {
+                    pullOwner = _registry.GetPartitionOwner(pullPartition);
+                }
                 catch (Exception)
                 {
                     // A demand can race the owner's death and lease expiry; refuse it cleanly - the
                     // caller retries after recovery reassigns the partition.
-                    WriteJson(context, 200, new { accepted = false, reason = "partition ownership is unavailable" });
+                    WriteJson(
+                        context,
+                        200,
+                        new { accepted = false, reason = "partition ownership is unavailable" }
+                    );
                     return;
                 }
                 if (IsFastPartition(pullPartition))
                 {
                     FastPartitionCounters.Pull();
-                    WriteJson(context, 200, new { accepted = false, reason = "partition is fast (T-0292): it stays with its owner until it slows down" });
+                    WriteJson(
+                        context,
+                        200,
+                        new
+                        {
+                            accepted = false,
+                            reason = "partition is fast (T-0292): it stays with its owner until it slows down",
+                        }
+                    );
                     return;
                 }
                 if (pullOwner.Node != pullSource)
                 {
-                    WriteJson(context, 200, new { accepted = false, reason = "partition is not owned by the reported source" });
+                    WriteJson(
+                        context,
+                        200,
+                        new
+                        {
+                            accepted = false,
+                            reason = "partition is not owned by the reported source",
+                        }
+                    );
                     return;
                 }
                 if (PullPinRefusal(MigrationTarget(pullPartition), pullTarget) is { } pinned)
@@ -4630,26 +7102,53 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     WriteJson(context, 200, new { accepted = false, reason = pinned });
                     return;
                 }
-                NodeRegistration? pullSourceNode = _registry.Nodes().SingleOrDefault(node => node.Node == pullSource
-                    && node.Role == NodeRole.Regular && node.State == NodeState.Active);
-                NodeRegistration? pullTargetNode = _registry.Nodes().SingleOrDefault(node => node.Node == pullTarget
-                    && node.Role == NodeRole.Regular && node.State == NodeState.Active);
-                if (pullSourceNode?.ControlEndpoint == null || pullTargetNode?.ControlEndpoint == null)
+                NodeRegistration? pullSourceNode = _registry
+                    .Nodes()
+                    .SingleOrDefault(node =>
+                        node.Node == pullSource
+                        && node.Role == NodeRole.Regular
+                        && node.State == NodeState.Active
+                    );
+                NodeRegistration? pullTargetNode = _registry
+                    .Nodes()
+                    .SingleOrDefault(node =>
+                        node.Node == pullTarget
+                        && node.Role == NodeRole.Regular
+                        && node.State == NodeState.Active
+                    );
+                if (
+                    pullSourceNode?.ControlEndpoint == null
+                    || pullTargetNode?.ControlEndpoint == null
+                )
                 {
-                    WriteJson(context, 200, new { accepted = false, reason = "source or target node is not active with a control endpoint" });
+                    WriteJson(
+                        context,
+                        200,
+                        new
+                        {
+                            accepted = false,
+                            reason = "source or target node is not active with a control endpoint",
+                        }
+                    );
                     return;
                 }
                 // Read the source now: a pin may be newer than the scheduler's cached report.
-                if (GetPartitions(StripScheme(pullSourceNode.ControlEndpoint)).Partitions
-                    .Any(p => p.Id == pullPartition && p.RemoteUsers is { Length: > 0 }) || _registry.HasRemoteUse(pullPartition))
+                if (
+                    GetPartitions(StripScheme(pullSourceNode.ControlEndpoint))
+                        .Partitions.Any(p =>
+                            p.Id == pullPartition && p.RemoteUsers is { Length: > 0 }
+                        ) || _registry.HasRemoteUse(pullPartition)
+                )
                 {
                     WriteJson(context, 200, new { accepted = false, reason = "remote-use" });
                     return;
                 }
                 lock (_pullLock)
                 {
-                    if (_pullCooldowns.TryGetValue(pullPartition, out DateTimeOffset lastPull)
-                        && DateTimeOffset.UtcNow - lastPull < TimeSpan.FromSeconds(60))
+                    if (
+                        _pullCooldowns.TryGetValue(pullPartition, out DateTimeOffset lastPull)
+                        && DateTimeOffset.UtcNow - lastPull < TimeSpan.FromSeconds(60)
+                    )
                     {
                         WriteJson(context, 200, new { accepted = false, reason = "cooldown" });
                         return;
@@ -4659,45 +7158,106 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // T-0296 r3: a retiring target is draining; the scale-in pass would pin the pulled partition straight out again.
                 if (_registry.IsRetiring(pullTarget))
                 {
-                    WriteJson(context, 200, new { accepted = false, reason = "the target node is retiring (draining for node control)" });
+                    WriteJson(
+                        context,
+                        200,
+                        new
+                        {
+                            accepted = false,
+                            reason = "the target node is retiring (draining for node control)",
+                        }
+                    );
                     return;
                 }
-                Console.WriteLine($"Pull demand partition {pullPartition} {pullSource} -> {pullTarget}"
-                    + $" grid {context.Request.QueryString["grid"]} client {context.Request.QueryString["client"]}");
+                Console.WriteLine(
+                    $"Pull demand partition {pullPartition} {pullSource} -> {pullTarget}"
+                        + $" grid {context.Request.QueryString["grid"]} client {context.Request.QueryString["client"]}"
+                );
                 WaitRotation("pull", pullPartition, true);
                 try
                 {
-                    WhenRegistryApplied(pullPartition, () => FencedClientlessHandover(StripScheme(pullSourceNode.ControlEndpoint),
-                        StripScheme(pullTargetNode.ControlEndpoint), EndpointParser.Parse(pullTargetNode.Endpoint, DirectTransportConstants.DefaultPort),
-                        pullPartition)).GetAwaiter().GetResult();
+                    WhenRegistryApplied(
+                            pullPartition,
+                            () =>
+                                FencedClientlessHandover(
+                                    StripScheme(pullSourceNode.ControlEndpoint),
+                                    StripScheme(pullTargetNode.ControlEndpoint),
+                                    EndpointParser.Parse(
+                                        pullTargetNode.Endpoint,
+                                        DirectTransportConstants.DefaultPort
+                                    ),
+                                    pullPartition
+                                )
+                        )
+                        .GetAwaiter()
+                        .GetResult();
                 }
                 catch (Exception exception)
                 {
                     // The source can die between its last heartbeat and the fenced handover (it still
                     // reads as Active here). Nothing was transferred - refuse cleanly; the caller's
                     // retry lands after recovery reassigns the partition.
-                    Console.WriteLine($"Pull demand partition {pullPartition} refused: {exception.Message}");
-                    WriteJson(context, 200, new { accepted = false, reason = exception.Message == "remote-use" ? "remote-use" : "the source node did not serve the handover" });
+                    Console.WriteLine(
+                        $"Pull demand partition {pullPartition} refused: {exception.Message}"
+                    );
+                    WriteJson(
+                        context,
+                        200,
+                        new
+                        {
+                            accepted = false,
+                            reason = exception.Message == "remote-use"
+                                ? "remote-use"
+                                : "the source node did not serve the handover",
+                        }
+                    );
                     return;
                 }
-                finally { _rotation.Release(); }
+                finally
+                {
+                    _rotation.Release();
+                }
                 // A pull toward the pin's own target was the migration's move: release that member's pin.
                 OnMigrationProgress(pullPartition, pullTarget);
-                WriteJson(context, 200, new { accepted = true, partition = pullPartition, source = pullSource, target = pullTarget });
+                WriteJson(
+                    context,
+                    200,
+                    new
+                    {
+                        accepted = true,
+                        partition = pullPartition,
+                        source = pullSource,
+                        target = pullTarget,
+                    }
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/pod-placement", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/pod-placement", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 // WA-6 pod placement: a respawn-ship spawn creates its own fresh partition, so unlike a
                 // medbay respawn it can execute anywhere - place it on the least-loaded node.
                 PartitionOwnership[] placementPartitions = _registry.Partitions();
-                NodeRegistration[] placementCandidates = _registry.Nodes()
-                    .Where(node => node.Role == NodeRole.Regular && node.State == NodeState.Active && node.Serving && !node.Spare
-                        && !string.IsNullOrWhiteSpace(node.ControlEndpoint))
+                NodeRegistration[] placementCandidates = _registry
+                    .Nodes()
+                    .Where(node =>
+                        node.Role == NodeRole.Regular
+                        && node.State == NodeState.Active
+                        && node.Serving
+                        && !node.Spare
+                        && !string.IsNullOrWhiteSpace(node.ControlEndpoint)
+                    )
                     .ToArray();
                 if (placementCandidates.Length == 0)
                 {
-                    WriteJson(context, 404, new { error = "no active regular node for pod placement" });
+                    WriteJson(
+                        context,
+                        404,
+                        new { error = "no active regular node for pod placement" }
+                    );
                     return;
                 }
                 // Partition count is the simulation-load signal; attached clients break ties (a node
@@ -4706,80 +7266,197 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // client through its live route with the durable character home as fallback: the
                 // live map lags respawn/backend churn (the recovery auto-pick had the same
                 // blindness), and a departed client's stale route must not count either.
-                ulong[] placementClients = _clients.Keys
-                    .Select(client => _registry.GetClientPartition(client)?.Partition
-                        ?? _registry.GetCharacterHome(client)?.Partition ?? 0UL)
-                    .Where(partition => partition != 0).ToArray();
-                Func<NodeRegistration, int> clientsOn = node => placementClients.Count(client =>
-                    placementPartitions.Any(partition => partition.Partition == client
-                        && partition.Node == node.Node && partition.Epoch == node.Epoch));
+                ulong[] placementClients = _clients
+                    .Keys.Select(client =>
+                        _registry.GetClientPartition(client)?.Partition
+                        ?? _registry.GetCharacterHome(client)?.Partition
+                        ?? 0UL
+                    )
+                    .Where(partition => partition != 0)
+                    .ToArray();
+                Func<NodeRegistration, int> clientsOn = node =>
+                    placementClients.Count(client =>
+                        placementPartitions.Any(partition =>
+                            partition.Partition == client
+                            && partition.Node == node.Node
+                            && partition.Epoch == node.Epoch
+                        )
+                    );
                 NodeRegistration placementTarget = placementCandidates
-                    .OrderBy(node => placementPartitions.Count(partition => partition.Node == node.Node && partition.Epoch == node.Epoch))
+                    .OrderBy(node =>
+                        placementPartitions.Count(partition =>
+                            partition.Node == node.Node && partition.Epoch == node.Epoch
+                        )
+                    )
                     .ThenBy(clientsOn)
                     .ThenBy(node => node.Node, StringComparer.Ordinal)
                     .First();
                 int placementLoad = placementPartitions.Count(partition =>
-                    partition.Node == placementTarget.Node && partition.Epoch == placementTarget.Epoch);
-                Console.WriteLine($"Pod placement -> {placementTarget.Node} ({placementLoad} partitions, {clientsOn(placementTarget)} clients)");
-                WriteJson(context, 200, new { node = placementTarget.Node, partitions = placementLoad });
+                    partition.Node == placementTarget.Node
+                    && partition.Epoch == placementTarget.Epoch
+                );
+                Console.WriteLine(
+                    $"Pod placement -> {placementTarget.Node} ({placementLoad} partitions, {clientsOn(placementTarget)} clients)"
+                );
+                WriteJson(
+                    context,
+                    200,
+                    new { node = placementTarget.Node, partitions = placementLoad }
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/respawns/switch", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/respawns/switch", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 RespawnSwitchRequest request = ReadJson<RespawnSwitchRequest>(context);
-                WriteJson(context, 200, RespawnSwitch(ResolveSession(request.UserId), request,
-                    context.Request.Headers["Authorization"] ?? string.Empty).GetAwaiter().GetResult());
+                WriteJson(
+                    context,
+                    200,
+                    RespawnSwitch(
+                            ResolveSession(request.UserId),
+                            request,
+                            context.Request.Headers["Authorization"] ?? string.Empty
+                        )
+                        .GetAwaiter()
+                        .GetResult()
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/peer-rejections", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/peer-rejections", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 HandlePeerRejection(context);
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/handover-config", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/handover-config", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, _registry.HandoverConfig());
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/offline-accounting-clock", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals(
+                    "/registry/offline-accounting-clock",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
-                WriteJson(context, 200, (object?)_registry.AccountingClock("", 0, null) ?? new { unavailable = true });
+                WriteJson(
+                    context,
+                    200,
+                    (object?)_registry.AccountingClock("", 0, null) ?? new { unavailable = true }
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/offline-accounting-sun", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals(
+                    "/registry/offline-accounting-sun",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
-                WriteJson(context, 200, _registry.AccountingSun(Required(context, "epoch"), long.Parse(Required(context, "from")), long.Parse(Required(context, "through"))));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.AccountingSun(
+                        Required(context, "epoch"),
+                        long.Parse(Required(context, "from")),
+                        long.Parse(Required(context, "through"))
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/offline-accounting-clock", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals(
+                    "/registry/offline-accounting-clock",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 var request = ReadJson<AccountingClockRequest>(context);
-                WriteJson(context, 200, _registry.AccountingClock(request.Node, request.Epoch, request.Sample));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.AccountingClock(request.Node, request.Epoch, request.Sample)
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/nodes/heartbeat", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/nodes/heartbeat", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 HeartbeatRequest request = ReadJson<HeartbeatRequest>(context);
-                NodeRegistration node = _registry.Heartbeat(request.Node, request.Epoch, request.Ownerships, request.ClientPartitions,
-                    request.SimulationFrame, request.SaveFailure, request.RecoveryCapacity, request.Quarantined,
-                    request.ProjectedLoad, request.LoadCapacity, request.RecoveryLoadsPending, request.Serving,
-                    request.DeploymentRevision, request.ConfigurationVerified, request.ConfigurationFailure, request.Liveness);
-                if (!request.Liveness) _registry.ReportRemoteUse(request.Node, request.Epoch, request.Ownerships, request.RemoteUsers);
+                NodeRegistration node = _registry.Heartbeat(
+                    request.Node,
+                    request.Epoch,
+                    request.Ownerships,
+                    request.ClientPartitions,
+                    request.SimulationFrame,
+                    request.SaveFailure,
+                    request.RecoveryCapacity,
+                    request.Quarantined,
+                    request.ProjectedLoad,
+                    request.LoadCapacity,
+                    request.RecoveryLoadsPending,
+                    request.Serving,
+                    request.DeploymentRevision,
+                    request.ConfigurationVerified,
+                    request.ConfigurationFailure,
+                    request.Liveness
+                );
+                if (!request.Liveness)
+                    _registry.ReportRemoteUse(
+                        request.Node,
+                        request.Epoch,
+                        request.Ownerships,
+                        request.RemoteUsers
+                    );
                 if (request.ServerData != null)
                     ReportServerData(request.Node, request.ServerData);
                 if (request.Hitches != null)
                     foreach (HitchReport hitch in request.Hitches)
-                        _handoverTelemetry.Hitch(hitch.TransferId, request.Node, hitch.Phase, hitch.Ms, hitch.Utc, hitch.PhaseMs);
+                        _handoverTelemetry.Hitch(
+                            hitch.TransferId,
+                            request.Node,
+                            hitch.Phase,
+                            hitch.Ms,
+                            hitch.Utc,
+                            hitch.PhaseMs
+                        );
                 double gatewayMilliseconds = Stopwatch.GetTimestamp() * 1000d / Stopwatch.Frequency;
-                if (node.Role == NodeRole.WA && request.AuthorityMilliseconds is double authorityMilliseconds)
+                if (
+                    node.Role == NodeRole.WA
+                    && request.AuthorityMilliseconds is double authorityMilliseconds
+                )
                 {
                     lock (_authorityClockLock)
                     {
                         if (node.AuthorityGeneration >= _authorityClockGeneration)
                         {
                             if (_authorityClockGeneration > 0)
-                                authorityMilliseconds = Math.Max(authorityMilliseconds,
-                                    _authorityClockMilliseconds + gatewayMilliseconds - _authorityClockObservedMilliseconds);
+                                authorityMilliseconds = Math.Max(
+                                    authorityMilliseconds,
+                                    _authorityClockMilliseconds
+                                        + gatewayMilliseconds
+                                        - _authorityClockObservedMilliseconds
+                                );
                             _authorityClockGeneration = node.AuthorityGeneration;
                             _authorityClockMilliseconds = authorityMilliseconds;
                             _authorityClockObservedMilliseconds = gatewayMilliseconds;
@@ -4790,96 +7467,252 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 double? currentAuthorityMilliseconds = null;
                 lock (_authorityClockLock)
                     if (authority.Node != null && _authorityClockGeneration == authority.Generation)
-                        currentAuthorityMilliseconds = _authorityClockMilliseconds + gatewayMilliseconds - _authorityClockObservedMilliseconds;
-                PartitionVersion[] accepted = _registry.PartitionsOwnedBy(node.Node, node.Epoch)
-                    .Select(x => new PartitionVersion(x.Partition, x.Generation)).ToArray();
-                WriteJson(context, 200, new HeartbeatResponse(node.Node, node.Epoch, node.Endpoint, node.Registered, node.State,
-                    node.LeaseExpires, node.ForceDrainAt, node.Role, node.AuthorityGeneration, authority.Generation, accepted,
-                    request.LocalSendMilliseconds, gatewayMilliseconds, currentAuthorityMilliseconds, _registry.HandoverConfigRevision,
-                    _registry.ShuttingDown, AccountingClock: _registry.AccountingClock(node.Node, node.Epoch, request.AccountingClock),
-                    ServerDataWanted: _admission.ServerData == null));
+                        currentAuthorityMilliseconds =
+                            _authorityClockMilliseconds
+                            + gatewayMilliseconds
+                            - _authorityClockObservedMilliseconds;
+                PartitionVersion[] accepted = _registry
+                    .PartitionsOwnedBy(node.Node, node.Epoch)
+                    .Select(x => new PartitionVersion(x.Partition, x.Generation))
+                    .ToArray();
+                WriteJson(
+                    context,
+                    200,
+                    new HeartbeatResponse(
+                        node.Node,
+                        node.Epoch,
+                        node.Endpoint,
+                        node.Registered,
+                        node.State,
+                        node.LeaseExpires,
+                        node.ForceDrainAt,
+                        node.Role,
+                        node.AuthorityGeneration,
+                        authority.Generation,
+                        accepted,
+                        request.LocalSendMilliseconds,
+                        gatewayMilliseconds,
+                        currentAuthorityMilliseconds,
+                        _registry.HandoverConfigRevision,
+                        _registry.ShuttingDown,
+                        AccountingClock: _registry.AccountingClock(
+                            node.Node,
+                            node.Epoch,
+                            request.AccountingClock
+                        ),
+                        ServerDataWanted: _admission.ServerData == null
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/nodes/close", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/nodes/close", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                double seconds = double.TryParse(context.Request.QueryString["forceAfterSeconds"], out double forceAfter) && forceAfter >= 0 ? forceAfter : 900;
-                WriteJson(context, 200, _registry.CloseNode(Required(context, "node"), long.Parse(Required(context, "epoch")), TimeSpan.FromSeconds(seconds)));
+                double seconds =
+                    double.TryParse(
+                        context.Request.QueryString["forceAfterSeconds"],
+                        out double forceAfter
+                    )
+                    && forceAfter >= 0
+                        ? forceAfter
+                        : 900;
+                WriteJson(
+                    context,
+                    200,
+                    _registry.CloseNode(
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch")),
+                        TimeSpan.FromSeconds(seconds)
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/nodes/empty", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/nodes/empty", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                WriteJson(context, 200, _registry.MarkEmpty(Required(context, "node"), long.Parse(Required(context, "epoch"))));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.MarkEmpty(
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch"))
+                    )
+                );
                 return;
             }
-            if (_registry != null && IsControlVerb(context) && path.Equals("/registry/scale", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && IsControlVerb(context)
+                && path.Equals("/registry/scale", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 // T-0312: GET = status (+ T-0320 per-host targets); POST ?nodes=N is kept one release as a shim for
                 // "cluster nodes set <sole host> --serving N" (409 when the cluster has more than one host). force and
                 // retire are gone: a decrease is never refused, and the oldest serving node goes first.
                 if (context.Request.HttpMethod == "POST")
                 {
-                    try { _registry.ScaleShim(int.Parse(Required(context, "nodes")), "registry/scale", CapacityWarningFor); }
+                    try
+                    {
+                        _registry.ScaleShim(
+                            int.Parse(Required(context, "nodes")),
+                            "registry/scale",
+                            CapacityWarningFor
+                        );
+                    }
                     catch (NodeControlException refused)
                     {
-                        WriteJson(context, refused.Status, new { error = refused.Code, message = refused.Message });
+                        WriteJson(
+                            context,
+                            refused.Status,
+                            new { error = refused.Code, message = refused.Message }
+                        );
                         return;
                     }
                 }
                 WriteJson(context, 200, ScaleView());
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/nodes/spare", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/nodes/spare", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 string spareNode = Required(context, "node");
                 bool spare = bool.Parse(Required(context, "spare"));
-                WriteJson(context, 200, (object?)_registry.SetNodeSpare(spareNode, spare) ?? new { node = spareNode, spare });
+                WriteJson(
+                    context,
+                    200,
+                    (object?)_registry.SetNodeSpare(spareNode, spare)
+                        ?? new { node = spareNode, spare }
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/partitions", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/partitions", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 string? expected = context.Request.QueryString["expectedGeneration"];
-                WriteJson(context, 200, _registry.ClaimPartition(
-                    ulong.Parse(Required(context, "partition")), Required(context, "node"), long.Parse(Required(context, "epoch")),
-                    expected == null ? null : long.Parse(expected)));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.ClaimPartition(
+                        ulong.Parse(Required(context, "partition")),
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch")),
+                        expected == null ? null : long.Parse(expected)
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/partition-ids", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/partition-ids", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                WriteJson(context, 200, _registry.AllocatePartitionIds(Required(context, "node"), long.Parse(Required(context, "epoch")), int.Parse(Required(context, "count"))));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.AllocatePartitionIds(
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch")),
+                        int.Parse(Required(context, "count"))
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/topology", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/topology", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 TopologyRequest request = ReadJson<TopologyRequest>(context);
-                WriteJson(context, 200, _registry.ApplyLineage(request.OpId, request.Kind, request.Node, request.Epoch, request.Inputs,
-                    request.OutputIds, request.Members, request.ClusterTime, request.Seated));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.ApplyLineage(
+                        request.OpId,
+                        request.Kind,
+                        request.Node,
+                        request.Epoch,
+                        request.Inputs,
+                        request.OutputIds,
+                        request.Members,
+                        request.ClusterTime,
+                        request.Seated
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/npc-census", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/npc-census", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                if (NpcCensusNow() is { } census) WriteJson(context, 200, census, redact: false);
-                else WriteJson(context, 503, new { error = "no complete partition report pass yet" });
+                if (NpcCensusNow() is { } census)
+                    WriteJson(context, 200, census, redact: false);
+                else
+                    WriteJson(
+                        context,
+                        503,
+                        new { error = "no complete partition report pass yet" }
+                    );
                 return;
             }
-            if (_registry != null && path.StartsWith("/registry/partitions/offline", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && path.StartsWith(
+                    "/registry/partitions/offline",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 HandleOfflineRoutes(context, path);
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/partitions", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/partitions", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 // ?partition=N: that one row (or []). The whole report is ~40 MB / 232k rows on w32, and a node
                 // asking about one partition used to fetch all of it (T-0231).
                 string? one = context.Request.QueryString["partition"];
-                WriteJson(context, 200, _registry.PartitionsReport(only: string.IsNullOrEmpty(one) ? null : ulong.Parse(one)));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.PartitionsReport(
+                        only: string.IsNullOrEmpty(one) ? null : ulong.Parse(one)
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/quarantine", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/quarantine", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, _registry.QuarantinedPartitions());
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/partitions/release", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/partitions/release", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 ulong releasePartition = ulong.Parse(Required(context, "partition"));
                 // Same guard as /registry/lineage below: a partition routed to a connected
@@ -4892,48 +7725,107 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // past its kill deadline). Retirement below keeps the unconditional guard -
                 // that one destroys reachability.
                 string releaseNode = Required(context, "node");
-                if (ReleaseRoutePinApplies(RoutePinStale(releasePartition),
-                        _registry.Nodes().FirstOrDefault(x => x.Node == releaseNode)?.State))
+                if (
+                    ReleaseRoutePinApplies(
+                        RoutePinStale(releasePartition),
+                        _registry.Nodes().FirstOrDefault(x => x.Node == releaseNode)?.State
+                    )
+                )
                     foreach (ulong releaseClient in _clients.Keys)
                     {
                         if (_registry.RoutedPartition(releaseClient) == releasePartition)
                             throw new RegistryConflictException(
-                                $"Partition {releasePartition} is routed to connected client {releaseClient}; refusing release");
+                                $"Partition {releasePartition} is routed to connected client {releaseClient}; refusing release"
+                            );
                     }
-                WriteJson(context, 200, _registry.ReleasePartition(releasePartition, releaseNode, long.Parse(Required(context, "epoch")),
-                    long.Parse(Required(context, "generation")), memberless: context.Request.QueryString["memberless"] == "true",
-                    failedRecovery: context.Request.QueryString["failed"] == "true"));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.ReleasePartition(
+                        releasePartition,
+                        releaseNode,
+                        long.Parse(Required(context, "epoch")),
+                        long.Parse(Required(context, "generation")),
+                        memberless: context.Request.QueryString["memberless"] == "true",
+                        failedRecovery: context.Request.QueryString["failed"] == "true"
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/recoveries/claim", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/recoveries/claim", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 RecoveryRequest request = ReadJson<RecoveryRequest>(context);
-                WriteJson(context, 200, _registry.ClaimRecoveries(request.Node, request.Epoch, request.Partitions));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.ClaimRecoveries(request.Node, request.Epoch, request.Partitions)
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/leases/expire", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/leases/expire", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, new { expired = _registry.ExpireLeases() });
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/handovers/begin", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/handovers/begin", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 HandoverRequest request = ReadJson<HandoverRequest>(context);
-                WriteJson(context, 200, _registry.Begin(request.Id, request.Partition, request.SourceNode, request.SourceEpoch, request.SourceGeneration, request.TargetNode, request.TargetEpoch));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.Begin(
+                        request.Id,
+                        request.Partition,
+                        request.SourceNode,
+                        request.SourceEpoch,
+                        request.SourceGeneration,
+                        request.TargetNode,
+                        request.TargetEpoch
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/grants", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/grants", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                WriteJson(context, 200, _registry.IssueGrant(ReadJson<GrantRequest>(context)), redact: false);
+                WriteJson(
+                    context,
+                    200,
+                    _registry.IssueGrant(ReadJson<GrantRequest>(context)),
+                    redact: false
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/grants/validate", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/grants/validate", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 _registry.ValidateGrant(ReadJson<GrantValidation>(context));
                 WriteJson(context, 200, new { valid = true });
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.StartsWith("/registry/handovers/", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.StartsWith("/registry/handovers/", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 string id = Required(context, "id");
                 HandoverRecord handover = path[20..].ToLowerInvariant() switch
@@ -4946,12 +7838,19 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 WriteJson(context, 200, handover);
                 return;
             }
-            if (context.Request.HttpMethod == "GET" && path.Equals("/registry/handovers/history", StringComparison.OrdinalIgnoreCase))
+            if (
+                context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/handovers/history", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, _handoverTelemetry.Snapshot());
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/handovers", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/handovers", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 string? id = context.Request.QueryString["id"];
                 if (id == null)
@@ -4959,13 +7858,21 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 else
                 {
                     HandoverRecord? handover = _registry.Get(id);
-                    WriteJson(context, handover == null ? 404 : 200, handover ?? (object)new { error = "handover not found" });
+                    WriteJson(
+                        context,
+                        handover == null ? 404 : 200,
+                        handover ?? (object)new { error = "handover not found" }
+                    );
                 }
                 return;
             }
             // TestPlan §1.4 / P3-REC-01: deterministically answer one node's registration, heartbeats,
             // claims and ID allocations with definitive 409s. Debug builds only.
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/debug/reject-node", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/debug/reject-node", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 if (!_options.DirectFrontend)
                     throw new ArgumentException("reject-node requires --direct");
@@ -4976,193 +7883,515 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 return;
             }
             // Orchestration §3.3: the HandoverBlocked table and its admin clear trigger.
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/handover-blocked", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/handover-blocked", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, _registry.HandoverBlocks());
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/handover-blocked/clear", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals(
+                    "/registry/handover-blocked/clear",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
                 ulong blockedPartition = ulong.Parse(Required(context, "partition"));
-                WriteJson(context, 200, new { partition = blockedPartition, cleared = _registry.ClearHandoverBlock(blockedPartition) });
+                WriteJson(
+                    context,
+                    200,
+                    new
+                    {
+                        partition = blockedPartition,
+                        cleared = _registry.ClearHandoverBlock(blockedPartition),
+                    }
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/saves", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/saves", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 string? sequence = context.Request.QueryString["sequence"];
                 if (sequence != null)
                 {
-                    WriteJson(context, 200, _registry.RegisterSave(
-                        new SaveId(ulong.Parse(Required(context, "partition")), long.Parse(Required(context, "generation")), long.Parse(sequence)),
-                        Required(context, "node"), long.Parse(Required(context, "epoch")), Enum.Parse<SaveKind>(Required(context, "kind"), true),
-						long.Parse(Required(context, "size")), Required(context, "checksum"), long.Parse(Required(context, "clusterTime")), Required(context, "location"), context.Request.QueryString["control"] ?? string.Empty,
-						ParseHomeStamps(context.Request.QueryString["homes"]),
-						int.TryParse(context.Request.QueryString["entities"], out int entities) && entities >= 0 ? entities : null));
+                    WriteJson(
+                        context,
+                        200,
+                        _registry.RegisterSave(
+                            new SaveId(
+                                ulong.Parse(Required(context, "partition")),
+                                long.Parse(Required(context, "generation")),
+                                long.Parse(sequence)
+                            ),
+                            Required(context, "node"),
+                            long.Parse(Required(context, "epoch")),
+                            Enum.Parse<SaveKind>(Required(context, "kind"), true),
+                            long.Parse(Required(context, "size")),
+                            Required(context, "checksum"),
+                            long.Parse(Required(context, "clusterTime")),
+                            Required(context, "location"),
+                            context.Request.QueryString["control"] ?? string.Empty,
+                            ParseHomeStamps(context.Request.QueryString["homes"]),
+                            int.TryParse(context.Request.QueryString["entities"], out int entities)
+                            && entities >= 0
+                                ? entities
+                                : null
+                        )
+                    );
                     return;
                 }
-                ulong[] partitions = Required(context, "partitions").Split(',', StringSplitOptions.RemoveEmptyEntries).Select(ulong.Parse).ToArray();
+                ulong[] partitions = Required(context, "partitions")
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(ulong.Parse)
+                    .ToArray();
                 string? created = context.Request.QueryString["created"];
-                WriteJson(context, 200, _registry.RegisterSave(
-                    Required(context, "id"), Required(context, "node"), long.Parse(Required(context, "epoch")),
-                    long.Parse(Required(context, "generation")), partitions, Required(context, "location"),
-                    created == null ? DateTimeOffset.UtcNow : DateTimeOffset.Parse(created)));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.RegisterSave(
+                        Required(context, "id"),
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch")),
+                        long.Parse(Required(context, "generation")),
+                        partitions,
+                        Required(context, "location"),
+                        created == null ? DateTimeOffset.UtcNow : DateTimeOffset.Parse(created)
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/saves/late", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/saves/late", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 // T-0347 (LateSaves.cs): the Finals of a local stop, reported from the writers' journals at the next start.
-                WriteJson(context, 200, _registry.RegisterLateSaves(Required(context, "node"), long.Parse(Required(context, "epoch")),
-                    ReadJson<LateSaveRequest>(context).Saves ?? []));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.RegisterLateSaves(
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch")),
+                        ReadJson<LateSaveRequest>(context).Saves ?? []
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/global-saves", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/global-saves", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                WriteJson(context, 200, _registry.RegisterGlobalSave(
-                    new GlobalSaveId(long.Parse(Required(context, "generation")), long.Parse(Required(context, "sequence"))),
-                    Required(context, "node"), long.Parse(Required(context, "epoch")), Enum.Parse<SaveKind>(Required(context, "kind"), true),
-                    long.Parse(Required(context, "size")), Required(context, "checksum"), long.Parse(Required(context, "clusterTime")),
-                    Required(context, "location"), context.Request.QueryString["control"] ?? string.Empty));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.RegisterGlobalSave(
+                        new GlobalSaveId(
+                            long.Parse(Required(context, "generation")),
+                            long.Parse(Required(context, "sequence"))
+                        ),
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch")),
+                        Enum.Parse<SaveKind>(Required(context, "kind"), true),
+                        long.Parse(Required(context, "size")),
+                        Required(context, "checksum"),
+                        long.Parse(Required(context, "clusterTime")),
+                        Required(context, "location"),
+                        context.Request.QueryString["control"] ?? string.Empty
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/host-store/adopt", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/host-store/adopt", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 // T-0340 step 7 (HostStoreMove.cs): the host agent's evidence for legacy save files it moved into its host's store.
-                WriteJson(context, 200, _registry.HostStoreAdopt(ReadJson<HostStoreAdoptRequest>(context)));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.HostStoreAdopt(ReadJson<HostStoreAdoptRequest>(context))
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/host-store/archived-partitions", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals(
+                    "/registry/host-store/archived-partitions",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
-                WriteJson(context, 200, new { partitions = _registry.HostStoreArchivedPartitions() });
+                WriteJson(
+                    context,
+                    200,
+                    new { partitions = _registry.HostStoreArchivedPartitions() }
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/global-saves", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/global-saves", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, _registry.GlobalSaves());
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/global-saves/newest", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/global-saves/newest", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 GlobalSaveRegistration? save = _registry.NewestGlobalSave();
-                WriteJson(context, save == null ? 404 : 200, save ?? (object)new { error = "global save not found" });
+                WriteJson(
+                    context,
+                    save == null ? 404 : 200,
+                    save ?? (object)new { error = "global save not found" }
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/global-saves/recovery", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals(
+                    "/registry/global-saves/recovery",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
-                GlobalSaveRegistration? save = _registry.NewestGlobalSaveForRecovery(context.Request.QueryString["without"]);
-                WriteJson(context, save == null ? 404 : 200, save ?? (object)new { error = "global save not found" });
+                GlobalSaveRegistration? save = _registry.NewestGlobalSaveForRecovery(
+                    context.Request.QueryString["without"]
+                );
+                WriteJson(
+                    context,
+                    save == null ? 404 : 200,
+                    save ?? (object)new { error = "global save not found" }
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/global-journal", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/global-journal", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 // #1318 (GlobalJournal.cs): the World Authority's commands, journaled before it answers them.
-                WriteJson(context, 200, new { appended = _registry.AppendGlobalJournal(Required(context, "node"), long.Parse(Required(context, "epoch")),
-                    long.Parse(Required(context, "generation")), ReadJson<GlobalJournalAppend>(context).Entries ?? []) });
+                WriteJson(
+                    context,
+                    200,
+                    new
+                    {
+                        appended = _registry.AppendGlobalJournal(
+                            Required(context, "node"),
+                            long.Parse(Required(context, "epoch")),
+                            long.Parse(Required(context, "generation")),
+                            ReadJson<GlobalJournalAppend>(context).Entries ?? []
+                        ),
+                    }
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/global-journal", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/global-journal", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 // Not redacted: the replacement replays these payloads and results as they were, like the global save holding them.
-                WriteJson(context, 200, _registry.GlobalJournal(long.Parse(context.Request.QueryString["after"] ?? "0")), redact: false);
+                WriteJson(
+                    context,
+                    200,
+                    _registry.GlobalJournal(
+                        long.Parse(context.Request.QueryString["after"] ?? "0")
+                    ),
+                    redact: false
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/voxel-bases", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/voxel-bases", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                WriteJson(context, 200, _registry.RegisterVoxelBase(Required(context, "storage"), long.Parse(Required(context, "baseVersion")),
-                    long.Parse(Required(context, "tailSeq")), Required(context, "node"), long.Parse(Required(context, "epoch")),
-                    long.Parse(Required(context, "generation")), long.Parse(Required(context, "size")), Required(context, "checksum"), Required(context, "location")));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.RegisterVoxelBase(
+                        Required(context, "storage"),
+                        long.Parse(Required(context, "baseVersion")),
+                        long.Parse(Required(context, "tailSeq")),
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch")),
+                        long.Parse(Required(context, "generation")),
+                        long.Parse(Required(context, "size")),
+                        Required(context, "checksum"),
+                        Required(context, "location")
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/voxel-bases", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/voxel-bases", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, _registry.VoxelBaseCatalog());
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/voxel-journals", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/voxel-journals", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                WriteJson(context, 200, _registry.ReportVoxelJournal(new VoxelRef(Required(context, "storage"),
-                    long.Parse(Required(context, "baseVersion")), long.Parse(Required(context, "tailSeq"))), Required(context, "node"),
-                    long.Parse(Required(context, "epoch")), long.Parse(Required(context, "generation"))));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.ReportVoxelJournal(
+                        new VoxelRef(
+                            Required(context, "storage"),
+                            long.Parse(Required(context, "baseVersion")),
+                            long.Parse(Required(context, "tailSeq"))
+                        ),
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch")),
+                        long.Parse(Required(context, "generation"))
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/voxel-journals", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/voxel-journals", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, _registry.VoxelJournals());
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/voxel-replicas", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/voxel-replicas", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                WriteJson(context, 200, _registry.ReportVoxelReplica(Required(context, "storage"), Required(context, "node"),
-                    long.Parse(Required(context, "epoch")), long.Parse(Required(context, "applied"))));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.ReportVoxelReplica(
+                        Required(context, "storage"),
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch")),
+                        long.Parse(Required(context, "applied"))
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/voxel-replicas", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/voxel-replicas", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 WriteJson(context, 200, _registry.VoxelReplicas());
                 return;
             }
-			if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/replicas", StringComparison.OrdinalIgnoreCase))
-			{
-				WriteJson(context, 200, _registry.ReplicaWork(Required(context, "node"), long.Parse(Required(context, "epoch"))));
-				return;
-			}
-			if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/saves/holders", StringComparison.OrdinalIgnoreCase))
-			{
-				WriteJson(context, 200, _registry.RegisterHolder(new SaveId(ulong.Parse(Required(context, "partition")), long.Parse(Required(context, "generation")), long.Parse(Required(context, "sequence"))),
-					Required(context, "node"), long.Parse(Required(context, "epoch")), long.Parse(Required(context, "size")), Required(context, "checksum"),
-					Required(context, "location"), Required(context, "control")));
-				return;
-			}
-			if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/global-saves/holders", StringComparison.OrdinalIgnoreCase))
-			{
-				// T-0399: ?withdraw=1 takes the node's copy back (its scrub found it unreadable); same parameters as the register.
-				if (context.Request.QueryString["withdraw"] == "1")
-				{
-					WriteJson(context, 200, new { withdrawn = _registry.WithdrawGlobalHolder(
-						new GlobalSaveId(long.Parse(Required(context, "generation")), long.Parse(Required(context, "sequence"))),
-						Required(context, "node"), long.Parse(Required(context, "epoch")), Required(context, "location")) });
-					return;
-				}
-				WriteJson(context, 200, _registry.RegisterGlobalHolder(new GlobalSaveId(long.Parse(Required(context, "generation")), long.Parse(Required(context, "sequence"))),
-					Required(context, "node"), long.Parse(Required(context, "epoch")), long.Parse(Required(context, "size")), Required(context, "checksum"),
-					Required(context, "location"), Required(context, "control")));
-				return;
-			}
-			if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/saves/amend", StringComparison.OrdinalIgnoreCase))
-			{
-				WriteJson(context, 200, _registry.AmendSave(
-					new SaveId(ulong.Parse(Required(context, "partition")), long.Parse(Required(context, "generation")), long.Parse(Required(context, "sequence"))),
-					Required(context, "node"), long.Parse(Required(context, "epoch")),
-					long.Parse(Required(context, "size")), Required(context, "checksum"), long.Parse(Required(context, "clusterTime")), Required(context, "location")));
-				return;
-			}
-			if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/saves/corruption", StringComparison.OrdinalIgnoreCase))
-			{
-				_registry.ReportCorruption(new SaveId(ulong.Parse(Required(context, "partition")), long.Parse(Required(context, "generation")), long.Parse(Required(context, "sequence"))),
-					Required(context, "holder"), Required(context, "reporter"), long.Parse(Required(context, "epoch")));
-				WriteJson(context, 200, new { quarantined = true });
-				return;
-			}
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/saves", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/replicas", StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                WriteJson(
+                    context,
+                    200,
+                    _registry.ReplicaWork(
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch"))
+                    )
+                );
+                return;
+            }
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/saves/holders", StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                WriteJson(
+                    context,
+                    200,
+                    _registry.RegisterHolder(
+                        new SaveId(
+                            ulong.Parse(Required(context, "partition")),
+                            long.Parse(Required(context, "generation")),
+                            long.Parse(Required(context, "sequence"))
+                        ),
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch")),
+                        long.Parse(Required(context, "size")),
+                        Required(context, "checksum"),
+                        Required(context, "location"),
+                        Required(context, "control")
+                    )
+                );
+                return;
+            }
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/global-saves/holders", StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                // T-0399: ?withdraw=1 takes the node's copy back (its scrub found it unreadable); same parameters as the register.
+                if (context.Request.QueryString["withdraw"] == "1")
+                {
+                    WriteJson(
+                        context,
+                        200,
+                        new
+                        {
+                            withdrawn = _registry.WithdrawGlobalHolder(
+                                new GlobalSaveId(
+                                    long.Parse(Required(context, "generation")),
+                                    long.Parse(Required(context, "sequence"))
+                                ),
+                                Required(context, "node"),
+                                long.Parse(Required(context, "epoch")),
+                                Required(context, "location")
+                            ),
+                        }
+                    );
+                    return;
+                }
+                WriteJson(
+                    context,
+                    200,
+                    _registry.RegisterGlobalHolder(
+                        new GlobalSaveId(
+                            long.Parse(Required(context, "generation")),
+                            long.Parse(Required(context, "sequence"))
+                        ),
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch")),
+                        long.Parse(Required(context, "size")),
+                        Required(context, "checksum"),
+                        Required(context, "location"),
+                        Required(context, "control")
+                    )
+                );
+                return;
+            }
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/saves/amend", StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                WriteJson(
+                    context,
+                    200,
+                    _registry.AmendSave(
+                        new SaveId(
+                            ulong.Parse(Required(context, "partition")),
+                            long.Parse(Required(context, "generation")),
+                            long.Parse(Required(context, "sequence"))
+                        ),
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch")),
+                        long.Parse(Required(context, "size")),
+                        Required(context, "checksum"),
+                        long.Parse(Required(context, "clusterTime")),
+                        Required(context, "location")
+                    )
+                );
+                return;
+            }
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/saves/corruption", StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                _registry.ReportCorruption(
+                    new SaveId(
+                        ulong.Parse(Required(context, "partition")),
+                        long.Parse(Required(context, "generation")),
+                        long.Parse(Required(context, "sequence"))
+                    ),
+                    Required(context, "holder"),
+                    Required(context, "reporter"),
+                    long.Parse(Required(context, "epoch"))
+                );
+                WriteJson(context, 200, new { quarantined = true });
+                return;
+            }
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/saves", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 // ?partition=N: that partition's saves only. Nodes always asked with it but got the WHOLE catalogue
                 // (6.1 MB on w32 2026-09-25) and filtered locally - and a draining node's final-replication wait asks
                 // once per drained partition every 500 ms for up to 10 s.
                 string? onePartition = context.Request.QueryString["partition"];
-                WriteJson(context, 200, string.IsNullOrEmpty(onePartition) ? _registry.Saves() : _registry.SavesFor(ulong.Parse(onePartition)));
+                WriteJson(
+                    context,
+                    200,
+                    string.IsNullOrEmpty(onePartition)
+                        ? _registry.Saves()
+                        : _registry.SavesFor(ulong.Parse(onePartition))
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/saves/resolve", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/saves/resolve", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                SaveCover[] cover = _registry.ResolveCover(ulong.Parse(Required(context, "partition")));
+                SaveCover[] cover = _registry.ResolveCover(
+                    ulong.Parse(Required(context, "partition"))
+                );
                 WriteJson(context, cover.Length == 0 ? 404 : 200, cover);
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/rebuild", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/rebuild", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                WriteJson(context, 200, _registry.RebuildCatalog(ReadJson<RebuildRequest>(context)));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.RebuildCatalog(ReadJson<RebuildRequest>(context))
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/lineage", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/lineage", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 LineageRequest request = ReadJson<LineageRequest>(context);
                 // The same invariant FencedClientlessHandover enforces for transfers, applied to
@@ -5182,83 +8411,193 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // is only true once something expires the route, and nothing did.
                 foreach (ulong lineageClient in _clients.Keys)
                 {
-                    if (_registry.GetClientPartition(lineageClient) is not { } lineagePlacement
-                        || !request.Inputs.Any(x => x.Partition == lineagePlacement.Partition))
+                    if (
+                        _registry.GetClientPartition(lineageClient) is not { } lineagePlacement
+                        || !request.Inputs.Any(x => x.Partition == lineagePlacement.Partition)
+                    )
                         continue;
                     if (!RoutePinStale(lineagePlacement.Partition))
                         throw new RegistryConflictException(
-                            $"Partition {lineagePlacement.Partition} is routed to connected client {lineageClient}; refusing lineage '{request.OpId}'");
-                    Console.WriteLine($"Partition {lineagePlacement.Partition} is routed to connected client "
-                        + $"{lineageClient} but its node has reported it clientless for at least "
-                        + $"{RouteOverReportGrace.TotalSeconds:F0}s; retiring it on the node's report "
-                        + $"(lineage '{request.OpId}')");
+                            $"Partition {lineagePlacement.Partition} is routed to connected client {lineageClient}; refusing lineage '{request.OpId}'"
+                        );
+                    Console.WriteLine(
+                        $"Partition {lineagePlacement.Partition} is routed to connected client "
+                            + $"{lineageClient} but its node has reported it clientless for at least "
+                            + $"{RouteOverReportGrace.TotalSeconds:F0}s; retiring it on the node's report "
+                            + $"(lineage '{request.OpId}')"
+                    );
                 }
-                WriteJson(context, 200, _registry.RecordLineage(request.OpId, request.Kind, request.Inputs, request.Outputs, request.Members, request.ClusterTime));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.RecordLineage(
+                        request.OpId,
+                        request.Kind,
+                        request.Inputs,
+                        request.Outputs,
+                        request.Members,
+                        request.ClusterTime
+                    )
+                );
                 return;
             }
-			if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/lineage", StringComparison.OrdinalIgnoreCase))
-			{
-				WriteJson(context, 200, _registry.Lineage());
-				return;
-			}
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/snapshots", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/lineage", StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                WriteJson(context, 200, _registry.Lineage());
+                return;
+            }
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/snapshots", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 SnapshotRequest request = ReadJson<SnapshotRequest>(context);
-                WriteJson(context, 200, _registry.CreateSnapshot(request.SnapshotId, request.Kind, request.ClusterTime,
-                    request.PartitionRefs, request.Dirty, request.GlobalRef, request.VoxelRefs));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.CreateSnapshot(
+                        request.SnapshotId,
+                        request.Kind,
+                        request.ClusterTime,
+                        request.PartitionRefs,
+                        request.Dirty,
+                        request.GlobalRef,
+                        request.VoxelRefs
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/snapshots/online", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/snapshots/online", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                WriteJson(context, 200, _registry.CreateOnlineSnapshot(Required(context, "id"),
-                    long.TryParse(context.Request.QueryString["clusterTime"], out long clusterTime) ? clusterTime : DateTimeOffset.UtcNow.UtcTicks));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.CreateOnlineSnapshot(
+                        Required(context, "id"),
+                        long.TryParse(
+                            context.Request.QueryString["clusterTime"],
+                            out long clusterTime
+                        )
+                            ? clusterTime
+                            : DateTimeOffset.UtcNow.UtcTicks
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/retention", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/retention", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                int keep = int.TryParse(context.Request.QueryString["keep"], out int keepValue) ? keepValue : 3;
-                int snapshots = int.TryParse(context.Request.QueryString["snapshots"], out int snapshotValue) ? snapshotValue : 2;
+                int keep = int.TryParse(context.Request.QueryString["keep"], out int keepValue)
+                    ? keepValue
+                    : 3;
+                int snapshots = int.TryParse(
+                    context.Request.QueryString["snapshots"],
+                    out int snapshotValue
+                )
+                    ? snapshotValue
+                    : 2;
                 WriteJson(context, 200, _registry.PlanRetention(keep, snapshots));
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "POST" && path.Equals("/registry/deletions/ack", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "POST"
+                && path.Equals("/registry/deletions/ack", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 bool removed = _registry.AcknowledgeDelete(
-                    new SaveId(ulong.Parse(Required(context, "partition")), long.Parse(Required(context, "generation")), long.Parse(Required(context, "sequence"))),
-                    Required(context, "location"));
+                    new SaveId(
+                        ulong.Parse(Required(context, "partition")),
+                        long.Parse(Required(context, "generation")),
+                        long.Parse(Required(context, "sequence"))
+                    ),
+                    Required(context, "location")
+                );
                 WriteJson(context, removed ? 200 : 404, new { removed });
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/deletions", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/deletions", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                WriteJson(context, 200, _registry.PendingDeletes(Required(context, "node"), long.Parse(Required(context, "epoch"))));
+                WriteJson(
+                    context,
+                    200,
+                    _registry.PendingDeletes(
+                        Required(context, "node"),
+                        long.Parse(Required(context, "epoch"))
+                    )
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/saves/newest", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/saves/newest", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                SaveRegistration? save = _registry.NewestSave(ulong.Parse(Required(context, "partition")));
-                WriteJson(context, save == null ? 404 : 200, save is null ? new { error = "save not found" } : (object)save);
+                SaveRegistration? save = _registry.NewestSave(
+                    ulong.Parse(Required(context, "partition"))
+                );
+                WriteJson(
+                    context,
+                    save == null ? 404 : 200,
+                    save is null ? new { error = "save not found" } : (object)save
+                );
                 return;
             }
-            if (_registry != null && context.Request.HttpMethod == "GET" && path.Equals("/registry/saves/cover", StringComparison.OrdinalIgnoreCase))
+            if (
+                _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals("/registry/saves/cover", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                ulong[] partitions = Required(context, "partitions").Split(',', StringSplitOptions.RemoveEmptyEntries).Select(ulong.Parse).ToArray();
+                ulong[] partitions = Required(context, "partitions")
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(ulong.Parse)
+                    .ToArray();
                 SaveRegistration[] saves = _registry.Cover(partitions);
                 WriteJson(context, saves.Length == 0 && partitions.Length != 0 ? 404 : 200, saves);
                 return;
             }
-            if (IsControlVerb(context) && path.Equals("/handover", StringComparison.OrdinalIgnoreCase))
+            if (
+                IsControlVerb(context)
+                && path.Equals("/handover", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 string source = Required(context, "source");
                 string target = Required(context, "target");
-                IPEndPoint backend = EndpointParser.Parse(Required(context, "backend"), DirectTransportConstants.DefaultPort);
+                IPEndPoint backend = EndpointParser.Parse(
+                    Required(context, "backend"),
+                    DirectTransportConstants.DefaultPort
+                );
                 ulong partition = ulong.Parse(Required(context, "partition"));
                 string? clientlessValue = context.Request.QueryString["clientless"];
-                bool clientless = clientlessValue != null && bool.TryParse(clientlessValue, out bool parsedClientless) && parsedClientless;
+                bool clientless =
+                    clientlessValue != null
+                    && bool.TryParse(clientlessValue, out bool parsedClientless)
+                    && parsedClientless;
                 if (clientlessValue != null && !bool.TryParse(clientlessValue, out _))
                     throw new ArgumentException("Invalid query parameter 'clientless'");
                 string? pauseValue = context.Request.QueryString["pauseAfterCapture"];
-                bool pauseAfterCapture = pauseValue != null && bool.TryParse(pauseValue, out bool parsedPause) && parsedPause;
+                bool pauseAfterCapture =
+                    pauseValue != null
+                    && bool.TryParse(pauseValue, out bool parsedPause)
+                    && parsedPause;
                 if (pauseValue != null && !bool.TryParse(pauseValue, out _))
                     throw new ArgumentException("Invalid query parameter 'pauseAfterCapture'");
                 // T-0235: before the move, so the balancer pass waiting on _rotation sees the drain.
@@ -5269,64 +8608,132 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     // T-0354b: a partition a node made a moment ago is refused until its id claim is answered; a requested
                     // move waits that out (bounded) instead of failing, as on df where the claim was answered at once.
                     if (clientless)
-                        WhenRegistryApplied(partition, () => FencedClientlessHandover(source, target, backend, partition, pauseAfterCapture)).GetAwaiter().GetResult();
+                        WhenRegistryApplied(
+                                partition,
+                                () =>
+                                    FencedClientlessHandover(
+                                        source,
+                                        target,
+                                        backend,
+                                        partition,
+                                        pauseAfterCapture
+                                    )
+                            )
+                            .GetAwaiter()
+                            .GetResult();
                     else
-                        WhenRegistryApplied(partition, () => Handover(ResolveCrew(context, source, partition), source, target, backend, partition, pauseAfterCapture)).GetAwaiter().GetResult();
+                        WhenRegistryApplied(
+                                partition,
+                                () =>
+                                    Handover(
+                                        ResolveCrew(context, source, partition),
+                                        source,
+                                        target,
+                                        backend,
+                                        partition,
+                                        pauseAfterCapture
+                                    )
+                            )
+                            .GetAwaiter()
+                            .GetResult();
                 }
-                finally { _rotation.Release(); }
+                finally
+                {
+                    _rotation.Release();
+                }
                 WriteText(context, 200, "handover ok\n");
                 return;
             }
 
-            if (IsControlVerb(context) && path.Equals("/close-node", StringComparison.OrdinalIgnoreCase))
+            if (
+                IsControlVerb(context)
+                && path.Equals("/close-node", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                double seconds = double.TryParse(context.Request.QueryString["forceAfterSeconds"], out double forceAfter) && forceAfter >= 0 ? forceAfter : 900;
-                bool forceOnly = bool.TryParse(context.Request.QueryString["forceOnly"], out bool parsedForceOnly) && parsedForceOnly;
-                NodeRegistration closed = CloseNode(TimeSpan.FromSeconds(seconds), forceOnly, context.Request.QueryString["node"]).GetAwaiter().GetResult();
+                double seconds =
+                    double.TryParse(
+                        context.Request.QueryString["forceAfterSeconds"],
+                        out double forceAfter
+                    )
+                    && forceAfter >= 0
+                        ? forceAfter
+                        : 900;
+                bool forceOnly =
+                    bool.TryParse(
+                        context.Request.QueryString["forceOnly"],
+                        out bool parsedForceOnly
+                    ) && parsedForceOnly;
+                NodeRegistration closed = CloseNode(
+                        TimeSpan.FromSeconds(seconds),
+                        forceOnly,
+                        context.Request.QueryString["node"]
+                    )
+                    .GetAwaiter()
+                    .GetResult();
                 WriteJson(context, 200, closed);
                 return;
             }
 
-            if (IsControlVerb(context) && path.Equals("/switch", StringComparison.OrdinalIgnoreCase))
+            if (
+                IsControlVerb(context) && path.Equals("/switch", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                ControlSwitchBackend(ResolveSession(context), EndpointParser.Parse(Required(context, "backend"), DirectTransportConstants.DefaultPort));
+                ControlSwitchBackend(
+                    ResolveSession(context),
+                    EndpointParser.Parse(
+                        Required(context, "backend"),
+                        DirectTransportConstants.DefaultPort
+                    )
+                );
                 WriteText(context, 200, "switch ok\n");
                 return;
             }
 
-            if (IsControlVerb(context) && path.Equals("/resume", StringComparison.OrdinalIgnoreCase))
+            if (
+                IsControlVerb(context) && path.Equals("/resume", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 Resume();
                 WriteText(context, 200, "resume ok\n");
                 return;
             }
-			if (IsControlVerb(context) && path.Equals("/pause", StringComparison.OrdinalIgnoreCase))
-			{
-				lock (_pauseLock) _paused = true;
-				WriteText(context, 200, "paused\n");
-				return;
-			}
-			// Suspends only the automatic co-location initiation - relay, scripted transfers,
-			// and reconciliation keep running. For maintenance and for test choreography that
-			// must hold deliberately co-located cross-node partitions in place.
-			if (IsControlVerb(context) && path.Equals("/automatic/pause", StringComparison.OrdinalIgnoreCase))
-			{
-				_automaticSuspended = true;
-				WriteText(context, 200, "automatic paused\n");
-				return;
-			}
-			if (IsControlVerb(context) && path.Equals("/automatic/resume", StringComparison.OrdinalIgnoreCase))
-			{
-				_automaticSuspended = false;
-				WriteText(context, 200, "automatic resumed\n");
-				return;
-			}
+            if (IsControlVerb(context) && path.Equals("/pause", StringComparison.OrdinalIgnoreCase))
+            {
+                lock (_pauseLock)
+                    _paused = true;
+                WriteText(context, 200, "paused\n");
+                return;
+            }
+            // Suspends only the automatic co-location initiation - relay, scripted transfers,
+            // and reconciliation keep running. For maintenance and for test choreography that
+            // must hold deliberately co-located cross-node partitions in place.
+            if (
+                IsControlVerb(context)
+                && path.Equals("/automatic/pause", StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                _automaticSuspended = true;
+                WriteText(context, 200, "automatic paused\n");
+                return;
+            }
+            if (
+                IsControlVerb(context)
+                && path.Equals("/automatic/resume", StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                _automaticSuspended = false;
+                WriteText(context, 200, "automatic resumed\n");
+                return;
+            }
 
-			if (context.Request.HttpMethod == "POST" && path.Equals("/balance/migrate", StringComparison.OrdinalIgnoreCase))
-			{
-				HandleTestMigration(context);
-				return;
-			}
+            if (
+                context.Request.HttpMethod == "POST"
+                && path.Equals("/balance/migrate", StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                HandleTestMigration(context);
+                return;
+            }
 
             WriteText(context, 404, "unknown gateway control route\n");
         }
@@ -5365,40 +8772,63 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // Except ArgumentNullException: no request can supply a null, so it is always a gateway bug
             // (w32 2026-09-25 20:53:03, POST /handover "Value cannot be null. (Parameter 'key')" was logged
             // as a one-line refusal and its throw site was unrecoverable). It gets the stack and a 500.
-            bool expected = e is RegistryBusyException or RegistryConflictException or FormatException
+            bool expected =
+                e is RegistryBusyException or RegistryConflictException or FormatException
                 || e is ArgumentException and not ArgumentNullException;
-            Console.Error.WriteLine("Control request failed: verb=" + context.Request.HttpMethod
-                // From the request, not from `path`: that local is declared inside the try and is
-                // therefore out of scope here - and would be unset anyway if the throw beat its
-                // assignment, which is exactly the case worth logging.
-                + " path=" + (context.Request.Url?.AbsolutePath ?? "?") + " "
-                + (expected ? e.GetType().Name + ": " + e.Message : e.ToString()));
+            Console.Error.WriteLine(
+                "Control request failed: verb="
+                    + context.Request.HttpMethod
+                    // From the request, not from `path`: that local is declared inside the try and is
+                    // therefore out of scope here - and would be unset anyway if the throw beat its
+                    // assignment, which is exactly the case worth logging.
+                    + " path="
+                    + (context.Request.Url?.AbsolutePath ?? "?")
+                    + " "
+                    + (expected ? e.GetType().Name + ": " + e.Message : e.ToString())
+            );
             try
             {
                 // Response body follows the same rule. A stack trace here is also of no use to the
                 // node: its line numbers refer to the DEPLOYED gateway build, not to any source the
                 // reader has (archive-build-id-names-the-wrong-repo).
-                WriteText(context, e is RegistryBusyException ? 503 : e is RegistryConflictException ? 409 : expected ? 400 : 500,
-                    (expected ? e.GetType().Name + ": " + e.Message : e.ToString()) + "\n");
+                WriteText(
+                    context,
+                    e is RegistryBusyException ? 503
+                        : e is RegistryConflictException ? 409
+                        : expected ? 400
+                        : 500,
+                    (expected ? e.GetType().Name + ": " + e.Message : e.ToString()) + "\n"
+                );
             }
             catch (Exception writeFailure)
             {
                 // Expected when the response is already submitted. The caller gets nothing, which
                 // it was going to get anyway; the point is that the line above survived.
-                Console.Error.WriteLine("  (could not send the error response: " + writeFailure.GetType().Name
-                                        + ": " + writeFailure.Message + ")");
+                Console.Error.WriteLine(
+                    "  (could not send the error response: "
+                        + writeFailure.GetType().Name
+                        + ": "
+                        + writeFailure.Message
+                        + ")"
+                );
             }
         }
     }
 
-    private ClusterLifecycle ShutdownCluster(bool emergency, TimeSpan timeout, TimeSpan forceDrainAfter)
+    private ClusterLifecycle ShutdownCluster(
+        bool emergency,
+        TimeSpan timeout,
+        TimeSpan forceDrainAfter
+    )
     {
         GatewayRegistry registry = _registry!;
         if (!emergency)
             NotifyAndReturnPlayers();
-		lock (_pauseLock) _paused = true;
+        lock (_pauseLock)
+            _paused = true;
         registry.BeginShutdown(emergency, forceDrainAfter);
-        foreach (ClientSession client in _clients.Values) client.Client?.Disconnect();
+        foreach (ClientSession client in _clients.Values)
+            client.Client?.Disconnect();
         DateTimeOffset deadline = DateTimeOffset.UtcNow + timeout;
         while (!registry.ShutdownReady() && DateTimeOffset.UtcNow < deadline)
         {
@@ -5432,23 +8862,35 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         Console.WriteLine($"Shutdown notice: joining closed, {clients} client(s) connected");
         if (clients == 0)
             return;
-        string text = Environment.GetEnvironmentVariable("CLUSTER_SHUTDOWN_MESSAGE") is { Length: > 0 } custom
-            ? custom : "The cluster is shutting down now. You can join again once it is back up.";
+        string text = Environment.GetEnvironmentVariable("CLUSTER_SHUTDOWN_MESSAGE")
+            is { Length: > 0 } custom
+            ? custom
+            : "The cluster is shutting down now. You can join again once it is back up.";
         bool announced = false;
         if (WorldAuthorityControl() is { } authority)
         {
             try
             {
-                using HttpResponseMessage response = _http.Send(new HttpRequestMessage(HttpMethod.Post,
-                    ClusterUrl(authority.Control, "shutdown-notice") + "?text=" + Uri.EscapeDataString(text)));
+                using HttpResponseMessage response = _http.Send(
+                    new HttpRequestMessage(
+                        HttpMethod.Post,
+                        ClusterUrl(authority.Control, "shutdown-notice")
+                            + "?text="
+                            + Uri.EscapeDataString(text)
+                    )
+                );
                 announced = response.IsSuccessStatusCode;
             }
             catch (Exception e)
             {
-                Console.Error.WriteLine($"Shutdown notice: World Authority chat failed: {e.Message}");
+                Console.Error.WriteLine(
+                    $"Shutdown notice: World Authority chat failed: {e.Message}"
+                );
             }
         }
-        Console.WriteLine($"Shutdown notice: chat {(announced ? "sent" : "NOT sent")}; returning players to the menu in {notice:0}s");
+        Console.WriteLine(
+            $"Shutdown notice: chat {(announced ? "sent" : "NOT sent")}; returning players to the menu in {notice:0}s"
+        );
         if (announced)
             Thread.Sleep(TimeSpan.FromSeconds(notice));
         // Repeated until the leave deadline: a client that attaches to a node after the first pass
@@ -5460,60 +8902,114 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         {
             foreach (NodeRegistration node in _registry?.Nodes() ?? [])
             {
-                if (node.ControlEndpoint == null || node.State != NodeState.Active) continue;
+                if (node.ControlEndpoint == null || node.State != NodeState.Active)
+                    continue;
                 try
                 {
-                    using HttpResponseMessage response = _http.Send(new HttpRequestMessage(HttpMethod.Post,
-                        ClusterUrl(node.ControlEndpoint.Replace("http://", string.Empty), "return-to-menu")
-                        // A Steam client knows its server as gateway-rs's GameServer, not as the node (T-0248).
-                        + (Volatile.Read(ref _steamServerId) is var steamServer and not 0 ? "?serverId=" + steamServer : "")));
+                    using HttpResponseMessage response = _http.Send(
+                        new HttpRequestMessage(
+                            HttpMethod.Post,
+                            ClusterUrl(
+                                node.ControlEndpoint.Replace("http://", string.Empty),
+                                "return-to-menu"
+                            )
+                                // A Steam client knows its server as gateway-rs's GameServer, not as the node (T-0248).
+                                + (
+                                    Volatile.Read(ref _steamServerId) is var steamServer and not 0
+                                        ? "?serverId=" + steamServer
+                                        : ""
+                                )
+                        )
+                    );
                     response.EnsureSuccessStatusCode();
-                    foreach (string id in response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-                                 .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                        if (ulong.TryParse(id, out ulong userId)) returned.Add(userId);
+                    foreach (
+                        string id in response
+                            .Content.ReadAsStringAsync()
+                            .GetAwaiter()
+                            .GetResult()
+                            .Split(
+                                ' ',
+                                StringSplitOptions.RemoveEmptyEntries
+                                    | StringSplitOptions.TrimEntries
+                            )
+                    )
+                        if (ulong.TryParse(id, out ulong userId))
+                            returned.Add(userId);
                     answered.Add(node.Node);
                 }
                 catch (Exception e)
                 {
-                    Console.Error.WriteLine($"Shutdown notice: return-to-menu on {node.Node} failed: {e.Message}");
+                    Console.Error.WriteLine(
+                        $"Shutdown notice: return-to-menu on {node.Node} failed: {e.Message}"
+                    );
                 }
             }
-            for (DateTimeOffset next = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(2);
-                 !_clients.IsEmpty && DateTimeOffset.UtcNow < next && DateTimeOffset.UtcNow < deadline;)
+            for (
+                DateTimeOffset next = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(2);
+                !_clients.IsEmpty
+                    && DateTimeOffset.UtcNow < next
+                    && DateTimeOffset.UtcNow < deadline;
+
+            )
                 Thread.Sleep(250);
         } while (!_clients.IsEmpty && DateTimeOffset.UtcNow < deadline);
         // Still connected and never listed by a node: joining, or a dead client the transport has
         // not timed out yet (the front's DisconnectTimeout is 120 s). The drain cuts both.
         ulong[] unlisted = _clients.Keys.Where(id => !returned.Contains(id)).ToArray();
-        Console.WriteLine($"Shutdown notice: {returned.Count} client(s) returned to the menu by {answered.Count} node(s); "
-            + $"{clients - _clients.Count} left, {_clients.Count} still connected (disconnected by the drain)"
-            + (unlisted.Length == 0 ? string.Empty
-                : $", {unlisted.Length} never listed by a node: {string.Join(",", unlisted.Take(20))}{(unlisted.Length > 20 ? ",..." : string.Empty)}"));
+        Console.WriteLine(
+            $"Shutdown notice: {returned.Count} client(s) returned to the menu by {answered.Count} node(s); "
+                + $"{clients - _clients.Count} left, {_clients.Count} still connected (disconnected by the drain)"
+                + (
+                    unlisted.Length == 0
+                        ? string.Empty
+                        : $", {unlisted.Length} never listed by a node: {string.Join(",", unlisted.Take(20))}{(unlisted.Length > 20 ? ",..." : string.Empty)}"
+                )
+        );
     }
 
     private static double EnvSeconds(string name, double fallback) =>
-        double.TryParse(Environment.GetEnvironmentVariable(name), System.Globalization.NumberStyles.Float,
-            System.Globalization.CultureInfo.InvariantCulture, out double value) && value >= 0 ? value : fallback;
+        double.TryParse(
+            Environment.GetEnvironmentVariable(name),
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out double value
+        )
+        && value >= 0
+            ? value
+            : fallback;
 
-    private static double PositiveSeconds(HttpListenerContext context, string name, double fallback) =>
-        double.TryParse(context.Request.QueryString[name], out double value) && value >= 0 ? value : fallback;
+    private static double PositiveSeconds(
+        HttpListenerContext context,
+        string name,
+        double fallback
+    ) =>
+        double.TryParse(context.Request.QueryString[name], out double value) && value >= 0
+            ? value
+            : fallback;
 
     private ClientSession ResolveSession(HttpListenerContext context)
     {
         string? value = context.Request.QueryString["client"];
         if (value != null)
         {
-            if (!ulong.TryParse(value, out ulong clientId) || !_clients.TryGetValue(clientId, out ClientSession? selected))
+            if (
+                !ulong.TryParse(value, out ulong clientId)
+                || !_clients.TryGetValue(clientId, out ClientSession? selected)
+            )
                 throw new ArgumentException("Unknown client '" + value + "'");
             return selected;
         }
         if (_clients.Count == 1)
             return _clients.Values.Single();
-        throw new ArgumentException(_clients.IsEmpty ? "No connected client" : "Missing query parameter 'client'");
+        throw new ArgumentException(
+            _clients.IsEmpty ? "No connected client" : "Missing query parameter 'client'"
+        );
     }
 
-    private ClientSession ResolveSession(ulong client) => _clients.TryGetValue(client, out ClientSession? session)
-        ? session : throw new ArgumentException("Unknown client '" + client + "'");
+    private ClientSession ResolveSession(ulong client) =>
+        _clients.TryGetValue(client, out ClientSession? session)
+            ? session
+            : throw new ArgumentException("Unknown client '" + client + "'");
 
     /// <summary>
     /// Every client riding the partition an operator asked to move, not just the one named in the
@@ -5529,11 +9025,16 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         ClientSession named = ResolveSession(context);
         PartitionInfo? reported;
-        try { reported = GetPartitions(source).Partitions.SingleOrDefault(x => x.Id == partition); }
+        try
+        {
+            reported = GetPartitions(source).Partitions.SingleOrDefault(x => x.Id == partition);
+        }
         catch (Exception e)
         {
-            Console.WriteLine($"Could not read {source} to find the crew of partition {partition}: {e.Message}; "
-                + $"handing over client {named.ClientId} alone");
+            Console.WriteLine(
+                $"Could not read {source} to find the crew of partition {partition}: {e.Message}; "
+                    + $"handing over client {named.ClientId} alone"
+            );
             return [named];
         }
         // A named client the source does not report on this partition is an explicit instruction,
@@ -5541,11 +9042,15 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         if (reported == null || !reported.Clients.Contains(named.ClientId))
             return [named];
         if (ResolveMovingSessions(reported.Clients, named.BackendEndpoint) is not { } crew)
-            throw new RegistryConflictException($"Partition {partition} has a client with no connected, ready "
-                + $"session on {source}; handover refused rather than splitting the partition");
+            throw new RegistryConflictException(
+                $"Partition {partition} has a client with no connected, ready "
+                    + $"session on {source}; handover refused rather than splitting the partition"
+            );
         if (crew.Length > 1)
-            Console.WriteLine($"Handover of partition {partition} carries {crew.Length} clients: "
-                + string.Join(", ", crew.Select(x => x.ClientId)));
+            Console.WriteLine(
+                $"Handover of partition {partition} carries {crew.Length} clients: "
+                    + string.Join(", ", crew.Select(x => x.ClientId))
+            );
         return crew;
     }
 
@@ -5571,9 +9076,16 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             return _options.Backend;
         try
         {
-            NodeRegistration[] live = _registry.Nodes()
-                .Where(x => x.Role == NodeRole.Regular && x.State == NodeState.Active && x.Serving && !x.Spare
-                    && x.Endpoint != null && x.LeaseExpires > DateTimeOffset.UtcNow)
+            NodeRegistration[] live = _registry
+                .Nodes()
+                .Where(x =>
+                    x.Role == NodeRole.Regular
+                    && x.State == NodeState.Active
+                    && x.Serving
+                    && !x.Spare
+                    && x.Endpoint != null
+                    && x.LeaseExpires > DateTimeOffset.UtcNow
+                )
                 .ToArray();
             // SE-1448: not onto a retiring node (rotation, scale-in): it closes once it owns nothing, and a first join
             // owns nothing there until it spawns.
@@ -5582,14 +9094,25 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             if (live.Length == 0)
                 return _options.Backend;
             string configured = _options.Backend.ToString();
-            if (live.Any(x => EndpointParser.Parse(x.Endpoint, DirectTransportConstants.DefaultPort)
-                    .ToString() == configured))
+            if (
+                live.Any(x =>
+                    EndpointParser
+                        .Parse(x.Endpoint, DirectTransportConstants.DefaultPort)
+                        .ToString() == configured
+                )
+            )
                 return _options.Backend;
-            NodeRegistration pick = live[(int)((ulong)Interlocked.Increment(ref _unroutedCursor)
-                                               % (ulong)live.Length)];
-            IPEndPoint backend = EndpointParser.Parse(pick.Endpoint, DirectTransportConstants.DefaultPort);
-            Console.WriteLine($"Unrouted client backend: {_options.Backend} is not Active or is retiring; using "
-                + $"{pick.Node} at {backend}");
+            NodeRegistration pick = live[
+                (int)((ulong)Interlocked.Increment(ref _unroutedCursor) % (ulong)live.Length)
+            ];
+            IPEndPoint backend = EndpointParser.Parse(
+                pick.Endpoint,
+                DirectTransportConstants.DefaultPort
+            );
+            Console.WriteLine(
+                $"Unrouted client backend: {_options.Backend} is not Active or is retiring; using "
+                    + $"{pick.Node} at {backend}"
+            );
             return backend;
         }
         catch (Exception error)
@@ -5601,7 +9124,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
 
     /// <summary>Switches each attached client of <paramref name="unpartitioned"/> (connected to <paramref name="source"/>, in no partition
     /// it reports) off the closing node: to the node owning its registry partition, else its character home, else the target.</summary>
-    private void SwitchUnpartitionedOff(NodeRegistration source, IReadOnlyList<ClientSession> unpartitioned, string targetNode, IPEndPoint targetBackend)
+    private void SwitchUnpartitionedOff(
+        NodeRegistration source,
+        IReadOnlyList<ClientSession> unpartitioned,
+        string targetNode,
+        IPEndPoint targetBackend
+    )
     {
         GatewayRegistry registry = _registry!;
         // Riding the node into its kill was a guaranteed disconnect for these clients, and
@@ -5614,7 +9142,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // so does one whose switch fails - that is no worse than before.
         foreach (ClientSession session in unpartitioned)
         {
-            if (session.PlayerReady == null) continue;
+            if (session.PlayerReady == null)
+                continue;
             try
             {
                 IPEndPoint rescueBackend = targetBackend;
@@ -5622,12 +9151,23 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 if (registry.GetClientPartition(session.ClientId) is ClientPartition home)
                 {
                     PartitionOwnership owner = registry.GetPartitionOwner(home.Partition);
-                    NodeRegistration? ownerNode = owner.Node == source.Node ? null
-                        : registry.Nodes().FirstOrDefault(x => x.Node == owner.Node && x.Epoch == owner.Epoch
-                            && x.State == NodeState.Active && x.LeaseExpires > DateTimeOffset.UtcNow);
+                    NodeRegistration? ownerNode =
+                        owner.Node == source.Node
+                            ? null
+                            : registry
+                                .Nodes()
+                                .FirstOrDefault(x =>
+                                    x.Node == owner.Node
+                                    && x.Epoch == owner.Epoch
+                                    && x.State == NodeState.Active
+                                    && x.LeaseExpires > DateTimeOffset.UtcNow
+                                );
                     if (ownerNode != null)
                     {
-                        rescueBackend = EndpointParser.Parse(ownerNode.Endpoint, DirectTransportConstants.DefaultPort);
+                        rescueBackend = EndpointParser.Parse(
+                            ownerNode.Endpoint,
+                            DirectTransportConstants.DefaultPort
+                        );
                         rescueNode = ownerNode.Node;
                     }
                 }
@@ -5639,12 +9179,19 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     // of parking it on the drain target with the same broken state.
                     try
                     {
-                        if (registry.ResolveClientRoute(session.ClientId) is { } derived
-                            && derived.Node != source.Node)
+                        if (
+                            registry.ResolveClientRoute(session.ClientId) is { } derived
+                            && derived.Node != source.Node
+                        )
                         {
-                            rescueBackend = EndpointParser.Parse(derived.Endpoint, DirectTransportConstants.DefaultPort);
+                            rescueBackend = EndpointParser.Parse(
+                                derived.Endpoint,
+                                DirectTransportConstants.DefaultPort
+                            );
                             rescueNode = derived.Node;
-                            Console.WriteLine($"Unpartitioned client {session.ClientId} adopted via its character home on {rescueNode}");
+                            Console.WriteLine(
+                                $"Unpartitioned client {session.ClientId} adopted via its character home on {rescueNode}"
+                            );
                         }
                     }
                     catch (RegistryConflictException)
@@ -5653,62 +9200,107 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         // right parking spot, exactly as before this repair existed.
                     }
                 }
-                Console.WriteLine($"Switching unpartitioned client {session.ClientId} off closing node {source.Node} to {rescueNode}");
+                Console.WriteLine(
+                    $"Switching unpartitioned client {session.ClientId} off closing node {source.Node} to {rescueNode}"
+                );
                 ControlSwitchBackend(session, rescueBackend);
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Unpartitioned client {session.ClientId} could not be switched off {source.Node}: {e.Message}");
+                Console.WriteLine(
+                    $"Unpartitioned client {session.ClientId} could not be switched off {source.Node}: {e.Message}"
+                );
             }
         }
     }
 
-    private async Task<NodeRegistration> CloseNode(TimeSpan forceDrainAfter, bool forceOnly, string? nodeName)
+    private async Task<NodeRegistration> CloseNode(
+        TimeSpan forceDrainAfter,
+        bool forceOnly,
+        string? nodeName
+    )
     {
         if (_registry == null)
             throw new InvalidOperationException("Close-node requires the registry");
         await WaitRotationAsync("close", true);
         try
         {
-            NodeRegistration source = nodeName == null
-                ? _registry.GetNodeByEndpoint(_options.Backend.ToString())
-                : _registry.Nodes().FirstOrDefault(x => x.Node == nodeName)
-                    ?? throw new ArgumentException($"Unknown node '{nodeName}'");
+            NodeRegistration source =
+                nodeName == null
+                    ? _registry.GetNodeByEndpoint(_options.Backend.ToString())
+                    : _registry.Nodes().FirstOrDefault(x => x.Node == nodeName)
+                        ?? throw new ArgumentException($"Unknown node '{nodeName}'");
             if (source.ControlEndpoint == null)
-                throw new InvalidOperationException($"Node '{source.Node}' registered no control endpoint");
+                throw new InvalidOperationException(
+                    $"Node '{source.Node}' registered no control endpoint"
+                );
             string sourceControl = StripScheme(source.ControlEndpoint);
-            IPEndPoint sourceBackend = EndpointParser.Parse(source.Endpoint, DirectTransportConstants.DefaultPort);
+            IPEndPoint sourceBackend = EndpointParser.Parse(
+                source.Endpoint,
+                DirectTransportConstants.DefaultPort
+            );
             // Drain target: the lightest ready node (7.3); fetching its report doubles as the
             // readiness probe the fixed-pair implementation did against the configured target.
             // CLUSTER-SIM-COST: lightest by measured load when every candidate reports it, PCU
             // otherwise - decided after all reports are in, so the units never mix.
-            List<(NodeRegistration Registration, string Control, PartitionReport Report)> ready = [];
-            foreach (NodeRegistration candidate in _registry.Nodes().Where(x => x.Role == NodeRole.Regular
-                && x.State == NodeState.Active && x.Serving && !x.Spare && x.Node != source.Node && x.ControlEndpoint != null
-                && x.LeaseExpires > DateTimeOffset.UtcNow && !_registry.IsRetiring(x.Node)))
+            List<(NodeRegistration Registration, string Control, PartitionReport Report)> ready =
+            [];
+            foreach (
+                NodeRegistration candidate in _registry
+                    .Nodes()
+                    .Where(x =>
+                        x.Role == NodeRole.Regular
+                        && x.State == NodeState.Active
+                        && x.Serving
+                        && !x.Spare
+                        && x.Node != source.Node
+                        && x.ControlEndpoint != null
+                        && x.LeaseExpires > DateTimeOffset.UtcNow
+                        && !_registry.IsRetiring(x.Node)
+                    )
+            )
             {
                 string control = StripScheme(candidate.ControlEndpoint!);
                 ready.Add((candidate, control, GetPartitions(control)));
             }
             bool closeSimLoad = ready.Count > 0 && ready.All(x => x.Report.SimLoadSupported);
-            (NodeRegistration Registration, string Control, PartitionReport Report)? drainTarget = ready.Count == 0
-                ? null : ready.MinBy(x => EffectiveNodeLoad(x.Report, closeSimLoad));
+            (NodeRegistration Registration, string Control, PartitionReport Report)? drainTarget =
+                ready.Count == 0
+                    ? null
+                    : ready.MinBy(x => EffectiveNodeLoad(x.Report, closeSimLoad));
             if (drainTarget is not { } target)
-                throw new RegistryConflictException($"No active replacement node to drain '{source.Node}' to");
-            ClientSession[] sessions = _clients.Values.Where(x => x.BackendEndpoint.Equals(sourceBackend)).ToArray();
+                throw new RegistryConflictException(
+                    $"No active replacement node to drain '{source.Node}' to"
+                );
+            ClientSession[] sessions = _clients
+                .Values.Where(x => x.BackendEndpoint.Equals(sourceBackend))
+                .ToArray();
             PartitionReport report = GetPartitions(sourceControl);
             // #1454 case 6: a heavy partition drains once, to the emptiest node without a heavy component, and the light
             // ones keep off every node holding or taking one while another node is ready.
             IReadOnlySet<ulong> heavy = _heavy;
             HashSet<string> heavyNodes = [.. _heavyNodes];
             string? heavyNode = report.Partitions.Any(p => heavy.Contains(p.Id))
-                ? HeavyDrainTarget(ready.Select(x => (x.Registration.Node, (double)EffectiveNodeLoad(x.Report, closeSimLoad))), heavyNodes) : null;
+                ? HeavyDrainTarget(
+                    ready.Select(x =>
+                        (x.Registration.Node, (double)EffectiveNodeLoad(x.Report, closeSimLoad))
+                    ),
+                    heavyNodes
+                )
+                : null;
             var heavyTarget = ready.FirstOrDefault(x => x.Registration.Node == heavyNode);
-            if (heavyNode != null) heavyNodes.Add(heavyNode);
-            if (heavyNodes.Contains(target.Registration.Node)
-                && ready.Where(x => !heavyNodes.Contains(x.Registration.Node)).ToArray() is { Length: > 0 } light)
+            if (heavyNode != null)
+                heavyNodes.Add(heavyNode);
+            if (
+                heavyNodes.Contains(target.Registration.Node)
+                && ready.Where(x => !heavyNodes.Contains(x.Registration.Node)).ToArray()
+                    is { Length: > 0 } light
+            )
                 target = light.MinBy(x => EffectiveNodeLoad(x.Report, closeSimLoad));
-            IPEndPoint targetBackend = EndpointParser.Parse(target.Registration.Endpoint, DirectTransportConstants.DefaultPort);
+            IPEndPoint targetBackend = EndpointParser.Parse(
+                target.Registration.Endpoint,
+                DirectTransportConstants.DefaultPort
+            );
             // A session the source reports in no partition is NOT a reason to refuse the
             // close. A client that has just been admitted, or whose character is being
             // respawned, is connected to the node without owning anything on it, and
@@ -5716,22 +9308,46 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // reconnect like any other client the drain cannot follow. Throwing here
             // failed the whole close-node with a 500 and stalled the rotation, which is
             // what happened on 2026-08-15 with five pilots still boarding on node-1.
-            var unpartitioned = sessions.Where(session =>
-                report.Partitions.SingleOrDefault(x => x.Clients.Contains(session.ClientId)) == null).ToArray();
+            var unpartitioned = sessions
+                .Where(session =>
+                    report.Partitions.SingleOrDefault(x => x.Clients.Contains(session.ClientId))
+                    == null
+                )
+                .ToArray();
             if (unpartitioned.Length > 0)
             {
-                Console.WriteLine($"Node {source.Node} holds {unpartitioned.Length} client(s) in no partition "
-                    + $"({string.Join(", ", unpartitioned.Select(x => x.ClientId))})");
-                SwitchUnpartitionedOff(source, unpartitioned, target.Registration.Node, targetBackend);
+                Console.WriteLine(
+                    $"Node {source.Node} holds {unpartitioned.Length} client(s) in no partition "
+                        + $"({string.Join(", ", unpartitioned.Select(x => x.ClientId))})"
+                );
+                SwitchUnpartitionedOff(
+                    source,
+                    unpartitioned,
+                    target.Registration.Node,
+                    targetBackend
+                );
             }
             var plans = sessions
-                .Select(session => (Session: session,
-                    Partition: report.Partitions.SingleOrDefault(x => x.Clients.Contains(session.ClientId))))
+                .Select(session =>
+                    (
+                        Session: session,
+                        Partition: report.Partitions.SingleOrDefault(x =>
+                            x.Clients.Contains(session.ClientId)
+                        )
+                    )
+                )
                 .Where(x => x.Partition != null)
                 .Select(x => (x.Session, Partition: x.Partition!))
-                .GroupBy(x => x.Partition.Id).ToArray();
-            NodeRegistration closed = _registry.CloseNode(source.Node, source.Epoch, forceDrainAfter);
-            Console.WriteLine($"Closed node {source.Node} epoch {source.Epoch}; force drain at {closed.ForceDrainAt:O}");
+                .GroupBy(x => x.Partition.Id)
+                .ToArray();
+            NodeRegistration closed = _registry.CloseNode(
+                source.Node,
+                source.Epoch,
+                forceDrainAfter
+            );
+            Console.WriteLine(
+                $"Closed node {source.Node} epoch {source.Epoch}; force drain at {closed.ForceDrainAt:O}"
+            );
             if (forceOnly)
             {
                 _forceOnlyDrainEpoch = source.Epoch;
@@ -5742,24 +9358,44 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // Cheapest first (§7.3): the partitions most likely to complete inside the drain window go
             // before the expensive ones, so a deadline strands the least.
             CostModel model = _costModel;
-            foreach (var plan in plans.OrderBy(p => model.Cost(p.First().Partition.EstimatedSnapshotBytes, p.Count())))
+            foreach (
+                var plan in plans.OrderBy(p =>
+                    model.Cost(p.First().Partition.EstimatedSnapshotBytes, p.Count())
+                )
+            )
             {
                 if (closed.ForceDrainAt!.Value - DateTimeOffset.UtcNow < TimeSpan.FromSeconds(45))
                     break;
                 ClientSession[] moving = plan.Select(x => x.Session).ToArray();
                 PartitionInfo partition = plan.First().Partition;
                 // T-0296 r3: left to the drain catch-up (DrainClosedNodes), which retries until the join has settled.
-                if (DrainDeferredForJoin(partition.Id, moving, source.Node)) continue;
+                if (DrainDeferredForJoin(partition.Id, moving, source.Node))
+                    continue;
                 var to = heavyNode != null && heavy.Contains(partition.Id) ? heavyTarget : target;
-                Console.WriteLine($"Draining occupied partition {partition.Id} from {source.Node} to {to.Registration.Node}"
-                    + $" with {moving.Length} client(s)" + (heavy.Contains(partition.Id) ? " (heavy)" : ""));
-                await Handover(moving, sourceControl, to.Control,
-                    EndpointParser.Parse(to.Registration.Endpoint, DirectTransportConstants.DefaultPort), partition.Id);
-                if (heavy.Contains(partition.Id)) HeavyMoved([partition.Id], moving.Length);
+                Console.WriteLine(
+                    $"Draining occupied partition {partition.Id} from {source.Node} to {to.Registration.Node}"
+                        + $" with {moving.Length} client(s)"
+                        + (heavy.Contains(partition.Id) ? " (heavy)" : "")
+                );
+                await Handover(
+                    moving,
+                    sourceControl,
+                    to.Control,
+                    EndpointParser.Parse(
+                        to.Registration.Endpoint,
+                        DirectTransportConstants.DefaultPort
+                    ),
+                    partition.Id
+                );
+                if (heavy.Contains(partition.Id))
+                    HeavyMoved([partition.Id], moving.Length);
             }
             return closed;
         }
-        finally { _rotation.Release(); }
+        finally
+        {
+            _rotation.Release();
+        }
     }
 
     /// <summary>
@@ -5771,7 +9407,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     internal static readonly TimeSpan PostReadySettle = TimeSpan.FromSeconds(10);
 
     private bool JoinStillSettling(ulong client) =>
-        _clients.TryGetValue(client, out ClientSession? session) && session.WorldReady
+        _clients.TryGetValue(client, out ClientSession? session)
+        && session.WorldReady
         && DateTimeOffset.UtcNow - session.WorldReadyAt < PostReadySettle;
 
     /// <summary>
@@ -5781,26 +9418,43 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// </summary>
     private ulong JoiningClientPlacedIn(ulong partition)
     {
-        if (_registry == null) return 0;
+        if (_registry == null)
+            return 0;
         GatewayRegistry registry = _registry;
         // T-0237: a join the gateway is still HOLDING (its home loading or recovering) has no session yet, but the
         // partition was loaded for it: w33 2026-09-27 20:12:11 a co-location moved Pilot-038's just-loaded home
         // 111231 away one line before its held join was accepted. It counts as a client that has not settled.
         ulong[] held;
-        lock (_heldJoins) held = [.. _heldJoins.Select(x => x.ClientId)];
-        return JoiningClientPlacedIn(_clients.Values.Select(x => (x.ClientId, x.WorldReady, x.WorldReadyAt))
-                .Concat(held.Where(id => !_clients.ContainsKey(id)).Select(id => (id, false, default(DateTimeOffset)))), partition,
-            client => registry.GetClientPartition(client)?.Partition, client => registry.GetCharacterHome(client)?.Partition,
-            DateTimeOffset.UtcNow);
+        lock (_heldJoins)
+            held = [.. _heldJoins.Select(x => x.ClientId)];
+        return JoiningClientPlacedIn(
+            _clients
+                .Values.Select(x => (x.ClientId, x.WorldReady, x.WorldReadyAt))
+                .Concat(
+                    held.Where(id => !_clients.ContainsKey(id))
+                        .Select(id => (id, false, default(DateTimeOffset)))
+                ),
+            partition,
+            client => registry.GetClientPartition(client)?.Partition,
+            client => registry.GetCharacterHome(client)?.Partition,
+            DateTimeOffset.UtcNow
+        );
     }
 
-    internal static ulong JoiningClientPlacedIn(IEnumerable<(ulong Client, bool WorldReady, DateTimeOffset WorldReadyAt)> sessions,
-        ulong partition, Func<ulong, ulong?> placement, Func<ulong, ulong?> home, DateTimeOffset now)
+    internal static ulong JoiningClientPlacedIn(
+        IEnumerable<(ulong Client, bool WorldReady, DateTimeOffset WorldReadyAt)> sessions,
+        ulong partition,
+        Func<ulong, ulong?> placement,
+        Func<ulong, ulong?> home,
+        DateTimeOffset now
+    )
     {
         foreach ((ulong client, bool ready, DateTimeOffset readyAt) in sessions)
         {
-            if (ready && now - readyAt >= PostReadySettle) continue;
-            if (placement(client) == partition || home(client) == partition) return client;
+            if (ready && now - readyAt >= PostReadySettle)
+                continue;
+            if (placement(client) == partition || home(client) == partition)
+                return client;
         }
         return 0;
     }
@@ -5813,57 +9467,115 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// <paramref name="settleCrew"/> a crew member inside its own post-ready settle defers the move as well (T-0238);
     /// the drains pass it because they retry every pass, an operator /handover does not.
     /// </summary>
-    internal static ulong ClientBearingMoveBlocker(IEnumerable<(ulong Client, bool WorldReady, DateTimeOffset WorldReadyAt)> sessions,
-        IReadOnlyCollection<ulong> crew, ulong partition, Func<ulong, ulong?> placement, Func<ulong, ulong?> home, DateTimeOffset now,
-        bool settleCrew)
+    internal static ulong ClientBearingMoveBlocker(
+        IEnumerable<(ulong Client, bool WorldReady, DateTimeOffset WorldReadyAt)> sessions,
+        IReadOnlyCollection<ulong> crew,
+        ulong partition,
+        Func<ulong, ulong?> placement,
+        Func<ulong, ulong?> home,
+        DateTimeOffset now,
+        bool settleCrew
+    )
     {
         (ulong Client, bool WorldReady, DateTimeOffset WorldReadyAt)[] all = [.. sessions];
         if (settleCrew)
             foreach ((ulong client, bool ready, DateTimeOffset readyAt) in all)
-                if (crew.Contains(client) && ready && now - readyAt < PostReadySettle) return client;
-        return JoiningClientPlacedIn(all.Where(x => !crew.Contains(x.Client)), partition, placement, home, now);
+                if (crew.Contains(client) && ready && now - readyAt < PostReadySettle)
+                    return client;
+        return JoiningClientPlacedIn(
+            all.Where(x => !crew.Contains(x.Client)),
+            partition,
+            placement,
+            home,
+            now
+        );
     }
 
-    private ulong ClientBearingMoveBlocker(ulong partition, IReadOnlyList<ClientSession> crew, bool settleCrew)
+    private ulong ClientBearingMoveBlocker(
+        ulong partition,
+        IReadOnlyList<ClientSession> crew,
+        bool settleCrew
+    )
     {
-        if (_registry == null) return 0;
+        if (_registry == null)
+            return 0;
         GatewayRegistry registry = _registry;
         ulong[] held;
-        lock (_heldJoins) held = [.. _heldJoins.Select(x => x.ClientId)];
-        return ClientBearingMoveBlocker(_clients.Values.Select(x => (x.ClientId, x.WorldReady, x.WorldReadyAt))
-                .Concat(held.Where(id => !_clients.ContainsKey(id)).Select(id => (id, false, default(DateTimeOffset)))),
-            [.. crew.Select(x => x.ClientId)], partition,
-            client => registry.GetClientPartition(client)?.Partition, client => registry.GetCharacterHome(client)?.Partition,
-            DateTimeOffset.UtcNow, settleCrew);
+        lock (_heldJoins)
+            held = [.. _heldJoins.Select(x => x.ClientId)];
+        return ClientBearingMoveBlocker(
+            _clients
+                .Values.Select(x => (x.ClientId, x.WorldReady, x.WorldReadyAt))
+                .Concat(
+                    held.Where(id => !_clients.ContainsKey(id))
+                        .Select(id => (id, false, default(DateTimeOffset)))
+                ),
+            [.. crew.Select(x => x.ClientId)],
+            partition,
+            client => registry.GetClientPartition(client)?.Partition,
+            client => registry.GetCharacterHome(client)?.Partition,
+            DateTimeOffset.UtcNow,
+            settleCrew
+        );
     }
 
     /// <summary>T-0296 r3: a drain skips the partition this pass; DrainClosedNodes offers it again every second.</summary>
-    private bool DrainDeferredForJoin(ulong partition, IReadOnlyList<ClientSession> crew, string node)
+    private bool DrainDeferredForJoin(
+        ulong partition,
+        IReadOnlyList<ClientSession> crew,
+        string node
+    )
     {
-        if (ClientBearingMoveBlocker(partition, crew, settleCrew: true) is not (var blocker and not 0)) return false;
-        Console.WriteLine($"Partition {partition} on closed node {node} is carrying or receiving client {blocker}, which is still joining "
-            + $"(not world-ready or under {PostReadySettle.TotalSeconds:F0}s ready); drain handover deferred");
+        if (
+            ClientBearingMoveBlocker(partition, crew, settleCrew: true)
+            is not (var blocker and not 0)
+        )
+            return false;
+        Console.WriteLine(
+            $"Partition {partition} on closed node {node} is carrying or receiving client {blocker}, which is still joining "
+                + $"(not world-ready or under {PostReadySettle.TotalSeconds:F0}s ready); drain handover deferred"
+        );
         return true;
     }
 
-    private ClientSession[]? ResolveMovingSessions(IReadOnlyList<ulong> clients, IPEndPoint sourceBackend)
+    private ClientSession[]? ResolveMovingSessions(
+        IReadOnlyList<ulong> clients,
+        IPEndPoint sourceBackend
+    )
     {
         List<ClientSession> sessions = [];
         foreach (ulong client in clients)
         {
-            if (!_clients.TryGetValue(client, out ClientSession? session)
-                || session.SwitchingBackend || !session.BackendEndpoint.Equals(sourceBackend) || !session.WorldReady)
+            if (
+                !_clients.TryGetValue(client, out ClientSession? session)
+                || session.SwitchingBackend
+                || !session.BackendEndpoint.Equals(sourceBackend)
+                || !session.WorldReady
+            )
                 return null;
             sessions.Add(session);
         }
         return sessions.Count == 0 ? null : sessions.ToArray();
     }
 
-    private async Task Handover(ClientSession session, string source, string target, IPEndPoint backend, ulong partition, bool pauseAfterCapture = false)
-        => await Handover([session], source, target, backend, partition, pauseAfterCapture);
+    private async Task Handover(
+        ClientSession session,
+        string source,
+        string target,
+        IPEndPoint backend,
+        ulong partition,
+        bool pauseAfterCapture = false
+    ) => await Handover([session], source, target, backend, partition, pauseAfterCapture);
 
-    private async Task Handover(IReadOnlyList<ClientSession> sessions, string source, string target, IPEndPoint backend, ulong partition, bool pauseAfterCapture = false,
-        TimeSpan? readinessBudget = null)
+    private async Task Handover(
+        IReadOnlyList<ClientSession> sessions,
+        string source,
+        string target,
+        IPEndPoint backend,
+        ulong partition,
+        bool pauseAfterCapture = false,
+        TimeSpan? readinessBudget = null
+    )
     {
         // Switch locks in client-id order: two handovers that overlap on a client take them the same
         // way round and one waits instead of both deadlocking half-held.
@@ -5878,27 +9590,48 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             }
             foreach (ClientSession each in sessions)
             {
-                if (!_clients.TryGetValue(each.ClientId, out ClientSession? current) || !ReferenceEquals(current, each))
+                if (
+                    !_clients.TryGetValue(each.ClientId, out ClientSession? current)
+                    || !ReferenceEquals(current, each)
+                )
                     throw new InvalidOperationException("Client disconnected before handover");
                 // A client that has not sent CLIENT_READY is still consuming the join sequence; switching
                 // its backend suppresses exactly those messages, so the join starves and times out.
                 if (!each.WorldReady)
-                    throw new RegistryConflictException($"Client {each.ClientId} is still joining; handover refused until CLIENT_READY");
+                    throw new RegistryConflictException(
+                        $"Client {each.ClientId} is still joining; handover refused until CLIENT_READY"
+                    );
             }
             // T-0296 r3 (T-0237 shape): the crew is what the source REPORTS, and a client still joining into this
             // partition is not in that report. Moving the partition takes its body away while its session stays on
             // the source. The automatic path and the drains check before they call; this is the operator /handover
             // and the window between their check and the switch locks.
-            if (ClientBearingMoveBlocker(partition, sessions, settleCrew: false) is var joining and not 0)
-                throw new RegistryConflictException($"Partition {partition} is the placement or home of client {joining}, which is still joining; handover refused until it has settled");
+            if (
+                ClientBearingMoveBlocker(partition, sessions, settleCrew: false)
+                is var joining
+                    and not 0
+            )
+                throw new RegistryConflictException(
+                    $"Partition {partition} is the placement or home of client {joining}, which is still joining; handover refused until it has settled"
+                );
             if (_registry == null)
             {
                 if (sessions.Count != 1)
-                    throw new InvalidOperationException("Multi-client handover requires the registry");
+                    throw new InvalidOperationException(
+                        "Multi-client handover requires the registry"
+                    );
                 await UnfencedHandover(sessions[0], source, target, backend, partition);
             }
             else
-                await FencedHandover(sessions, source, target, backend, partition, pauseAfterCapture, readinessBudget);
+                await FencedHandover(
+                    sessions,
+                    source,
+                    target,
+                    backend,
+                    partition,
+                    pauseAfterCapture,
+                    readinessBudget
+                );
         }
         finally
         {
@@ -5912,7 +9645,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         session.SwitchLock.Wait();
         try
         {
-            if (!_clients.TryGetValue(session.ClientId, out ClientSession? current) || !ReferenceEquals(current, session))
+            if (
+                !_clients.TryGetValue(session.ClientId, out ClientSession? current)
+                || !ReferenceEquals(current, session)
+            )
                 throw new InvalidOperationException("Client disconnected before switch");
             SwitchBackend(session, backend);
         }
@@ -5921,37 +9657,74 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             session.Client?.Disconnect();
             throw;
         }
-        finally { session.SwitchLock.Release(); }
+        finally
+        {
+            session.SwitchLock.Release();
+        }
     }
 
-    private async Task<RespawnExecutionResult> RespawnSwitch(ClientSession session, RespawnSwitchRequest request, string authorization)
+    private async Task<RespawnExecutionResult> RespawnSwitch(
+        ClientSession session,
+        RespawnSwitchRequest request,
+        string authorization
+    )
     {
         // A pod (respawn ship) has no medbay anchors: it creates its own fresh partition on the
         // target node, so only the target's name is validated here and ownership not at all.
         bool pod = !string.IsNullOrWhiteSpace(request.RespawnShipId);
         // SE1-0122: a spawn point preview moves the dead client to the medbay's node without respawning it.
         bool preview = request.Preview && !pod;
-        if (request.OperationId == Guid.Empty || request.UserId == 0 || request.SerialId < 0 || request.IdentityId <= 0
-            || string.IsNullOrWhiteSpace(request.Origin) || request.ModelName?.Length > 256
-            || request.RespawnShipId?.Length > 256 || request.ClientState?.Length > 8 * 1024 * 1024
-            || !pod && (request.RespawnEntityId <= 0 || request.GridEntityId <= 0
-                || request.PartitionId == 0 || request.Generation <= 0))
+        if (
+            request.OperationId == Guid.Empty
+            || request.UserId == 0
+            || request.SerialId < 0
+            || request.IdentityId <= 0
+            || string.IsNullOrWhiteSpace(request.Origin)
+            || request.ModelName?.Length > 256
+            || request.RespawnShipId?.Length > 256
+            || request.ClientState?.Length > 8 * 1024 * 1024
+            || !pod
+                && (
+                    request.RespawnEntityId <= 0
+                    || request.GridEntityId <= 0
+                    || request.PartitionId == 0
+                    || request.Generation <= 0
+                )
+        )
             throw new ArgumentException("Invalid respawn switch request");
         await session.SwitchLock.WaitAsync();
         GatewayRegistry registry = _registry!;
         IPEndPoint sourceBackend = session.BackendEndpoint;
         ClientPartition? previous = registry.GetClientPartition(session.ClientId);
-        bool routeChanged = false, switched = false, success = false;
+        bool routeChanged = false,
+            switched = false,
+            success = false;
         try
         {
-            PlayerReady ready = session.PlayerReady ?? throw new RegistryConflictException("Client has no World Authority player binding");
-            if (ready.UserId != request.UserId || ready.SerialId != request.SerialId || ready.Identity.IdentityId != request.IdentityId)
-                throw new RegistryConflictException("Respawn request does not match the attached player binding");
+            PlayerReady ready =
+                session.PlayerReady
+                ?? throw new RegistryConflictException(
+                    "Client has no World Authority player binding"
+                );
+            if (
+                ready.UserId != request.UserId
+                || ready.SerialId != request.SerialId
+                || ready.Identity.IdentityId != request.IdentityId
+            )
+                throw new RegistryConflictException(
+                    "Respawn request does not match the attached player binding"
+                );
             NodeRegistration targetNode;
             if (pod)
             {
-                targetNode = registry.Nodes().SingleOrDefault(node => node.Node == request.Origin
-                    && node.Role == NodeRole.Regular && node.State == NodeState.Active)
+                targetNode =
+                    registry
+                        .Nodes()
+                        .SingleOrDefault(node =>
+                            node.Node == request.Origin
+                            && node.Role == NodeRole.Regular
+                            && node.State == NodeState.Active
+                        )
                     ?? throw new RegistryConflictException("Respawn target node is not active");
             }
             else
@@ -5961,23 +9734,40 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // that holds the grid now; the retired row has no node, and the switch used to fail on it.
                 if (preview)
                 {
-                    ulong live = registry.LivePartitionOf(request.PartitionId, request.GridEntityId);
-                    if (live != request.PartitionId) request = request with { PartitionId = live };
+                    ulong live = registry.LivePartitionOf(
+                        request.PartitionId,
+                        request.GridEntityId
+                    );
+                    if (live != request.PartitionId)
+                        request = request with { PartitionId = live };
                 }
                 PartitionOwnership owner = registry.GetPartitionOwner(request.PartitionId);
                 // The source node detached the client's view before asking, so a failed switch costs the client a
                 // reconnect. A preview just follows a medbay that moved in the meantime; the target checks it holds it.
-                if (preview && (owner.Node != request.Origin || owner.Generation != request.Generation))
+                if (
+                    preview
+                    && (owner.Node != request.Origin || owner.Generation != request.Generation)
+                )
                     request = request with { Origin = owner.Node, Generation = owner.Generation };
                 if (owner.Node != request.Origin || owner.Generation != request.Generation)
                     throw new RegistryConflictException("Respawn partition ownership changed");
-                targetNode = registry.Nodes().SingleOrDefault(node => node.Node == owner.Node && node.Epoch == owner.Epoch
-                    && node.Role == NodeRole.Regular && node.State == NodeState.Active)
+                targetNode =
+                    registry
+                        .Nodes()
+                        .SingleOrDefault(node =>
+                            node.Node == owner.Node
+                            && node.Epoch == owner.Epoch
+                            && node.Role == NodeRole.Regular
+                            && node.State == NodeState.Active
+                        )
                     ?? throw new RegistryConflictException("Respawn partition has no active owner");
             }
             if (string.IsNullOrWhiteSpace(targetNode.ControlEndpoint))
                 throw new RegistryConflictException("Respawn target has no control endpoint");
-            IPEndPoint targetBackend = EndpointParser.Parse(targetNode.Endpoint, DirectTransportConstants.DefaultPort);
+            IPEndPoint targetBackend = EndpointParser.Parse(
+                targetNode.Endpoint,
+                DirectTransportConstants.DefaultPort
+            );
             lock (session.RelayLock)
             {
                 session.SwitchingBackend = true;
@@ -5990,8 +9780,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // route-follow the local pod spawn already uses. Rollback restores the previous route.
             // A previewing client has no character in any partition either, and its respawn at the
             // medbay is a local spawn on the target, so it follows the same way.
-            ClientRoute? route = pod || preview ? registry.RestoreClientRoute(session.ClientId, null)
-                : registry.RouteClient(session.ClientId, request.PartitionId);
+            ClientRoute? route =
+                pod || preview
+                    ? registry.RestoreClientRoute(session.ClientId, null)
+                    : registry.RouteClient(session.ClientId, request.PartitionId);
             routeChanged = true;
             lock (session.RelayLock)
             {
@@ -6009,65 +9801,88 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             RespawnExecutionResult result;
             while (true)
             {
-                using var targetRequest = new HttpRequestMessage(HttpMethod.Post,
-                    targetNode.ControlEndpoint.TrimEnd('/') + "/cluster/respawn-execute")
+                using var targetRequest = new HttpRequestMessage(
+                    HttpMethod.Post,
+                    targetNode.ControlEndpoint.TrimEnd('/') + "/cluster/respawn-execute"
+                )
                 {
-                    Content = new StringContent(JsonSerializer.Serialize(request), Encoding.UTF8, "application/json")
+                    Content = new StringContent(
+                        JsonSerializer.Serialize(request),
+                        Encoding.UTF8,
+                        "application/json"
+                    ),
                 };
                 if (!string.IsNullOrWhiteSpace(authorization))
                     targetRequest.Headers.TryAddWithoutValidation("Authorization", authorization);
                 using HttpResponseMessage response = await _http.SendAsync(targetRequest);
-				string payload = await response.Content.ReadAsStringAsync();
-				if (!response.IsSuccessStatusCode)
-					throw new InvalidOperationException($"Respawn target returned HTTP {(int)response.StatusCode}: {payload}");
-				result = JsonSerializer.Deserialize<RespawnExecutionResult>(payload,
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-                    ?? throw new InvalidDataException("Target returned an empty respawn result");
-                if (result.Ready) break;
-                if (DateTimeOffset.UtcNow >= deadline) throw new TimeoutException("Target player was not ready for respawn");
+                string payload = await response.Content.ReadAsStringAsync();
+                if (!response.IsSuccessStatusCode)
+                    throw new InvalidOperationException(
+                        $"Respawn target returned HTTP {(int)response.StatusCode}: {payload}"
+                    );
+                result =
+                    JsonSerializer.Deserialize<RespawnExecutionResult>(
+                        payload,
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true }
+                    ) ?? throw new InvalidDataException("Target returned an empty respawn result");
+                if (result.Ready)
+                    break;
+                if (DateTimeOffset.UtcNow >= deadline)
+                    throw new TimeoutException("Target player was not ready for respawn");
                 await Task.Delay(100);
             }
             if (!result.Success || !preview && result.ControlledEntityId <= 0)
                 throw new InvalidOperationException("Target rejected the respawn request");
             success = true;
-			try
-			{
-				if (!pod && !preview)
-				{
-					route = registry.RouteClient(session.ClientId, request.PartitionId, result.ControlledEntityId);
-					lock (session.RelayLock) session.RegistryRoute = route;
-				}
-			}
-			catch (Exception exception)
-			{
-				Console.Error.WriteLine($"Respawn {request.OperationId:D} succeeded before controlled-entity route persistence: {exception.Message}");
-			}
+            try
+            {
+                if (!pod && !preview)
+                {
+                    route = registry.RouteClient(
+                        session.ClientId,
+                        request.PartitionId,
+                        result.ControlledEntityId
+                    );
+                    lock (session.RelayLock)
+                        session.RegistryRoute = route;
+                }
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine(
+                    $"Respawn {request.OperationId:D} succeeded before controlled-entity route persistence: {exception.Message}"
+                );
+            }
             return result;
         }
-		catch (Exception failure)
+        catch (Exception failure)
         {
-			try
-			{
-				if (routeChanged)
-				{
-					ClientRoute? restored = registry.RestoreClientRoute(session.ClientId, previous);
-					lock (session.RelayLock)
-					{
-						session.RegistryRoute = restored;
-						session.RegistryRouteValidated = false;
-					}
-				}
-				if (switched)
-				{
-					SwitchBackend(session, sourceBackend);
-					AttachBackend(session);
-				}
-			}
-			catch (Exception rollback)
-			{
-				throw new AggregateException("Respawn switch and rollback failed", failure, rollback);
-			}
-			throw;
+            try
+            {
+                if (routeChanged)
+                {
+                    ClientRoute? restored = registry.RestoreClientRoute(session.ClientId, previous);
+                    lock (session.RelayLock)
+                    {
+                        session.RegistryRoute = restored;
+                        session.RegistryRouteValidated = false;
+                    }
+                }
+                if (switched)
+                {
+                    SwitchBackend(session, sourceBackend);
+                    AttachBackend(session);
+                }
+            }
+            catch (Exception rollback)
+            {
+                throw new AggregateException(
+                    "Respawn switch and rollback failed",
+                    failure,
+                    rollback
+                );
+            }
+            throw;
         }
         finally
         {
@@ -6076,39 +9891,61 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             bool healthy = false;
             try
             {
-                healthy = FinishSwitching(session, () =>
-                {
-                    if (RouteHealthy(session)) FlushClientBacklog(session);
-                    if (success && RouteHealthy(session))
-                        FlushServerBacklog(session);
-                    else
-                        DiscardServerBacklog(session);
-                    session.BufferServerPackets = false;
-                });
+                healthy = FinishSwitching(
+                    session,
+                    () =>
+                    {
+                        if (RouteHealthy(session))
+                            FlushClientBacklog(session);
+                        if (success && RouteHealthy(session))
+                            FlushServerBacklog(session);
+                        else
+                            DiscardServerBacklog(session);
+                        session.BufferServerPackets = false;
+                    }
+                );
             }
-            finally { session.SwitchLock.Release(); }
-            if (!healthy) session.Client?.Disconnect();
+            finally
+            {
+                session.SwitchLock.Release();
+            }
+            if (!healthy)
+                session.Client?.Disconnect();
         }
     }
 
-    private async Task UnfencedHandover(ClientSession session, string source, string target, IPEndPoint backend, ulong partition)
+    private async Task UnfencedHandover(
+        ClientSession session,
+        string source,
+        string target,
+        IPEndPoint backend,
+        ulong partition
+    )
     {
         lock (session.RelayLock)
             session.SwitchingBackend = true;
         try
         {
             string query = "?partition=" + partition;
-            byte[] capture = await _http.GetByteArrayAsync(ClusterUrl(source, "capture") + query + "&clients=" + session.ClientId);
+            byte[] capture = await _http.GetByteArrayAsync(
+                ClusterUrl(source, "capture") + query + "&clients=" + session.ClientId
+            );
             HandoverCapture handover = HandoverCapture.Parse(capture);
 
             using (StringContent state = new(handover.NetworkState))
             {
-                HttpResponseMessage prepare = await _http.PostAsync(ClusterUrl(target, "prepare-import"), state);
+                HttpResponseMessage prepare = await _http.PostAsync(
+                    ClusterUrl(target, "prepare-import"),
+                    state
+                );
                 prepare.EnsureSuccessStatusCode();
             }
             using (ByteArrayContent content = new(handover.Sector))
             {
-                HttpResponseMessage import = await _http.PostAsync(ClusterUrl(target, "import") + query, content);
+                HttpResponseMessage import = await _http.PostAsync(
+                    ClusterUrl(target, "import") + query,
+                    content
+                );
                 import.EnsureSuccessStatusCode();
                 Console.WriteLine((await import.Content.ReadAsStringAsync()).Trim());
             }
@@ -6121,31 +9958,47 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             }
             session.BufferServerPackets = true;
             SwitchBackend(session, backend);
-            lock (session.RelayLock) session.ValidationLink = session.Link;
+            lock (session.RelayLock)
+                session.ValidationLink = session.Link;
             AttachBackend(session);
 
-            HttpResponseMessage adopt = await _http.PostAsync(ClusterUrl(target, "adopt") + "?client=" + session.ClientId + "&state=" + Uri.EscapeDataString(handover.StateFor(session.ClientId)), null);
+            HttpResponseMessage adopt = await _http.PostAsync(
+                ClusterUrl(target, "adopt")
+                    + "?client="
+                    + session.ClientId
+                    + "&state="
+                    + Uri.EscapeDataString(handover.StateFor(session.ClientId)),
+                null
+            );
             adopt.EnsureSuccessStatusCode();
             Console.WriteLine((await adopt.Content.ReadAsStringAsync()).Trim());
 
             if (!HasHealthyRoute(session, backend))
-                throw new IOException("Target backend disconnected before handover completion " + backend);
+                throw new IOException(
+                    "Target backend disconnected before handover completion " + backend
+                );
 
-            HttpResponseMessage remove = await _http.PostAsync(ClusterUrl(source, "remove") + query, null);
+            HttpResponseMessage remove = await _http.PostAsync(
+                ClusterUrl(source, "remove") + query,
+                null
+            );
             remove.EnsureSuccessStatusCode();
             Console.WriteLine((await remove.Content.ReadAsStringAsync()).Trim());
         }
         finally
         {
-			bool healthy = FinishSwitching(session, () =>
-            {
-				if (RouteHealthy(session))
+            bool healthy = FinishSwitching(
+                session,
+                () =>
                 {
-                    FlushClientBacklog(session);
-                    FlushServerBacklog(session);
+                    if (RouteHealthy(session))
+                    {
+                        FlushClientBacklog(session);
+                        FlushServerBacklog(session);
+                    }
+                    session.BufferServerPackets = false;
                 }
-                session.BufferServerPackets = false;
-			});
+            );
             if (!healthy)
                 session.Client?.Disconnect();
         }
@@ -6158,17 +10011,34 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// makes the move authoritative. Handing them over one at a time would put two players who share
     /// a grid on two different nodes for the duration, which is the desync this exists to prevent.
     /// </param>
-    private async Task FencedHandover(IReadOnlyList<ClientSession> sessions, string source, string target, IPEndPoint backend, ulong partition, bool pauseAfterCapture,
-        TimeSpan? readinessBudget = null)
+    private async Task FencedHandover(
+        IReadOnlyList<ClientSession> sessions,
+        string source,
+        string target,
+        IPEndPoint backend,
+        ulong partition,
+        bool pauseAfterCapture,
+        TimeSpan? readinessBudget = null
+    )
     {
         GatewayRegistry registry = _registry!;
-        (NodeRegistration sourceNode, NodeRegistration targetNode) = ResolveFencedNodes(registry, source, target, backend);
+        (NodeRegistration sourceNode, NodeRegistration targetNode) = ResolveFencedNodes(
+            registry,
+            source,
+            target,
+            backend
+        );
         if (sessions.Count == 0)
             throw new InvalidOperationException("Handover needs at least one client session");
-        IPEndPoint sourceEndpoint = EndpointParser.Parse(sourceNode.Endpoint, DirectTransportConstants.DefaultPort);
+        IPEndPoint sourceEndpoint = EndpointParser.Parse(
+            sourceNode.Endpoint,
+            DirectTransportConstants.DefaultPort
+        );
         foreach (ClientSession each in sessions)
             if (!each.BackendEndpoint.Equals(sourceEndpoint))
-                throw new RegistryConflictException($"Client {each.ClientId} is not attached to the handover source backend");
+                throw new RegistryConflictException(
+                    $"Client {each.ClientId} is not attached to the handover source backend"
+                );
         PartitionOwnership? row;
         try
         {
@@ -6179,9 +10049,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // T-0354b: an id the registry handed out and nobody claimed yet is a layout the source made a moment ago; its
             // own claim is under way. Claimed here, the row would be the node's at generation 1 and the node's claim
             // (expecting generation 0) would be refused - which the node reads as the registry closing it.
-            throw new RegistryApplyPendingRefusal($"Partition {partition} is not claimed yet (the source's claim is under way)");
+            throw new RegistryApplyPendingRefusal(
+                $"Partition {partition} is not claimed yet (the source's claim is under way)"
+            );
         }
-        catch (ArgumentException) when (sourceNode.State == NodeState.Closed && ClusterProtocol.PlaceholderPartitionIds.Contains(partition))
+        catch (ArgumentException)
+            when (sourceNode.State == NodeState.Closed
+                && ClusterProtocol.PlaceholderPartitionIds.Contains(partition)
+            )
         {
             // T-0374: a Closed source's row-less partition is a placeholder layout around a stray; ClaimPartition refuses
             // a Closed node, and the crew waited for the force drain. Claimed below, just before Begin (#1283).
@@ -6190,7 +10065,9 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         catch (ArgumentException)
         {
             row = registry.ClaimPartition(partition, sourceNode.Node, sourceNode.Epoch, 0);
-            Console.WriteLine($"Claimed runtime partition {partition} for {sourceNode.Node} generation {row.Generation}");
+            Console.WriteLine(
+                $"Claimed runtime partition {partition} for {sourceNode.Node} generation {row.Generation}"
+            );
         }
         // T-0373: the registry hands out its LIVE row, and a topology change releases it IN PLACE (Node = null).
         // Live 2026-10-02 07:04:35.26: 307625 was split on node-187 between this read and Begin below, Begin got
@@ -6201,8 +10078,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // w22 2026-08-21: partitions 1 and 3 hit this 27 times in 4.5 h and never recovered, and the
             // message could not distinguish a dead epoch from a different live node from a null owner -
             // see findings/partitions-1-and-3-are-permanently-unschedulable.md. Name the actual owner.
-            throw new RegistryConflictException($"Partition {partition} owner does not match source endpoint '{source}'"
-                + $" (source {sourceNode.Node} epoch {sourceNode.Epoch}, registry owner {row.Node} epoch {row.Epoch})");
+            throw new RegistryConflictException(
+                $"Partition {partition} owner does not match source endpoint '{source}'"
+                    + $" (source {sourceNode.Node} epoch {sourceNode.Epoch}, registry owner {row.Node} epoch {row.Epoch})"
+            );
 
         string transferId = Guid.NewGuid().ToString("D");
         string clientList = string.Join(",", sessions.Select(x => x.ClientId));
@@ -6231,15 +10110,18 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         {
             foreach (ClientSession each in sessions)
             {
-                bool healthy = FinishSwitching(each, () =>
-                {
-                    if ((committed || safeRoute) && RouteHealthy(each))
-                        FlushClientBacklog(each);
-                    if (committed && RouteHealthy(each))
-                        FlushServerBacklog(each);
-                    each.BufferServerPackets = false;
-                    each.ValidationLink = null;
-                });
+                bool healthy = FinishSwitching(
+                    each,
+                    () =>
+                    {
+                        if ((committed || safeRoute) && RouteHealthy(each))
+                            FlushClientBacklog(each);
+                        if (committed && RouteHealthy(each))
+                            FlushServerBacklog(each);
+                        each.BufferServerPackets = false;
+                        each.ValidationLink = null;
+                    }
+                );
                 if ((committed || safeRoute) && !healthy)
                     each.Client?.Disconnect();
             }
@@ -6249,7 +10131,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // Size proxies for the transfer record, read before the freeze so telemetry never
         // lengthens the frozen window; a lagging report just leaves them null.
         PartitionInfo? reported = null;
-        try { reported = GetPartitions(source).Partitions.SingleOrDefault(x => x.Id == partition); }
+        try
+        {
+            reported = GetPartitions(source).Partitions.SingleOrDefault(x => x.Id == partition);
+        }
         catch (Exception) { }
 
         // HandoverDelta: stage the partition on the target before anything is frozen.
@@ -6262,9 +10147,20 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // row paused balancing (RecoveryPending) until the 5-min unowned reap. Claimed here, Begin follows on the same
         // thread, and from Begin on the transfer exempts the row from expiry; an exit before Commit releases it.
         bool placeholderClaimed = row == null;
-        PartitionOwnership owner = row ?? (registry.ClaimClosedNodePlaceholder(partition, sourceNode.Node, sourceNode.Epoch) with { });
+        PartitionOwnership owner =
+            row
+            ?? (
+                registry.ClaimClosedNodePlaceholder(
+                    partition,
+                    sourceNode.Node,
+                    sourceNode.Epoch
+                ) with
+                { }
+            );
         if (placeholderClaimed)
-            Console.WriteLine($"Claimed placeholder partition {partition} for Closed {sourceNode.Node} generation {owner.Generation}");
+            Console.WriteLine(
+                $"Claimed placeholder partition {partition} for Closed {sourceNode.Node} generation {owner.Generation}"
+            );
         uint generation = checked((uint)owner.Generation);
         string fence = $"?transferId={transferId}&partition={partition}&generation={generation}";
 
@@ -6273,23 +10169,52 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 each.SwitchingBackend = true;
         try
         {
-            registry.Begin(transferId, partition, owner.Node, owner.Epoch, owner.Generation, targetNode.Node, targetNode.Epoch);
+            registry.Begin(
+                transferId,
+                partition,
+                owner.Node,
+                owner.Epoch,
+                owner.Generation,
+                targetNode.Node,
+                targetNode.Epoch
+            );
             begun = true;
-            HandoverTelemetry.Transfer telemetry = _handoverTelemetry.Begin(transferId, partition,
-                owner.Node, targetNode.Node, clients: sessions.Count, reported?.Pcu, reported?.MemberCount);
-            LogTransfer(transferId, partition, "begun", (sessions.Count > 1 ? $" clients={clientList}" : "") + (presyncId == null ? "" : $" presync={presyncId}"));
+            HandoverTelemetry.Transfer telemetry = _handoverTelemetry.Begin(
+                transferId,
+                partition,
+                owner.Node,
+                targetNode.Node,
+                clients: sessions.Count,
+                reported?.Pcu,
+                reported?.MemberCount
+            );
+            LogTransfer(
+                transferId,
+                partition,
+                "begun",
+                (sessions.Count > 1 ? $" clients={clientList}" : "")
+                    + (presyncId == null ? "" : $" presync={presyncId}")
+            );
 
             captured = true;
-            byte[] capture = await FencedCapture(ClusterUrl(source, "capture") + fence + "&clients=" + clientList + presyncQuery, partition);
+            byte[] capture = await FencedCapture(
+                ClusterUrl(source, "capture") + fence + "&clients=" + clientList + presyncQuery,
+                partition
+            );
             HandoverCapture handover = HandoverCapture.Parse(capture);
             // Every client must have come back with a view. A missing one would only surface at its
             // own adopt, after other clients are already on the target - too late to abort cleanly.
-            foreach (ClientSession each in sessions) handover.StateFor(each.ClientId);
+            foreach (ClientSession each in sessions)
+                handover.StateFor(each.ClientId);
             telemetry.SectorBytes = handover.Sector.Length;
             telemetry.NetworkStateBytes = handover.NetworkState.Length;
             telemetry.ClientStateBytes = handover.ClientStateBytes;
-            LogTransfer(transferId, partition, "captured",
-                $" sectorBytes={handover.Sector.Length} clients={sessions.Count} clientStateBytes={handover.ClientStateBytes}");
+            LogTransfer(
+                transferId,
+                partition,
+                "captured",
+                $" sectorBytes={handover.Sector.Length} clients={sessions.Count} clientStateBytes={handover.ClientStateBytes}"
+            );
 
             if (pauseAfterCapture)
             {
@@ -6304,17 +10229,52 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             using (StringContent state = new(handover.NetworkState))
             {
                 prepared = true;
-                TransferGrant grant = registry.IssueGrant(new("handover", transferId, partition, owner.Generation, 0,
-                    sourceNode.Node, sourceNode.Epoch, targetNode.Node));
+                TransferGrant grant = registry.IssueGrant(
+                    new(
+                        "handover",
+                        transferId,
+                        partition,
+                        owner.Generation,
+                        0,
+                        sourceNode.Node,
+                        sourceNode.Epoch,
+                        targetNode.Node
+                    )
+                );
                 // The target is told up front which clients this transfer carries, so it can refuse to
                 // commit on a partial adoption instead of trusting the gateway to have asked for all.
-                HttpResponseMessage prepare = await PostGranted(ClusterUrl(target, "prepare-import") + fence + "&clients=" + clientList, state, grant.Token);
+                HttpResponseMessage prepare = await PostGranted(
+                    ClusterUrl(target, "prepare-import") + fence + "&clients=" + clientList,
+                    state,
+                    grant.Token
+                );
                 prepare.EnsureSuccessStatusCode();
             }
             LogTransfer(transferId, partition, "prepared");
 
-            handover = await ImportWithFallback(source, target, partition, fence, "&clients=" + clientList, handover, transferId, presyncId != null,
-                () => registry.IssueGrant(new("handover", transferId, partition, owner.Generation, 0, sourceNode.Node, sourceNode.Epoch, targetNode.Node)));
+            handover = await ImportWithFallback(
+                source,
+                target,
+                partition,
+                fence,
+                "&clients=" + clientList,
+                handover,
+                transferId,
+                presyncId != null,
+                () =>
+                    registry.IssueGrant(
+                        new(
+                            "handover",
+                            transferId,
+                            partition,
+                            owner.Generation,
+                            0,
+                            sourceNode.Node,
+                            sourceNode.Epoch,
+                            targetNode.Node
+                        )
+                    )
+            );
             LogTransfer(transferId, partition, "imported");
 
             // From here to the commit the partition exists frozen on the source and imported on the
@@ -6347,7 +10307,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 each.BufferServerPackets = true;
                 SwitchBackend(each, backend);
                 switchedSessions.Add(each);
-                lock (each.RelayLock) each.ValidationLink = each.Link;
+                lock (each.RelayLock)
+                    each.ValidationLink = each.Link;
                 AttachBackend(each);
             }
 
@@ -6359,12 +10320,20 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             LogTransfer(transferId, partition, "sessions-attached");
 
             string Adoption(ClientSession each) =>
-                fence + "&client=" + each.ClientId + "&state=" + Uri.EscapeDataString(handover.StateFor(each.ClientId));
+                fence
+                + "&client="
+                + each.ClientId
+                + "&state="
+                + Uri.EscapeDataString(handover.StateFor(each.ClientId));
             // One budget for the whole crew, because it bounds the frozen window - but it grows with
             // the crew, so a big platform partition does not spend the last client's share waiting
             // for the first. The per-client 30 s of the single-client path is the floor. An optional move
             // passes a shorter budget (BalanceReadinessBudget).
-            using (CancellationTokenSource readinessTimeout = new(readinessBudget ?? TimeSpan.FromSeconds(30 + 10 * (sessions.Count - 1))))
+            using (
+                CancellationTokenSource readinessTimeout = new(
+                    readinessBudget ?? TimeSpan.FromSeconds(30 + 10 * (sessions.Count - 1))
+                )
+            )
             {
                 foreach (ClientSession each in sessions)
                 {
@@ -6377,15 +10346,25 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                             // handover whose client was already on the target. adopt-ready is a poll by design: asking
                             // again after an answer that was lost finds the player it created and re-validates.
                             using HttpResponseMessage ready = await SendThroughTransportFailures(
-                                token => _http.PostAsync(ClusterUrl(target, "adopt-ready") + Adoption(each), null, token),
-                                $"adopt-ready of client {each.ClientId} on {target}", readinessTimeout.Token);
+                                token =>
+                                    _http.PostAsync(
+                                        ClusterUrl(target, "adopt-ready") + Adoption(each),
+                                        null,
+                                        token
+                                    ),
+                                $"adopt-ready of client {each.ClientId} on {target}",
+                                readinessTimeout.Token
+                            );
                             if (ready.IsSuccessStatusCode)
                                 break;
                             await Task.Delay(100, readinessTimeout.Token);
                         }
-                        catch (OperationCanceledException) when (readinessTimeout.IsCancellationRequested)
+                        catch (OperationCanceledException)
+                            when (readinessTimeout.IsCancellationRequested)
                         {
-                            throw new TimeoutException("Target client adoption readiness timed out");
+                            throw new TimeoutException(
+                                "Target client adoption readiness timed out"
+                            );
                         }
                     }
                 }
@@ -6397,8 +10376,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // T-0369: a fenced adopt is idempotent per client on the node (the transfer keeps the count it
                 // answered and returns it again for the same view), so a transport failure is asked again.
                 using HttpResponseMessage adopt = await SendThroughTransportFailures(
-                    token => _http.PostAsync(ClusterUrl(target, "adopt") + Adoption(each), null, token),
-                    $"adopt of client {each.ClientId} on {target}");
+                    token =>
+                        _http.PostAsync(ClusterUrl(target, "adopt") + Adoption(each), null, token),
+                    $"adopt of client {each.ClientId} on {target}"
+                );
                 adopt.EnsureSuccessStatusCode();
                 adoptedOnTarget.Add(each);
             }
@@ -6425,7 +10406,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // every client but the last, and the last one is the exact total.
             System.Diagnostics.Stopwatch readiness = System.Diagnostics.Stopwatch.StartNew();
             List<string> observed = new();
-            using (CancellationTokenSource trafficTimeout = new(TimeSpan.FromSeconds(10 + 0.5 * (sessions.Count - 1))))
+            using (
+                CancellationTokenSource trafficTimeout = new(
+                    TimeSpan.FromSeconds(10 + 0.5 * (sessions.Count - 1))
+                )
+            )
             {
                 foreach (ClientSession each in sessions)
                 {
@@ -6436,8 +10421,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     }
                     catch (OperationCanceledException)
                     {
-                        Console.WriteLine($"Client {each.ClientId} showed no target traffic within the readiness window; "
-                            + $"disconnecting it and committing partition {partition} without it");
+                        Console.WriteLine(
+                            $"Client {each.ClientId} showed no target traffic within the readiness window; "
+                                + $"disconnecting it and committing partition {partition} without it"
+                        );
                         each.Client?.Disconnect();
                         live.Remove(each);
                         observed.Add($"{each.ClientId}=timeout");
@@ -6445,35 +10432,47 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 }
             }
             if (sessions.Count != 0)
-                Console.WriteLine($"handover_traffic transferId={transferId} partition={partition} clients={sessions.Count} "
-                    + $"totalMs={readiness.Elapsed.TotalMilliseconds:F0} observed=[{string.Join(" ", observed)}]");
+                Console.WriteLine(
+                    $"handover_traffic transferId={transferId} partition={partition} clients={sessions.Count} "
+                        + $"totalMs={readiness.Elapsed.TotalMilliseconds:F0} observed=[{string.Join(" ", observed)}]"
+                );
             LogTransfer(transferId, partition, "target-traffic-ready");
             await AwaitDurableTee(source, transferId, partition, handover.Sector);
 
             HandoverRecord committedHandover;
-			while (true)
+            while (true)
             {
-				foreach (ClientSession each in live) EnsureAttachedBindingCurrent(each);
-				// One commit for all of them, under every session's relay lock at once: a client
-				// whose route went unhealthy between the checks must not be committed as switched.
-				// Only the sessions that survived the traffic validation take part - a client
-				// disconnected there must not veto the commit it was dropped from.
-				using (RelayLocks held = RelayLocks.Take(live))
-				{
-					foreach (ClientSession each in live)
-						if (!backend.Equals(each.BackendEndpoint) || !RouteHealthy(each))
-							throw new IOException("Target backend disconnected before handover commit " + backend);
-					if (live.Any(each => !AttachedBindingCurrent(each))) continue;
-					registry.Activate(transferId);
-					committedHandover = registry.Commit(transferId);
-					committed = true;
-				}
-				break;
+                foreach (ClientSession each in live)
+                    EnsureAttachedBindingCurrent(each);
+                // One commit for all of them, under every session's relay lock at once: a client
+                // whose route went unhealthy between the checks must not be committed as switched.
+                // Only the sessions that survived the traffic validation take part - a client
+                // disconnected there must not veto the commit it was dropped from.
+                using (RelayLocks held = RelayLocks.Take(live))
+                {
+                    foreach (ClientSession each in live)
+                        if (!backend.Equals(each.BackendEndpoint) || !RouteHealthy(each))
+                            throw new IOException(
+                                "Target backend disconnected before handover commit " + backend
+                            );
+                    if (live.Any(each => !AttachedBindingCurrent(each)))
+                        continue;
+                    registry.Activate(transferId);
+                    committedHandover = registry.Commit(transferId);
+                    committed = true;
+                }
+                break;
             }
             LogTransfer(transferId, partition, "active");
             LogTransfer(transferId, partition, "committed");
 
-            await PostCommittedWithRetry(ClusterUrl(target, "commit") + fence + "&committedGeneration=" + committedHandover.CommittedGeneration, "target commit");
+            await PostCommittedWithRetry(
+                ClusterUrl(target, "commit")
+                    + fence
+                    + "&committedGeneration="
+                    + committedHandover.CommittedGeneration,
+                "target commit"
+            );
             LogTransfer(transferId, partition, "target-committed");
 
             // PLAYER-VISIBLE: the blackout ends HERE, not after the source release below.
@@ -6501,8 +10500,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         }
         catch (Exception failure)
         {
-            DiagnosticReports.Write("handover_failure", "Partition handover failed", failure,
-                transferId, partition, "handover");
+            DiagnosticReports.Write(
+                "handover_failure",
+                "Partition handover failed",
+                failure,
+                transferId,
+                partition,
+                "handover"
+            );
             if (!committed)
             {
                 List<Exception> cleanupFailures = [];
@@ -6516,7 +10521,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         SwitchBackend(each, sourceBackend);
                         AttachBackend(each);
                     }
-                    catch (Exception e) { stranded.Add(each); cleanupFailures.Add(e); }
+                    catch (Exception e)
+                    {
+                        stranded.Add(each);
+                        cleanupFailures.Add(e);
+                    }
                 }
                 if (switchedSessions.Count != 0 && stranded.Count == 0)
                 {
@@ -6528,9 +10537,16 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     try
                     {
                         bool found = await PostCleanup(ClusterUrl(target, "discard") + fence);
-                        LogTransfer(transferId, partition, found ? "discarded" : "discard-not-found");
+                        LogTransfer(
+                            transferId,
+                            partition,
+                            found ? "discarded" : "discard-not-found"
+                        );
                     }
-                    catch (Exception e) { cleanupFailures.Add(e); }
+                    catch (Exception e)
+                    {
+                        cleanupFailures.Add(e);
+                    }
                 }
                 // T-0369: the switch DETACHED each of these clients from the source, which is a disconnect there
                 // (vanilla ClientLeft: the player is removed, the body stays), and the restore above attached them
@@ -6544,34 +10560,56 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 if (switchedWith != null && switchedSessions.Count != stranded.Count)
                 {
                     List<ClientSession> returned = [.. switchedSessions.Except(stranded)];
-                    using CancellationTokenSource budget = new(SourceReadoptBudget + TimeSpan.FromSeconds(returned.Count - 1));
+                    using CancellationTokenSource budget = new(
+                        SourceReadoptBudget + TimeSpan.FromSeconds(returned.Count - 1)
+                    );
                     foreach (ClientSession each in returned)
                     {
                         try
                         {
                             if (adoptedOnTarget.Contains(each))
-                                throw new InvalidOperationException("the target had already adopted it, its captured view is stale");
-                            await ReadoptOnSource(source, each, switchedWith.StateFor(each.ClientId), budget.Token);
+                                throw new InvalidOperationException(
+                                    "the target had already adopted it, its captured view is stale"
+                                );
+                            await ReadoptOnSource(
+                                source,
+                                each,
+                                switchedWith.StateFor(each.ClientId),
+                                budget.Token
+                            );
                         }
                         catch (Exception e)
                         {
                             unadopted.Add(each);
-                            Console.WriteLine($"Client {each.ClientId} could not be re-adopted on source {source} after the aborted handover "
-                                + $"of partition {partition}: {e.Message}; ending its session so it rejoins");
+                            Console.WriteLine(
+                                $"Client {each.ClientId} could not be re-adopted on source {source} after the aborted handover "
+                                    + $"of partition {partition}: {e.Message}; ending its session so it rejoins"
+                            );
                         }
                     }
                     if (unadopted.Count != returned.Count)
-                        LogTransfer(transferId, partition, "source-readopted",
-                            $" clients={string.Join(",", returned.Except(unadopted).Select(x => x.ClientId))}");
+                        LogTransfer(
+                            transferId,
+                            partition,
+                            "source-readopted",
+                            $" clients={string.Join(",", returned.Except(unadopted).Select(x => x.ClientId))}"
+                        );
                 }
                 if (captured)
                 {
                     try
                     {
                         bool found = await PostCleanup(ClusterUrl(source, "thaw") + fence);
-                        LogTransfer(transferId, partition, found ? "source-thawed" : "source-thaw-not-found");
+                        LogTransfer(
+                            transferId,
+                            partition,
+                            found ? "source-thawed" : "source-thaw-not-found"
+                        );
                     }
-                    catch (Exception e) { cleanupFailures.Add(e); }
+                    catch (Exception e)
+                    {
+                        cleanupFailures.Add(e);
+                    }
                 }
                 if (cleanupFailures.Count == 0)
                 {
@@ -6582,11 +10620,24 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                             registry.Abort(transferId);
                             aborted = true;
                             LogTransfer(transferId, partition, "aborted");
-                            if (failure is HandoverImportException { Signature: { } signature } rejected)
-                                registry.RecordValidationAbort(partition, signature, rejected.Reason, rejected.Entities);
+                            if (
+                                failure is HandoverImportException
+                                {
+                                    Signature: { } signature
+                                } rejected
+                            )
+                                registry.RecordValidationAbort(
+                                    partition,
+                                    signature,
+                                    rejected.Reason,
+                                    rejected.Entities
+                                );
                         }
                     }
-                    catch (Exception e) { cleanupFailures.Add(e); }
+                    catch (Exception e)
+                    {
+                        cleanupFailures.Add(e);
+                    }
                 }
                 // #1283: kept, the claimed placeholder row would lapse unowned and unrecoverable (see the claim). Released,
                 // it is reaped as stillborn (no save, no lineage) and the next pass claims the placeholder afresh. Not while
@@ -6595,12 +10646,19 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 {
                     try
                     {
-                        registry.ReleasePartition(partition, owner.Node!, owner.Epoch, owner.Generation);
+                        registry.ReleasePartition(
+                            partition,
+                            owner.Node!,
+                            owner.Epoch,
+                            owner.Generation
+                        );
                         LogTransfer(transferId, partition, "placeholder-released");
                     }
                     catch (Exception e)
                     {
-                        Console.WriteLine($"Could not release placeholder partition {partition} after its failed handover: {e.Message}");
+                        Console.WriteLine(
+                            $"Could not release placeholder partition {partition} after its failed handover: {e.Message}"
+                        );
                     }
                 }
 
@@ -6620,10 +10678,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             if (pause != null)
             {
                 pause.Release.TrySetResult();
-                _handoverPauses.TryRemove(new KeyValuePair<string, HandoverPause>(transferId, pause));
+                _handoverPauses.TryRemove(
+                    new KeyValuePair<string, HandoverPause>(transferId, pause)
+                );
             }
-			// Idempotent; on the success path it has already run, before the source release.
-			CompleteSwitch();
+            // Idempotent; on the success path it has already run, before the source release.
+            CompleteSwitch();
         }
     }
 
@@ -6669,16 +10729,28 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// </summary>
     private async Task<byte[]> FencedCapture(string url, ulong partition)
     {
-        try { return await _http.GetByteArrayAsync(url); }
+        try
+        {
+            return await _http.GetByteArrayAsync(url);
+        }
         catch (HttpRequestException e) when (e.StatusCode == HttpStatusCode.Conflict)
         {
-            throw new RegistryApplyPendingRefusal($"Partition {partition} capture refused: a registry request about it is unanswered on the source", e);
+            throw new RegistryApplyPendingRefusal(
+                $"Partition {partition} capture refused: a registry request about it is unanswered on the source",
+                e
+            );
         }
     }
 
     /// <summary>T-0354b: the waits between attempts of <see cref="WhenRegistryApplied"/> (3.1 s in all: a claim's 3 s request timeout and a frame).</summary>
     internal static readonly TimeSpan[] RegistryApplyRetryDelays =
-        [TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(400), TimeSpan.FromMilliseconds(800), TimeSpan.FromMilliseconds(1600)];
+    [
+        TimeSpan.FromMilliseconds(100),
+        TimeSpan.FromMilliseconds(200),
+        TimeSpan.FromMilliseconds(400),
+        TimeSpan.FromMilliseconds(800),
+        TimeSpan.FromMilliseconds(1600),
+    ];
 
     /// <summary>
     /// T-0354b: a REQUESTED handover (POST /handover, a pull demand) of a partition whose source has a registry request
@@ -6688,42 +10760,73 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// surfaces here, so the whole handover is asked again, at <see cref="RegistryApplyRetryDelays"/>; then it fails as
     /// <see cref="RegistryBusyException"/> (503: come back later). An automatic move is not wrapped: its backoff retries it.
     /// </summary>
-    internal static async Task WhenRegistryApplied(ulong partition, Func<Task> handover, Func<TimeSpan, Task>? delay = null)
+    internal static async Task WhenRegistryApplied(
+        ulong partition,
+        Func<Task> handover,
+        Func<TimeSpan, Task>? delay = null
+    )
     {
         for (int attempt = 0; ; attempt++)
         {
             try
             {
                 await handover();
-                if (attempt != 0) Console.WriteLine($"Partition {partition} handover went through after {attempt} retr{(attempt == 1 ? "y" : "ies")} (registry request answered)");
+                if (attempt != 0)
+                    Console.WriteLine(
+                        $"Partition {partition} handover went through after {attempt} retr{(attempt == 1 ? "y" : "ies")} (registry request answered)"
+                    );
                 return;
             }
             catch (RegistryApplyPendingRefusal refusal)
             {
                 if (attempt == RegistryApplyRetryDelays.Length)
-                    throw new RegistryBusyException(refusal.Message + $"; still refused after {attempt} retries");
-                Console.WriteLine($"{refusal.Message}; handover asked again in {RegistryApplyRetryDelays[attempt].TotalMilliseconds:F0} ms");
+                    throw new RegistryBusyException(
+                        refusal.Message + $"; still refused after {attempt} retries"
+                    );
+                Console.WriteLine(
+                    $"{refusal.Message}; handover asked again in {RegistryApplyRetryDelays[attempt].TotalMilliseconds:F0} ms"
+                );
                 await (delay ?? Task.Delay)(RegistryApplyRetryDelays[attempt]);
             }
         }
     }
 
-    private async Task FencedClientlessHandover(string source, string target, IPEndPoint backend, ulong partition, bool pauseAfterCapture = false, bool allowRemoteUse = false)
+    private async Task FencedClientlessHandover(
+        string source,
+        string target,
+        IPEndPoint backend,
+        ulong partition,
+        bool pauseAfterCapture = false,
+        bool allowRemoteUse = false
+    )
     {
-        GatewayRegistry registry = _registry ?? throw new InvalidOperationException("Clientless handover requires the registry");
-        (NodeRegistration sourceNode, NodeRegistration targetNode) = ResolveFencedNodes(registry, source, target, backend);
-        PartitionInfo sourcePartition = GetPartitions(source).Partitions.SingleOrDefault(x => x.Id == partition)
+        GatewayRegistry registry =
+            _registry
+            ?? throw new InvalidOperationException("Clientless handover requires the registry");
+        (NodeRegistration sourceNode, NodeRegistration targetNode) = ResolveFencedNodes(
+            registry,
+            source,
+            target,
+            backend
+        );
+        PartitionInfo sourcePartition =
+            GetPartitions(source).Partitions.SingleOrDefault(x => x.Id == partition)
             ?? throw new InvalidOperationException($"Source did not report partition {partition}");
         // A node reports a client for every ONLINE player controlling an entity in the partition -
         // and a disconnected player's body re-binds as such on every warm boot, which made any
         // partition holding an abandoned character permanently unmovable ("not clientless",
         // partition 74's spawn-point pulls, 2026-08-11). Only a client with a live gateway session
         // needs its session moved with the partition; a resident body without one is cargo.
-        if (!allowRemoteUse && (sourcePartition.RemoteUsers is { Length: > 0 } || registry.HasRemoteUse(partition)))
+        if (
+            !allowRemoteUse
+            && (sourcePartition.RemoteUsers is { Length: > 0 } || registry.HasRemoteUse(partition))
+        )
             throw new InvalidOperationException("remote-use");
         ulong[] connectedReported = sourcePartition.Clients.Where(_clients.ContainsKey).ToArray();
         if (connectedReported.Length != 0)
-            throw new InvalidOperationException($"Partition {partition} is not clientless (connected: {string.Join(",", connectedReported)})");
+            throw new InvalidOperationException(
+                $"Partition {partition} is not clientless (connected: {string.Join(",", connectedReported)})"
+            );
         // The node report lags the registry after a client switch; a partition routed to a
         // connected client must never move without its client, whatever the report says -
         // but only for the length of that lag. This is the same rule as the scheduler's
@@ -6733,15 +10836,23 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // "no connected client on this partition" for RouteOverReportGrace, so the route is
         // stale and the partition may move. A missing entry means the disagreement has not
         // been observed by a scheduler pass yet, which is the conservative case - throw.
-        ulong[] routedConnected = [.. _clients.Keys
-            .Where(client => registry.GetClientPartition(client)?.Partition == partition)];
+        ulong[] routedConnected =
+        [
+            .. _clients.Keys.Where(client =>
+                registry.GetClientPartition(client)?.Partition == partition
+            ),
+        ];
         if (routedConnected.Length != 0)
         {
             if (!RoutePinStale(partition))
-                throw new InvalidOperationException($"Partition {partition} is routed to a connected client");
-            Console.WriteLine($"Partition {partition} is routed to connected client(s) "
-                + $"{string.Join(",", routedConnected)} but its node has reported it clientless for at least "
-                + $"{RouteOverReportGrace.TotalSeconds:F0}s; moving it on the node's report");
+                throw new InvalidOperationException(
+                    $"Partition {partition} is routed to a connected client"
+                );
+            Console.WriteLine(
+                $"Partition {partition} is routed to connected client(s) "
+                    + $"{string.Join(",", routedConnected)} but its node has reported it clientless for at least "
+                    + $"{RouteOverReportGrace.TotalSeconds:F0}s; moving it on the node's report"
+            );
         }
         // T-0313 (race review F7): the joining-client guard ran only on the automatic client-bearing path, so a
         // pull demand, an operator/rotator /handover or a drain could move the home or placement partition of a
@@ -6750,25 +10861,35 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // clientless move comes through here, so the guard lives here; the automatic path's backoff and the
         // callers' failure handling treat the refusal like any other deferral.
         if (JoiningClientPlacedIn(partition) is var joining && joining != 0)
-            throw new InvalidOperationException($"Partition {partition} is the placement or home of client {joining}, which is still joining; clientless handover deferred");
+            throw new InvalidOperationException(
+                $"Partition {partition} is the placement or home of client {joining}, which is still joining; clientless handover deferred"
+            );
         PartitionOwnership owner;
-        try { owner = registry.GetPartitionOwner(partition); }
+        try
+        {
+            owner = registry.GetPartitionOwner(partition);
+        }
         catch (ArgumentException) when (registry.IsAllocatedUnclaimed(partition))
         {
             // T-0354b: the source made the layout a moment ago and its claim has not reached the registry yet.
-            throw new RegistryApplyPendingRefusal($"Partition {partition} is not claimed yet (the source's claim is under way)");
+            throw new RegistryApplyPendingRefusal(
+                $"Partition {partition} is not claimed yet (the source's claim is under way)"
+            );
         }
         // T-0373: the registry hands out its LIVE row, and a topology change releases it IN PLACE (Node = null).
         // Live 2026-10-02 07:04:35.26: 307625 was split on node-187 between this read and Begin below, Begin got
         // owner.Node == null and its node lookup threw "Value cannot be null. (Parameter 'key')". A copy keeps what
         // was checked; Begin then refuses the stale generation as "ownership is fenced".
-        owner = owner with { };
+        owner = owner with
+        { };
         if (sourceNode.Node != owner.Node || sourceNode.Epoch != owner.Epoch)
             // w22 2026-08-21: partitions 1 and 3 hit this 27 times in 4.5 h and never recovered, and the
             // message could not distinguish a dead epoch from a different live node from a null owner -
             // see findings/partitions-1-and-3-are-permanently-unschedulable.md. Name the actual owner.
-            throw new RegistryConflictException($"Partition {partition} owner does not match source endpoint '{source}'"
-                + $" (source {sourceNode.Node} epoch {sourceNode.Epoch}, registry owner {owner.Node} epoch {owner.Epoch})");
+            throw new RegistryConflictException(
+                $"Partition {partition} owner does not match source endpoint '{source}'"
+                    + $" (source {sourceNode.Node} epoch {sourceNode.Epoch}, registry owner {owner.Node} epoch {owner.Epoch})"
+            );
 
         uint generation = checked((uint)owner.Generation);
         string transferId = Guid.NewGuid().ToString("D");
@@ -6782,21 +10903,52 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         string presyncQuery = presyncId == null ? "" : "&presync=" + presyncId;
         try
         {
-            registry.Begin(transferId, partition, owner.Node, owner.Epoch, owner.Generation, targetNode.Node, targetNode.Epoch);
+            registry.Begin(
+                transferId,
+                partition,
+                owner.Node,
+                owner.Epoch,
+                owner.Generation,
+                targetNode.Node,
+                targetNode.Epoch
+            );
             begun = true;
-            HandoverTelemetry.Transfer telemetry = _handoverTelemetry.Begin(transferId, partition,
-                owner.Node, targetNode.Node, clients: 0, sourcePartition.Pcu, sourcePartition.MemberCount);
-            LogTransfer(transferId, partition, "begun", presyncId == null ? "" : $" presync={presyncId}");
+            HandoverTelemetry.Transfer telemetry = _handoverTelemetry.Begin(
+                transferId,
+                partition,
+                owner.Node,
+                targetNode.Node,
+                clients: 0,
+                sourcePartition.Pcu,
+                sourcePartition.MemberCount
+            );
+            LogTransfer(
+                transferId,
+                partition,
+                "begun",
+                presyncId == null ? "" : $" presync={presyncId}"
+            );
 
             captured = true;
-            byte[] capture = await FencedCapture(ClusterUrl(source, "capture") + fence + "&clientless=true"
-                + (allowRemoteUse ? "&allowRemoteUse=true" : "") + presyncQuery, partition);
+            byte[] capture = await FencedCapture(
+                ClusterUrl(source, "capture")
+                    + fence
+                    + "&clientless=true"
+                    + (allowRemoteUse ? "&allowRemoteUse=true" : "")
+                    + presyncQuery,
+                partition
+            );
             HandoverCapture handover = HandoverCapture.Parse(capture);
             if (handover.ClientStates.Count != 0)
                 throw new InvalidDataException("Clientless capture included client state");
             telemetry.SectorBytes = handover.Sector.Length;
             telemetry.NetworkStateBytes = handover.NetworkState.Length;
-            LogTransfer(transferId, partition, "captured", $" sectorBytes={handover.Sector.Length}");
+            LogTransfer(
+                transferId,
+                partition,
+                "captured",
+                $" sectorBytes={handover.Sector.Length}"
+            );
 
             if (pauseAfterCapture)
             {
@@ -6811,15 +10963,50 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             using (StringContent state = new(handover.NetworkState))
             {
                 prepared = true;
-                TransferGrant grant = registry.IssueGrant(new("handover", transferId, partition, owner.Generation, 0,
-                    sourceNode.Node, sourceNode.Epoch, targetNode.Node));
-                HttpResponseMessage prepare = await PostGranted(ClusterUrl(target, "prepare-import") + fence + "&clientless=true", state, grant.Token);
+                TransferGrant grant = registry.IssueGrant(
+                    new(
+                        "handover",
+                        transferId,
+                        partition,
+                        owner.Generation,
+                        0,
+                        sourceNode.Node,
+                        sourceNode.Epoch,
+                        targetNode.Node
+                    )
+                );
+                HttpResponseMessage prepare = await PostGranted(
+                    ClusterUrl(target, "prepare-import") + fence + "&clientless=true",
+                    state,
+                    grant.Token
+                );
                 prepare.EnsureSuccessStatusCode();
             }
             LogTransfer(transferId, partition, "prepared");
 
-            handover = await ImportWithFallback(source, target, partition, fence, "&clientless=true", handover, transferId, presyncId != null,
-                () => registry.IssueGrant(new("handover", transferId, partition, owner.Generation, 0, sourceNode.Node, sourceNode.Epoch, targetNode.Node)));
+            handover = await ImportWithFallback(
+                source,
+                target,
+                partition,
+                fence,
+                "&clientless=true",
+                handover,
+                transferId,
+                presyncId != null,
+                () =>
+                    registry.IssueGrant(
+                        new(
+                            "handover",
+                            transferId,
+                            partition,
+                            owner.Generation,
+                            0,
+                            sourceNode.Node,
+                            sourceNode.Epoch,
+                            targetNode.Node
+                        )
+                    )
+            );
             LogTransfer(transferId, partition, "imported");
             await AwaitDurableTee(source, transferId, partition, handover.Sector);
 
@@ -6829,7 +11016,13 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             LogTransfer(transferId, partition, "active");
             LogTransfer(transferId, partition, "committed");
 
-            await PostCommittedWithRetry(ClusterUrl(target, "commit") + fence + "&committedGeneration=" + committedHandover.CommittedGeneration, "target commit");
+            await PostCommittedWithRetry(
+                ClusterUrl(target, "commit")
+                    + fence
+                    + "&committedGeneration="
+                    + committedHandover.CommittedGeneration,
+                "target commit"
+            );
             LogTransfer(transferId, partition, "target-committed");
 
             await PostCommittedWithRetry(ClusterUrl(source, "release") + fence, "source release");
@@ -6838,8 +11031,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         }
         catch (Exception failure)
         {
-            DiagnosticReports.Write("handover_failure", "Partition handover failed", failure,
-                transferId, partition, "handover");
+            DiagnosticReports.Write(
+                "handover_failure",
+                "Partition handover failed",
+                failure,
+                transferId,
+                partition,
+                "handover"
+            );
             if (!committed)
             {
                 List<Exception> cleanupFailures = [];
@@ -6848,18 +11047,32 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     try
                     {
                         bool found = await PostCleanup(ClusterUrl(target, "discard") + fence);
-                        LogTransfer(transferId, partition, found ? "discarded" : "discard-not-found");
+                        LogTransfer(
+                            transferId,
+                            partition,
+                            found ? "discarded" : "discard-not-found"
+                        );
                     }
-                    catch (Exception e) { cleanupFailures.Add(e); }
+                    catch (Exception e)
+                    {
+                        cleanupFailures.Add(e);
+                    }
                 }
                 if (captured)
                 {
                     try
                     {
                         bool found = await PostCleanup(ClusterUrl(source, "thaw") + fence);
-                        LogTransfer(transferId, partition, found ? "source-thawed" : "source-thaw-not-found");
+                        LogTransfer(
+                            transferId,
+                            partition,
+                            found ? "source-thawed" : "source-thaw-not-found"
+                        );
                     }
-                    catch (Exception e) { cleanupFailures.Add(e); }
+                    catch (Exception e)
+                    {
+                        cleanupFailures.Add(e);
+                    }
                 }
                 if (cleanupFailures.Count == 0)
                 {
@@ -6869,11 +11082,24 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         {
                             registry.Abort(transferId);
                             LogTransfer(transferId, partition, "aborted");
-                            if (failure is HandoverImportException { Signature: { } signature } rejected)
-                                registry.RecordValidationAbort(partition, signature, rejected.Reason, rejected.Entities);
+                            if (
+                                failure is HandoverImportException
+                                {
+                                    Signature: { } signature
+                                } rejected
+                            )
+                                registry.RecordValidationAbort(
+                                    partition,
+                                    signature,
+                                    rejected.Reason,
+                                    rejected.Entities
+                                );
                         }
                     }
-                    catch (Exception e) { cleanupFailures.Add(e); }
+                    catch (Exception e)
+                    {
+                        cleanupFailures.Add(e);
+                    }
                 }
                 if (cleanupFailures.Count != 0)
                     throw new AggregateException([failure, .. cleanupFailures]);
@@ -6885,16 +11111,28 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             if (pause != null)
             {
                 pause.Release.TrySetResult();
-                _handoverPauses.TryRemove(new KeyValuePair<string, HandoverPause>(transferId, pause));
+                _handoverPauses.TryRemove(
+                    new KeyValuePair<string, HandoverPause>(transferId, pause)
+                );
             }
         }
     }
 
-    private bool MatchesConfiguredPair(string source, string target, IPEndPoint backend)
-        => _options.SourceControl != null && _options.TargetControl != null && _options.TargetBackend != null
-            && string.Equals(source.TrimEnd('/'), _options.SourceControl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)
-            && string.Equals(target.TrimEnd('/'), _options.TargetControl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)
-            && backend.Equals(_options.TargetBackend);
+    private bool MatchesConfiguredPair(string source, string target, IPEndPoint backend) =>
+        _options.SourceControl != null
+        && _options.TargetControl != null
+        && _options.TargetBackend != null
+        && string.Equals(
+            source.TrimEnd('/'),
+            _options.SourceControl.TrimEnd('/'),
+            StringComparison.OrdinalIgnoreCase
+        )
+        && string.Equals(
+            target.TrimEnd('/'),
+            _options.TargetControl.TrimEnd('/'),
+            StringComparison.OrdinalIgnoreCase
+        )
+        && backend.Equals(_options.TargetBackend);
 
     /// <summary>
     /// A fenced transfer is not pinned to a configured rotation direction: any pair of distinct
@@ -6904,37 +11142,69 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// and the client-bearing path requires the session to sit on the resolved source backend.
     /// The configured-pair shortcut keeps the registry-less debug shape working.
     /// </summary>
-    private (NodeRegistration Source, NodeRegistration Target) ResolveFencedNodes(GatewayRegistry registry, string source, string target, IPEndPoint backend)
+    private (NodeRegistration Source, NodeRegistration Target) ResolveFencedNodes(
+        GatewayRegistry registry,
+        string source,
+        string target,
+        IPEndPoint backend
+    )
     {
         if (MatchesConfiguredPair(source, target, backend))
-            return (registry.GetNodeByEndpoint(_options.Backend.ToString()), registry.GetNodeByEndpoint(backend.ToString()));
+            return (
+                registry.GetNodeByEndpoint(_options.Backend.ToString()),
+                registry.GetNodeByEndpoint(backend.ToString())
+            );
         return ResolveNodePair(registry.Nodes(), source, target, backend)
-            ?? throw new ArgumentException("Handover endpoints do not match the configured source and target nodes");
+            ?? throw new ArgumentException(
+                "Handover endpoints do not match the configured source and target nodes"
+            );
     }
 
     internal static (NodeRegistration Source, NodeRegistration Target)? ResolveNodePair(
-        IEnumerable<NodeRegistration> nodes, string source, string target, IPEndPoint backend)
+        IEnumerable<NodeRegistration> nodes,
+        string source,
+        string target,
+        IPEndPoint backend
+    )
     {
-        NodeRegistration? sourceNode = nodes.SingleOrDefault(node => node.Role == NodeRole.Regular
-            && node.State is NodeState.Active or NodeState.Closed && ControlEndpointMatches(source, node.ControlEndpoint));
-        NodeRegistration? targetNode = nodes.SingleOrDefault(node => node.Role == NodeRole.Regular
-            && node.State == NodeState.Active && ControlEndpointMatches(target, node.ControlEndpoint));
-        if (sourceNode == null || targetNode == null || sourceNode.Node == targetNode.Node
-            || !backend.Equals(EndpointParser.Parse(targetNode.Endpoint, DirectTransportConstants.DefaultPort)))
+        NodeRegistration? sourceNode = nodes.SingleOrDefault(node =>
+            node.Role == NodeRole.Regular
+            && node.State is NodeState.Active or NodeState.Closed
+            && ControlEndpointMatches(source, node.ControlEndpoint)
+        );
+        NodeRegistration? targetNode = nodes.SingleOrDefault(node =>
+            node.Role == NodeRole.Regular
+            && node.State == NodeState.Active
+            && ControlEndpointMatches(target, node.ControlEndpoint)
+        );
+        if (
+            sourceNode == null
+            || targetNode == null
+            || sourceNode.Node == targetNode.Node
+            || !backend.Equals(
+                EndpointParser.Parse(targetNode.Endpoint, DirectTransportConstants.DefaultPort)
+            )
+        )
             return null;
         return (sourceNode, targetNode);
     }
 
     // Registered control endpoints carry the http:// scheme while handover endpoints (and ClusterUrl)
     // use bare host:port - compare and pass them scheme-less.
-    private static bool ControlEndpointMatches(string endpoint, string? control)
-        => control != null && string.Equals(StripScheme(endpoint).TrimEnd('/'), StripScheme(control).TrimEnd('/'),
-            StringComparison.OrdinalIgnoreCase);
+    private static bool ControlEndpointMatches(string endpoint, string? control) =>
+        control != null
+        && string.Equals(
+            StripScheme(endpoint).TrimEnd('/'),
+            StripScheme(control).TrimEnd('/'),
+            StringComparison.OrdinalIgnoreCase
+        );
 
-    private static string StripScheme(string endpoint)
-        => endpoint.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ? endpoint["http://".Length..]
-            : endpoint.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? endpoint["https://".Length..]
-            : endpoint;
+    private static string StripScheme(string endpoint) =>
+        endpoint.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            ? endpoint["http://".Length..]
+        : endpoint.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            ? endpoint["https://".Length..]
+        : endpoint;
 
     private async Task ReconcileHandovers()
     {
@@ -6946,47 +11216,97 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // fence) must not end the pass. The automatic loop runs this FIRST, so a throw here used to repeat at the
             // same record every second and wedge the whole loop: balancing, scale-in drains, the catalogue GC and
             // every other record's reconciliation.
-            try { await ReconcileHandover(registry, nodes, handover); }
+            try
+            {
+                await ReconcileHandover(registry, nodes, handover);
+            }
             catch (Exception e)
             {
-                Console.Error.WriteLine($"Handover reconciliation of {handover.Id} (partition {handover.Partition}, {handover.State}) "
-                    + $"failed this pass: {e.GetType().Name}: {SecretRedactor.Redact(e.Message)}");
+                Console.Error.WriteLine(
+                    $"Handover reconciliation of {handover.Id} (partition {handover.Partition}, {handover.State}) "
+                        + $"failed this pass: {e.GetType().Name}: {SecretRedactor.Redact(e.Message)}"
+                );
             }
         }
     }
 
-    private async Task ReconcileHandover(GatewayRegistry registry, NodeRegistration[] nodes, HandoverRecord handover)
+    private async Task ReconcileHandover(
+        GatewayRegistry registry,
+        NodeRegistration[] nodes,
+        HandoverRecord handover
+    )
     {
         // The record names its nodes by (id, epoch). T-0296 round 2: a side whose recorded epoch is gone (the id
         // re-registered under a new epoch, or its row was released) or whose control endpoint is unknown is probed as
         // UNREACHABLE: if it is still the live recorded incarnation that means Wait, otherwise it is dead and the other
         // side decides. Skipping such a record - as this did - left it Begun forever once that epoch was gone: joins
         // to the partition refused as "moving", no new handover of it, the source's frozen copy never thawed.
-        NodeRegistration? sourceNode = nodes.FirstOrDefault(x => x.Node == handover.SourceNode && x.Epoch == handover.SourceEpoch);
-        NodeRegistration? targetNode = nodes.FirstOrDefault(x => x.Node == handover.TargetNode && x.Epoch == handover.TargetEpoch);
-        string? sourceControl = sourceNode?.ControlEndpoint is { } sourceEndpoint ? StripScheme(sourceEndpoint) : null;
-        string? targetControl = targetNode?.ControlEndpoint is { } targetEndpoint ? StripScheme(targetEndpoint) : null;
+        NodeRegistration? sourceNode = nodes.FirstOrDefault(x =>
+            x.Node == handover.SourceNode && x.Epoch == handover.SourceEpoch
+        );
+        NodeRegistration? targetNode = nodes.FirstOrDefault(x =>
+            x.Node == handover.TargetNode && x.Epoch == handover.TargetEpoch
+        );
+        string? sourceControl = sourceNode?.ControlEndpoint is { } sourceEndpoint
+            ? StripScheme(sourceEndpoint)
+            : null;
+        string? targetControl = targetNode?.ControlEndpoint is { } targetEndpoint
+            ? StripScheme(targetEndpoint)
+            : null;
         uint generation = checked((uint)handover.SourceGeneration);
-        string fence = $"?transferId={handover.Id}&partition={handover.Partition}&generation={generation}";
-        Task<TransferProbe> sourceTask = sourceControl == null ? Task.FromResult(new TransferProbe(false, null)) : ProbeTransfer(sourceControl, fence);
-        Task<TransferProbe> targetTask = targetControl == null ? Task.FromResult(new TransferProbe(false, null)) : ProbeTransfer(targetControl, fence);
+        string fence =
+            $"?transferId={handover.Id}&partition={handover.Partition}&generation={generation}";
+        Task<TransferProbe> sourceTask =
+            sourceControl == null
+                ? Task.FromResult(new TransferProbe(false, null))
+                : ProbeTransfer(sourceControl, fence);
+        Task<TransferProbe> targetTask =
+            targetControl == null
+                ? Task.FromResult(new TransferProbe(false, null))
+                : ProbeTransfer(targetControl, fence);
         await Task.WhenAll(sourceTask, targetTask);
         TransferProbe source = await sourceTask;
         TransferProbe target = await targetTask;
-        bool sourceOwnerLive = registry.HasLiveOwnership(handover.Partition, handover.SourceNode, handover.SourceEpoch, handover.SourceGeneration);
-        bool targetOwnerLive = registry.HasLiveOwnership(handover.Partition, handover.TargetNode, handover.TargetEpoch, handover.SourceGeneration + 1);
+        bool sourceOwnerLive = registry.HasLiveOwnership(
+            handover.Partition,
+            handover.SourceNode,
+            handover.SourceEpoch,
+            handover.SourceGeneration
+        );
+        bool targetOwnerLive = registry.HasLiveOwnership(
+            handover.Partition,
+            handover.TargetNode,
+            handover.TargetEpoch,
+            handover.SourceGeneration + 1
+        );
         // T-0296 round 2: whether the row is still at the handover's source generation, lease or not. Once it moved on
         // (the dead source's lease expiry released it, a recovery claimed it) neither Activate/Commit nor Abort can
         // pass RequireOwner: completing is impossible, and the target's copy belongs to nobody.
-        bool sourceGenerationCurrent = registry.OwnedAt(handover.Partition, handover.SourceNode, handover.SourceEpoch, handover.SourceGeneration);
+        bool sourceGenerationCurrent = registry.OwnedAt(
+            handover.Partition,
+            handover.SourceNode,
+            handover.SourceEpoch,
+            handover.SourceGeneration
+        );
         bool targetNodeLive = registry.HasLiveNode(handover.TargetNode, handover.TargetEpoch);
-        ReconciliationAction action = DecideReconciliation(handover, source, target, sourceOwnerLive, targetOwnerLive,
-            registry.HasLiveNode(handover.SourceNode, handover.SourceEpoch), targetNodeLive, sourceGenerationCurrent);
+        ReconciliationAction action = DecideReconciliation(
+            handover,
+            source,
+            target,
+            sourceOwnerLive,
+            targetOwnerLive,
+            registry.HasLiveNode(handover.SourceNode, handover.SourceEpoch),
+            targetNodeLive,
+            sourceGenerationCurrent
+        );
         if (action == ReconciliationAction.Wait)
             return;
         if (TargetDiedMidHandover(handover, action, targetNodeLive))
-            registry.RecordValidationAbort(handover.Partition, TargetDiedSignature,
-                $"target {handover.TargetNode} died during the uncommitted handover {handover.Id}");
+            registry.RecordValidationAbort(
+                handover.Partition,
+                TargetDiedSignature,
+                $"target {handover.TargetNode} died during the uncommitted handover {handover.Id}"
+            );
 
         if (action == ReconciliationAction.Abort)
         {
@@ -6998,13 +11318,26 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         }
         else if (action == ReconciliationAction.Complete)
         {
-            HandoverRecord committed = handover.State == HandoverState.Committed
-                ? handover
-                : registry.Commit(registry.Activate(handover.Id).Id);
-            if (target.Status != null && target.Status.CommittedGeneration != committed.CommittedGeneration)
-                await PostCommittedWithRetry(ClusterUrl(targetControl!, "commit") + fence + "&committedGeneration=" + committed.CommittedGeneration, "reconciled target commit");
+            HandoverRecord committed =
+                handover.State == HandoverState.Committed
+                    ? handover
+                    : registry.Commit(registry.Activate(handover.Id).Id);
+            if (
+                target.Status != null
+                && target.Status.CommittedGeneration != committed.CommittedGeneration
+            )
+                await PostCommittedWithRetry(
+                    ClusterUrl(targetControl!, "commit")
+                        + fence
+                        + "&committedGeneration="
+                        + committed.CommittedGeneration,
+                    "reconciled target commit"
+                );
             if (source.Status is { Released: false })
-                await PostCommittedWithRetry(ClusterUrl(sourceControl!, "release") + fence, "reconciled source release");
+                await PostCommittedWithRetry(
+                    ClusterUrl(sourceControl!, "release") + fence,
+                    "reconciled source release"
+                );
             registry.FinalizeReconciliation(handover.Id);
         }
         else
@@ -7015,7 +11348,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 await PostCleanup(ClusterUrl(sourceControl!, "thaw") + fence);
             registry.AbandonReconciliation(handover.Id);
         }
-        LogTransfer(handover.Id, handover.Partition, "restart-" + action.ToString().ToLowerInvariant());
+        LogTransfer(
+            handover.Id,
+            handover.Partition,
+            "restart-" + action.ToString().ToLowerInvariant()
+        );
     }
 
     /// <summary>SE-1583: the HandoverBlocked signature of a target that died while it held the partition's uncommitted import.</summary>
@@ -7027,12 +11364,25 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// such death counts toward HandoverBlocked like a same-signature validation abort: the partition stays on its source
     /// and backs off instead of being offered to the next node. A committed handover is the target's own business.
     /// </summary>
-    internal static bool TargetDiedMidHandover(HandoverRecord handover, ReconciliationAction action, bool targetNodeLive)
-        => !targetNodeLive && handover.State != HandoverState.Committed
-            && action is ReconciliationAction.Abort or ReconciliationAction.Recover;
+    internal static bool TargetDiedMidHandover(
+        HandoverRecord handover,
+        ReconciliationAction action,
+        bool targetNodeLive
+    ) =>
+        !targetNodeLive
+        && handover.State != HandoverState.Committed
+        && action is ReconciliationAction.Abort or ReconciliationAction.Recover;
 
-    internal static ReconciliationAction DecideReconciliation(HandoverRecord handover, TransferProbe source, TransferProbe target,
-        bool sourceOwnerLive, bool targetOwnerLive, bool sourceNodeLive, bool targetNodeLive, bool sourceGenerationCurrent = true)
+    internal static ReconciliationAction DecideReconciliation(
+        HandoverRecord handover,
+        TransferProbe source,
+        TransferProbe target,
+        bool sourceOwnerLive,
+        bool targetOwnerLive,
+        bool sourceNodeLive,
+        bool targetNodeLive,
+        bool sourceGenerationCurrent = true
+    )
     {
         if (!source.Reachable && sourceNodeLive || !target.Reachable && targetNodeLive)
             return ReconciliationAction.Wait;
@@ -7040,7 +11390,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // through the registry; Recover discards the target's copy and closes the record without touching the row.
         if (handover.State != HandoverState.Committed && !sourceGenerationCurrent)
             return ReconciliationAction.Recover;
-        bool targetReady = target.Status is { Imported: true, StateVerified: true, Discarded: false }
+        bool targetReady =
+            target.Status is { Imported: true, StateVerified: true, Discarded: false }
             && (target.Status.Clientless || target.Status.Adopted);
         if (handover.State == HandoverState.Committed)
             // T-0296 round 2: a live target that answers "unknown transfer" while it owns the committed generation has swept
@@ -7048,7 +11399,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // Recover released that live row, and the target discarded the partition it was simulating. Completing is safe
             // either way: a target that does not report the generation loses the row when the finalization lease ends.
             return targetReady || targetOwnerLive && target is { Reachable: true, Status: null }
-                ? ReconciliationAction.Complete : ReconciliationAction.Recover;
+                ? ReconciliationAction.Complete
+                : ReconciliationAction.Recover;
         bool sourceViable = sourceOwnerLive || source.Status is { Captured: true, Released: false };
         return sourceViable ? ReconciliationAction.Abort
             : targetReady ? ReconciliationAction.Complete
@@ -7059,15 +11411,27 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         try
         {
-            using HttpResponseMessage response = await _http.GetAsync(ClusterUrl(endpoint, "status") + fence);
+            using HttpResponseMessage response = await _http.GetAsync(
+                ClusterUrl(endpoint, "status") + fence
+            );
             if (response.StatusCode == HttpStatusCode.NotFound)
                 return new(true, null);
             response.EnsureSuccessStatusCode();
-            return new(true, JsonSerializer.Deserialize<TransferStatus>(await response.Content.ReadAsStringAsync())
-                ?? throw new InvalidDataException("Empty transfer status from " + endpoint));
+            return new(
+                true,
+                JsonSerializer.Deserialize<TransferStatus>(
+                    await response.Content.ReadAsStringAsync()
+                ) ?? throw new InvalidDataException("Empty transfer status from " + endpoint)
+            );
         }
-        catch (HttpRequestException) { return new(false, null); }
-        catch (TaskCanceledException) { return new(false, null); }
+        catch (HttpRequestException)
+        {
+            return new(false, null);
+        }
+        catch (TaskCanceledException)
+        {
+            return new(false, null);
+        }
     }
 
     /// <summary>T-0369: how many times in a row one node control request may fail in transport before it fails the handover.</summary>
@@ -7083,17 +11447,31 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// really gone still fails the caller in about two seconds instead of holding a frozen partition for the whole
     /// budget. Only for requests the node answers the same way twice (a poll, a read, a fenced adopt).
     /// </summary>
-    private static async Task<HttpResponseMessage> SendThroughTransportFailures(Func<CancellationToken, Task<HttpResponseMessage>> send,
-        string operation, CancellationToken budget = default)
+    private static async Task<HttpResponseMessage> SendThroughTransportFailures(
+        Func<CancellationToken, Task<HttpResponseMessage>> send,
+        string operation,
+        CancellationToken budget = default
+    )
     {
         for (int failures = 1; ; failures++)
         {
-            try { return await send(budget); }
-            // Without a budget the per-request timeout (100 s) is not asked again: twenty of those is no retry.
-            catch (Exception e) when (failures < TransportAttempts && !budget.IsCancellationRequested
-                && (e is HttpRequestException || e is OperationCanceledException && budget.CanBeCanceled))
+            try
             {
-                Console.WriteLine($"{operation} failed in transport ({e.Message}); asking again ({failures}/{TransportAttempts - 1})");
+                return await send(budget);
+            }
+            // Without a budget the per-request timeout (100 s) is not asked again: twenty of those is no retry.
+            catch (Exception e)
+                when (failures < TransportAttempts
+                    && !budget.IsCancellationRequested
+                    && (
+                        e is HttpRequestException
+                        || e is OperationCanceledException && budget.CanBeCanceled
+                    )
+                )
+            {
+                Console.WriteLine(
+                    $"{operation} failed in transport ({e.Message}); asking again ({failures}/{TransportAttempts - 1})"
+                );
             }
             await Task.Delay(100, budget);
         }
@@ -7105,7 +11483,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// landed, then creates the player for the body that never left) and adopt (rebuilds the replication view the
     /// client still holds and wires its controlled entity). An unfenced adopt is NOT idempotent, so it is sent once.
     /// </summary>
-    private async Task ReadoptOnSource(string source, ClientSession session, string state, CancellationToken budget)
+    private async Task ReadoptOnSource(
+        string source,
+        ClientSession session,
+        string state,
+        CancellationToken budget
+    )
     {
         string query = "?client=" + session.ClientId + "&state=" + Uri.EscapeDataString(state);
         try
@@ -7113,15 +11496,25 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             while (true)
             {
                 using HttpResponseMessage ready = await SendThroughTransportFailures(
-                    token => _http.PostAsync(ClusterUrl(source, "adopt-ready") + query, null, token),
-                    $"adopt-ready of client {session.ClientId} on source {source}", budget);
-                if (ready.IsSuccessStatusCode) break;
+                    token =>
+                        _http.PostAsync(ClusterUrl(source, "adopt-ready") + query, null, token),
+                    $"adopt-ready of client {session.ClientId} on source {source}",
+                    budget
+                );
+                if (ready.IsSuccessStatusCode)
+                    break;
                 await Task.Delay(100, budget);
             }
-            using HttpResponseMessage adopt = await _http.PostAsync(ClusterUrl(source, "adopt") + query, null, budget);
+            using HttpResponseMessage adopt = await _http.PostAsync(
+                ClusterUrl(source, "adopt") + query,
+                null,
+                budget
+            );
             if (!adopt.IsSuccessStatusCode)
-                throw new InvalidOperationException($"source adopt answered HTTP {(int)adopt.StatusCode}: "
-                    + HandoverImportException.FirstLine(await adopt.Content.ReadAsStringAsync()));
+                throw new InvalidOperationException(
+                    $"source adopt answered HTTP {(int)adopt.StatusCode}: "
+                        + HandoverImportException.FirstLine(await adopt.Content.ReadAsStringAsync())
+                );
         }
         catch (OperationCanceledException) when (budget.IsCancellationRequested)
         {
@@ -7138,15 +11531,27 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         return true;
     }
 
-    private async Task<HttpResponseMessage> PostGranted(string url, HttpContent content, string token)
+    private async Task<HttpResponseMessage> PostGranted(
+        string url,
+        HttpContent content,
+        string token
+    )
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
         request.Headers.Authorization = new("Bearer", token);
         return await _http.SendAsync(request);
     }
 
-    internal enum ReconciliationAction { Wait, Abort, Complete, Recover }
+    internal enum ReconciliationAction
+    {
+        Wait,
+        Abort,
+        Complete,
+        Recover,
+    }
+
     internal sealed record TransferProbe(bool Reachable, TransferStatus? Status);
+
     internal sealed record TransferStatus(
         [property: JsonPropertyName("captured")] bool Captured,
         [property: JsonPropertyName("imported")] bool Imported,
@@ -7156,7 +11561,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         [property: JsonPropertyName("committedGeneration")] long CommittedGeneration,
         [property: JsonPropertyName("released")] bool Released,
         [property: JsonPropertyName("thawed")] bool Thawed,
-        [property: JsonPropertyName("discarded")] bool Discarded);
+        [property: JsonPropertyName("discarded")] bool Discarded
+    );
 
     /// <summary>
     /// HandoverImprovements.md §4 tee.async: with the async tee the source returns its capture before the
@@ -7164,7 +11570,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// the capture frame. A source running the synchronous tee (or an older build) answers known=false
     /// and the wait is one round trip.
     /// </summary>
-    private async Task AwaitDurableTee(string source, string transferId, ulong partition, byte[]? sector)
+    private async Task AwaitDurableTee(
+        string source,
+        string transferId,
+        ulong partition,
+        byte[]? sector
+    )
     {
         string url = ClusterUrl(source, "tee-status") + "?transferId=" + transferId;
         DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
@@ -7181,24 +11592,33 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // T-0161: the source died after its tee was catalogued. The registry's copy is the
                 // durability the tee-status answer would have confirmed, so the target may commit
                 // without the source instead of discarding the move and waiting for lease recovery.
-                LogTransfer(transferId, partition, "tee-durable-from-registry",
-                    $" save={tee.Generation}/{tee.Sequence} sourceError={error.Message}");
+                LogTransfer(
+                    transferId,
+                    partition,
+                    "tee-durable-from-registry",
+                    $" save={tee.Generation}/{tee.Sequence} sourceError={error.Message}"
+                );
                 return;
             }
-            catch (HttpRequestException error) when (++transportFailures < TransportAttempts && DateTime.UtcNow < deadline)
+            catch (HttpRequestException error)
+                when (++transportFailures < TransportAttempts && DateTime.UtcNow < deadline)
             {
                 // T-0369: a read, asked again. Here every client is already adopted on the target, so letting one
                 // failed GET through aborted the handover at its most expensive point.
-                Console.WriteLine($"tee-status of partition {partition} on {source} failed in transport ({error.Message}); "
-                    + $"asking again ({transportFailures}/{TransportAttempts - 1})");
+                Console.WriteLine(
+                    $"tee-status of partition {partition} on {source} failed in transport ({error.Message}); "
+                        + $"asking again ({transportFailures}/{TransportAttempts - 1})"
+                );
                 await Task.Delay(100);
                 continue;
             }
             using var _ = response;
             if (response.StatusCode == HttpStatusCode.NotFound)
-                return;  // pre-§4 node without the route
+                return; // pre-§4 node without the route
             response.EnsureSuccessStatusCode();
-            using JsonDocument status = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            using JsonDocument status = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync()
+            );
             JsonElement root = status.RootElement;
             if (!root.GetProperty("known").GetBoolean())
                 return;
@@ -7209,11 +11629,19 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     LogTransfer(transferId, partition, "tee-durable");
                     return;
                 }
-                throw new InvalidOperationException("Handover tee was not durably catalogued: "
-                    + (root.TryGetProperty("error", out JsonElement error) ? error.ToString() : "save failed"));
+                throw new InvalidOperationException(
+                    "Handover tee was not durably catalogued: "
+                        + (
+                            root.TryGetProperty("error", out JsonElement error)
+                                ? error.ToString()
+                                : "save failed"
+                        )
+                );
             }
             if (DateTime.UtcNow >= deadline)
-                throw new TimeoutException("Handover tee of partition " + partition + " not durable within 30s");
+                throw new TimeoutException(
+                    "Handover tee of partition " + partition + " not durable within 30s"
+                );
             await Task.Delay(100);
         }
     }
@@ -7225,16 +11653,29 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// </summary>
     private SaveId? TeeCatalogued(ulong partition, byte[]? sector)
     {
-        if (_registry == null || sector == null || sector.Length < 24
-            || sector[0] != (byte)'M' || sector[1] != (byte)'P' || sector[2] != (byte)'S' || sector[3] != (byte)'1')
+        if (
+            _registry == null
+            || sector == null
+            || sector.Length < 24
+            || sector[0] != (byte)'M'
+            || sector[1] != (byte)'P'
+            || sector[2] != (byte)'S'
+            || sector[3] != (byte)'1'
+        )
             return null;
         ulong id = BitConverter.ToUInt64(sector, 8);
         uint generation = BitConverter.ToUInt32(sector, 16);
         uint sequence = BitConverter.ToUInt32(sector, 20);
-        if (id != partition) return null;
+        if (id != partition)
+            return null;
         SaveId tee = new(partition, generation, sequence);
-        return _registry.Saves().Any(save => save.SaveId == tee && save.Kind == SaveKind.HandoverTee && !save.PendingDelete)
-            ? tee : null;
+        return _registry
+            .Saves()
+            .Any(save =>
+                save.SaveId == tee && save.Kind == SaveKind.HandoverTee && !save.PendingDelete
+            )
+            ? tee
+            : null;
     }
 
     private async Task PostCommittedWithRetry(string url, string operation)
@@ -7245,18 +11686,47 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         {
             try
             {
-                using HttpResponseMessage response = await _http.PostAsync(url, null, timeout.Token);
+                using HttpResponseMessage response = await _http.PostAsync(
+                    url,
+                    null,
+                    timeout.Token
+                );
                 if (response.IsSuccessStatusCode)
                     return;
-                if ((int)response.StatusCode < 500 && response.StatusCode is not HttpStatusCode.RequestTimeout and not HttpStatusCode.TooManyRequests)
-                    throw new InvalidOperationException($"{operation} returned non-retryable HTTP {(int)response.StatusCode}");
-                last = new HttpRequestException($"{operation} returned HTTP {(int)response.StatusCode}");
+                if (
+                    (int)response.StatusCode < 500
+                    && response.StatusCode
+                        is not HttpStatusCode.RequestTimeout
+                            and not HttpStatusCode.TooManyRequests
+                )
+                    throw new InvalidOperationException(
+                        $"{operation} returned non-retryable HTTP {(int)response.StatusCode}"
+                    );
+                last = new HttpRequestException(
+                    $"{operation} returned HTTP {(int)response.StatusCode}"
+                );
             }
-            catch (OperationCanceledException e) when (!timeout.IsCancellationRequested) { last = e; }
-            catch (OperationCanceledException e) { last = e; break; }
-            catch (HttpRequestException e) { last = e; }
-            try { await Task.Delay(250, timeout.Token); }
-            catch (OperationCanceledException) { break; }
+            catch (OperationCanceledException e) when (!timeout.IsCancellationRequested)
+            {
+                last = e;
+            }
+            catch (OperationCanceledException e)
+            {
+                last = e;
+                break;
+            }
+            catch (HttpRequestException e)
+            {
+                last = e;
+            }
+            try
+            {
+                await Task.Delay(250, timeout.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
         }
         throw new TimeoutException($"Timed out retrying {operation}", last);
     }
@@ -7267,8 +11737,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             return endpoint.Equals(session.BackendEndpoint) && RouteHealthy(session);
     }
 
-    private static bool RouteHealthy(ClientSession session) => ReferenceEquals(session.AttachedLink, session.Link)
-        && session.Link?.IsConnected == true;
+    private static bool RouteHealthy(ClientSession session) =>
+        ReferenceEquals(session.AttachedLink, session.Link) && session.Link?.IsConnected == true;
 
     /// <summary>
     /// Relays the client's original CLIENT_CONNECTED packet to the backend it is now linked to.
@@ -7300,11 +11770,17 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     private void AttachBackend(ClientSession session)
     {
         if (session.ClientConnectedPacket == null || session.Link == null)
-            throw new InvalidOperationException("Cannot attach backend without the original CLIENT_CONNECTED packet");
+            throw new InvalidOperationException(
+                "Cannot attach backend without the original CLIENT_CONNECTED packet"
+            );
         if (_relay != null)
         {
             // gateway-rs captured the same packet and replays it to the session's current link.
-            _relay.Send(RelayIpcType.ReplayConnect, 0, new { clientId = session.ClientId, session = session.RelaySession });
+            _relay.Send(
+                RelayIpcType.ReplayConnect,
+                0,
+                new { clientId = session.ClientId, session = session.RelaySession }
+            );
             return;
         }
         SendToNode(session.Link, session.ClientConnectedPacket);
@@ -7313,17 +11789,29 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     private void LogTransfer(string transferId, ulong partition, string state, string extra = "")
     {
         long? atMs = _handoverTelemetry.Stamp(transferId, state);
-        if (state.Contains("failed", StringComparison.OrdinalIgnoreCase)
+        if (
+            state.Contains("failed", StringComparison.OrdinalIgnoreCase)
             || state.Contains("abort", StringComparison.OrdinalIgnoreCase)
             || state.Contains("timeout", StringComparison.OrdinalIgnoreCase)
-            || state.Contains("recover", StringComparison.OrdinalIgnoreCase))
-            DiagnosticReports.Write("handover_event", state + extra, transferId: transferId,
-                partition: partition, phase: state);
+            || state.Contains("recover", StringComparison.OrdinalIgnoreCase)
+        )
+            DiagnosticReports.Write(
+                "handover_event",
+                state + extra,
+                transferId: transferId,
+                partition: partition,
+                phase: state
+            );
         // T-0251: a committed balance migration is an arrival (the pin names the partition until it expires).
         bool arrival = state == "committed" && MigrationPinned(partition);
-        if (arrival) _registry?.NoteArrival(partition);
-        Console.WriteLine($"handover transferId={transferId} partition={partition} state={state}"
-            + (atMs is { } ms ? $" atMs={ms}" : "") + extra + (arrival ? " arrival=noted" : ""));
+        if (arrival)
+            _registry?.NoteArrival(partition);
+        Console.WriteLine(
+            $"handover transferId={transferId} partition={partition} state={state}"
+                + (atMs is { } ms ? $" atMs={ms}" : "")
+                + extra
+                + (arrival ? " arrival=noted" : "")
+        );
     }
 
     // ------------------------------------------------------------------ HandoverDelta.md: presync
@@ -7340,39 +11828,57 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         try
         {
-            return _registry != null && _registry.HandoverConfig().Values.TryGetValue("presync.enabled", out string? value)
+            return _registry != null
+                && _registry
+                    .HandoverConfig()
+                    .Values.TryGetValue("presync.enabled", out string? value)
                 && string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
         }
-        catch (Exception) { return false; }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     private async Task<string?> TryPresync(string source, string target, ulong partition)
     {
-        if (!PresyncEnabled()) return null;
+        if (!PresyncEnabled())
+            return null;
         if (_presyncQuarantine.TryGetValue(partition, out DateTime until))
         {
-            if (DateTime.UtcNow < until) return null;
+            if (DateTime.UtcNow < until)
+                return null;
             _presyncQuarantine.TryRemove(partition, out _);
         }
         Stopwatch watch = Stopwatch.StartNew();
         try
         {
-            using HttpResponseMessage response = await _http.PostAsync(ClusterUrl(target, "presync") + $"?partition={partition}&source={Uri.EscapeDataString(source)}", null);
+            using HttpResponseMessage response = await _http.PostAsync(
+                ClusterUrl(target, "presync")
+                    + $"?partition={partition}&source={Uri.EscapeDataString(source)}",
+                null
+            );
             string body = await response.Content.ReadAsStringAsync();
             if (!response.IsSuccessStatusCode)
             {
-                Console.WriteLine($"presync partition={partition} target={target} failed HTTP {(int)response.StatusCode}: {HandoverImportException.FirstLine(body)} ({watch.ElapsedMilliseconds} ms); full handover");
+                Console.WriteLine(
+                    $"presync partition={partition} target={target} failed HTTP {(int)response.StatusCode}: {HandoverImportException.FirstLine(body)} ({watch.ElapsedMilliseconds} ms); full handover"
+                );
                 return null;
             }
             using JsonDocument document = JsonDocument.Parse(body);
             string id = document.RootElement.GetProperty("presyncId").GetString()!;
-            Console.WriteLine($"presync partition={partition} {source}->{target} presync={id} entities={document.RootElement.GetProperty("entities").GetInt32()}"
-                + $" staged={document.RootElement.GetProperty("staged").GetInt32()} ms={watch.ElapsedMilliseconds}");
+            Console.WriteLine(
+                $"presync partition={partition} {source}->{target} presync={id} entities={document.RootElement.GetProperty("entities").GetInt32()}"
+                    + $" staged={document.RootElement.GetProperty("staged").GetInt32()} ms={watch.ElapsedMilliseconds}"
+            );
             return id;
         }
         catch (Exception e)
         {
-            Console.WriteLine($"presync partition={partition} target={target} failed: {e.Message} ({watch.ElapsedMilliseconds} ms); full handover");
+            Console.WriteLine(
+                $"presync partition={partition} target={target} failed: {e.Message} ({watch.ElapsedMilliseconds} ms); full handover"
+            );
             return null;
         }
     }
@@ -7382,16 +11888,35 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// capture is re-fetched in full from the source and imported again. Returns the sector that was
     /// imported (the full one after a fallback, so telemetry and retries see what the target did).
     /// </summary>
-    private async Task<HandoverCapture> ImportWithFallback(string source, string target, ulong partition, string fence, string captureQuery,
-        HandoverCapture handover, string transferId, bool delta, Func<TransferGrant> grant)
+    private async Task<HandoverCapture> ImportWithFallback(
+        string source,
+        string target,
+        ulong partition,
+        string fence,
+        string captureQuery,
+        HandoverCapture handover,
+        string transferId,
+        bool delta,
+        Func<TransferGrant> grant
+    )
     {
         using (ByteArrayContent content = new(handover.Sector))
         {
-            HttpResponseMessage import = await PostGranted(ClusterUrl(target, "import") + fence, content, grant().Token);
-            if (import.IsSuccessStatusCode) return handover;
+            HttpResponseMessage import = await PostGranted(
+                ClusterUrl(target, "import") + fence,
+                content,
+                grant().Token
+            );
+            if (import.IsSuccessStatusCode)
+                return handover;
             string body = await import.Content.ReadAsStringAsync();
             if ((int)import.StatusCode == 424)
-                LogTransfer(transferId, partition, "presync-missing", $" {HandoverImportException.FirstLine(body)}");
+                LogTransfer(
+                    transferId,
+                    partition,
+                    "presync-missing",
+                    $" {HandoverImportException.FirstLine(body)}"
+                );
             else if (delta)
             {
                 // A delta import that fails for any other reason (an applier left the dormant entity
@@ -7400,48 +11925,67 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 // every 2 s for as long as the partition stays movable. Quarantine presync for this
                 // partition and finish THIS transfer with a full import.
                 _presyncQuarantine[partition] = DateTime.UtcNow + PresyncQuarantine;
-                LogTransfer(transferId, partition, "delta-failed", $" HTTP {(int)import.StatusCode} {HandoverImportException.FirstLine(body)}; presync quarantined {PresyncQuarantine.TotalMinutes:0} min");
+                LogTransfer(
+                    transferId,
+                    partition,
+                    "delta-failed",
+                    $" HTTP {(int)import.StatusCode} {HandoverImportException.FirstLine(body)}; presync quarantined {PresyncQuarantine.TotalMinutes:0} min"
+                );
             }
             else
             {
                 HandoverImportException failure = new(partition, (int)import.StatusCode, body);
-                if (failure.Signature != null) _presyncQuarantine[partition] = DateTime.UtcNow + PresyncQuarantine;
+                if (failure.Signature != null)
+                    _presyncQuarantine[partition] = DateTime.UtcNow + PresyncQuarantine;
                 throw failure;
             }
         }
-        byte[] capture = await _http.GetByteArrayAsync(ClusterUrl(source, "capture") + fence + captureQuery + "&full=true");
+        byte[] capture = await _http.GetByteArrayAsync(
+            ClusterUrl(source, "capture") + fence + captureQuery + "&full=true"
+        );
         HandoverCapture full = HandoverCapture.Parse(capture);
         LogTransfer(transferId, partition, "recaptured-full", $" sectorBytes={full.Sector.Length}");
         using (ByteArrayContent content = new(full.Sector))
         {
-            HttpResponseMessage import = await PostGranted(ClusterUrl(target, "import") + fence, content, grant().Token);
+            HttpResponseMessage import = await PostGranted(
+                ClusterUrl(target, "import") + fence,
+                content,
+                grant().Token
+            );
             if (!import.IsSuccessStatusCode)
-                throw new HandoverImportException(partition, (int)import.StatusCode, await import.Content.ReadAsStringAsync());
+                throw new HandoverImportException(
+                    partition,
+                    (int)import.StatusCode,
+                    await import.Content.ReadAsStringAsync()
+                );
         }
         return full;
     }
 
-    private static string ClusterUrl(string endpoint, string action) => $"http://{endpoint.TrimEnd('/')}/cluster/{action}";
+    private static string ClusterUrl(string endpoint, string action) =>
+        $"http://{endpoint.TrimEnd('/')}/cluster/{action}";
 
     private void Resume()
     {
-		lock (_pauseLock)
+        lock (_pauseLock)
         {
-			_paused = false;
-			foreach (ClientSession session in _clients.Values)
-			{
-				if (PlayerAdmissionRequired(session) && session.PlayerReady == null) continue;
-				NodeLink link = session.Link ?? GetNodeLink(session.BackendEndpoint);
-				Attach(session, link);
-				FlushClientBacklog(session);
-			}
+            _paused = false;
+            foreach (ClientSession session in _clients.Values)
+            {
+                if (PlayerAdmissionRequired(session) && session.PlayerReady == null)
+                    continue;
+                NodeLink link = session.Link ?? GetNodeLink(session.BackendEndpoint);
+                Attach(session, link);
+                FlushClientBacklog(session);
+            }
         }
     }
 
     private static bool IsControlVerb(HttpListenerContext context) =>
         context.Request.HttpMethod == "GET" || context.Request.HttpMethod == "POST";
 
-    private static bool IsAdminRoute(string path) => !path.StartsWith("/registry/", StringComparison.OrdinalIgnoreCase)
+    private static bool IsAdminRoute(string path) =>
+        !path.StartsWith("/registry/", StringComparison.OrdinalIgnoreCase)
         || path.StartsWith("/registry/status", StringComparison.OrdinalIgnoreCase)
         || path.StartsWith("/registry/node-plan", StringComparison.OrdinalIgnoreCase)
         || path.StartsWith("/registry/scale", StringComparison.OrdinalIgnoreCase)
@@ -7459,12 +12003,18 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// empty = a stamped save with no characters in it.</summary>
     internal static Dictionary<long, long>? ParseHomeStamps(string? value)
     {
-        if (value == null) return null;
+        if (value == null)
+            return null;
         var stamps = new Dictionary<long, long>();
         foreach (string pair in value.Split(',', StringSplitOptions.RemoveEmptyEntries))
         {
             string[] parts = pair.Split(':');
-            if (parts.Length != 2 || !long.TryParse(parts[0], out long entity) || !long.TryParse(parts[1], out long version) || version <= 0)
+            if (
+                parts.Length != 2
+                || !long.TryParse(parts[0], out long entity)
+                || !long.TryParse(parts[1], out long version)
+                || version <= 0
+            )
                 throw new ArgumentException($"Malformed home stamp '{pair}'");
             stamps[entity] = version;
         }
@@ -7472,15 +12022,18 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     }
 
     private static string Required(HttpListenerContext context, string key) =>
-        context.Request.QueryString[key] ?? throw new ArgumentException("Missing query parameter '" + key + "'");
+        context.Request.QueryString[key]
+        ?? throw new ArgumentException("Missing query parameter '" + key + "'");
 
     private static T ReadJson<T>(HttpListenerContext context) =>
-        JsonSerializer.Deserialize<T>(context.Request.InputStream, new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true,
-            Converters = { new JsonStringEnumConverter() },
-        })
-        ?? throw new ArgumentException("Request body is required");
+        JsonSerializer.Deserialize<T>(
+            context.Request.InputStream,
+            new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+                Converters = { new JsonStringEnumConverter() },
+            }
+        ) ?? throw new ArgumentException("Request body is required");
 
     private static void WriteText(HttpListenerContext context, int status, string text)
     {
@@ -7500,7 +12053,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// every rotation (w32 2026-09-25: 20-100 MB/s allocated, LOH 0.9-1.2 GB between collections). Secrets are
     /// whole configured values inside a string or a key, so per-string redaction redacts the same text.
     /// </summary>
-    internal static void WriteJson(HttpListenerContext context, int status, object value, bool redact = true)
+    internal static void WriteJson(
+        HttpListenerContext context,
+        int status,
+        object value,
+        bool redact = true
+    )
     {
         context.Response.StatusCode = status;
         context.Response.ContentType = "application/json";
@@ -7512,13 +12070,17 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // reports each online player's character home synchronously every 5 s, so 16-18 players cost a
             // 700-900 ms hitch every 5 s on every node (w32 2026-09-25 06:07 on, sim down to 0.32x).
             using var body = new SpillToChunkedStream(context.Response);
-            JsonSerializer.Serialize(body, value, redact ? RedactingJson : JsonSerializerOptions.Default);
+            JsonSerializer.Serialize(
+                body,
+                value,
+                redact ? RedactingJson : JsonSerializerOptions.Default
+            );
             body.Complete();
             context.Response.Close();
         }
         catch
         {
-            context.Response.Abort();   // a half-written body must not read as a complete document
+            context.Response.Abort(); // a half-written body must not read as a complete document
             throw;
         }
     }
@@ -7540,12 +12102,28 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         public override bool CanSeek => false;
         public override bool CanWrite => true;
         public override long Length => throw new NotSupportedException();
-        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
-        public override void Flush() { if (_spilled) response.OutputStream.Flush(); }
-        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+            if (_spilled)
+                response.OutputStream.Flush();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) =>
+            throw new NotSupportedException();
+
         public override void SetLength(long value) => throw new NotSupportedException();
-        public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            Write(buffer.AsSpan(offset, count));
 
         public override void Write(ReadOnlySpan<byte> data)
         {
@@ -7568,20 +12146,44 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         /// <summary>Sends a still-buffered body with its Content-Length; a spilled one is already streaming.</summary>
         public void Complete()
         {
-            if (_spilled) return;
+            if (_spilled)
+                return;
             response.ContentLength64 = _length;
             response.OutputStream.Write(_buffer, 0, _length);
         }
     }
 
-    internal static readonly JsonSerializerOptions RedactingJson = new() { Converters = { new RedactingStringConverter(), new RedactingElementConverter() } };
-
-    private sealed class RedactingStringConverter : System.Text.Json.Serialization.JsonConverter<string>
+    internal static readonly JsonSerializerOptions RedactingJson = new()
     {
-        public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => reader.GetString();
-        public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options) => writer.WriteStringValue(SecretRedactor.Redact(value));
-        public override void WriteAsPropertyName(Utf8JsonWriter writer, string value, JsonSerializerOptions options) => writer.WritePropertyName(SecretRedactor.Redact(value));
-        public override string ReadAsPropertyName(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => reader.GetString()!;
+        Converters = { new RedactingStringConverter(), new RedactingElementConverter() },
+    };
+
+    private sealed class RedactingStringConverter
+        : System.Text.Json.Serialization.JsonConverter<string>
+    {
+        public override string? Read(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options
+        ) => reader.GetString();
+
+        public override void Write(
+            Utf8JsonWriter writer,
+            string value,
+            JsonSerializerOptions options
+        ) => writer.WriteStringValue(SecretRedactor.Redact(value));
+
+        public override void WriteAsPropertyName(
+            Utf8JsonWriter writer,
+            string value,
+            JsonSerializerOptions options
+        ) => writer.WritePropertyName(SecretRedactor.Redact(value));
+
+        public override string ReadAsPropertyName(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options
+        ) => reader.GetString()!;
     }
 
     private void SendToBackend(ClientSession session, GatewayPacket packet)
@@ -7589,8 +12191,13 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         lock (session.RelayLock)
         {
             NodeLink? link = session.Link;
-			if (!RelayPaused && !session.SwitchingBackend && AttachedBindingRoutable(session) && ReferenceEquals(session.AttachedLink, link)
-                && link?.IsConnected == true)
+            if (
+                !RelayPaused
+                && !session.SwitchingBackend
+                && AttachedBindingRoutable(session)
+                && ReferenceEquals(session.AttachedLink, link)
+                && link?.IsConnected == true
+            )
                 SendClientPacketToNode(session, link, packet);
             else
             {
@@ -7599,7 +12206,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 if (RelayPaused || session.SwitchingBackend)
                     session.ClientBacklog.RefreshAge();
                 if (!session.ClientBacklog.TryEnqueue(packet))
-                    ForceReconnect(session, "client-backlog-overflow (" + session.ClientBacklog.Describe() + ")");
+                    ForceReconnect(
+                        session,
+                        "client-backlog-overflow (" + session.ClientBacklog.Describe() + ")"
+                    );
             }
         }
     }
@@ -7622,7 +12232,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 {
                     int credit = session.WithheldCreditBytes + packet.Payload.Length + 10;
                     session.WithheldCreditBytes = 0;
-                    if (session.Link != null) SendCredit(session.Link, session.ClientId, credit);
+                    if (session.Link != null)
+                        SendCredit(session.Link, session.ClientId, credit);
                 }
                 else
                     session.WithheldCreditBytes += packet.Payload.Length + 10;
@@ -7635,8 +12246,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         lock (session.RelayLock)
         {
             ClientChannel? client = session.Client;
-            if (session.ReliableBacklogStarted == null || client?.Connected != true
-                || client.ReliableBacklogPackets >= 3072)
+            if (
+                session.ReliableBacklogStarted == null
+                || client?.Connected != true
+                || client.ReliableBacklogPackets >= 3072
+            )
                 return;
             session.ReliableBacklogStarted = null;
             int credit = session.WithheldCreditBytes;
@@ -7650,16 +12264,24 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         if (DirectTransportCodec.TryGetGameMessageId(packet, out byte messageId))
         {
-            if (session.SuppressJoinMessages && session.TypeTableSent && messageId is 2 or 12 or 13 or 20)
+            if (
+                session.SuppressJoinMessages
+                && session.TypeTableSent
+                && messageId is 2 or 12 or 13 or 20
+            )
             {
-                Console.Error.WriteLine($"Dropped duplicate join message {messageId} for client {session.ClientId}");
+                Console.Error.WriteLine(
+                    $"Dropped duplicate join message {messageId} for client {session.ClientId}"
+                );
                 return false;
             }
             if (messageId == 6)
             {
                 if (session.TypeTableSent)
                 {
-                    Console.Error.WriteLine($"Dropped duplicate SERVER_DATA for client {session.ClientId}");
+                    Console.Error.WriteLine(
+                        $"Dropped duplicate SERVER_DATA for client {session.ClientId}"
+                    );
                     session.DuplicateServerData++;
                     Interlocked.Increment(ref _duplicateServerData);
                     return false;
@@ -7674,27 +12296,41 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         string supplied = context.Request.Headers["Authorization"] ?? string.Empty;
         const string prefix = "Bearer ";
-        if (!supplied.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) || _options.AdminToken == null)
+        if (
+            !supplied.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            || _options.AdminToken == null
+        )
             return false;
         byte[] expected = SHA256.HashData(Encoding.UTF8.GetBytes(_options.AdminToken));
         byte[] actual = SHA256.HashData(Encoding.UTF8.GetBytes(supplied[prefix.Length..]));
         // T-0321: after a gateway-only restart that brought a re-minted admin token, the start's persisted token stays
         // the gateway's own (the running nodes hold it) and the new one is accepted as well (StartCredentials).
         return CryptographicOperations.FixedTimeEquals(expected, actual)
-            | ClusterProtocol.ClusterNet.TokenMatches(supplied[prefix.Length..], _options.ExtraAdminTokens ?? []);
+            | ClusterProtocol.ClusterNet.TokenMatches(
+                supplied[prefix.Length..],
+                _options.ExtraAdminTokens ?? []
+            );
     }
 
     private bool NodeAuthorized(HttpListenerContext context, string path)
     {
         // T-0321: a node's control-liveness rescue (ControlReassertService) is the one non-registry route a node calls.
         // Only the punitive-free reconnect form: an admin kick still needs the admin token.
-        if (path.Equals("/admission/kick", StringComparison.OrdinalIgnoreCase)
-            && string.Equals(context.Request.QueryString["reason"], "reconnect", StringComparison.OrdinalIgnoreCase))
+        if (
+            path.Equals("/admission/kick", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(
+                context.Request.QueryString["reason"],
+                "reconnect",
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
             return JoinTokenPresented(context);
-        if (!path.StartsWith("/registry/", StringComparison.OrdinalIgnoreCase)
+        if (
+            !path.StartsWith("/registry/", StringComparison.OrdinalIgnoreCase)
             || IsAdminRoute(path)
             || path.Equals("/registry/nodes", StringComparison.OrdinalIgnoreCase)
-            || path.Equals("/registry/grants/validate", StringComparison.OrdinalIgnoreCase))
+            || path.Equals("/registry/grants/validate", StringComparison.OrdinalIgnoreCase)
+        )
             return path.Equals("/registry/nodes", StringComparison.OrdinalIgnoreCase)
                 || path.Equals("/registry/grants/validate", StringComparison.OrdinalIgnoreCase);
         string supplied = context.Request.Headers["Authorization"] ?? string.Empty;
@@ -7722,107 +12358,160 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // registry=summary: the registry section without its history - live partition rows plus counts, and
         // the EntityId issue log as a summary - for pollers such as cluster-status (1 Hz in the harness), which
         // otherwise pulled 34.7 MB per call, 37.5 MB of it retired partition rows (w32, 2026-09-23).
-        bool summary = string.Equals(context.Request.QueryString["registry"], "summary", StringComparison.OrdinalIgnoreCase);
+        bool summary = string.Equals(
+            context.Request.QueryString["registry"],
+            "summary",
+            StringComparison.OrdinalIgnoreCase
+        );
         string query = context.Request.Url?.Query ?? string.Empty;
         DateTimeOffset now = DateTimeOffset.UtcNow;
         NodeRegistration[] nodes = _registry?.Nodes() ?? Array.Empty<NodeRegistration>();
         // Publish the same effective load the balancer derives from its /partitions reports.
         // The node diag's health.simSpeed is a separate capture and must not recalculate it.
         var balanceLoads = new Dictionary<string, (long Effective, long Partitions)>();
-        if (_lastPartitionReports is { } loadSnapshot
+        if (
+            _lastPartitionReports is { } loadSnapshot
             && DateTime.UtcNow - loadSnapshot.At <= TimeSpan.FromSeconds(15)
             && loadSnapshot.Reports.Length != 0
-            && loadSnapshot.Reports.All(x => x.Report.SimLoadSupported))
+            && loadSnapshot.Reports.All(x => x.Report.SimLoadSupported)
+        )
             foreach (var report in loadSnapshot.Reports)
-                balanceLoads[report.Node] = (EffectiveNodeLoad(report.Report, true),
-                    report.Report.Partitions.Sum(p => p.SimLoadUs));
+                balanceLoads[report.Node] = (
+                    EffectiveNodeLoad(report.Report, true),
+                    report.Report.Partitions.Sum(p => p.SimLoadUs)
+                );
         var sections = new List<object>();
         foreach (NodeRegistration node in nodes)
         {
-            if (nodeFilter != null && !node.Node.Equals(nodeFilter, StringComparison.OrdinalIgnoreCase)) continue;
+            if (
+                nodeFilter != null
+                && !node.Node.Equals(nodeFilter, StringComparison.OrdinalIgnoreCase)
+            )
+                continue;
             // The lease is refreshed by the heartbeat, so age since the last one is the TTL minus what is
             // left on the lease. Reporting (now - LeaseExpires) instead reads 0 for every healthy node,
             // which is the one value a staleness check must never see from a node that has gone quiet.
-            double heartbeatAge = _options.LeaseTtl.TotalMilliseconds - (node.LeaseExpires - now).TotalMilliseconds;
+            double heartbeatAge =
+                _options.LeaseTtl.TotalMilliseconds - (node.LeaseExpires - now).TotalMilliseconds;
             object? section = null;
             string? error = null;
             // T-0320: a gone node (Empty, Dead) is listed but never queried. Its id is never reused, but its port slot is:
             // the row's control endpoint may serve ANOTHER node by now, whose section would appear twice, once under the
             // stopped node's name (bench run 3). Its partitions are elsewhere or offline; "stale" says the section is absent.
             if (node.State is NodeState.Empty or NodeState.Dead && depth != "cluster")
-                error = $"node is {node.State}; not queried (its endpoint may serve another node now)";
+                error =
+                    $"node is {node.State}; not queried (its endpoint may serve another node now)";
             else if (node.ControlEndpoint != null && depth != "cluster")
                 try
                 {
-                    using HttpRequestMessage request = new(HttpMethod.Get,
-                        ClusterUrl(node.ControlEndpoint.Replace("http://", string.Empty), "diag" + query));
+                    using HttpRequestMessage request = new(
+                        HttpMethod.Get,
+                        ClusterUrl(
+                            node.ControlEndpoint.Replace("http://", string.Empty),
+                            "diag" + query
+                        )
+                    );
                     // Headers only: the body is read straight into RelayedJson's chunks, not buffered whole by HttpClient
                     // first (its growing buffer was another large-object allocation per node per call).
-                    using HttpResponseMessage response = _http.Send(request, HttpCompletionOption.ResponseHeadersRead);
+                    using HttpResponseMessage response = _http.Send(
+                        request,
+                        HttpCompletionOption.ResponseHeadersRead
+                    );
                     response.EnsureSuccessStatusCode();
                     // Relayed as the node's bytes, not parsed into a JsonDocument (LOH), and redacted per string on
                     // the way out - see RelayedJson.
                     section = RelayedJson.Read(response.Content.ReadAsStream());
                 }
-                catch (Exception e) { error = e.Message; }
+                catch (Exception e)
+                {
+                    error = e.Message;
+                }
             bool hasBalanceLoad = balanceLoads.TryGetValue(node.Node, out var balanceLoad);
-            sections.Add(new
-            {
-                nodeId = node.Node, slot = node.Node, role = node.Role.ToString(), state = node.State.ToString(),
-                endpoint = node.Endpoint, controlEndpoint = node.ControlEndpoint, epoch = node.Epoch,
-                leaseExpires = node.LeaseExpires,
-                lastHeartbeatAgeMs = Math.Max(0, heartbeatAge), quarantined = node.Quarantined,
-                balanceLoadUs = hasBalanceLoad ? balanceLoad.Effective : (long?)null,
-                balancePartitionLoadUs = hasBalanceLoad ? balanceLoad.Partitions : (long?)null,
-                // Explicitly stale rather than absent: an unreachable node's partitions are unknown, not gone.
-                stale = section == null && depth != "cluster", sectionError = error, section
-            });
+            sections.Add(
+                new
+                {
+                    nodeId = node.Node,
+                    slot = node.Node,
+                    role = node.Role.ToString(),
+                    state = node.State.ToString(),
+                    endpoint = node.Endpoint,
+                    controlEndpoint = node.ControlEndpoint,
+                    epoch = node.Epoch,
+                    leaseExpires = node.LeaseExpires,
+                    lastHeartbeatAgeMs = Math.Max(0, heartbeatAge),
+                    quarantined = node.Quarantined,
+                    balanceLoadUs = hasBalanceLoad ? balanceLoad.Effective : (long?)null,
+                    balancePartitionLoadUs = hasBalanceLoad ? balanceLoad.Partitions : (long?)null,
+                    // Explicitly stale rather than absent: an unreachable node's partitions are unknown, not gone.
+                    stale = section == null && depth != "cluster",
+                    sectionError = error,
+                    section,
+                }
+            );
         }
         return new
         {
             schemaVersion = 1,
             capturedAt = now,
             depth,
-            registry = _registry == null ? null : new
-            {
-                status = _registry.Status(),
-                // PartitionsReport, not Partitions: the leaner shape omits Retired, and every
-                // consumer reading this report has to tell a live row from a retired husk that
-                // still names its old Node. bin/node-lifecycle-audit.py could not, so it billed
-                // every retired row as a stuck partition for the rest of the run (w19 23:38,
-                // partitions 2711 and 2729). HandoverBlocked comes along and is null on all but
-                // a handful of rows; IsRetired is an O(1) index lookup since 3bac425.
-                partitions = _registry.PartitionsReport(summary),
-                partitionCounts = summary ? _registry.PartitionCounts() : null,
-                handovers = _registry.Incomplete(),
-                handoverBlocked = _registry.HandoverBlocks(),
-                // T-0296: runtime invariant audit (duplicate copies, abandoned partitions), Docs/ConcurrencyReview.md 8.
-                invariants = _registry.InvariantAudit(),
-                // T-0292: partitions the latest node reports mark fast, and what that suppressed.
-                fastPartitions = FastPartitionsNow(),
-                fastSuppressed = FastPartitionCounters.Snapshot(),
-                worldAuthority = _registry.WorldAuthority(),
-                // EntityId ranges (Docs/EntityIdRanges.md): every range ever issued, with the node
-                // incarnation that took it, and the index the next request gets. cluster-status pairs
-                // these with the node sections' entityIdRange to show each node's current segment.
-                entityIdRanges = summary ? null : _registry.EntityIdRanges(),
-                entityIdRangeSummary = summary ? _registry.EntityIdRangeSummary() : null,
-                nextEntityIdRange = _registry.NextEntityIdRange(),
-                // T-0321: refused credentials and peer-rejection reports (fingerprints only), newest last.
-                credentialRejections = CredentialRejectionsDiag(),
-                // T-0321 P3: live partitions whose newest save has holders on one host only (gate: 0 before a host cut).
-                replicaHosts = _registry.ReplicaHostSpread(),
-                clientPartitions = _clients.Keys.OrderBy(client => client)
-                    .Select(client => new { client, location = _registry.GetClientPartition(client) }).ToArray()
-            },
-            clients = _clients.Values.OrderBy(session => session.ClientId).Select(session => new
-            {
-                clientId = session.ClientId, transport = session.Client?.Frontend ?? "direct",
-                routedNodeId = GatewayRegistry.LiveFirst(nodes.Where(node => node.Endpoint == session.BackendEndpoint.ToString()))?.Node,
-                backend = session.BackendEndpoint.ToString(), switching = session.SwitchingBackend,
-                connectedAt = session.ConnectedAt, disconnectReason = session.DisconnectReason
-            }).ToArray(),
-            nodes = sections.ToArray()
+            registry = _registry == null
+                ? null
+                : new
+                {
+                    status = _registry.Status(),
+                    // PartitionsReport, not Partitions: the leaner shape omits Retired, and every
+                    // consumer reading this report has to tell a live row from a retired husk that
+                    // still names its old Node. bin/node-lifecycle-audit.py could not, so it billed
+                    // every retired row as a stuck partition for the rest of the run (w19 23:38,
+                    // partitions 2711 and 2729). HandoverBlocked comes along and is null on all but
+                    // a handful of rows; IsRetired is an O(1) index lookup since 3bac425.
+                    partitions = _registry.PartitionsReport(summary),
+                    partitionCounts = summary ? _registry.PartitionCounts() : null,
+                    handovers = _registry.Incomplete(),
+                    handoverBlocked = _registry.HandoverBlocks(),
+                    // T-0296: runtime invariant audit (duplicate copies, abandoned partitions), Docs/ConcurrencyReview.md 8.
+                    invariants = _registry.InvariantAudit(),
+                    // T-0292: partitions the latest node reports mark fast, and what that suppressed.
+                    fastPartitions = FastPartitionsNow(),
+                    fastSuppressed = FastPartitionCounters.Snapshot(),
+                    worldAuthority = _registry.WorldAuthority(),
+                    // EntityId ranges (Docs/EntityIdRanges.md): every range ever issued, with the node
+                    // incarnation that took it, and the index the next request gets. cluster-status pairs
+                    // these with the node sections' entityIdRange to show each node's current segment.
+                    entityIdRanges = summary ? null : _registry.EntityIdRanges(),
+                    entityIdRangeSummary = summary ? _registry.EntityIdRangeSummary() : null,
+                    nextEntityIdRange = _registry.NextEntityIdRange(),
+                    // T-0321: refused credentials and peer-rejection reports (fingerprints only), newest last.
+                    credentialRejections = CredentialRejectionsDiag(),
+                    // T-0321 P3: live partitions whose newest save has holders on one host only (gate: 0 before a host cut).
+                    replicaHosts = _registry.ReplicaHostSpread(),
+                    clientPartitions = _clients
+                        .Keys.OrderBy(client => client)
+                        .Select(client => new
+                        {
+                            client,
+                            location = _registry.GetClientPartition(client),
+                        })
+                        .ToArray(),
+                },
+            clients = _clients
+                .Values.OrderBy(session => session.ClientId)
+                .Select(session => new
+                {
+                    clientId = session.ClientId,
+                    transport = session.Client?.Frontend ?? "direct",
+                    routedNodeId = GatewayRegistry
+                        .LiveFirst(
+                            nodes.Where(node => node.Endpoint == session.BackendEndpoint.ToString())
+                        )
+                        ?.Node,
+                    backend = session.BackendEndpoint.ToString(),
+                    switching = session.SwitchingBackend,
+                    connectedAt = session.ConnectedAt,
+                    disconnectReason = session.DisconnectReason,
+                })
+                .ToArray(),
+            nodes = sections.ToArray(),
         };
     }
 
@@ -7847,30 +12536,75 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     throw new ArgumentException("--unthrottled requires --direct");
                 DateTime before = _lastBalanceMove;
                 _lastBalanceMove = DateTime.MinValue;
-                if (unthrottled) lock (_lastHandover) _lastHandover.Clear();
-                return new { task, released = true, previousMoveAt = before == DateTime.MinValue ? (DateTime?)null : before, unthrottled };
+                if (unthrottled)
+                    lock (_lastHandover)
+                        _lastHandover.Clear();
+                return new
+                {
+                    task,
+                    released = true,
+                    previousMoveAt = before == DateTime.MinValue ? (DateTime?)null : before,
+                    unthrottled,
+                };
             }
             case "rotation-check":
-                return new { task, nodes = _registry?.Nodes().Select(node => new { node.Node, state = node.State.ToString(), node.LeaseExpires }).ToArray() };
+                return new
+                {
+                    task,
+                    nodes = _registry
+                        ?.Nodes()
+                        .Select(node => new
+                        {
+                            node.Node,
+                            state = node.State.ToString(),
+                            node.LeaseExpires,
+                        })
+                        .ToArray(),
+                };
             case "catalog-gc":
                 return new { task, deletions = _registry?.PlanRetention() };
             default:
             {
                 var results = new List<object>();
-                foreach (NodeRegistration node in _registry?.Nodes() ?? Array.Empty<NodeRegistration>())
+                foreach (
+                    NodeRegistration node in _registry?.Nodes() ?? Array.Empty<NodeRegistration>()
+                )
                 {
                     // T-0341: not the rows of stopped nodes - a live node on a reused port slot was triggered once per row.
-                    if (node.ControlEndpoint == null || node.State is NodeState.Empty or NodeState.Dead) continue;
-                    if (nodeFilter != null && !node.Node.Equals(nodeFilter, StringComparison.OrdinalIgnoreCase)) continue;
-                    string url = ClusterUrl(node.ControlEndpoint.Replace("http://", string.Empty), "trigger/" + task)
-                        + (partition == null ? string.Empty : "?partition=" + partition);
+                    if (
+                        node.ControlEndpoint == null
+                        || node.State is NodeState.Empty or NodeState.Dead
+                    )
+                        continue;
+                    if (
+                        nodeFilter != null
+                        && !node.Node.Equals(nodeFilter, StringComparison.OrdinalIgnoreCase)
+                    )
+                        continue;
+                    string url =
+                        ClusterUrl(
+                            node.ControlEndpoint.Replace("http://", string.Empty),
+                            "trigger/" + task
+                        ) + (partition == null ? string.Empty : "?partition=" + partition);
                     try
                     {
-                        using HttpResponseMessage response = _http.Send(new HttpRequestMessage(HttpMethod.Post, url), HttpCompletionOption.ResponseHeadersRead);
+                        using HttpResponseMessage response = _http.Send(
+                            new HttpRequestMessage(HttpMethod.Post, url),
+                            HttpCompletionOption.ResponseHeadersRead
+                        );
                         response.EnsureSuccessStatusCode();
-                        results.Add(new { node = node.Node, result = RelayedJson.Read(response.Content.ReadAsStream()) });
+                        results.Add(
+                            new
+                            {
+                                node = node.Node,
+                                result = RelayedJson.Read(response.Content.ReadAsStream()),
+                            }
+                        );
                     }
-                    catch (Exception e) { results.Add(new { node = node.Node, error = e.Message }); }
+                    catch (Exception e)
+                    {
+                        results.Add(new { node = node.Node, error = e.Message });
+                    }
                 }
                 return new { task, nodes = results.ToArray() };
             }
@@ -7879,22 +12613,31 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
 
     private object TransportStatus()
     {
-        long ticks = Interlocked.Read(ref _relayTicks), packets = Interlocked.Read(ref _clientPackets) + Interlocked.Read(ref _nodePackets);
+        long ticks = Interlocked.Read(ref _relayTicks),
+            packets = Interlocked.Read(ref _clientPackets) + Interlocked.Read(ref _nodePackets);
         (JsonElement? Status, string? Error) relay = ExternalRelayStatus();
-        Dictionary<(ulong, ulong), DateTimeOffset> nodeActivity = ExternalNodeActivity(relay.Status);
+        Dictionary<(ulong, ulong), DateTimeOffset> nodeActivity = ExternalNodeActivity(
+            relay.Status
+        );
         return new
         {
             vanillaVersion = DirectTransportConstants.VanillaVersion,
             wireFingerprint = DirectTransportConstants.WireFingerprint,
             counters = new
             {
-                clientPackets = Interlocked.Read(ref _clientPackets), clientBytes = Interlocked.Read(ref _clientBytes),
-                nodePackets = Interlocked.Read(ref _nodePackets), nodeBytes = Interlocked.Read(ref _nodeBytes),
+                clientPackets = Interlocked.Read(ref _clientPackets),
+                clientBytes = Interlocked.Read(ref _clientBytes),
+                nodePackets = Interlocked.Read(ref _nodePackets),
+                nodeBytes = Interlocked.Read(ref _nodeBytes),
                 relayCpuMilliseconds = ticks * 1000d / Stopwatch.Frequency,
-                averageRelayMicroseconds = packets == 0 ? 0 : ticks * 1_000_000d / Stopwatch.Frequency / packets,
-                relayAllocatedBytes = Interlocked.Read(ref _relayAllocations), duplicateServerData = Interlocked.Read(ref _duplicateServerData),
+                averageRelayMicroseconds = packets == 0
+                    ? 0
+                    : ticks * 1_000_000d / Stopwatch.Frequency / packets,
+                relayAllocatedBytes = Interlocked.Read(ref _relayAllocations),
+                duplicateServerData = Interlocked.Read(ref _duplicateServerData),
                 queueOverflows = Interlocked.Read(ref _queueOverflows),
-                globalMessages = Interlocked.Read(ref _globalMessages), rejectedGlobalMessages = Interlocked.Read(ref _rejectedGlobalMessages),
+                globalMessages = Interlocked.Read(ref _globalMessages),
+                rejectedGlobalMessages = Interlocked.Read(ref _rejectedGlobalMessages),
                 admissionRejections = Interlocked.Read(ref _admissionRejections),
                 singleFlightRefusals = Interlocked.Read(ref _singleFlightRefusals),
                 steamBootsToMenu = Interlocked.Read(ref _steamBootsToMenu),
@@ -7902,60 +12645,89 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             reconnectStreaks = SteamReconnectStreaks(),
             admission = new
             {
-                directFrontend = _options.DirectFrontend, acceptAll = _options.DirectFrontend,
-                memberLimit = _admission.Settings.MemberLimit, groupId = _admission.Settings.GroupId,
-                familySharing = _admission.Settings.FamilySharing, clusterPlayers = ClusterPlayers().Count,
+                directFrontend = _options.DirectFrontend,
+                acceptAll = _options.DirectFrontend,
+                memberLimit = _admission.Settings.MemberLimit,
+                groupId = _admission.Settings.GroupId,
+                familySharing = _admission.Settings.FamilySharing,
+                clusterPlayers = ClusterPlayers().Count,
             },
             steam = _steam?.Status() ?? ExternalSteamStatus(relay),
             eos = _eos?.Status(),
-            sessions = _clients.Values.Select(session => new
-            {
-                client = session.ClientId, connectedAt = session.ConnectedAt, lastClientActivity = session.LastClientActivity,
-                lastNodeActivity = nodeActivity.TryGetValue((session.ClientId, session.RelaySession), out DateTimeOffset nodeAt) ? nodeAt : session.LastNodeActivity,
-                disconnectReason = session.DisconnectReason,
-                backend = session.BackendEndpoint.ToString(),
-                clientBacklogBytes = session.ClientBacklog.Bytes, serverBacklogBytes = session.ServerBacklog.Bytes,
-                frontend = session.Client?.Frontend, remote = session.Client?.Remote,
-                reliableBacklogPackets = session.Client?.ReliableBacklogPackets ?? 0,
-                reliableBacklogStarted = session.ReliableBacklogStarted,
-                withheldCreditBytes = session.WithheldCreditBytes,
-                joiningWindowBytes = 4 * 1024 * 1024, typeTableSent = session.TypeTableSent,
-                worldReady = session.WorldReady,
-                duplicateServerData = session.DuplicateServerData,
-                admissionState = session.AdmissionState, identityId = session.PlayerReady?.Identity.IdentityId,
-                serviceName = session.Credential?.ServiceName, userId = session.Credential?.UserId,
-                ownerId = session.Credential?.OwnerId, playerName = session.Credential?.Name,
-                isAdmin = session.Credential?.IsAdmin,
-				authorityGeneration = session.PlayerReady?.AuthorityGeneration,
-				attachedIdentityId = session.AttachedIdentityId,
-				attachedAuthorityGeneration = session.AttachedAdmissionGeneration,
-				bindingRevision = session.BindingRevision,
-				attachedBindingRevision = session.AttachedBindingRevision,
-                admissionError = session.AdmissionError,
-            }).ToArray(),
-            nodes = _nodes.Values.Select(link => new
-            {
-                endpoint = link.Endpoint.ToString(), connected = link.IsConnected,
-                connectedAt = link.ConnectedAt, lastActivity = link.LastActivity, disconnectedAt = link.DisconnectedAt,
-                lastDisconnectReason = link.LastDisconnectReason, attachedClients = link.Clients.Count,
-                // T-0154: packets LiteNetLib still holds for this link (sent, unacknowledged, or
-                // waiting for the window). Channel 0 ordered carries the global-state publishes
-                // (antenna snapshots), channel 0 unordered the WA commands; the remaining 15
-                // channels relay client traffic. A queue that only grows is retained heap and a
-                // stalled link, whichever the process counters say.
-                reliableQueue = ReliableQueueDepths(link.Peer),
-            }).ToArray(),
+            sessions = _clients
+                .Values.Select(session => new
+                {
+                    client = session.ClientId,
+                    connectedAt = session.ConnectedAt,
+                    lastClientActivity = session.LastClientActivity,
+                    lastNodeActivity = nodeActivity.TryGetValue(
+                        (session.ClientId, session.RelaySession),
+                        out DateTimeOffset nodeAt
+                    )
+                        ? nodeAt
+                        : session.LastNodeActivity,
+                    disconnectReason = session.DisconnectReason,
+                    backend = session.BackendEndpoint.ToString(),
+                    clientBacklogBytes = session.ClientBacklog.Bytes,
+                    serverBacklogBytes = session.ServerBacklog.Bytes,
+                    frontend = session.Client?.Frontend,
+                    remote = session.Client?.Remote,
+                    reliableBacklogPackets = session.Client?.ReliableBacklogPackets ?? 0,
+                    reliableBacklogStarted = session.ReliableBacklogStarted,
+                    withheldCreditBytes = session.WithheldCreditBytes,
+                    joiningWindowBytes = 4 * 1024 * 1024,
+                    typeTableSent = session.TypeTableSent,
+                    worldReady = session.WorldReady,
+                    duplicateServerData = session.DuplicateServerData,
+                    admissionState = session.AdmissionState,
+                    identityId = session.PlayerReady?.Identity.IdentityId,
+                    serviceName = session.Credential?.ServiceName,
+                    userId = session.Credential?.UserId,
+                    ownerId = session.Credential?.OwnerId,
+                    playerName = session.Credential?.Name,
+                    isAdmin = session.Credential?.IsAdmin,
+                    authorityGeneration = session.PlayerReady?.AuthorityGeneration,
+                    attachedIdentityId = session.AttachedIdentityId,
+                    attachedAuthorityGeneration = session.AttachedAdmissionGeneration,
+                    bindingRevision = session.BindingRevision,
+                    attachedBindingRevision = session.AttachedBindingRevision,
+                    admissionError = session.AdmissionError,
+                })
+                .ToArray(),
+            nodes = _nodes
+                .Values.Select(link => new
+                {
+                    endpoint = link.Endpoint.ToString(),
+                    connected = link.IsConnected,
+                    connectedAt = link.ConnectedAt,
+                    lastActivity = link.LastActivity,
+                    disconnectedAt = link.DisconnectedAt,
+                    lastDisconnectReason = link.LastDisconnectReason,
+                    attachedClients = link.Clients.Count,
+                    // T-0154: packets LiteNetLib still holds for this link (sent, unacknowledged, or
+                    // waiting for the window). Channel 0 ordered carries the global-state publishes
+                    // (antenna snapshots), channel 0 unordered the WA commands; the remaining 15
+                    // channels relay client traffic. A queue that only grows is retained heap and a
+                    // stalled link, whichever the process counters say.
+                    reliableQueue = ReliableQueueDepths(link.Peer),
+                })
+                .ToArray(),
             // T-0321 P6: gateway-rs's own node links (path local/lan, traffic counters, rtt, invalid/unowned frames).
             // The packets never pass through C#, so nothing above carries them.
-            relayNodes = relay.Status is { } relayStatus && relayStatus.TryGetProperty("nodes", out JsonElement relayNodes) ? relayNodes : (JsonElement?)null,
+            relayNodes = relay.Status is { } relayStatus
+            && relayStatus.TryGetProperty("nodes", out JsonElement relayNodes)
+                ? relayNodes
+                : (JsonElement?)null,
             recentDisconnects = _disconnects.ToArray(),
         };
     }
 
     private static object? ReliableQueueDepths(NetPeer? peer)
     {
-        if (peer == null) return null;
-        int orderedTotal = 0, unorderedTotal = 0;
+        if (peer == null)
+            return null;
+        int orderedTotal = 0,
+            unorderedTotal = 0;
         for (byte channel = 0; channel < NodeLinkChannels; channel++)
         {
             orderedTotal += peer.GetPacketsCountInReliableQueue(channel, true);
@@ -7965,7 +12737,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         {
             globalOrdered = peer.GetPacketsCountInReliableQueue(0, true),
             globalUnordered = peer.GetPacketsCountInReliableQueue(0, false),
-            orderedTotal, unorderedTotal, mtu = peer.Mtu, ping = peer.Ping,
+            orderedTotal,
+            unorderedTotal,
+            mtu = peer.Mtu,
+            ping = peer.Ping,
         };
     }
 
@@ -7977,14 +12752,19 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             if (session.DisconnectReason != null)
             {
                 // #1221: a later reason (an admin kick, node-link-lost) for a session whose connection is gone.
-                if (peer?.Connected != true) RemoveDeadSession(session, reason);
+                if (peer?.Connected != true)
+                    RemoveDeadSession(session, reason);
                 return;
             }
             session.DisconnectReason = reason;
-            Console.WriteLine($"Force reconnect client {session.ClientId}: {reason}{NoteSteamForcedEnd(session)}");
-            if (reason.Contains("overflow", StringComparison.Ordinal)) Interlocked.Increment(ref _queueOverflows);
+            Console.WriteLine(
+                $"Force reconnect client {session.ClientId}: {reason}{NoteSteamForcedEnd(session)}"
+            );
+            if (reason.Contains("overflow", StringComparison.Ordinal))
+                Interlocked.Increment(ref _queueOverflows);
             _disconnects.Enqueue(new(session.ClientId, DateTimeOffset.UtcNow, reason));
-            while (_disconnects.Count > 100) _disconnects.TryDequeue(out _);
+            while (_disconnects.Count > 100)
+                _disconnects.TryDequeue(out _);
             if (peer?.Connected != true)
             {
                 // #1221: there is nothing to disconnect, so no disconnect event will ever remove the session.
@@ -7996,8 +12776,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // T-0244: the Client field must be the id the client knows its server by, or it is not
             // "the host left" to it (MyMultiplayerClient_ClientLeft) and the vanilla client ignores it.
             BinaryPrimitives.WriteUInt64LittleEndian(payload.AsSpan(2), ReconnectServerId(peer));
-            peer.Send(new GatewayPacket(session.ClientId, 0, payload, DeliveryMethod.ReliableOrdered));
-            ThreadPool.QueueUserWorkItem(_ => { Thread.Sleep(25); peer.Disconnect(); });
+            peer.Send(
+                new GatewayPacket(session.ClientId, 0, payload, DeliveryMethod.ReliableOrdered)
+            );
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                Thread.Sleep(25);
+                peer.Disconnect();
+            });
         }
     }
 
@@ -8009,21 +12795,33 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             PushRouting(session, flushClient: true);
             return;
         }
-		lock (session.RelayLock)
-		{
-			NodeLink? link = session.Link;
-			if (RelayPaused || session.SwitchingBackend || !AttachedBindingRoutable(session) || !ReferenceEquals(session.AttachedLink, link)
-				|| link?.IsConnected != true)
-				return;
-			while (AttachedBindingRoutable(session) && session.ClientBacklog.TryDequeue(out GatewayPacket? packet))
-				SendClientPacketToNode(session, link, packet!);
-		}
+        lock (session.RelayLock)
+        {
+            NodeLink? link = session.Link;
+            if (
+                RelayPaused
+                || session.SwitchingBackend
+                || !AttachedBindingRoutable(session)
+                || !ReferenceEquals(session.AttachedLink, link)
+                || link?.IsConnected != true
+            )
+                return;
+            while (
+                AttachedBindingRoutable(session)
+                && session.ClientBacklog.TryDequeue(out GatewayPacket? packet)
+            )
+                SendClientPacketToNode(session, link, packet!);
+        }
     }
 
     /// <summary>Releases the node-to-client packets held while <c>BufferServerPackets</c> was set.</summary>
     private void FlushServerBacklog(ClientSession session)
     {
-        if (_relay != null) { PushRouting(session, flushServer: true); return; }
+        if (_relay != null)
+        {
+            PushRouting(session, flushServer: true);
+            return;
+        }
         while (session.ServerBacklog.TryDequeue(out GatewayPacket? packet))
             SendToClient(session, packet!);
     }
@@ -8031,7 +12829,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// <summary>Drops the held node-to-client packets (a switch that did not commit).</summary>
     private void DiscardServerBacklog(ClientSession session)
     {
-        if (_relay != null) { PushRouting(session, discardServer: true); return; }
+        if (_relay != null)
+        {
+            PushRouting(session, discardServer: true);
+            return;
+        }
         while (session.ServerBacklog.TryDequeue(out _)) { }
     }
 
@@ -8047,64 +12849,98 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     }
 
     private static void SendToNode(NodeLink link, GatewayPacket packet) =>
-        SendNodeLink(link, new(NodeLinkMessage.Relay, packet.ClientId, checked((byte)packet.Channel), packet.Payload, packet.Delivery));
+        SendNodeLink(
+            link,
+            new(
+                NodeLinkMessage.Relay,
+                packet.ClientId,
+                checked((byte)packet.Channel),
+                packet.Payload,
+                packet.Delivery
+            )
+        );
 
     private void SendAttach(NodeLink link, ClientSession session)
     {
-		lock (_pauseLock)
+        lock (_pauseLock)
         {
-			if (RelayPaused) return;
-			if (_registry != null && session.PlayerReady is PlayerReady ready
-				&& ready.AuthorityGeneration != _registry.WorldAuthority().Generation)
-			{
-				// Single-flight: resetting the debounce here spawned a NEW admission task per
-				// attach attempt (~120/s after a WA replacement), saturating the new WA with
-				// players commands whose late timeouts kept overwriting an already-successful
-				// admission back to Stale. The in-flight attempt's own completion re-arms the
-				// retry (success attaches, failure resets AdmissionStarted); this path only
-				// needs to ensure one attempt is running.
-				session.AdmissionState = "Refreshing";
-				if (Volatile.Read(ref session.AdmissionStarted) == 0)
-					BeginPlayerAdmission(session);
-				return;
-			}
+            if (RelayPaused)
+                return;
+            if (
+                _registry != null
+                && session.PlayerReady is PlayerReady ready
+                && ready.AuthorityGeneration != _registry.WorldAuthority().Generation
+            )
+            {
+                // Single-flight: resetting the debounce here spawned a NEW admission task per
+                // attach attempt (~120/s after a WA replacement), saturating the new WA with
+                // players commands whose late timeouts kept overwriting an already-successful
+                // admission back to Stale. The in-flight attempt's own completion re-arms the
+                // retry (success attaches, failure resets AdmissionStarted); this path only
+                // needs to ensure one attempt is running.
+                session.AdmissionState = "Refreshing";
+                if (Volatile.Read(ref session.AdmissionStarted) == 0)
+                    BeginPlayerAdmission(session);
+                return;
+            }
             lock (link.Sync)
             {
-				lock (session.RelayLock)
-				{
-					long admissionGeneration = session.PlayerReady?.AuthorityGeneration ?? 0;
-					long identityId = session.PlayerReady?.Identity.IdentityId ?? 0;
-					long bindingRevision = session.BindingRevision;
-					if ((ReferenceEquals(session.AttachedLink, link) && session.AttachedBindingRevision == bindingRevision)
-						|| ReferenceEquals(session.AttachingLink, link))
-						return;
-					// T-0357: every other reason not to send the Attach used to return silently; a Steam join
-					// during boot was admitted and bound, no Attach left the gateway, nothing was logged and the
-					// client backlog expired after 10 s. Named once per session and reason.
-					string? skipped = !link.IsConnected ? "node link not connected"
-						: !_clients.TryGetValue(session.ClientId, out ClientSession? current) || !ReferenceEquals(current, session) ? "session replaced"
-						: !ReferenceEquals(session.Link, link) ? "session routed to another link"
-						: session.Client?.Connected != true ? "client not connected"
-						: !RouteStillValid(session, link) ? "route no longer valid"
-						: PlayerAdmissionRequired(session) && session.PlayerReady == null ? "player binding not ready"
-						: null;
-					if (skipped != null)
-					{
-						if (session.AttachSkipped != skipped)
-							Console.WriteLine($"Attach of client {session.ClientId} to {link.Endpoint} not sent: {skipped}");
-						session.AttachSkipped = skipped;
-						return;
-					}
-					session.AttachSkipped = null;
-					session.AttachCompleted.Reset();
-					byte[] binding = AttachBinding(session);
-					SendNodeLink(link, new(NodeLinkMessage.Attach, session.ClientId, 0, binding, DeliveryMethod.ReliableOrdered));
-					session.AttachingAdmissionGeneration = admissionGeneration;
-					session.AttachingIdentityId = identityId;
-					session.AttachingBindingRevision = bindingRevision;
-					session.AttachingLink = link;
-					Console.WriteLine($"Connected backend {link.Endpoint} as client {session.ClientId}");
-				}
+                lock (session.RelayLock)
+                {
+                    long admissionGeneration = session.PlayerReady?.AuthorityGeneration ?? 0;
+                    long identityId = session.PlayerReady?.Identity.IdentityId ?? 0;
+                    long bindingRevision = session.BindingRevision;
+                    if (
+                        (
+                            ReferenceEquals(session.AttachedLink, link)
+                            && session.AttachedBindingRevision == bindingRevision
+                        ) || ReferenceEquals(session.AttachingLink, link)
+                    )
+                        return;
+                    // T-0357: every other reason not to send the Attach used to return silently; a Steam join
+                    // during boot was admitted and bound, no Attach left the gateway, nothing was logged and the
+                    // client backlog expired after 10 s. Named once per session and reason.
+                    string? skipped =
+                        !link.IsConnected ? "node link not connected"
+                        : !_clients.TryGetValue(session.ClientId, out ClientSession? current)
+                        || !ReferenceEquals(current, session)
+                            ? "session replaced"
+                        : !ReferenceEquals(session.Link, link) ? "session routed to another link"
+                        : session.Client?.Connected != true ? "client not connected"
+                        : !RouteStillValid(session, link) ? "route no longer valid"
+                        : PlayerAdmissionRequired(session) && session.PlayerReady == null
+                            ? "player binding not ready"
+                        : null;
+                    if (skipped != null)
+                    {
+                        if (session.AttachSkipped != skipped)
+                            Console.WriteLine(
+                                $"Attach of client {session.ClientId} to {link.Endpoint} not sent: {skipped}"
+                            );
+                        session.AttachSkipped = skipped;
+                        return;
+                    }
+                    session.AttachSkipped = null;
+                    session.AttachCompleted.Reset();
+                    byte[] binding = AttachBinding(session);
+                    SendNodeLink(
+                        link,
+                        new(
+                            NodeLinkMessage.Attach,
+                            session.ClientId,
+                            0,
+                            binding,
+                            DeliveryMethod.ReliableOrdered
+                        )
+                    );
+                    session.AttachingAdmissionGeneration = admissionGeneration;
+                    session.AttachingIdentityId = identityId;
+                    session.AttachingBindingRevision = bindingRevision;
+                    session.AttachingLink = link;
+                    Console.WriteLine(
+                        $"Connected backend {link.Endpoint} as client {session.ClientId}"
+                    );
+                }
             }
         }
     }
@@ -8113,7 +12949,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         lock (session.RelayLock)
         {
-            if (!ReferenceEquals(session.AttachedLink, link) && !ReferenceEquals(session.AttachingLink, link))
+            if (
+                !ReferenceEquals(session.AttachedLink, link)
+                && !ReferenceEquals(session.AttachingLink, link)
+            )
                 return false;
             if (!link.IsConnected)
             {
@@ -8122,7 +12961,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 return false;
             }
             session.DetachCompleted.Reset();
-            SendNodeLink(link, new(NodeLinkMessage.Detach, session.ClientId, 0, [], DeliveryMethod.ReliableOrdered));
+            SendNodeLink(
+                link,
+                new(NodeLinkMessage.Detach, session.ClientId, 0, [], DeliveryMethod.ReliableOrdered)
+            );
             session.DetachingLink = link;
             session.AttachedLink = null;
             session.AttachingLink = null;
@@ -8142,14 +12984,20 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         {
             NetDataWriter writer = DirectTransportCodec.EncodeNodeLink(packet);
             DeliveryMethod delivery = packet.Delivery;
-            if (delivery == DeliveryMethod.Unreliable && writer.Length > peer.GetMaxSinglePacketSize(delivery))
+            if (
+                delivery == DeliveryMethod.Unreliable
+                && writer.Length > peer.GetMaxSinglePacketSize(delivery)
+            )
                 delivery = DeliveryMethod.ReliableUnordered;
             peer.Send(writer, (byte)(packet.ClientId % NodeLinkChannels), delivery);
         }
     }
 
     private static void SendCredit(NodeLink link, ulong clientId, int bytes) =>
-        SendNodeLink(link, new(NodeLinkMessage.Credit, clientId, 0, [], DeliveryMethod.ReliableOrdered, bytes));
+        SendNodeLink(
+            link,
+            new(NodeLinkMessage.Credit, clientId, 0, [], DeliveryMethod.ReliableOrdered, bytes)
+        );
 
     /// <summary>
     /// #1221: removes a session whose client connection is gone. A session normally ends with its frontend's
@@ -8160,7 +13008,9 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     private void RemoveDeadSession(ClientSession session, string why)
     {
         if (RemoveSession(session))
-            Console.WriteLine($"Removed the session of client {session.ClientId}: its client connection is gone ({why})");
+            Console.WriteLine(
+                $"Removed the session of client {session.ClientId}: its client connection is gone ({why})"
+            );
     }
 
     /// <summary>How long a session may outlive its client connection before maintenance removes it. Longer than
@@ -8169,7 +13019,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
 
     /// <summary>How long a world-ready Steam client may send nothing before its session ends (Steam P2P has no
     /// disconnect detection of its own). CLUSTER_CLIENT_SILENCE_SECONDS, default 180.</summary>
-    internal static TimeSpan ClientSilenceLimit = SecondsFromEnvironment("CLUSTER_CLIENT_SILENCE_SECONDS", 180);
+    internal static TimeSpan ClientSilenceLimit = SecondsFromEnvironment(
+        "CLUSTER_CLIENT_SILENCE_SECONDS",
+        180
+    );
 
     /// <summary>
     /// SE-1450: the same limit for a client that has not sent CLIENT_READY yet. A vanilla client sends nothing
@@ -8178,17 +13031,32 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// 180 s limit while loading, and 14 of those players got in on a later attempt.
     /// CLUSTER_CLIENT_LOADING_SILENCE_SECONDS, default 600.
     /// </summary>
-    internal static TimeSpan LoadingSilenceLimit = SecondsFromEnvironment("CLUSTER_CLIENT_LOADING_SILENCE_SECONDS", 600);
+    internal static TimeSpan LoadingSilenceLimit = SecondsFromEnvironment(
+        "CLUSTER_CLIENT_LOADING_SILENCE_SECONDS",
+        600
+    );
 
-    private static TimeSpan SecondsFromEnvironment(string name, double fallback) => TimeSpan.FromSeconds(
-        double.TryParse(Environment.GetEnvironmentVariable(name), System.Globalization.NumberStyles.Float,
-            System.Globalization.CultureInfo.InvariantCulture, out double seconds) && seconds > 0 ? seconds : fallback);
+    private static TimeSpan SecondsFromEnvironment(string name, double fallback) =>
+        TimeSpan.FromSeconds(
+            double.TryParse(
+                Environment.GetEnvironmentVariable(name),
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out double seconds
+            )
+            && seconds > 0
+                ? seconds
+                : fallback
+        );
 
     private static bool ClientSilent(ClientSession session, DateTimeOffset now) =>
-        now - session.LastClientActivity >= (session.WorldReady ? ClientSilenceLimit : LoadingSilenceLimit);
+        now - session.LastClientActivity
+        >= (session.WorldReady ? ClientSilenceLimit : LoadingSilenceLimit);
 
     internal (bool WorldReady, string? DisconnectReason)? SessionForSelfTest(ulong clientId) =>
-        _clients.TryGetValue(clientId, out ClientSession? session) ? (session.WorldReady, session.DisconnectReason) : null;
+        _clients.TryGetValue(clientId, out ClientSession? session)
+            ? (session.WorldReady, session.DisconnectReason)
+            : null;
 
     private bool ReapDeadClientSession(ClientSession session, long now)
     {
@@ -8226,15 +13094,16 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         return true;
     }
 
-    private static NetManager CreateManager(INetEventListener listener) => new(listener)
-    {
-        UnsyncedEvents = false,
-        AutoRecycle = true,
-        DisconnectTimeout = 30000,
-        ReconnectDelay = 500,
-        MaxConnectAttempts = 20,
-        ChannelsCount = NodeLinkChannels,
-    };
+    private static NetManager CreateManager(INetEventListener listener) =>
+        new(listener)
+        {
+            UnsyncedEvents = false,
+            AutoRecycle = true,
+            DisconnectTimeout = 30000,
+            ReconnectDelay = 500,
+            MaxConnectAttempts = 20,
+            ChannelsCount = NodeLinkChannels,
+        };
 
     private Thread StartPollThread(string name, NetManager manager)
     {
@@ -8250,12 +13119,17 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         try
         {
             ClientRoute? current = _registry?.ResolveClientRoute(session.ClientId);
-            bool valid = current == session.RegistryRoute
-                && EndpointParser.Parse(current.Endpoint, DirectTransportConstants.DefaultPort).Equals(link.Endpoint);
+            bool valid =
+                current == session.RegistryRoute
+                && EndpointParser
+                    .Parse(current.Endpoint, DirectTransportConstants.DefaultPort)
+                    .Equals(link.Endpoint);
             if (!valid)
             {
-                Console.WriteLine($"Route no longer valid for client {session.ClientId}:"
-                    + $" resolved {current?.Node}@{current?.Endpoint} attached {link.Endpoint}");
+                Console.WriteLine(
+                    $"Route no longer valid for client {session.ClientId}:"
+                        + $" resolved {current?.Node}@{current?.Endpoint} attached {link.Endpoint}"
+                );
                 session.Client?.Disconnect();
             }
             return valid;
@@ -8284,7 +13158,13 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// therefore always called from the thread that polls the frontend, which is the only thread
     /// allowed to create or drop peers on that NetManager.
     /// </summary>
-    private void HoldJoin(IJoinRequest request, ulong clientId, string? assertedName, string reason, DateTimeOffset? holdUntil)
+    private void HoldJoin(
+        IJoinRequest request,
+        ulong clientId,
+        string? assertedName,
+        string reason,
+        DateTimeOffset? holdUntil
+    )
     {
         if (JoinHold <= TimeSpan.Zero)
         {
@@ -8298,9 +13178,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         {
             // gateway-rs re-asks every second as a fresh request: log once per relay session, so the
             // hold is as visible as the in-process one (P3-PLR-02 asserts this line).
-            if (request is ExternalJoinRequest external && FirstExternalHold(clientId, external.Session))
-                Console.WriteLine($"Holding join for client {clientId}: {reason};"
-                    + $" answering when the registry can route it, or refusing at {DateTimeOffset.UtcNow + JoinHold:HH:mm:ss}Z");
+            if (
+                request is ExternalJoinRequest external
+                && FirstExternalHold(clientId, external.Session)
+            )
+                Console.WriteLine(
+                    $"Holding join for client {clientId}: {reason};"
+                        + $" answering when the registry can route it, or refusing at {DateTimeOffset.UtcNow + JoinHold:HH:mm:ss}Z"
+                );
             return;
         }
         DateTimeOffset deadline = holdUntil ?? DateTimeOffset.UtcNow + JoinHold;
@@ -8314,14 +13199,27 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             // one carry its own full hold rather than inheriting a clock that is already running.
             for (int i = _heldJoins.Count - 1; i >= 0; i--)
             {
-                if (_heldJoins[i].ClientId != clientId || ReferenceEquals(_heldJoins[i].Request, request)) continue;
-                try { _heldJoins[i].Request.Reject(); } catch (Exception e) { Console.Error.WriteLine("Superseded join reject failed: " + e.Message); }
+                if (
+                    _heldJoins[i].ClientId != clientId
+                    || ReferenceEquals(_heldJoins[i].Request, request)
+                )
+                    continue;
+                try
+                {
+                    _heldJoins[i].Request.Reject();
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine("Superseded join reject failed: " + e.Message);
+                }
                 _heldJoins.RemoveAt(i);
             }
             _heldJoins.Add(new HeldJoin(request, clientId, assertedName, deadline, reason));
             if (holdUntil == null)
-                Console.WriteLine($"Holding join for client {clientId}: {reason};"
-                    + $" answering when the registry can route it, or refusing at {deadline:HH:mm:ss}Z");
+                Console.WriteLine(
+                    $"Holding join for client {clientId}: {reason};"
+                        + $" answering when the registry can route it, or refusing at {deadline:HH:mm:ss}Z"
+                );
         }
     }
 
@@ -8339,12 +13237,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         // the registry lock that the 1 Hz lease sweep and every node heartbeat also take; the state
         // being waited for is re-homing, which moves on the lease sweep's cadence anyway.
         long now_ticks = Environment.TickCount64;
-        if (now_ticks < _heldJoinsNextSweep) return;
+        if (now_ticks < _heldJoinsNextSweep)
+            return;
         _heldJoinsNextSweep = now_ticks + 1000;
         HeldJoin[] held;
         lock (_heldJoins)
         {
-            if (_heldJoins.Count == 0) return;
+            if (_heldJoins.Count == 0)
+                return;
             held = _heldJoins.ToArray();
             _heldJoins.Clear();
         }
@@ -8353,14 +13253,32 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         {
             if (now >= join.Deadline)
             {
-                Console.Error.WriteLine($"Rejected client {join.ClientId} after holding {JoinHold.TotalSeconds:F0}s:"
-                    + $" {join.Reason} - the state that was expected to clear did not");
-                try { join.Request.Reject(); }
-                catch (Exception e) { Console.Error.WriteLine("Held join reject failed: " + e.Message); }
+                Console.Error.WriteLine(
+                    $"Rejected client {join.ClientId} after holding {JoinHold.TotalSeconds:F0}s:"
+                        + $" {join.Reason} - the state that was expected to clear did not"
+                );
+                try
+                {
+                    join.Request.Reject();
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine("Held join reject failed: " + e.Message);
+                }
                 continue;
             }
-            try { OnConnectionRequest(join.Request, join.Deadline, (join.ClientId, join.AssertedName)); }
-            catch (Exception e) { Console.Error.WriteLine("Held join retry failed: " + e); }
+            try
+            {
+                OnConnectionRequest(
+                    join.Request,
+                    join.Deadline,
+                    (join.ClientId, join.AssertedName)
+                );
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("Held join retry failed: " + e);
+            }
         }
     }
 
@@ -8369,13 +13287,25 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         bool frontend = ReferenceEquals(manager, _front);
         while (_running)
         {
-            try { manager.PollEvents(); }
-            catch (Exception e) { Console.Error.WriteLine("Poll failed: " + e); }
+            try
+            {
+                manager.PollEvents();
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("Poll failed: " + e);
+            }
             // Held joins belong to the frontend's peers, and only this thread may answer them.
             if (frontend)
             {
-                try { RetryHeldJoins(); }
-                catch (Exception e) { Console.Error.WriteLine("Held join sweep failed: " + e); }
+                try
+                {
+                    RetryHeldJoins();
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine("Held join sweep failed: " + e);
+                }
             }
             Thread.Sleep(1);
         }
@@ -8412,22 +13342,33 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         // and the force-reconnect zombies it. A dead DT peer is LiteNetLib's
                         // DisconnectTimeout to detect. Steam P2P has no such event, so a Steam
                         // session that goes quiet far past any re-stream flood is reaped here.
-                        else if (session.ReliableBacklogStarted is DateTimeOffset congested
-                            && DateTimeOffset.UtcNow - congested >= TimeSpan.FromSeconds(10))
+                        else if (
+                            session.ReliableBacklogStarted is DateTimeOffset congested
+                            && DateTimeOffset.UtcNow - congested >= TimeSpan.FromSeconds(10)
+                        )
                             ForceReconnect(session, "client-ack-backlog");
                         // gateway-rs sees the traffic of its sessions and reports "silent" itself.
-                        else if (session.Client is { Frontend: not "dt" } and not ExternalClientChannel
-                            && ClientSilent(session, DateTimeOffset.UtcNow))
+                        else if (
+                            session.Client is { Frontend: not "dt" } and not ExternalClientChannel
+                            && ClientSilent(session, DateTimeOffset.UtcNow)
+                        )
                             ForceReconnect(session, "client-silent");
                         else if (SteamSessionWithoutLogin(session))
                             EndSteamSessionWithoutLogin(session);
                     }
                     PruneSteamReconnectStreaks();
                 }
-                catch (Exception e) { Console.Error.WriteLine("Session maintenance failed: " + e); }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine("Session maintenance failed: " + e);
+                }
                 Thread.Sleep(100);
             }
-        }) { Name = "Gateway-Session-Maintenance", IsBackground = true };
+        })
+        {
+            Name = "Gateway-Session-Maintenance",
+            IsBackground = true,
+        };
         thread.Start();
     }
 
@@ -8435,10 +13376,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         /// <summary>T-0357: why the last Attach was not sent (null = sent or nothing to say); logged on change.</summary>
         public string? AttachSkipped;
+
         /// <summary>T-0357: the last reason RetryPlayerAttach logged for waiting, and the last reason the
         /// backlog age was not enforced (ClientBacklogHeld); each logged on change.</summary>
         public volatile string? AttachWaitLogged;
         public volatile string? BacklogHoldLogged;
+
         /// <summary>T-0357: the link whose node last sent Detach for this session (see RetryPlayerAttach).</summary>
         public volatile NodeLink? AttachRetryDetachedBy;
         public readonly ulong ClientId;
@@ -8447,21 +13390,28 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         public readonly SemaphoreSlim SwitchLock = new(1, 1);
         public readonly ManualResetEventSlim AttachCompleted = new(false);
         public readonly ManualResetEventSlim DetachCompleted = new(false);
+
         // 4 MB: a held client streams ~10-30 KB/s of input/position traffic, so the byte cap must
         // outlast any deliberate hold (pause, slow backend switch); the age bound is the wedge
         // detector, the byte cap only guards runaway memory.
-        public readonly BoundedPacketQueue ClientBacklog = new(4 * 1024 * 1024, TimeSpan.FromSeconds(10));
+        public readonly BoundedPacketQueue ClientBacklog = new(
+            4 * 1024 * 1024,
+            TimeSpan.FromSeconds(10)
+        );
         public readonly BoundedPacketQueue ServerBacklog = new(1024 * 1024, TimeSpan.MaxValue);
         public IPEndPoint BackendEndpoint;
         public ClientChannel? Client;
+
         /// <summary>#1221: Stopwatch timestamp since which <see cref="Client"/> has not been connected; 0 while it is.</summary>
         public long ClientGoneSince;
+
         /// <summary>
         /// T-0229: set by the external relay adapter. The routing fields below are mirrored into
         /// gateway-rs, which applies the per-packet rules; every change is pushed from here, so no
         /// write site can forget to. Null for the in-process relay.
         /// </summary>
         public Action<ClientSession>? RoutingChanged;
+
         /// <summary>
         /// T-0229: held while PushRouting snapshots the routing fields and sends them, so the
         /// SessionUpdates of one session reach gateway-rs in the order they were read. Without it
@@ -8471,52 +13421,119 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         /// Taken only in PushRouting, around lock-free reads and the IPC send.
         /// </summary>
         public readonly object RoutingPushLock = new();
+
         /// <summary>gateway-rs's session number for this client (Docs/Gateway/RelayIpc.md); 0 in process.</summary>
         public ulong RelaySession;
-        private NodeLink? _link, _attachedLink, _validationLink;
-        private volatile bool _switchingBackend, _bufferServerPackets, _suppressJoinMessages;
-        public NodeLink? Link { get => _link; set { if (!ReferenceEquals(_link, value)) { _link = value; RoutingChanged?.Invoke(this); } } }
-        public NodeLink? AttachedLink { get => _attachedLink; set { if (!ReferenceEquals(_attachedLink, value)) { _attachedLink = value; RoutingChanged?.Invoke(this); } } }
+        private NodeLink? _link,
+            _attachedLink,
+            _validationLink;
+        private volatile bool _switchingBackend,
+            _bufferServerPackets,
+            _suppressJoinMessages;
+        public NodeLink? Link
+        {
+            get => _link;
+            set
+            {
+                if (!ReferenceEquals(_link, value))
+                {
+                    _link = value;
+                    RoutingChanged?.Invoke(this);
+                }
+            }
+        }
+        public NodeLink? AttachedLink
+        {
+            get => _attachedLink;
+            set
+            {
+                if (!ReferenceEquals(_attachedLink, value))
+                {
+                    _attachedLink = value;
+                    RoutingChanged?.Invoke(this);
+                }
+            }
+        }
         public NodeLink? AttachingLink;
         public NodeLink? DetachingLink;
         public GatewayPacket? ClientConnectedPacket;
+
         /// <summary>T-0244: gateway-rs reported this session's CLIENT_CONNECTED (set on receipt, before
         /// the ordered worker gets to it). A Steam session without one is not a join.</summary>
         public volatile bool LoginPresented;
+
         /// <summary>Set once the perimeter admitted this client; null means not yet validated.</summary>
         public ClientCredential? Credential;
         public string? AssertedName;
         public string? AssertedServiceName;
         public volatile bool IsProfiling;
         public ulong TicketOwnerId;
+
         /// <summary>SE-1158: the DLC app ids Steam says the player has no license for; null without a Steam ticket.</summary>
         public uint[]? MissingDlcs;
+
         /// <summary>SE-1158: the skins the player's last inventory blob proved; null until a node asked.</summary>
         public volatile string[]? Skins;
         public readonly CancellationTokenSource AdmissionCancellation = new();
         public int AdmissionStarted;
-		public int AttachRetryStarted;
+        public int AttachRetryStarted;
         public volatile string AdmissionState = "WaitingForClient";
         public volatile string? AdmissionError;
         public PlayerReady? PlayerReady;
-		public long BindingRevision;
-		public long AttachingBindingRevision;
-		public long AttachedBindingRevision;
-		public long AttachingAdmissionGeneration;
-		public long AttachingIdentityId;
-		public long AttachedAdmissionGeneration;
-		public long AttachedIdentityId;
-        public bool SwitchingBackend { get => _switchingBackend; set { if (_switchingBackend != value) { _switchingBackend = value; RoutingChanged?.Invoke(this); } } }
-        public bool BufferServerPackets { get => _bufferServerPackets; set { if (_bufferServerPackets != value) { _bufferServerPackets = value; RoutingChanged?.Invoke(this); } } }
+        public long BindingRevision;
+        public long AttachingBindingRevision;
+        public long AttachedBindingRevision;
+        public long AttachingAdmissionGeneration;
+        public long AttachingIdentityId;
+        public long AttachedAdmissionGeneration;
+        public long AttachedIdentityId;
+        public bool SwitchingBackend
+        {
+            get => _switchingBackend;
+            set
+            {
+                if (_switchingBackend != value)
+                {
+                    _switchingBackend = value;
+                    RoutingChanged?.Invoke(this);
+                }
+            }
+        }
+        public bool BufferServerPackets
+        {
+            get => _bufferServerPackets;
+            set
+            {
+                if (_bufferServerPackets != value)
+                {
+                    _bufferServerPackets = value;
+                    RoutingChanged?.Invoke(this);
+                }
+            }
+        }
         public volatile bool TypeTableSent;
-        public bool SuppressJoinMessages { get => _suppressJoinMessages; set { if (_suppressJoinMessages != value) { _suppressJoinMessages = value; RoutingChanged?.Invoke(this); } } }
+        public bool SuppressJoinMessages
+        {
+            get => _suppressJoinMessages;
+            set
+            {
+                if (_suppressJoinMessages != value)
+                {
+                    _suppressJoinMessages = value;
+                    RoutingChanged?.Invoke(this);
+                }
+            }
+        }
+
         /// <summary>Set on the client's CLIENT_READY: the world is loaded and the join sequence fully
         /// consumed. Client-bearing handovers are refused until then - a backend switch suppresses
         /// join messages, and a still-joining client starves on that suppression.</summary>
         public volatile bool WorldReady;
+
         /// <summary>When CLIENT_READY arrived (set just before <see cref="WorldReady"/>).</summary>
         public DateTimeOffset WorldReadyAt;
         public volatile bool RegistryRouteValidated;
+
         /// <summary>T-0237: why a Steam session was accepted without a route (the registry said "come back
         /// shortly"); admission resolves it again before attaching. See ResolveDeferredSteamRoute.</summary>
         public volatile string? RouteDeferred;
@@ -8528,11 +13545,28 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         public long DuplicateServerData;
         public DateTimeOffset? ReliableBacklogStarted;
         public int WithheldCreditBytes;
-        public NodeLink? ValidationLink { get => _validationLink; set { if (!ReferenceEquals(_validationLink, value)) { _validationLink = value; RoutingChanged?.Invoke(this); } } }
+        public NodeLink? ValidationLink
+        {
+            get => _validationLink;
+            set
+            {
+                if (!ReferenceEquals(_validationLink, value))
+                {
+                    _validationLink = value;
+                    RoutingChanged?.Invoke(this);
+                }
+            }
+        }
         public bool TargetServerPacketSeen;
-        public TaskCompletionSource TargetReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource TargetReady = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
 
-        public ClientSession(ulong clientId, IPEndPoint backendEndpoint, ClientRoute? registryRoute = null)
+        public ClientSession(
+            ulong clientId,
+            IPEndPoint backendEndpoint,
+            ClientRoute? registryRoute = null
+        )
         {
             ClientId = clientId;
             BackendEndpoint = backendEndpoint;
@@ -8563,8 +13597,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         public string Describe()
         {
             lock (_packets)
-                return $"bytes={_bytes}/{_maximumBytes} packets={_packets.Count} " +
-                    $"ageMs={(_packets.Count == 0 ? 0 : (long)Stopwatch.GetElapsedTime(_started).TotalMilliseconds)}";
+                return $"bytes={_bytes}/{_maximumBytes} packets={_packets.Count} "
+                    + $"ageMs={(_packets.Count == 0 ? 0 : (long)Stopwatch.GetElapsedTime(_started).TotalMilliseconds)}";
         }
 
         public bool TryEnqueue(GatewayPacket packet)
@@ -8573,7 +13607,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             {
                 int size = packet.Payload.Length + 2;
                 long now = Stopwatch.GetTimestamp();
-                if (_bytes + size > _maximumBytes || _packets.Count != 0 && Stopwatch.GetElapsedTime(_started, now) > _maximumAge)
+                if (
+                    _bytes + size > _maximumBytes
+                    || _packets.Count != 0 && Stopwatch.GetElapsedTime(_started, now) > _maximumAge
+                )
                     return false;
                 if (_packets.Count == 0)
                     _started = now;
@@ -8600,13 +13637,29 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 return _packets.Count != 0 && Stopwatch.GetElapsedTime(_started, now) > _maximumAge;
         }
 
-        public int Count { get { lock (_packets) return _packets.Count; } }
-        public int Bytes { get { lock (_packets) return _bytes; } }
+        public int Count
+        {
+            get
+            {
+                lock (_packets)
+                    return _packets.Count;
+            }
+        }
+        public int Bytes
+        {
+            get
+            {
+                lock (_packets)
+                    return _bytes;
+            }
+        }
     }
 
     private sealed record HandoverPause(string TransferId, ulong Partition, ClientSession? Session)
     {
-        public readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource Release = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
     }
 
     private sealed record DisconnectEvent(ulong Client, DateTimeOffset Timestamp, string Reason);
@@ -8618,12 +13671,15 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         public readonly ManualResetEventSlim Connected = new(false);
         public readonly ConcurrentDictionary<ulong, ClientSession> Clients = new();
         public NetPeer? Peer;
+
         /// <summary>T-0229: an external relay (gateway-rs) owns this link; its state arrives as LinkState events.</summary>
         public readonly bool External;
         public RelayIpcServer? Relay;
         public volatile bool ExternalConnected;
+
         /// <summary>The link can carry frames now: the LiteNetLib peer is connected, or gateway-rs says its link is.</summary>
-        public bool IsConnected => External ? ExternalConnected : Peer?.ConnectionState == ConnectionState.Connected;
+        public bool IsConnected =>
+            External ? ExternalConnected : Peer?.ConnectionState == ConnectionState.Connected;
         public DateTimeOffset ConnectedAt;
         public DateTimeOffset LastActivity;
         public DateTimeOffset? DisconnectedAt;
@@ -8636,60 +13692,233 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         }
     }
 
-    private sealed record LineageRequest(string OpId, LineageKind Kind, PartitionVersion[] Inputs, PartitionVersion[] Outputs, Dictionary<ulong, long[]>? Members, long ClusterTime);
-    private sealed record TopologyRequest(string OpId, LineageKind Kind, string Node, long Epoch, PartitionVersion[] Inputs, ulong[] OutputIds, Dictionary<ulong, long[]>? Members, long ClusterTime,
-        Dictionary<ulong, long[]>? Seated = null);
-    private sealed record SnapshotRequest(string SnapshotId, SnapshotKind Kind, long ClusterTime, SaveId[] PartitionRefs, string[] Dirty,
-        GlobalSaveId? GlobalRef = null, VoxelRef[]? VoxelRefs = null);
-    private sealed record HandoverRequest(string Id, ulong Partition, string SourceNode, long SourceEpoch, long SourceGeneration, string TargetNode, long TargetEpoch);
-    private sealed record HeartbeatRequest(string Node, long Epoch, PartitionVersion[] Ownerships, ClientPartitionReport[]? ClientPartitions,
-        double LocalSendMilliseconds, long? SimulationFrame, SaveFailureReport? SaveFailure, double? AuthorityMilliseconds,
-        long? RecoveryCapacity = null, ulong[]? Quarantined = null, long? ProjectedLoad = null, long? LoadCapacity = null,
-        long? RecoveryLoadsPending = null, HitchReport[]? Hitches = null, long? ConfigRevision = null, bool? Serving = null,
-        string? DeploymentRevision = null, bool ConfigurationVerified = false, string? ConfigurationFailure = null,
-        bool Liveness = false, Dictionary<ulong, RemoteUseReport>? RemoteUsers = null, AccountingClockSample? AccountingClock = null,
-        string? ServerData = null);
+    private sealed record LineageRequest(
+        string OpId,
+        LineageKind Kind,
+        PartitionVersion[] Inputs,
+        PartitionVersion[] Outputs,
+        Dictionary<ulong, long[]>? Members,
+        long ClusterTime
+    );
+
+    private sealed record TopologyRequest(
+        string OpId,
+        LineageKind Kind,
+        string Node,
+        long Epoch,
+        PartitionVersion[] Inputs,
+        ulong[] OutputIds,
+        Dictionary<ulong, long[]>? Members,
+        long ClusterTime,
+        Dictionary<ulong, long[]>? Seated = null
+    );
+
+    private sealed record SnapshotRequest(
+        string SnapshotId,
+        SnapshotKind Kind,
+        long ClusterTime,
+        SaveId[] PartitionRefs,
+        string[] Dirty,
+        GlobalSaveId? GlobalRef = null,
+        VoxelRef[]? VoxelRefs = null
+    );
+
+    private sealed record HandoverRequest(
+        string Id,
+        ulong Partition,
+        string SourceNode,
+        long SourceEpoch,
+        long SourceGeneration,
+        string TargetNode,
+        long TargetEpoch
+    );
+
+    private sealed record HeartbeatRequest(
+        string Node,
+        long Epoch,
+        PartitionVersion[] Ownerships,
+        ClientPartitionReport[]? ClientPartitions,
+        double LocalSendMilliseconds,
+        long? SimulationFrame,
+        SaveFailureReport? SaveFailure,
+        double? AuthorityMilliseconds,
+        long? RecoveryCapacity = null,
+        ulong[]? Quarantined = null,
+        long? ProjectedLoad = null,
+        long? LoadCapacity = null,
+        long? RecoveryLoadsPending = null,
+        HitchReport[]? Hitches = null,
+        long? ConfigRevision = null,
+        bool? Serving = null,
+        string? DeploymentRevision = null,
+        bool ConfigurationVerified = false,
+        string? ConfigurationFailure = null,
+        bool Liveness = false,
+        Dictionary<ulong, RemoteUseReport>? RemoteUsers = null,
+        AccountingClockSample? AccountingClock = null,
+        string? ServerData = null
+    );
+
     /// <summary>A game-thread frame over the node's hitch threshold, with the handover phase that held it (§3).</summary>
-    private sealed record HitchReport(DateTime Utc, double Ms, string Phase, string? TransferId, ulong Partition, double PhaseMs);
-    private sealed record AccountingClockRequest(string Node, long Epoch, AccountingClockSample Sample);
-    private sealed record HeartbeatResponse(string Node, long Epoch, string Endpoint, DateTimeOffset Registered, NodeState State,
-        DateTimeOffset LeaseExpires, DateTimeOffset? ForceDrainAt, NodeRole Role, long AuthorityGeneration, long WorldAuthorityGeneration,
-        PartitionVersion[] Ownerships, double LocalSendMilliseconds, double GatewayMilliseconds, double? AuthorityMilliseconds,
-        long HandoverConfigRevision = 0, bool ClusterDraining = false, bool TopologyTransfer = true, AccountingClockSample? AccountingClock = null,
-        bool ServerDataWanted = false);
+    private sealed record HitchReport(
+        DateTime Utc,
+        double Ms,
+        string Phase,
+        string? TransferId,
+        ulong Partition,
+        double PhaseMs
+    );
+
+    private sealed record AccountingClockRequest(
+        string Node,
+        long Epoch,
+        AccountingClockSample Sample
+    );
+
+    private sealed record HeartbeatResponse(
+        string Node,
+        long Epoch,
+        string Endpoint,
+        DateTimeOffset Registered,
+        NodeState State,
+        DateTimeOffset LeaseExpires,
+        DateTimeOffset? ForceDrainAt,
+        NodeRole Role,
+        long AuthorityGeneration,
+        long WorldAuthorityGeneration,
+        PartitionVersion[] Ownerships,
+        double LocalSendMilliseconds,
+        double GatewayMilliseconds,
+        double? AuthorityMilliseconds,
+        long HandoverConfigRevision = 0,
+        bool ClusterDraining = false,
+        bool TopologyTransfer = true,
+        AccountingClockSample? AccountingClock = null,
+        bool ServerDataWanted = false
+    );
+
     // SE-1076: ServerDataWanted asks the node for MyCachedServerItem.GetServerData() in its next heartbeat's ServerData
     // (base64), which the Steam frontend publishes as the "sc" rules of the server details. A node without the field
     // never sends it; a registry without it never asks.
     // T-0339 (design C): TopologyTransfer tells the node this registry applies a transfer (GatewayRegistry.IsTransfer); a
     // registry without the field is one that refuses it, and the node then makes the split and the merge instead.
     private sealed record RecoveryRequest(string Node, long Epoch, ulong[] Partitions);
-    private sealed record NodeSlotRequest(string SlotKey, string Host, NodeRole Role, NodeDesiredState Desired);
-    private sealed record ExecutorHeartbeatRequest(string Executor, SpawnObservation[] Observations);
-    private sealed record GlobalEnvelope(string Kind, long Generation, string Subsystem, long Sequence, string Origin, string? Target,
-		string Payload, Guid OperationId = default);
+
+    private sealed record NodeSlotRequest(
+        string SlotKey,
+        string Host,
+        NodeRole Role,
+        NodeDesiredState Desired
+    );
+
+    private sealed record ExecutorHeartbeatRequest(
+        string Executor,
+        SpawnObservation[] Observations
+    );
+
+    private sealed record GlobalEnvelope(
+        string Kind,
+        long Generation,
+        string Subsystem,
+        long Sequence,
+        string Origin,
+        string? Target,
+        string Payload,
+        Guid OperationId = default
+    );
+
     private sealed record GlobalCommandResult(bool Success, string Payload, string Error);
-	private sealed record RespawnSwitchRequest(Guid OperationId, ulong UserId, int SerialId, long IdentityId,
-		long RespawnEntityId, long GridEntityId, string Origin, ulong PartitionId, long Generation,
-		bool JoinGame, string? ModelName, uint PackedColor, string? ClientState, string? RespawnShipId = null,
-		bool NewIdentity = false, bool Preview = false);
-	private sealed record RespawnExecutionResult(bool Ready, bool Success, long ControlledEntityId);
-	private sealed record PendingGatewayCommand(long Generation, string Subsystem, Guid OperationId, TaskCompletionSource<string> Completion);
-    private sealed record PlayerBindingRequest(string ServiceName, ulong UserId, ulong OwnerId, int SerialId, string Name, bool IsAdmin,
-        long ExpectedIdentityId = 0);
+
+    private sealed record RespawnSwitchRequest(
+        Guid OperationId,
+        ulong UserId,
+        int SerialId,
+        long IdentityId,
+        long RespawnEntityId,
+        long GridEntityId,
+        string Origin,
+        ulong PartitionId,
+        long Generation,
+        bool JoinGame,
+        string? ModelName,
+        uint PackedColor,
+        string? ClientState,
+        string? RespawnShipId = null,
+        bool NewIdentity = false,
+        bool Preview = false
+    );
+
+    private sealed record RespawnExecutionResult(bool Ready, bool Success, long ControlledEntityId);
+
+    private sealed record PendingGatewayCommand(
+        long Generation,
+        string Subsystem,
+        Guid OperationId,
+        TaskCompletionSource<string> Completion
+    );
+
+    private sealed record PlayerBindingRequest(
+        string ServiceName,
+        ulong UserId,
+        ulong OwnerId,
+        int SerialId,
+        string Name,
+        bool IsAdmin,
+        long ExpectedIdentityId = 0
+    );
+
     /// <summary>What the perimeter validated about a client (Security.md §3.5 identity trust chain).</summary>
-    internal sealed record ClientCredential(string ServiceName, ulong UserId, ulong OwnerId, string Name, bool IsAdmin);
+    internal sealed record ClientCredential(
+        string ServiceName,
+        ulong UserId,
+        ulong OwnerId,
+        string Name,
+        bool IsAdmin
+    );
 
     /// <summary>ServiceName of a client admitted through Direct Transport, with no Steam identity.</summary>
     internal const string DirectTransportService = "DirectTransport";
-    private sealed record IdentityAuthorityEntry(long IdentityId, string Name, string? Model, bool HasColor,
-        float ColorX, float ColorY, float ColorZ, bool IsNpc);
-	private sealed record PlayerBindingEntry(ulong UserId, int SerialId, long IdentityId);
-	private sealed record IdentityAuthoritySnapshot(IdentityAuthorityEntry[] Identities, PlayerBindingEntry[] Bindings);
+
+    private sealed record IdentityAuthorityEntry(
+        long IdentityId,
+        string Name,
+        string? Model,
+        bool HasColor,
+        float ColorX,
+        float ColorY,
+        float ColorZ,
+        bool IsNpc
+    );
+
+    private sealed record PlayerBindingEntry(ulong UserId, int SerialId, long IdentityId);
+
+    private sealed record IdentityAuthoritySnapshot(
+        IdentityAuthorityEntry[] Identities,
+        PlayerBindingEntry[] Bindings
+    );
+
     /// <summary>The World Authority's player binding. The Gateway adds what Steam says the player owns (SE-1158) when it attaches them.</summary>
-    private sealed record PlayerReady(long AuthorityGeneration, string ServiceName, ulong UserId, ulong OwnerId, int SerialId,
-        bool IsAdmin, IdentityAuthorityEntry Identity, uint[]? MissingDlcs = null, string[]? Skins = null);
+    private sealed record PlayerReady(
+        long AuthorityGeneration,
+        string ServiceName,
+        ulong UserId,
+        ulong OwnerId,
+        int SerialId,
+        bool IsAdmin,
+        IdentityAuthorityEntry Identity,
+        uint[]? MissingDlcs = null,
+        string[]? Skins = null
+    );
 
     /// <summary>The attach binding a node gets: the player binding with the Steam ownership of SE-1158.</summary>
-    private static byte[] AttachBinding(ClientSession session) => session.PlayerReady == null ? []
-        : JsonSerializer.SerializeToUtf8Bytes(session.PlayerReady with { MissingDlcs = session.MissingDlcs, Skins = session.Skins });
+    private static byte[] AttachBinding(ClientSession session) =>
+        session.PlayerReady == null
+            ? []
+            : JsonSerializer.SerializeToUtf8Bytes(
+                session.PlayerReady with
+                {
+                    MissingDlcs = session.MissingDlcs,
+                    Skins = session.Skins,
+                }
+            );
 }

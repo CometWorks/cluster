@@ -4,7 +4,15 @@ namespace ClusterRegistry;
 
 /// <summary>One legacy save file a host agent found in a stopped node's data dir (T-0340 step 7): whose dir, which save,
 /// and what the file says it is (its size, and the body checksum in its trailer; null when the file is unreadable).</summary>
-internal sealed record HostStoreAdoptFile(string Node, ulong Partition, long Generation, long Sequence, bool Global, long SizeBytes, string? Checksum);
+internal sealed record HostStoreAdoptFile(
+    string Node,
+    ulong Partition,
+    long Generation,
+    long Sequence,
+    bool Global,
+    long SizeBytes,
+    string? Checksum
+);
 
 /// <summary><see cref="GatewayRegistry.HostStoreAdopt"/>: <c>Commit</c> false only answers what the registry would do.</summary>
 internal sealed record HostStoreAdoptRequest(string Host, bool Commit, HostStoreAdoptFile[] Files);
@@ -13,7 +21,13 @@ internal sealed record HostStoreAdoptRequest(string Host, bool Commit, HostStore
 /// <c>ArchiveFilesDue</c> (T-0400): the save is archived and its partition is past the archive retention age
 /// (retention.archiveFileDays) - its files are due for deletion, so a sweep may delete the file instead of adopting it
 /// (the registry still names that location until a commit path for it exists).</summary>
-internal sealed record HostStoreAdoptResult(string Status, long? SizeBytes = null, string? Checksum = null, bool Archived = false, bool ArchiveFilesDue = false);
+internal sealed record HostStoreAdoptResult(
+    string Status,
+    long? SizeBytes = null,
+    string? Checksum = null,
+    bool Archived = false,
+    bool ArchiveFilesDue = false
+);
 
 /// <summary>
 /// T-0340 step 7: the host agent's file move, registry side. A world from before store mode keeps its saves in node data
@@ -49,11 +63,16 @@ internal sealed partial class GatewayRegistry
             throw new ArgumentException($"host-store adopt takes 1..{HostStoreAdoptBatch} files");
         lock (_lock)
         {
-            if (!NodeControlActive) throw new RegistryConflictException("host-store adopt needs node control");
+            if (!NodeControlActive)
+                throw new RegistryConflictException("host-store adopt needs node control");
             string host = HostsFileSpelling(request.Host ?? "");
-            if (!Control.Hosts.ContainsKey(host)) throw new ArgumentException($"host '{request.Host}' is not in the hosts file");
+            if (!Control.Hosts.ContainsKey(host))
+                throw new ArgumentException($"host '{request.Host}' is not in the hosts file");
             HostStoreRoot(RunRoot, host);
-            if (request.Commit && !_hostStore) throw new RegistryConflictException("the catalogue is not in host-store mode; nothing is re-keyed");
+            if (request.Commit && !_hostStore)
+                throw new RegistryConflictException(
+                    "the catalogue is not in host-store mode; nothing is re-keyed"
+                );
             var results = new HostStoreAdoptResult[files.Length];
             int rekeyed = 0;
             HashSet<ulong> claimed = AdoptClaimedPartitions();
@@ -61,7 +80,8 @@ internal sealed partial class GatewayRegistry
             for (int i = 0; i < files.Length; i++)
             {
                 results[i] = AdoptOne(files[i], host, request.Commit, claimed, granted);
-                if (results[i].Status == "rekeyed") rekeyed++;
+                if (results[i].Status == "rekeyed")
+                    rekeyed++;
             }
             if (rekeyed != 0)
             {
@@ -69,9 +89,16 @@ internal sealed partial class GatewayRegistry
                 Persist();
                 FlushState();
                 HostStoreAdopted += rekeyed;
-                Console.WriteLine($"registry: host store: re-keyed {rekeyed} legacy location(s) to host:{host} on the host agent's evidence");
+                Console.WriteLine(
+                    $"registry: host store: re-keyed {rekeyed} legacy location(s) to host:{host} on the host agent's evidence"
+                );
             }
-            return new { storeMode = _hostStore, host, files = results };
+            return new
+            {
+                storeMode = _hostStore,
+                host,
+                files = results,
+            };
         }
     }
 
@@ -79,10 +106,21 @@ internal sealed partial class GatewayRegistry
     internal long HostStoreAdopted;
 
     /// <summary>Self-test: state or archive changes not yet written.</summary>
-    internal bool StatePendingWrite { get { lock (_lock) return _dirty || _store.PendingRows != 0; } }
+    internal bool StatePendingWrite
+    {
+        get
+        {
+            lock (_lock)
+                return _dirty || _store.PendingRows != 0;
+        }
+    }
 
     /// <summary>The archived partitions, for the host agent's archive-retention knob (default off). Caller: the route.</summary>
-    internal ulong[] HostStoreArchivedPartitions() { lock (_lock) return [.. _archivedPartitions.Keys.Order()]; }
+    internal ulong[] HostStoreArchivedPartitions()
+    {
+        lock (_lock)
+            return [.. _archivedPartitions.Keys.Order()];
+    }
 
     /// <summary>#1276 (T-0296 F33): a recovery claim hands the node its cover at the legacy paths, and the node fetches them
     /// later through the gone-holder proxy under a grant bound to that path. A re-key commits the agent to unlinking the
@@ -94,7 +132,8 @@ internal sealed partial class GatewayRegistry
     private HashSet<ulong> AdoptClaimedPartitions()
     {
         HashSet<ulong> claimed = [];
-        if (!AdoptHoldsClaimedSaves) return claimed;
+        if (!AdoptHoldsClaimedSaves)
+            return claimed;
         foreach (PartitionOwnership owner in _state.Partitions.Values.Where(x => x.Recovering))
         {
             claimed.Add(owner.Partition);
@@ -109,42 +148,120 @@ internal sealed partial class GatewayRegistry
     {
         DateTimeOffset now = _clock();
         return AdoptHoldsClaimedSaves
-            ? _grants.Values.Where(x => x.Location != null && x.Expires > now).Select(x => x.Location!).ToHashSet(StringComparer.Ordinal)
+            ? _grants
+                .Values.Where(x => x.Location != null && x.Expires > now)
+                .Select(x => x.Location!)
+                .ToHashSet(StringComparer.Ordinal)
             : [];
     }
 
-    private HostStoreAdoptResult AdoptOne(HostStoreAdoptFile file, string host, bool commit, HashSet<ulong> claimed, HashSet<string> granted)
+    private HostStoreAdoptResult AdoptOne(
+        HostStoreAdoptFile file,
+        string host,
+        bool commit,
+        HashSet<ulong> claimed,
+        HashSet<string> granted
+    )
     {
         string node = file.Node ?? "";
-        if (node.Length == 0 || IsHostHolder(node)) return new("invalid");
-        if (Control.Live.ContainsKey(node) || _state.Nodes.TryGetValue(node, out NodeRegistration? row) && row.State is NodeState.Active or NodeState.Closed)
+        if (node.Length == 0 || IsHostHolder(node))
+            return new("invalid");
+        if (
+            Control.Live.ContainsKey(node)
+            || _state.Nodes.TryGetValue(node, out NodeRegistration? row)
+                && row.State is NodeState.Active or NodeState.Closed
+        )
             return new("live");
         if (file.Global)
         {
             var id = new GlobalSaveId(file.Generation, file.Sequence);
-            if (!_state.GlobalSaves.TryGetValue(GlobalKey(id), out GlobalSaveRegistration? global)) return new("uncatalogued");
-            return AdoptLocation(global.Locations, global.LocationHolders, global.HolderEndpoints, null, global.Node, global.SizeBytes, global.Checksum,
-                global.PendingDelete, HostStorePath(RunRoot, host, id), file, host, commit, () => Touch(global), archived: false, busy: false, granted);
+            if (!_state.GlobalSaves.TryGetValue(GlobalKey(id), out GlobalSaveRegistration? global))
+                return new("uncatalogued");
+            return AdoptLocation(
+                global.Locations,
+                global.LocationHolders,
+                global.HolderEndpoints,
+                null,
+                global.Node,
+                global.SizeBytes,
+                global.Checksum,
+                global.PendingDelete,
+                HostStorePath(RunRoot, host, id),
+                file,
+                host,
+                commit,
+                () => Touch(global),
+                archived: false,
+                busy: false,
+                granted
+            );
         }
         var saveId = new SaveId(file.Partition, file.Generation, file.Sequence);
         string key = Key(saveId);
         if (_state.Saves.TryGetValue(key, out SaveRegistration? save))
-            return AdoptLocation(save.Locations, save.LocationHolders, save.HolderEndpoints, save.CorruptHolders, save.Node, save.SizeBytes, save.Checksum,
-                save.PendingDelete, HostStorePath(RunRoot, host, saveId), file, host, commit, () => Touch(save), archived: false,
-                claimed.Contains(file.Partition), granted);
-        if (!_archivedPartitions.ContainsKey(file.Partition) || _store.ReadArchived(file.Partition, key) is not { } stored) return new("uncatalogued");
-        SaveRegistration archived = JsonSerializer.Deserialize<SaveRegistration>(stored.Value) ?? throw new InvalidDataException($"Archived save {key} is empty");
+            return AdoptLocation(
+                save.Locations,
+                save.LocationHolders,
+                save.HolderEndpoints,
+                save.CorruptHolders,
+                save.Node,
+                save.SizeBytes,
+                save.Checksum,
+                save.PendingDelete,
+                HostStorePath(RunRoot, host, saveId),
+                file,
+                host,
+                commit,
+                () => Touch(save),
+                archived: false,
+                claimed.Contains(file.Partition),
+                granted
+            );
+        if (
+            !_archivedPartitions.ContainsKey(file.Partition)
+            || _store.ReadArchived(file.Partition, key) is not { } stored
+        )
+            return new("uncatalogued");
+        SaveRegistration archived =
+            JsonSerializer.Deserialize<SaveRegistration>(stored.Value)
+            ?? throw new InvalidDataException($"Archived save {key} is empty");
         // As Rehydrate reads it: a location without a holder is the writer's.
-        foreach (string location in archived.Locations) archived.LocationHolders.TryAdd(location, archived.Node);
+        foreach (string location in archived.Locations)
+            archived.LocationHolders.TryAdd(location, archived.Node);
         // T-0400: the answer says whether the partition's files are due under archive retention; a copy adopted into a
         // store of a partition already swept re-opens its sweep, or that store file would never be deleted.
         RegistryStore.ArchiveStamp? stamp = _store.ReadStamp(file.Partition);
         int days = ArchiveFileDays();
-        bool due = days > 0 && stamp != null && stamp.ArchivedMs <= (_clock() - TimeSpan.FromDays(days)).ToUnixTimeMilliseconds();
-        HostStoreAdoptResult result = AdoptLocation(archived.Locations, archived.LocationHolders, archived.HolderEndpoints, archived.CorruptHolders,
-            archived.Node, archived.SizeBytes, archived.Checksum, archived.PendingDelete, HostStorePath(RunRoot, host, saveId), file, host, commit,
-            () => _store.Rearchive(file.Partition, key, stored.Generation, stored.Located, archived, typeof(SaveRegistration)), archived: true,
-            claimed.Contains(file.Partition), granted);
+        bool due =
+            days > 0
+            && stamp != null
+            && stamp.ArchivedMs <= (_clock() - TimeSpan.FromDays(days)).ToUnixTimeMilliseconds();
+        HostStoreAdoptResult result = AdoptLocation(
+            archived.Locations,
+            archived.LocationHolders,
+            archived.HolderEndpoints,
+            archived.CorruptHolders,
+            archived.Node,
+            archived.SizeBytes,
+            archived.Checksum,
+            archived.PendingDelete,
+            HostStorePath(RunRoot, host, saveId),
+            file,
+            host,
+            commit,
+            () =>
+                _store.Rearchive(
+                    file.Partition,
+                    key,
+                    stored.Generation,
+                    stored.Located,
+                    archived,
+                    typeof(SaveRegistration)
+                ),
+            archived: true,
+            claimed.Contains(file.Partition),
+            granted
+        );
         if (result.Status == "rekeyed" && stamp is { Swept: true })
         {
             _store.Stamp(file.Partition, stamp.ArchivedMs);
@@ -157,31 +274,67 @@ internal sealed partial class GatewayRegistry
     /// (the file is in that store, with the catalogue's size and checksum). Only that node's location changes; a copy the
     /// host already holds merges with it, exactly as the load-time re-key merges copies on one host. <paramref name="busy"/>:
     /// a recovery claim may still fetch the save; <paramref name="granted"/>: the locations unexpired grants bind.</summary>
-    private HostStoreAdoptResult AdoptLocation(HashSet<string> locations, Dictionary<string, string> holders, Dictionary<string, string> endpoints,
-        HashSet<string>? corrupt, string writer, long size, string checksum, bool pendingDelete, string store, HostStoreAdoptFile file, string host,
-        bool commit, Action touch, bool archived, bool busy, HashSet<string> granted)
+    private HostStoreAdoptResult AdoptLocation(
+        HashSet<string> locations,
+        Dictionary<string, string> holders,
+        Dictionary<string, string> endpoints,
+        HashSet<string>? corrupt,
+        string writer,
+        long size,
+        string checksum,
+        bool pendingDelete,
+        string store,
+        HostStoreAdoptFile file,
+        string host,
+        bool commit,
+        Action touch,
+        bool archived,
+        bool busy,
+        HashSet<string> granted
+    )
     {
         string hostKey = HostHolder(host);
-        string[] mine = locations.Where(location => holders.GetValueOrDefault(location, writer) == file.Node).ToArray();
+        string[] mine = locations
+            .Where(location => holders.GetValueOrDefault(location, writer) == file.Node)
+            .ToArray();
         if (mine.Length == 0)
-            return new(locations.Contains(store) && holders.GetValueOrDefault(store) == hostKey ? "hostHeld" : "unnamed", size, checksum, archived);
-        if (pendingDelete) return new("pendingDelete", size, checksum, archived);
+            return new(
+                locations.Contains(store) && holders.GetValueOrDefault(store) == hostKey
+                    ? "hostHeld"
+                    : "unnamed",
+                size,
+                checksum,
+                archived
+            );
+        if (pendingDelete)
+            return new("pendingDelete", size, checksum, archived);
         string? known = KnownHostOfLegacyHolder(file.Node);
-        if (known != null && !string.Equals(known, host, StringComparison.OrdinalIgnoreCase)) return new("wrongHost", size, checksum, archived);
-        if (file.SizeBytes != size || !string.Equals(file.Checksum, checksum, StringComparison.OrdinalIgnoreCase)) return new("mismatch", size, checksum, archived);
-        if (corrupt != null && (corrupt.Contains(file.Node) || corrupt.Contains(hostKey))) return new("corrupt", size, checksum, archived);
-        if (busy || mine.Any(granted.Contains)) return new("busy", size, checksum, archived);
-        if (!commit) return new("adopt", size, checksum, archived);
+        if (known != null && !string.Equals(known, host, StringComparison.OrdinalIgnoreCase))
+            return new("wrongHost", size, checksum, archived);
+        if (
+            file.SizeBytes != size
+            || !string.Equals(file.Checksum, checksum, StringComparison.OrdinalIgnoreCase)
+        )
+            return new("mismatch", size, checksum, archived);
+        if (corrupt != null && (corrupt.Contains(file.Node) || corrupt.Contains(hostKey)))
+            return new("corrupt", size, checksum, archived);
+        if (busy || mine.Any(granted.Contains))
+            return new("busy", size, checksum, archived);
+        if (!commit)
+            return new("adopt", size, checksum, archived);
         // The file is on this host's disk: that is where the node's files are, whatever a guess would have said. A known
         // host is frozen as it is (it equals this one); an unknown one is frozen to this host.
-        if (known == null) _state.HostStoreAliases[file.Node] = host;
-        else HostOfLegacyHolder(file.Node);
+        if (known == null)
+            _state.HostStoreAliases[file.Node] = host;
+        else
+            HostOfLegacyHolder(file.Node);
         foreach (string location in mine)
         {
             locations.Remove(location);
             holders.Remove(location);
         }
-        if (!holders.ContainsValue(file.Node)) endpoints.Remove(file.Node);
+        if (!holders.ContainsValue(file.Node))
+            endpoints.Remove(file.Node);
         locations.Add(store);
         holders[store] = hostKey;
         EnsureHostRow(host);
@@ -193,8 +346,10 @@ internal sealed partial class GatewayRegistry
     /// null when nothing the registry keeps says where the node ran.</summary>
     private string? KnownHostOfLegacyHolder(string node)
     {
-        if (_state.HostStoreAliases.TryGetValue(node, out string? known)) return known;
-        string? host = Control.Live.GetValueOrDefault(node)?.Host
+        if (_state.HostStoreAliases.TryGetValue(node, out string? known))
+            return known;
+        string? host =
+            Control.Live.GetValueOrDefault(node)?.Host
             ?? _state.NodeHistory.LastOrDefault(x => x.Node == node)?.Host
             ?? _state.Nodes.GetValueOrDefault(node)?.Host;
         return host == null ? null : HostsFileSpelling(host);

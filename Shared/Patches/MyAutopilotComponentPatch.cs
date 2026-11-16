@@ -27,40 +27,72 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyAutopilotComponent), nameof(MyAutopilotComponent.SetWaypoints))]
 public static class MyAutopilotComponentPatch
 {
-	private static void Prefix(MyAutopilotComponent __instance, List<MyAutopilotWaypoint> newWaypoints,
-		bool continueOnCurrentCourse, bool continueOnReversedCourse, out int __state)
-	{
-		__state = -1;
-		if (!ClusterRuntime.IsClustered || !Sync.IsServer || continueOnCurrentCourse || continueOnReversedCourse)
-			return;
-		List<MyAutopilotWaypoint> route = __instance.Waypoints;
-		if (newWaypoints == null || route == null || route.Count < 2 || newWaypoints.Count != route.Count)
-			return;
-		for (int i = 0; i < route.Count; i++)
-			if (!MyAutopilotWaypoint.AreEqualByResultCoordinates(route[i], newWaypoints[i]))
-				return;
-		MyAutopilotWaypoint current = __instance.CurrentWaypoint;
-		if (current != null && current.IsPathfindingVertex)
-			current = __instance.m_destinationWaypoint;
-		int index = current == null ? -1 : route.IndexOf(current);
-		if (index > 0)
-			__state = index;
-	}
+    private static void Prefix(
+        MyAutopilotComponent __instance,
+        List<MyAutopilotWaypoint> newWaypoints,
+        bool continueOnCurrentCourse,
+        bool continueOnReversedCourse,
+        out int __state
+    )
+    {
+        __state = -1;
+        if (
+            !ClusterRuntime.IsClustered
+            || !Sync.IsServer
+            || continueOnCurrentCourse
+            || continueOnReversedCourse
+        )
+            return;
+        List<MyAutopilotWaypoint> route = __instance.Waypoints;
+        if (
+            newWaypoints == null
+            || route == null
+            || route.Count < 2
+            || newWaypoints.Count != route.Count
+        )
+            return;
+        for (int i = 0; i < route.Count; i++)
+            if (!MyAutopilotWaypoint.AreEqualByResultCoordinates(route[i], newWaypoints[i]))
+                return;
+        MyAutopilotWaypoint current = __instance.CurrentWaypoint;
+        if (current != null && current.IsPathfindingVertex)
+            current = __instance.m_destinationWaypoint;
+        int index = current == null ? -1 : route.IndexOf(current);
+        if (index > 0)
+            __state = index;
+    }
 
-	private static void Postfix(MyAutopilotComponent __instance, List<MyAutopilotWaypoint> newWaypoints, int __state)
-	{
-		if (__state <= 0)
-			return;
-		List<MyAutopilotWaypoint> route = __instance.Waypoints;
-		if (route == null || __state >= route.Count)
-			return;
-		MyAutopilotWaypoint current = __instance.CurrentWaypoint;
-		if (current != null && current != route[0])
-			return;
-		__instance.CurrentWaypoint = route[__state];
-		long grid = (__instance.Entity as Sandbox.Game.Entities.MyCubeBlock)?.CubeGrid?.EntityId ?? 0;
-		VRage.Utils.MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] autopilot_route_kept grid=" + grid + " block=" + (__instance.Entity?.EntityId ?? 0)
-			+ " index=" + __state + " of " + route.Count + " name='" + route[__state].Name
-			+ "' (a same-route re-push had restarted it at " + (current == null ? "none" : "0") + ")");
-	}
+    private static void Postfix(
+        MyAutopilotComponent __instance,
+        List<MyAutopilotWaypoint> newWaypoints,
+        int __state
+    )
+    {
+        if (__state <= 0)
+            return;
+        List<MyAutopilotWaypoint> route = __instance.Waypoints;
+        if (route == null || __state >= route.Count)
+            return;
+        MyAutopilotWaypoint current = __instance.CurrentWaypoint;
+        if (current != null && current != route[0])
+            return;
+        __instance.CurrentWaypoint = route[__state];
+        long grid =
+            (__instance.Entity as Sandbox.Game.Entities.MyCubeBlock)?.CubeGrid?.EntityId ?? 0;
+        VRage.Utils.MyLog.Default?.WriteLineAndConsole(
+            "[ClusterPlugin] autopilot_route_kept grid="
+                + grid
+                + " block="
+                + (__instance.Entity?.EntityId ?? 0)
+                + " index="
+                + __state
+                + " of "
+                + route.Count
+                + " name='"
+                + route[__state].Name
+                + "' (a same-route re-push had restarted it at "
+                + (current == null ? "none" : "0")
+                + ")"
+        );
+    }
 }

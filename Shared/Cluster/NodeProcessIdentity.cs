@@ -13,7 +13,8 @@ internal static class NodeProcessIdentity
     private static long nextCheck;
     private static volatile string failure;
 
-    internal static string Revision => Environment.GetEnvironmentVariable("CLUSTER_DEPLOYMENT_REVISION");
+    internal static string Revision =>
+        Environment.GetEnvironmentVariable("CLUSTER_DEPLOYMENT_REVISION");
     internal static bool Verified => ready;
     internal static string Failure => failure;
 
@@ -25,17 +26,27 @@ internal static class NodeProcessIdentity
 
     internal static void Ready()
     {
-        if (!registered || Stopwatch.GetTimestamp() < nextCheck) return;
+        if (!registered || Stopwatch.GetTimestamp() < nextCheck)
+            return;
         nextCheck = Stopwatch.GetTimestamp() + Stopwatch.Frequency;
-        if (string.IsNullOrEmpty(Revision)) return;
-        bool valid = PluginServices.Instance != null
+        if (string.IsNullOrEmpty(Revision))
+            return;
+        bool valid =
+            PluginServices.Instance != null
             && ReferenceEquals(PluginSdk.Clustering.PluginCluster.Current, PluginServices.Instance)
             && PluginSdk.Config.ManagedPluginConfiguration.Required
-            && PluginSdk.Config.ManagedPluginConfiguration.Revision == Environment.GetEnvironmentVariable("CLUSTER_DEPLOYMENT_REVISION")
+            && PluginSdk.Config.ManagedPluginConfiguration.Revision
+                == Environment.GetEnvironmentVariable("CLUSTER_DEPLOYMENT_REVISION")
             && PluginSdk.Config.ManagedPluginConfiguration.Observe();
-        string observedFailure = valid ? null : "configuration_drift:" +
-            (PluginSdk.Config.ManagedPluginConfiguration.Failure ?? "canonical initialization proof is unavailable");
-        if (ready == valid && failure == observedFailure) return;
+        string observedFailure = valid
+            ? null
+            : "configuration_drift:"
+                + (
+                    PluginSdk.Config.ManagedPluginConfiguration.Failure
+                    ?? "canonical initialization proof is unavailable"
+                );
+        if (ready == valid && failure == observedFailure)
+            return;
         ready = valid;
         failure = observedFailure;
         Publish(valid);
@@ -47,34 +58,62 @@ internal static class NodeProcessIdentity
     /// </summary>
     internal static void Exiting(int code)
     {
-        if (!registered) return;
-        try { Publish(ready, code); }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException) { }
+        if (!registered)
+            return;
+        try
+        {
+            Publish(ready, code);
+        }
+        catch (Exception exception)
+            when (exception
+                    is IOException
+                        or UnauthorizedAccessException
+                        or InvalidOperationException
+            ) { }
     }
 
     private static void Publish(bool gameReady, int? exitCode = null)
     {
         string path = Environment.GetEnvironmentVariable("CLUSTER_PROCESS_IDENTITY_PATH");
-        if (string.IsNullOrEmpty(path)) return; // Standalone packaged launcher needs no Host receipt.
+        if (string.IsNullOrEmpty(path))
+            return; // Standalone packaged launcher needs no Host receipt.
         string Required(string name)
         {
             string value = Environment.GetEnvironmentVariable(name);
-            if (string.IsNullOrWhiteSpace(value)) throw new InvalidOperationException(name + " is required for managed admission");
+            if (string.IsNullOrWhiteSpace(value))
+                throw new InvalidOperationException(name + " is required for managed admission");
             return value;
         }
         if (!Path.IsPathFullyQualified(path) || ClusterRuntime.RegistryNodeEpoch <= 0)
-            throw new InvalidOperationException("Managed identity path or Registry incarnation is invalid");
-        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(new
-        {
-            schemaVersion = 1,
-            clusterId = Required("CLUSTER_ID"), slotKey = Required("CLUSTER_SLOT_ID"),
-            attemptKey = Required("CLUSTER_LAUNCH_ATTEMPT"), nodeId = Required("CLUSTER_NODE_ID"),
-            epoch = ClusterRuntime.RegistryNodeEpoch, endpoint = Required("CLUSTER_NODE_ENDPOINT"),
-            processId = Process.GetCurrentProcess().Id,
-            deploymentRevision = Required("CLUSTER_DEPLOYMENT_REVISION"), ready = gameReady, failure, exitCode,
-        });
+            throw new InvalidOperationException(
+                "Managed identity path or Registry incarnation is invalid"
+            );
+        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(
+            new
+            {
+                schemaVersion = 1,
+                clusterId = Required("CLUSTER_ID"),
+                slotKey = Required("CLUSTER_SLOT_ID"),
+                attemptKey = Required("CLUSTER_LAUNCH_ATTEMPT"),
+                nodeId = Required("CLUSTER_NODE_ID"),
+                epoch = ClusterRuntime.RegistryNodeEpoch,
+                endpoint = Required("CLUSTER_NODE_ENDPOINT"),
+                processId = Process.GetCurrentProcess().Id,
+                deploymentRevision = Required("CLUSTER_DEPLOYMENT_REVISION"),
+                ready = gameReady,
+                failure,
+                exitCode,
+            }
+        );
         string temporary = path + ".tmp";
-        using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
+        using (
+            var stream = new FileStream(
+                temporary,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None
+            )
+        )
         {
             stream.Write(bytes, 0, bytes.Length);
             stream.Flush(true);

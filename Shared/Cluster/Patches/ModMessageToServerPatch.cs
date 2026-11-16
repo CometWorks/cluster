@@ -27,28 +27,34 @@ namespace ClusterPlugin;
 [HarmonyPatch]
 public static class ModMessageToServerPatch
 {
-	private static readonly HashSet<ulong> Logged = new();
+    private static readonly HashSet<ulong> Logged = new();
 
-	private static IEnumerable<MethodBase> TargetMethods()
-	{
-		yield return AccessTools.DeclaredMethod(typeof(MyModAPIHelper.MyMultiplayer), nameof(MyModAPIHelper.MyMultiplayer.ModMessageServerReliable));
-		yield return AccessTools.DeclaredMethod(typeof(MyModAPIHelper.MyMultiplayer), nameof(MyModAPIHelper.MyMultiplayer.ModMessageServerUnreliable));
-	}
+    private static IEnumerable<MethodBase> TargetMethods()
+    {
+        yield return AccessTools.DeclaredMethod(
+            typeof(MyModAPIHelper.MyMultiplayer),
+            nameof(MyModAPIHelper.MyMultiplayer.ModMessageServerReliable)
+        );
+        yield return AccessTools.DeclaredMethod(
+            typeof(MyModAPIHelper.MyMultiplayer),
+            nameof(MyModAPIHelper.MyMultiplayer.ModMessageServerUnreliable)
+        );
+    }
 
-	[HarmonyPrefix]
-	private static void Prefix(ref ulong recipient)
-	{
-		if (!ClusterRuntime.IsClustered || !Sync.IsServer || recipient == Sync.MyId)
-			return;
-		try
-		{
-			ulong sender = MyEventContext.Current.Sender.Value;
-			if (Logged.Add(sender))
-				Console.WriteLine($"[ClusterPlugin] mod_message_to_server client={sender} addressed={recipient} (taken as this node's; logged once per client)");
-		}
-		catch (Exception)
-		{
-		}
-		recipient = Sync.MyId;
-	}
+    [HarmonyPrefix]
+    private static void Prefix(ref ulong recipient)
+    {
+        if (!ClusterRuntime.IsClustered || !Sync.IsServer || recipient == Sync.MyId)
+            return;
+        try
+        {
+            ulong sender = MyEventContext.Current.Sender.Value;
+            if (Logged.Add(sender))
+                Console.WriteLine(
+                    $"[ClusterPlugin] mod_message_to_server client={sender} addressed={recipient} (taken as this node's; logged once per client)"
+                );
+        }
+        catch (Exception) { }
+        recipient = Sync.MyId;
+    }
 }

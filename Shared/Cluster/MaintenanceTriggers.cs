@@ -19,54 +19,108 @@ namespace ClusterPlugin;
 /// </remarks>
 internal static class MaintenanceTriggers
 {
-	internal static readonly string[] Tasks = { "split-sweep", "membership-eval", "save", "conceal-eval", "compact", "profile", "compensate-dry-run" };
+    internal static readonly string[] Tasks =
+    {
+        "split-sweep",
+        "membership-eval",
+        "save",
+        "conceal-eval",
+        "compact",
+        "profile",
+        "compensate-dry-run",
+    };
 
-	internal static object Run(string task, PartitionManager partitions, PartitionPersistence persistence, ulong? partitionFilter)
-	{
-		switch (task)
-		{
-			// One routine, two names: the membership pass IS the sweep - it re-clusters every partition's
-			// members from scratch at the D + 2m split radius on each call (Partitioning.md 3.4). The names
-			// stay distinct because the plan's trigger table and the scenarios name them separately.
-			case "split-sweep":
-			case "membership-eval":
-			{
-				partitions.Evaluate();
-				PartitionMembership.Change[] changes = partitions.LastChanges;
-				return new
-				{
-					task,
-					splits = changes.Where(change => change.Split && !change.Transfer).Select(change => new
-						{ input = change.Inputs.Single(), children = change.Outputs.Select(output => output.Id).ToArray() }).ToArray(),
-					// T-0339 (design C): Inputs = [source, target], both kept.
-					transfers = changes.Where(change => change.Transfer).Select(change => new
-						{ source = change.Inputs[0], target = change.Inputs[1], moved = change.Moved }).ToArray(),
-					merges = changes.Where(change => !change.Split).Select(change => new
-						{ inputs = change.Inputs, output = change.Outputs.Single().Id }).ToArray(),
-					partitions = partitions.Evaluate().Select(partition => partition.Id).ToArray()
-				};
-			}
-			case "save":
-			{
-				IEnumerable<ulong> targets = partitionFilter is ulong only
-					? new[] { only }
-					: partitions.Evaluate().Select(partition => partition.Id).ToArray();
-				var queued = targets.Select(id => new { partition = id, accepted = persistence.QueueTestCapture(id) }).ToArray();
-				return new { task, queued };
-			}
-			case "profile":
-				if (partitionFilter is not ulong profiling) throw new ArgumentException("profile requires partition");
-				var candidate = partitions.Peek(profiling);
-				if (ClusterRuntime.IsClustered && (!ClusterRuntime.IsServing || ClusterRuntime.IsAuthorityFenced
-				    || persistence.OwnedGeneration(profiling) == 0 || candidate.Members.Any(ClusterRuntime.IsFrozen)))
-				    throw new InvalidOperationException("Profile requires current serving, non-frozen ownership");
-				return new { task, partition = profiling, complete = OfflineCompensation.Prepare(candidate) };
-			case "conceal-eval":
-				return new { task, concealment = persistence.TriggerConcealEval() };
-			case "compact":
-				return new { task, compacted = VoxelJournalService.Instance?.Compact() };
-			default:
-				throw new KeyNotFoundException("Unknown maintenance task " + task);
-		}
-	}
+    internal static object Run(
+        string task,
+        PartitionManager partitions,
+        PartitionPersistence persistence,
+        ulong? partitionFilter
+    )
+    {
+        switch (task)
+        {
+            // One routine, two names: the membership pass IS the sweep - it re-clusters every partition's
+            // members from scratch at the D + 2m split radius on each call (Partitioning.md 3.4). The names
+            // stay distinct because the plan's trigger table and the scenarios name them separately.
+            case "split-sweep":
+            case "membership-eval":
+            {
+                partitions.Evaluate();
+                PartitionMembership.Change[] changes = partitions.LastChanges;
+                return new
+                {
+                    task,
+                    splits = changes
+                        .Where(change => change.Split && !change.Transfer)
+                        .Select(change => new
+                        {
+                            input = change.Inputs.Single(),
+                            children = change.Outputs.Select(output => output.Id).ToArray(),
+                        })
+                        .ToArray(),
+                    // T-0339 (design C): Inputs = [source, target], both kept.
+                    transfers = changes
+                        .Where(change => change.Transfer)
+                        .Select(change => new
+                        {
+                            source = change.Inputs[0],
+                            target = change.Inputs[1],
+                            moved = change.Moved,
+                        })
+                        .ToArray(),
+                    merges = changes
+                        .Where(change => !change.Split)
+                        .Select(change => new
+                        {
+                            inputs = change.Inputs,
+                            output = change.Outputs.Single().Id,
+                        })
+                        .ToArray(),
+                    partitions = partitions.Evaluate().Select(partition => partition.Id).ToArray(),
+                };
+            }
+            case "save":
+            {
+                IEnumerable<ulong> targets = partitionFilter is ulong only
+                    ? new[] { only }
+                    : partitions.Evaluate().Select(partition => partition.Id).ToArray();
+                var queued = targets
+                    .Select(id => new
+                    {
+                        partition = id,
+                        accepted = persistence.QueueTestCapture(id),
+                    })
+                    .ToArray();
+                return new { task, queued };
+            }
+            case "profile":
+                if (partitionFilter is not ulong profiling)
+                    throw new ArgumentException("profile requires partition");
+                var candidate = partitions.Peek(profiling);
+                if (
+                    ClusterRuntime.IsClustered
+                    && (
+                        !ClusterRuntime.IsServing
+                        || ClusterRuntime.IsAuthorityFenced
+                        || persistence.OwnedGeneration(profiling) == 0
+                        || candidate.Members.Any(ClusterRuntime.IsFrozen)
+                    )
+                )
+                    throw new InvalidOperationException(
+                        "Profile requires current serving, non-frozen ownership"
+                    );
+                return new
+                {
+                    task,
+                    partition = profiling,
+                    complete = OfflineCompensation.Prepare(candidate),
+                };
+            case "conceal-eval":
+                return new { task, concealment = persistence.TriggerConcealEval() };
+            case "compact":
+                return new { task, compacted = VoxelJournalService.Instance?.Compact() };
+            default:
+                throw new KeyNotFoundException("Unknown maintenance task " + task);
+        }
+    }
 }

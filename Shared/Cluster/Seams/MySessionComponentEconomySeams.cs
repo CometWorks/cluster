@@ -8,8 +8,8 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MySessionComponentEconomySeams
 {
-	// ClusterPlugin seam adapters for MySessionComponentEconomyPatch
-	public static Func<bool> ClusterBeforeStartPrefix;
+    // ClusterPlugin seam adapters for MySessionComponentEconomyPatch
+    public static Func<bool> ClusterBeforeStartPrefix;
 
-	public static Func<bool> ClusterUpdatePrefix;
+    public static Func<bool> ClusterUpdatePrefix;
 }

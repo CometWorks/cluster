@@ -21,40 +21,52 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyRenderComponentBase), nameof(MyRenderComponentBase.RemoveRenderObjects))]
 public static class VoxelClipmapWaitSetPatch
 {
-	private static readonly TimeSpan ReportInterval = TimeSpan.FromMinutes(5);
-	private static DateTime s_nextReport = DateTime.UtcNow + ReportInterval;
-	private static long s_removed;
+    private static readonly TimeSpan ReportInterval = TimeSpan.FromMinutes(5);
+    private static DateTime s_nextReport = DateTime.UtcNow + ReportInterval;
+    private static long s_removed;
 
-	[HarmonyPostfix]
-	private static void Postfix(MyRenderComponentBase __instance)
-	{
-		if (!(__instance is MyRenderComponentVoxelMap voxelRender)) return;
-		var clipmap = voxelRender.Clipmap;
-		if (clipmap == null) return;
+    [HarmonyPostfix]
+    private static void Postfix(MyRenderComponentBase __instance)
+    {
+        if (!(__instance is MyRenderComponentVoxelMap voxelRender))
+            return;
+        var clipmap = voxelRender.Clipmap;
+        if (clipmap == null)
+            return;
 
-		var waiting = MyRenderComponentVoxelMap.VoxelLoadingWaitStep.Clipmaps;
-		bool present;
-		lock (waiting) present = waiting.Contains(clipmap);
-		if (!present) return;
+        var waiting = MyRenderComponentVoxelMap.VoxelLoadingWaitStep.Clipmaps;
+        bool present;
+        lock (waiting)
+            present = waiting.Contains(clipmap);
+        if (!present)
+            return;
 
-		// The game's own removal: unhooks Loaded and signals ClipmapsReady if the set empties.
-		MyRenderComponentVoxelMap.VoxelLoadingWaitStep.RemoveClipmap(clipmap);
-		s_removed++;
-	}
+        // The game's own removal: unhooks Loaded and signals ClipmapsReady if the set empties.
+        MyRenderComponentVoxelMap.VoxelLoadingWaitStep.RemoveClipmap(clipmap);
+        s_removed++;
+    }
 
-	/// <summary>Game thread, from ClusterRuntime.Update: one count line every 5 minutes.</summary>
-	public static void Update()
-	{
-		DateTime now = DateTime.UtcNow;
-		if (now < s_nextReport) return;
-		s_nextReport = now + ReportInterval;
+    /// <summary>Game thread, from ClusterRuntime.Update: one count line every 5 minutes.</summary>
+    public static void Update()
+    {
+        DateTime now = DateTime.UtcNow;
+        if (now < s_nextReport)
+            return;
+        s_nextReport = now + ReportInterval;
 
-		var waiting = MyRenderComponentVoxelMap.VoxelLoadingWaitStep.Clipmaps;
-		int count;
-		lock (waiting) count = waiting.Count;
-		var voxelMaps = MySession.Static?.VoxelMaps;
-		int live = voxelMaps != null ? voxelMaps.Instances.Count : -1;
-		MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] voxel_clipmap_waitset count=" + count + " live_voxel_maps=" + live
-			+ " removed_by_backstop=" + s_removed);
-	}
+        var waiting = MyRenderComponentVoxelMap.VoxelLoadingWaitStep.Clipmaps;
+        int count;
+        lock (waiting)
+            count = waiting.Count;
+        var voxelMaps = MySession.Static?.VoxelMaps;
+        int live = voxelMaps != null ? voxelMaps.Instances.Count : -1;
+        MyLog.Default?.WriteLineAndConsole(
+            "[ClusterPlugin] voxel_clipmap_waitset count="
+                + count
+                + " live_voxel_maps="
+                + live
+                + " removed_by_backstop="
+                + s_removed
+        );
+    }
 }

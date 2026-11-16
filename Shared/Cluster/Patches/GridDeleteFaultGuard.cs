@@ -37,58 +37,99 @@ namespace ClusterPlugin;
 [HarmonyPatch(typeof(MyCubeGrid), "BeforeDelete")]
 internal static class GridDeleteFaultGuard
 {
-	private static long s_faults;
+    private static long s_faults;
 
-	public static long Faults => System.Threading.Interlocked.Read(ref s_faults);
+    public static long Faults => System.Threading.Interlocked.Read(ref s_faults);
 
-	/// <summary>CLUSTER_GRID_DELETE_GUARD=0 leaves the fault to end the node, as vanilla (the red arm).</summary>
-	[HarmonyPrepare]
-	private static bool Prepare() => Environment.GetEnvironmentVariable("CLUSTER_GRID_DELETE_GUARD") != "0";
+    /// <summary>CLUSTER_GRID_DELETE_GUARD=0 leaves the fault to end the node, as vanilla (the red arm).</summary>
+    [HarmonyPrepare]
+    private static bool Prepare() =>
+        Environment.GetEnvironmentVariable("CLUSTER_GRID_DELETE_GUARD") != "0";
 
-	[HarmonyFinalizer]
-	[HarmonyPriority(Priority.Last)]
-	private static Exception Finalizer(MyCubeGrid __instance, Exception __exception)
-	{
-		if (__exception == null || !ClusterCloseScope.Active) return __exception;
-		long faults = System.Threading.Interlocked.Increment(ref s_faults);
-		MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] grid delete fault: BeforeDelete of grid " + __instance?.EntityId
-			+ " '" + __instance?.DisplayName + "' threw during a cluster close; the close goes on without the rest of the"
-			+ " vanilla cleanup (#1295, fault " + faults + "): " + Probe(__instance) + "; " + __exception);
-		return null;
-	}
+    [HarmonyFinalizer]
+    [HarmonyPriority(Priority.Last)]
+    private static Exception Finalizer(MyCubeGrid __instance, Exception __exception)
+    {
+        if (__exception == null || !ClusterCloseScope.Active)
+            return __exception;
+        long faults = System.Threading.Interlocked.Increment(ref s_faults);
+        MyLog.Default?.WriteLineAndConsole(
+            "[ClusterPlugin] grid delete fault: BeforeDelete of grid "
+                + __instance?.EntityId
+                + " '"
+                + __instance?.DisplayName
+                + "' threw during a cluster close; the close goes on without the rest of the"
+                + " vanilla cleanup (#1295, fault "
+                + faults
+                + "): "
+                + Probe(__instance)
+                + "; "
+                + __exception
+        );
+        return null;
+    }
 
-	/// <summary>Every receiver BeforeDelete and its small callees dereference without a frame of their own.</summary>
-	internal static string Probe(MyCubeGrid grid)
-	{
-		if (grid == null) return "grid=null";
-		try
-		{
-			MySession session = MySession.Static;
-			MySlimBlock[] blocks = grid.m_cubeBlocks?.ToArray() ?? Array.Empty<MySlimBlock>();
-			int unknownBuilder = 0, nullLimits = 0;
-			foreach (MySlimBlock block in blocks)
-			{
-				if (block == null || block.BuiltBy == 0 || session?.Players == null) continue;
-				MyIdentity identity = session.Players.TryGetIdentity(block.BuiltBy);
-				if (identity == null) unknownBuilder++;
-				else if (identity.BlockLimits == null) nullLimits++;
-			}
-			return "blocks=" + blocks.Length
-				+ " nullBlocks=" + blocks.Count(x => x == null)
-				+ " nullDefinition=" + blocks.Count(x => x != null && x.BlockDefinition == null)
-				+ " nullComponentStack=" + blocks.Count(x => x != null && x.ComponentStack == null)
-				+ " foreignCubeGrid=" + blocks.Count(x => x != null && x.CubeGrid != grid)
-				+ " unknownBuilder=" + unknownBuilder + " nullIdentityLimits=" + nullLimits
-				+ " gridSystems=" + (grid.GridSystems != null)
-				+ " fatBlocks=" + (grid.m_fatBlocks != null) + " cubes=" + (grid.m_cubes != null)
-				+ " targetingList=" + (grid.m_targetingList != null) + " occupied=" + (grid.m_occupiedBlocks != null)
-				+ " session=" + (session != null) + " settings=" + (session?.Settings != null)
-				+ " sessionLimits=" + (session?.SessionBlockLimits != null) + " npcLimits=" + (session?.NPCBlockLimits != null)
-				+ " marked=" + grid.MarkedForClose + " closed=" + grid.Closed;
-		}
-		catch (Exception probe)
-		{
-			return "probe failed: " + probe.GetType().Name + ": " + probe.Message;
-		}
-	}
+    /// <summary>Every receiver BeforeDelete and its small callees dereference without a frame of their own.</summary>
+    internal static string Probe(MyCubeGrid grid)
+    {
+        if (grid == null)
+            return "grid=null";
+        try
+        {
+            MySession session = MySession.Static;
+            MySlimBlock[] blocks = grid.m_cubeBlocks?.ToArray() ?? Array.Empty<MySlimBlock>();
+            int unknownBuilder = 0,
+                nullLimits = 0;
+            foreach (MySlimBlock block in blocks)
+            {
+                if (block == null || block.BuiltBy == 0 || session?.Players == null)
+                    continue;
+                MyIdentity identity = session.Players.TryGetIdentity(block.BuiltBy);
+                if (identity == null)
+                    unknownBuilder++;
+                else if (identity.BlockLimits == null)
+                    nullLimits++;
+            }
+            return "blocks="
+                + blocks.Length
+                + " nullBlocks="
+                + blocks.Count(x => x == null)
+                + " nullDefinition="
+                + blocks.Count(x => x != null && x.BlockDefinition == null)
+                + " nullComponentStack="
+                + blocks.Count(x => x != null && x.ComponentStack == null)
+                + " foreignCubeGrid="
+                + blocks.Count(x => x != null && x.CubeGrid != grid)
+                + " unknownBuilder="
+                + unknownBuilder
+                + " nullIdentityLimits="
+                + nullLimits
+                + " gridSystems="
+                + (grid.GridSystems != null)
+                + " fatBlocks="
+                + (grid.m_fatBlocks != null)
+                + " cubes="
+                + (grid.m_cubes != null)
+                + " targetingList="
+                + (grid.m_targetingList != null)
+                + " occupied="
+                + (grid.m_occupiedBlocks != null)
+                + " session="
+                + (session != null)
+                + " settings="
+                + (session?.Settings != null)
+                + " sessionLimits="
+                + (session?.SessionBlockLimits != null)
+                + " npcLimits="
+                + (session?.NPCBlockLimits != null)
+                + " marked="
+                + grid.MarkedForClose
+                + " closed="
+                + grid.Closed;
+        }
+        catch (Exception probe)
+        {
+            return "probe failed: " + probe.GetType().Name + ": " + probe.Message;
+        }
+    }
 }

@@ -27,10 +27,20 @@ namespace Shared.Patches;
 public static class MySessionComponentTrashPatch
 {
     [HarmonyPrefix]
-    [HarmonyPatch(nameof(MySessionComponentTrash.IsCloseToPlayerOrCamera), new[] { typeof(MyEntity), typeof(float) })]
-    private static bool IsCloseToPlayerOrCameraPrefix(MyEntity entity, float distanceThreshold, ref bool __result)
+    [HarmonyPatch(
+        nameof(MySessionComponentTrash.IsCloseToPlayerOrCamera),
+        new[] { typeof(MyEntity), typeof(float) }
+    )]
+    private static bool IsCloseToPlayerOrCameraPrefix(
+        MyEntity entity,
+        float distanceThreshold,
+        ref bool __result
+    )
     {
-        bool? close = MySessionComponentTrashSeams.ClusterIsCloseToPlayer?.Invoke(entity, distanceThreshold);
+        bool? close = MySessionComponentTrashSeams.ClusterIsCloseToPlayer?.Invoke(
+            entity,
+            distanceThreshold
+        );
         if (close == null)
             return true;
         __result = close.Value;
@@ -52,21 +62,51 @@ public static class MySessionComponentTrashPatch
     //   if (RunsGridTrash()) { VoxelRevertor_Update(); RevertForageableItems(); } -> gate 3, skipping to ret
     [HarmonyTranspiler]
     [HarmonyPatch(nameof(MySessionComponentTrash.UpdateAfterSimulation))]
-    private static IEnumerable<CodeInstruction> UpdateAfterSimulationTranspiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator, MethodBase original)
+    private static IEnumerable<CodeInstruction> UpdateAfterSimulationTranspiler(
+        IEnumerable<CodeInstruction> instructions,
+        ILGenerator generator,
+        MethodBase original
+    )
     {
         var il = instructions.ToList();
-        var gridGate = AccessTools.Method(typeof(MySessionComponentTrashSeams), nameof(MySessionComponentTrashSeams.RunsGridTrash));
-        var identityGate = AccessTools.Method(typeof(MySessionComponentTrashSeams), nameof(MySessionComponentTrashSeams.RunsIdentityTrash));
+        var gridGate = AccessTools.Method(
+            typeof(MySessionComponentTrashSeams),
+            nameof(MySessionComponentTrashSeams.RunsGridTrash)
+        );
+        var identityGate = AccessTools.Method(
+            typeof(MySessionComponentTrashSeams),
+            nameof(MySessionComponentTrashSeams.RunsIdentityTrash)
+        );
 
-        int checkIdentities = il.IndexOfSingle(original, "call CheckIdentitiesTrash", ci => ci.CallsNamed("CheckIdentitiesTrash"));
-        int voxelRevert = il.IndexOfSingle(original, "call VoxelRevertor_Update", ci => ci.CallsNamed("VoxelRevertor_Update"));
-        GateTranspilerHelpers.Require(checkIdentities > 1 && il[checkIdentities - 1].IsLdarg(0), original, "ldarg.0 before CheckIdentitiesTrash");
-        GateTranspilerHelpers.Require(voxelRevert == checkIdentities + 2 && il[voxelRevert - 1].IsLdarg(0), original, "VoxelRevertor_Update to directly follow CheckIdentitiesTrash");
+        int checkIdentities = il.IndexOfSingle(
+            original,
+            "call CheckIdentitiesTrash",
+            ci => ci.CallsNamed("CheckIdentitiesTrash")
+        );
+        int voxelRevert = il.IndexOfSingle(
+            original,
+            "call VoxelRevertor_Update",
+            ci => ci.CallsNamed("VoxelRevertor_Update")
+        );
+        GateTranspilerHelpers.Require(
+            checkIdentities > 1 && il[checkIdentities - 1].IsLdarg(0),
+            original,
+            "ldarg.0 before CheckIdentitiesTrash"
+        );
+        GateTranspilerHelpers.Require(
+            voxelRevert == checkIdentities + 2 && il[voxelRevert - 1].IsLdarg(0),
+            original,
+            "VoxelRevertor_Update to directly follow CheckIdentitiesTrash"
+        );
 
         // The if's false branches all land on the ldarg.0 of VoxelRevertor_Update(); the if-body starts right
         // after the last of those branches.
         var afterIf = il[voxelRevert - 1];
-        GateTranspilerHelpers.Require(afterIf.labels.Count > 0, original, "the skip label of the trash-removal if on VoxelRevertor_Update");
+        GateTranspilerHelpers.Require(
+            afterIf.labels.Count > 0,
+            original,
+            "the skip label of the trash-removal if on VoxelRevertor_Update"
+        );
         var skipLabels = afterIf.labels.ToList();
         int bodyStart = -1;
         for (int i = 0; i < checkIdentities; i++)
@@ -74,8 +114,16 @@ public static class MySessionComponentTrashPatch
             if (il[i].operand is Label target && skipLabels.Contains(target))
                 bodyStart = i + 1;
         }
-        GateTranspilerHelpers.Require(bodyStart > 0 && bodyStart < checkIdentities - 1, original, "a branch to the skip label before the trash sweep");
-        GateTranspilerHelpers.Require(il[bodyStart].opcode == OpCodes.Newobj, original, "the trash sweep to start with its closure allocation (newobj)");
+        GateTranspilerHelpers.Require(
+            bodyStart > 0 && bodyStart < checkIdentities - 1,
+            original,
+            "a branch to the skip label before the trash sweep"
+        );
+        GateTranspilerHelpers.Require(
+            il[bodyStart].opcode == OpCodes.Newobj,
+            original,
+            "the trash sweep to start with its closure allocation (newobj)"
+        );
 
         // Gate 3 (before VoxelRevertor_Update): !RunsGridTrash -> ret. Takes over the if's skip labels.
         var ret = il.LabelOnLastRet(generator, original);
@@ -86,13 +134,21 @@ public static class MySessionComponentTrashPatch
         // join point of the OptimalGridCount if/else chain (every false branch lands on it), so the gate must
         // take over those labels or the branches bypass it - which is exactly what removed the template's
         // character on a regular node (trash collector, 8 ms after character_seen).
-        var gate2 = new CodeInstruction(OpCodes.Call, identityGate).MoveLabelsFrom(il[checkIdentities - 1]);
+        var gate2 = new CodeInstruction(OpCodes.Call, identityGate).MoveLabelsFrom(
+            il[checkIdentities - 1]
+        );
         var gate2Label = gate2.AddLabel(generator);
-        il.InsertRange(checkIdentities - 1, new[] { gate2, new CodeInstruction(OpCodes.Brfalse, skipLabels[0]) });
+        il.InsertRange(
+            checkIdentities - 1,
+            new[] { gate2, new CodeInstruction(OpCodes.Brfalse, skipLabels[0]) }
+        );
 
         // Gate 1 (if-body start): !RunsGridTrash -> gate 2. Takes over the if's body labels.
         var gate1 = new CodeInstruction(OpCodes.Call, gridGate).MoveLabelsFrom(il[bodyStart]);
-        il.InsertRange(bodyStart, new[] { gate1, new CodeInstruction(OpCodes.Brfalse, gate2Label) });
+        il.InsertRange(
+            bodyStart,
+            new[] { gate1, new CodeInstruction(OpCodes.Brfalse, gate2Label) }
+        );
 
         return il;
     }

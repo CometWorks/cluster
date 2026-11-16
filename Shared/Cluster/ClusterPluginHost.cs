@@ -48,15 +48,24 @@ public static class ClusterPluginHost
         var sdk = Assembly.Load("PluginSdk");
         string contract = null;
         foreach (var metadata in sdk.GetCustomAttributes<AssemblyMetadataAttribute>())
-            if (metadata.Key == PluginSdkContract.Key) contract = metadata.Value;
+            if (metadata.Key == PluginSdkContract.Key)
+                contract = metadata.Value;
         if (contract != null && !PluginSdkContract.IsSatisfiedBy(contract))
-            throw new InvalidOperationException($"Cluster needs PluginSdk contract {PluginSdkContract.Required}, but Magnetar has {contract}. Use a Magnetar and a cluster release with compatible PluginSdk contracts.");
+            throw new InvalidOperationException(
+                $"Cluster needs PluginSdk contract {PluginSdkContract.Required}, but Magnetar has {contract}. Use a Magnetar and a cluster release with compatible PluginSdk contracts."
+            );
         // Magnetar releases before the contract: the version and the types tell.
-        if ((contract == null && sdk.GetName().Version < new Version(2, 4, 2, 1))
+        if (
+            (contract == null && sdk.GetName().Version < new Version(2, 4, 2, 1))
             || sdk.GetType("PluginSdk.Config.ManagedPluginConfiguration") == null
-            || sdk.GetType("PluginSdk.Clustering.PluginCluster") == null)
-            throw new InvalidOperationException("Cluster 1.1.0 requires Magnetar 2.4.2.1 or newer. Upgrade Magnetar before loading cluster plugins.");
-        ClusterRole processRole = ClusterNodeRole.IsWorldAuthority(Environment.GetEnvironmentVariable("CLUSTER_NODE_ROLE"))
+            || sdk.GetType("PluginSdk.Clustering.PluginCluster") == null
+        )
+            throw new InvalidOperationException(
+                "Cluster 1.1.0 requires Magnetar 2.4.2.1 or newer. Upgrade Magnetar before loading cluster plugins."
+            );
+        ClusterRole processRole = ClusterNodeRole.IsWorldAuthority(
+            Environment.GetEnvironmentVariable("CLUSTER_NODE_ROLE")
+        )
             ? ClusterRole.WorldAuthority
             : ClusterRole.Regular;
         lock (Sync)
@@ -64,11 +73,15 @@ public static class ClusterPluginHost
             if (processRole != role)
             {
                 if (owner != role)
-                    log.Info($"This process runs as {processRole} (CLUSTER_NODE_ROLE); the {role} plugin stays idle");
+                    log.Info(
+                        $"This process runs as {processRole} (CLUSTER_NODE_ROLE); the {role} plugin stays idle"
+                    );
                 return false;
             }
             if (owner != null && owner != role)
-                throw new InvalidOperationException($"Cluster role {owner} already claimed this process");
+                throw new InvalidOperationException(
+                    $"Cluster role {owner} already claimed this process"
+                );
             owner = role;
             return true;
         }
@@ -90,9 +103,15 @@ public static class ClusterPluginHost
             Fail("Harmony patching failed");
             throw new InvalidOperationException("Harmony patching failed");
         }
-        MethodInfo run = AccessTools.Method(typeof(DedicatedServer), nameof(DedicatedServer.Run), new[] { typeof(string[]), typeof(Action<bool>) });
+        MethodInfo run = AccessTools.Method(
+            typeof(DedicatedServer),
+            nameof(DedicatedServer.Run),
+            new[] { typeof(string[]), typeof(Action<bool>) }
+        );
         if (run == null)
-            throw new MissingMethodException("VRage.Dedicated.DedicatedServer.Run(string[], Action<bool>) not found");
+            throw new MissingMethodException(
+                "VRage.Dedicated.DedicatedServer.Run(string[], Action<bool>) not found"
+            );
         harmony.Patch(run, prefix: new HarmonyMethod(typeof(ClusterPluginHost), nameof(RunPrefix)));
         lock (Sync)
         {
@@ -123,7 +142,8 @@ public static class ClusterPluginHost
     {
         lock (Sync)
         {
-            if (!Owns(role) || started) return;
+            if (!Owns(role) || started)
+                return;
             started = true;
         }
         // The Gateway node link lives on the Direct Transport plugin's UdpPeer2Peer, an assembly with a
@@ -133,7 +153,9 @@ public static class ClusterPluginHost
         NodeLinkTransportBinding.Install(harmony, log);
         ClusterRuntime.StartFromEnvironment();
         if (!ClusterRuntime.IsClustered)
-            log.Warning("CLUSTER_CONTROL_PORT or CLUSTER_GATEWAY_REGISTRY is not set; running as a standalone server");
+            log.Warning(
+                "CLUSTER_CONTROL_PORT or CLUSTER_GATEWAY_REGISTRY is not set; running as a standalone server"
+            );
         else
             log.Info($"Cluster runtime started as {role}");
     }
@@ -141,15 +163,25 @@ public static class ClusterPluginHost
     public static void Fail(string reason)
     {
         ClusterRuntime.SetNodeState("Failed", reason);
-        PluginSdk.Logging.Logger.Create("Cluster").Error("Cluster node entered Failed: " + reason,
-            new { eventCode = "node_failed", reasonCode = reason, phase = "runtime" });
+        PluginSdk
+            .Logging.Logger.Create("Cluster")
+            .Error(
+                "Cluster node entered Failed: " + reason,
+                new
+                {
+                    eventCode = "node_failed",
+                    reasonCode = reason,
+                    phase = "runtime",
+                }
+            );
     }
 
     public static void Update() => ClusterRuntime.Tick();
 
     public static void Dispose(ClusterRole role)
     {
-        if (!Owns(role)) return;
+        if (!Owns(role))
+            return;
         PluginServices.Instance?.Dispose();
     }
 
@@ -160,8 +192,13 @@ public static class ClusterPluginHost
     /// </summary>
     public static readonly string[] ReplicationAssemblies =
     {
-        "Sandbox.Common.dll", "Sandbox.Game.dll", "SpaceEngineers.Game.dll", "SpaceEngineers.ObjectBuilders.dll",
-        "VRage.dll", "VRage.Game.dll", "VRage.Library.dll",
+        "Sandbox.Common.dll",
+        "Sandbox.Game.dll",
+        "SpaceEngineers.Game.dll",
+        "SpaceEngineers.ObjectBuilders.dll",
+        "VRage.dll",
+        "VRage.Game.dll",
+        "VRage.Library.dll",
     };
 
     /// <summary>
@@ -175,7 +212,10 @@ public static class ClusterPluginHost
         if (File.Exists(json))
             return Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(json)));
         string directory = MyFileSystem.ExePath;
-        if (string.IsNullOrEmpty(directory) || !File.Exists(Path.Combine(directory, ReplicationAssemblies[1])))
+        if (
+            string.IsNullOrEmpty(directory)
+            || !File.Exists(Path.Combine(directory, ReplicationAssemblies[1]))
+        )
             directory = AppContext.BaseDirectory;
         using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         foreach (string name in ReplicationAssemblies)

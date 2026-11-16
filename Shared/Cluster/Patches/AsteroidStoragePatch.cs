@@ -12,21 +12,28 @@ namespace ClusterPlugin;
 /// </summary>
 internal static class AsteroidStoragePatch
 {
-	public static bool InitPrefix(MyVoxelMap __instance, MyObjectBuilder_EntityBase builder)
-	{
-		if (VoxelJournalService.Instance?.TrySelectAsteroidBase(builder, out IMyStorage storage, out long tailSequence) != true) return true;
-		try
-		{
-			__instance.Init(builder, storage);
-			// The base carries edits, so the map is changed content whatever the world's builder said.
-			__instance.ContentChanged = true;
-			VoxelJournalService.Instance.CommitBase(__instance.StorageName, tailSequence);
-			return false;
-		}
-		catch
-		{
-			storage.Close();
-			throw;
-		}
-	}
+    public static bool InitPrefix(MyVoxelMap __instance, MyObjectBuilder_EntityBase builder)
+    {
+        if (
+            VoxelJournalService.Instance?.TrySelectAsteroidBase(
+                builder,
+                out IMyStorage storage,
+                out long tailSequence
+            ) != true
+        )
+            return true;
+        try
+        {
+            __instance.Init(builder, storage);
+            // The base carries edits, so the map is changed content whatever the world's builder said.
+            __instance.ContentChanged = true;
+            VoxelJournalService.Instance.CommitBase(__instance.StorageName, tailSequence);
+            return false;
+        }
+        catch
+        {
+            storage.Close();
+            throw;
+        }
+    }
 }

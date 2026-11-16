@@ -75,22 +75,39 @@ public static class AdminProtocol
 
 public sealed record AdminEnvelope<T>(int ProtocolVersion, DateTimeOffset CapturedAt, T Data);
 
-public sealed record AdminErrorEnvelope(int ProtocolVersion, DateTimeOffset CapturedAt, AdminError Error);
+public sealed record AdminErrorEnvelope(
+    int ProtocolVersion,
+    DateTimeOffset CapturedAt,
+    AdminError Error
+);
 
-public sealed record AdminError(string Code, string Message,
-    IReadOnlyDictionary<string, string[]>? Validation = null);
+public sealed record AdminError(
+    string Code,
+    string Message,
+    IReadOnlyDictionary<string, string[]>? Validation = null
+);
 
-public sealed record GatewayHealth(string Service, bool RegistryAvailable, string TransportProtocol);
+public sealed record GatewayHealth(
+    string Service,
+    bool RegistryAvailable,
+    string TransportProtocol
+);
 
 /// <summary>What the presented credential may do. Query reads state; Manage also mutates it.</summary>
-public enum AdminScope { Query, Manage, Executor }
+public enum AdminScope
+{
+    Query,
+    Manage,
+    Executor,
+}
 
 /// <summary>Feature discovery: the operations this Gateway build serves and the caller's own scope.</summary>
 public sealed record AdminCapabilities(
     string Service,
     AdminScope Scope,
     string[] Operations,
-    IReadOnlyDictionary<string, string> Features);
+    IReadOnlyDictionary<string, string> Features
+);
 
 /// <summary>
 /// One entry of the ordered cluster event/audit tail. <c>Seq</c> is monotonic per Gateway
@@ -104,11 +121,17 @@ public sealed record AdminEvent(
     string? Actor,
     string? RequestId,
     string? Target,
-    IReadOnlyDictionary<string, string>? Data);
+    IReadOnlyDictionary<string, string>? Data
+);
 
 public sealed record AdminEventPage(AdminEvent[] Events, long NextCursor, long EarliestRetained);
 
-public enum AdminOperationState { Running, Succeeded, Failed }
+public enum AdminOperationState
+{
+    Running,
+    Succeeded,
+    Failed,
+}
 
 /// <summary>
 /// One durable admin mutation. Every mutating route requires an <c>Idempotency-Key</c>
@@ -126,13 +149,18 @@ public sealed record AdminOperation(
     DateTimeOffset UpdatedAt,
     string? Target,
     IReadOnlyDictionary<string, string>? Result,
-    AdminError? Error);
+    AdminError? Error
+);
 
 public sealed record AdminOperationPage(AdminOperation[] Operations);
 
 /// <summary>Graceful drain to Down, or emergency teardown. The Gateway API process stays up
 /// in Down; final OS process teardown belongs to the packaged cluster CLI / host executor.</summary>
-public sealed record ShutdownRequest(bool Emergency = false, double GraceSeconds = 60, double ForceAfterSeconds = 300);
+public sealed record ShutdownRequest(
+    bool Emergency = false,
+    double GraceSeconds = 60,
+    double ForceAfterSeconds = 300
+);
 
 public sealed record SaveAllRequest(bool Sweep = false);
 
@@ -160,7 +188,8 @@ public sealed record AdminConfig(
     double SyncDistance,
     double LeaseTtlSeconds,
     long PolicyRevision,
-    AdminSlotSpec[] Slots);
+    AdminSlotSpec[] Slots
+);
 
 /// <summary>Compare-and-set policy update: upserts the given slots; refused with
 /// <c>revision_mismatch</c> when <c>ExpectedRevision</c> is stale.</summary>
@@ -180,7 +209,8 @@ public sealed record ClientSummary(
     string? Node,
     ulong? Partition,
     DateTimeOffset ConnectedAt,
-    DateTimeOffset LastClientActivity);
+    DateTimeOffset LastClientActivity
+);
 
 /// <summary>Kick with cooldown, or a punitive-free forced reconnect when <c>Reconnect</c>.</summary>
 public sealed record KickClientRequest(bool Reconnect = false);
@@ -193,7 +223,13 @@ public sealed record AdmissionBans(ulong[] Banned);
 /// Steam id) - authorship is part of the admission model, not a free string.</summary>
 public sealed record ChatSendRequest(string Message, ulong Sender);
 
-public sealed record ChatMessage(long Seq, DateTimeOffset At, ulong Author, byte Channel, string Text);
+public sealed record ChatMessage(
+    long Seq,
+    DateTimeOffset At,
+    ulong Author,
+    byte Channel,
+    string Text
+);
 
 /// <summary>
 /// Accepted global chat, oldest first, captured at the World Authority (the single accept
@@ -206,8 +242,17 @@ public sealed record ChatHistory(ChatMessage[] Messages, long NextCursor, long W
 /// #1316: a ship storage take the World Authority holds. A <c>Stranded</c> take (blueprint fetched, held 10 min) is
 /// one its node never settled: look for a grid named <c>Name</c> of <c>Owner</c> near <c>Position</c> before settling it.
 /// </summary>
-public sealed record ShipStorageTake(Guid Id, long Owner, string? Name, double[] Position, string TakenBy, Guid Take,
-    DateTime Taken, bool Fetched, bool Stranded);
+public sealed record ShipStorageTake(
+    Guid Id,
+    long Owner,
+    string? Name,
+    double[] Position,
+    string TakenBy,
+    Guid Take,
+    DateTime Taken,
+    bool Fetched,
+    bool Stranded
+);
 
 public sealed record ShipStorageTakes(ShipStorageTake[] Takes, long WorldAuthorityEpoch);
 
@@ -217,14 +262,28 @@ public sealed record ShipStorageSettleRequest(Guid Take, string Action);
 
 /// <summary>Honest export labels: Quiescent only from a clean shutdown with nothing dirty;
 /// an online cut is CutConsistent only when the cluster can prove it, else CrashConsistent.</summary>
-public enum ExportConsistency { Quiescent, CutConsistent, CrashConsistent }
+public enum ExportConsistency
+{
+    Quiescent,
+    CutConsistent,
+    CrashConsistent,
+}
 
-public enum ArtifactRetrievalKind { SharedPath, HttpDownload, StorageUri }
+public enum ArtifactRetrievalKind
+{
+    SharedPath,
+    HttpDownload,
+    StorageUri,
+}
 
 /// <summary>How to fetch an artifact. v1 implements SharedPath (a scope-validated absolute
 /// path under the configured export root); the discriminator already carries the future
 /// HttpDownload/StorageUri kinds so adding them is not a breaking change.</summary>
-public sealed record ArtifactRetrieval(ArtifactRetrievalKind Kind, string? LocalPath = null, string? Uri = null);
+public sealed record ArtifactRetrieval(
+    ArtifactRetrievalKind Kind,
+    string? LocalPath = null,
+    string? Uri = null
+);
 
 public sealed record ArtifactDescriptor(
     string ArtifactId,
@@ -237,7 +296,8 @@ public sealed record ArtifactDescriptor(
     string ManifestSha256,
     IReadOnlyDictionary<string, string> FileChecksums,
     ArtifactRetrieval Retrieval,
-    string[] Warnings);
+    string[] Warnings
+);
 
 public sealed record WorldExportRequest(double? TtlHours = null);
 
@@ -264,13 +324,21 @@ public sealed record ClusterStatus(
     bool AcceptingPlayers,
     AdminHealth Health,
     string[] ReasonCodes,
-    DateTimeOffset ObservedAt, string? DeploymentRevision = null, bool ManagedDeploymentReady = false);
+    DateTimeOffset ObservedAt,
+    string? DeploymentRevision = null,
+    bool ManagedDeploymentReady = false
+);
 
 /// <summary>
 /// Server-computed health severity with stable machine-readable <c>ReasonCodes</c>, so a
 /// control plane never decodes internal states or error strings to decide severity.
 /// </summary>
-public enum AdminHealth { Healthy, Warning, Unhealthy }
+public enum AdminHealth
+{
+    Healthy,
+    Warning,
+    Unhealthy,
+}
 
 public sealed record ClusterCounts(
     int ConnectedClients,
@@ -284,9 +352,15 @@ public sealed record ClusterCounts(
     int VoxelJournals,
     int PendingDeletes,
     long WalRecords,
-    long WalBytes);
+    long WalBytes
+);
 
-public sealed record WorldAuthorityStatus(string? Node, long Epoch, long Generation, DateTimeOffset LeaseExpires);
+public sealed record WorldAuthorityStatus(
+    string? Node,
+    long Epoch,
+    long Generation,
+    DateTimeOffset LeaseExpires
+);
 
 /// <summary>A registered node incarnation. <c>Spare</c>: a warm hot spare that holds nothing until it replaces a dead node.
 /// <c>ServingSince</c>: when a serving regular node started serving (the age rotation measures); <c>RotationDue</c>: when a
@@ -307,7 +381,8 @@ public sealed record NodeStatus(
     bool LeaseFresh,
     bool Spare = false,
     DateTimeOffset? ServingSince = null,
-    DateTimeOffset? RotationDue = null);
+    DateTimeOffset? RotationDue = null
+);
 
 public sealed record PartitionSummary(
     ulong Partition,
@@ -321,9 +396,15 @@ public sealed record PartitionSummary(
     bool Offline = false,
     long? OfflineGameFrame = null,
     OfflineGroupSummary[]? ProfileGroups = null,
-    ulong[]? RemoteUsers = null);
+    ulong[]? RemoteUsers = null
+);
 
-public enum AdminSnapshotKind { CleanShutdown, Online, Conversion }
+public enum AdminSnapshotKind
+{
+    CleanShutdown,
+    Online,
+    Conversion,
+}
 
 public sealed record SnapshotSummary(
     string SnapshotId,
@@ -332,7 +413,8 @@ public sealed record SnapshotSummary(
     int Partitions,
     bool HasGlobal,
     int VoxelMaps,
-    string[] Dirty);
+    string[] Dirty
+);
 
 public sealed record ExecutorStatus(string Executor, DateTimeOffset LastHeartbeat);
 
@@ -352,7 +434,8 @@ public sealed record NodePlan(
     DateTimeOffset? RetryAt,
     int FailureCount,
     bool FailureAlert,
-    bool SpawnAllowed);
+    bool SpawnAllowed
+);
 
 public sealed record RecoveryReadiness(
     RecoveryReadinessState State,
@@ -365,41 +448,108 @@ public sealed record RecoveryReadiness(
     ArtifactCoverage Voxels,
     RegistryDurability Registry,
     MissingArtifact[] Missing,
-    string[] Risks);
+    string[] Risks
+);
 
 public sealed record RecoveryPoint(
     string SnapshotId,
     RecoveryConsistency Consistency,
-    long ClusterTime);
+    long ClusterTime
+);
 
 public sealed record ArtifactCoverage(
     int Required,
     int Covered,
     int MinimumCopies,
-    int MinimumDistinctHosts);
+    int MinimumDistinctHosts
+);
 
 public sealed record RegistryDurability(
     bool SnapshotPresent,
     DateTimeOffset? LastCheckpointAt,
     long WalRecords,
-    long WalBytes);
+    long WalBytes
+);
 
 public sealed record MissingArtifact(string Kind, string Id);
 
-public enum ClusterPhase { Bootstrapping, Serving, Degraded, Draining, Down }
-public enum StartupKind { Warm, Recovery }
-public enum NodeRole { Regular, WorldAuthority }
-public enum NodeState { Active, Closed, Dead, Empty }
-public enum NodeGoal { Wanted, Draining, Kill }
-public enum NodeObservation { Missing, Spawning, Ready, Failed, Gone }
-public enum IncumbentAction { None, Draining, Kill }
-public enum RecoveryReadinessState { Ready, AtRisk, NotReconstructible }
-public enum RecoveryConsistency { Quiescent, CutConsistent }
+public enum ClusterPhase
+{
+    Bootstrapping,
+    Serving,
+    Degraded,
+    Draining,
+    Down,
+}
+
+public enum StartupKind
+{
+    Warm,
+    Recovery,
+}
+
+public enum NodeRole
+{
+    Regular,
+    WorldAuthority,
+}
+
+public enum NodeState
+{
+    Active,
+    Closed,
+    Dead,
+    Empty,
+}
+
+public enum NodeGoal
+{
+    Wanted,
+    Draining,
+    Kill,
+}
+
+public enum NodeObservation
+{
+    Missing,
+    Spawning,
+    Ready,
+    Failed,
+    Gone,
+}
+
+public enum IncumbentAction
+{
+    None,
+    Draining,
+    Kill,
+}
+
+public enum RecoveryReadinessState
+{
+    Ready,
+    AtRisk,
+    NotReconstructible,
+}
+
+public enum RecoveryConsistency
+{
+    Quiescent,
+    CutConsistent,
+}
 
 // ---------------------------------------------------------------- node control v1 (T-0320, additive, contract 0.5.0)
 
 /// <summary>What an operator sees of a node. Internal registry states (Active/Closed/Empty/Dead) are not exposed.</summary>
-public enum OperatorNodeState { Starting, Serving, Spare, Draining, Stopping, Failed }
+public enum OperatorNodeState
+{
+    Starting,
+    Serving,
+    Spare,
+    Draining,
+    Stopping,
+    Failed,
+}
 
 /// <summary>
 /// GET /admin/v1/node-control: per-host targets (runtime, last hosts file, actual), every live node with its
@@ -416,7 +566,8 @@ public sealed record NodeControlView(
     OperatorNode[] Nodes,
     NotCountedNode[] NotCounted,
     bool Active = false,
-    bool Managed = false);
+    bool Managed = false
+);
 
 public sealed record HostsFileInfo(string? Sha256, DateTimeOffset? AppliedAt);
 
@@ -429,7 +580,8 @@ public sealed record HostView(
     TargetCount Spares,
     long? RamFloorMb,
     long? DiskFloorMb,
-    string[] Warnings);
+    string[] Warnings
+);
 
 public sealed record OperatorNode(
     string Node,
@@ -444,7 +596,8 @@ public sealed record OperatorNode(
     int Clients,
     OperatorNodeStop? Stop,
     string? Replaces,
-    string? ReplacedBy);
+    string? ReplacedBy
+);
 
 /// <summary>A stop request: kind remove|recycle|decrease|failed, who (admin actor + free-text requestedBy), why, and
 /// when the graceful drain is forced (<c>Deadline</c>; it moves out while partitions recover).</summary>
@@ -458,17 +611,36 @@ public sealed record OperatorNodeStop(
     DateTimeOffset? RequestedAt = null,
     DateTimeOffset? ForcedAt = null,
     bool Now = false,
-    string? Detail = null);
+    string? Detail = null
+);
 
-public sealed record NotCountedNode(string Node, string Role, string? Host, int? Pid, DateTimeOffset? StartedAt = null, double? AgeSeconds = null);
+public sealed record NotCountedNode(
+    string Node,
+    string Role,
+    string? Host,
+    int? Pid,
+    DateTimeOffset? StartedAt = null,
+    double? AgeSeconds = null
+);
 
 /// <summary>PUT /admin/v1/node-control/hosts/{host}: runtime targets (null keeps the current value). Lasts until the next start.</summary>
-public sealed record HostTargetsUpdate(int? Serving = null, int? Spares = null, string? Reason = null, string? RequestedBy = null);
+public sealed record HostTargetsUpdate(
+    int? Serving = null,
+    int? Spares = null,
+    string? Reason = null,
+    string? RequestedBy = null
+);
 
 /// <summary>POST /admin/v1/node-control/remove|recycle. <c>Selector</c>: <c>node-9</c>, <c>12345@polaris</c> or
 /// <c>polaris#2</c>. <c>TimeoutSeconds</c> null = the server default (300, CLUSTER_DRAIN_TIMEOUT_SECONDS);
 /// <c>Now</c> forces at once. Remove lowers the host's target by one; recycle keeps it (a spare or a new node replaces it).</summary>
-public sealed record NodeStopRequest(string Selector, bool Now = false, double? TimeoutSeconds = null, string? Reason = null, string? RequestedBy = null);
+public sealed record NodeStopRequest(
+    string Selector,
+    bool Now = false,
+    double? TimeoutSeconds = null,
+    string? Reason = null,
+    string? RequestedBy = null
+);
 
 public sealed record NodeHistoryEntry(
     long Seq,
@@ -484,14 +656,24 @@ public sealed record NodeHistoryEntry(
     string Why,
     bool Forced,
     string? ReplacedBy,
-    int PartitionsAtStop);
+    int PartitionsAtStop
+);
 
 /// <summary>GET /admin/v1/node-control/history?limit&amp;cursor&amp;host, newest first; pass <c>NextCursor</c> as <c>cursor</c> for the next page.</summary>
 public sealed record NodeHistoryPage(NodeHistoryEntry[] Records, long? NextCursor);
 
-public sealed record HostTargetSpec(int Serving, int Spares, long? RamFloorMb = null, long? DiskFloorMb = null);
+public sealed record HostTargetSpec(
+    int Serving,
+    int Spares,
+    long? RamFloorMb = null,
+    long? DiskFloorMb = null
+);
 
 /// <summary>POST /admin/v1/node-control/hosts-file: the launcher's start applies the hosts file. Every live node goes
 /// to the history and the file's nodes are planned under new ids (fresh ids every start; <c>Resume</c> is accepted
 /// and ignored).</summary>
-public sealed record HostsFileApply(IReadOnlyDictionary<string, HostTargetSpec> Hosts, string? Sha256 = null, bool Resume = false);
+public sealed record HostsFileApply(
+    IReadOnlyDictionary<string, HostTargetSpec> Hosts,
+    string? Sha256 = null,
+    bool Resume = false
+);

@@ -15,18 +15,32 @@ namespace ClusterRegistry;
 /// </summary>
 internal sealed class EventLog : IDisposable
 {
-    internal sealed record Entry(long Seq, DateTimeOffset At, string Type, string? Actor,
-        string? RequestId, string? Target, IReadOnlyDictionary<string, string>? Data);
+    internal sealed record Entry(
+        long Seq,
+        DateTimeOffset At,
+        string Type,
+        string? Actor,
+        string? RequestId,
+        string? Target,
+        IReadOnlyDictionary<string, string>? Data
+    );
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly object _lock = new();
     private readonly object _diskLock = new();
-    private sealed record Pending(Entry? Entry, TaskCompletionSource? Completion = null, long Through = 0);
+
+    private sealed record Pending(
+        Entry? Entry,
+        TaskCompletionSource? Completion = null,
+        long Through = 0
+    );
+
     private readonly Channel<Pending>? _pending;
     private readonly Task? _persistence;
     private bool _disposed;
     private Exception? _writeFailure;
-    private long _writtenSeq, _writtenBytes;
+    private long _writtenSeq,
+        _writtenBytes;
     private readonly Queue<Entry> _ring = new();
     private readonly int _capacity;
     private readonly long _rollBytes;
@@ -36,8 +50,12 @@ internal sealed class EventLog : IDisposable
     private long _seq;
     private long _earliestRetained = 1;
 
-    public EventLog(string? directory, Func<DateTimeOffset>? clock = null, int capacity = 4096,
-        long rollBytes = 64 << 20)
+    public EventLog(
+        string? directory,
+        Func<DateTimeOffset>? clock = null,
+        int capacity = 4096,
+        long rollBytes = 64 << 20
+    )
     {
         _capacity = capacity;
         _rollBytes = rollBytes;
@@ -50,20 +68,38 @@ internal sealed class EventLog : IDisposable
         _writer = OpenWriter();
         _writtenSeq = _seq;
         _writtenBytes = _writer.BaseStream.Length;
-        _pending = Channel.CreateBounded<Pending>(new BoundedChannelOptions(capacity)
-        { SingleReader = true, FullMode = BoundedChannelFullMode.Wait, AllowSynchronousContinuations = false });
+        _pending = Channel.CreateBounded<Pending>(
+            new BoundedChannelOptions(capacity)
+            {
+                SingleReader = true,
+                FullMode = BoundedChannelFullMode.Wait,
+                AllowSynchronousContinuations = false,
+            }
+        );
         _persistence = Task.Run(PersistAsync);
     }
 
     /// <summary>Appends one event and returns its sequence number. Callers may hold their own locks.</summary>
-    public long Append(string type, string? actor = null, string? requestId = null, string? target = null,
-        IReadOnlyDictionary<string, string>? data = null)
+    public long Append(
+        string type,
+        string? actor = null,
+        string? requestId = null,
+        string? target = null,
+        IReadOnlyDictionary<string, string>? data = null
+    )
     {
         lock (_lock)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            var entry = new Entry(++_seq, _clock(), type, actor, requestId, target,
-                data is null ? null : new Dictionary<string, string>(data));
+            var entry = new Entry(
+                ++_seq,
+                _clock(),
+                type,
+                actor,
+                requestId,
+                target,
+                data is null ? null : new Dictionary<string, string>(data)
+            );
             _ring.Enqueue(entry);
             while (_ring.Count > _capacity)
                 _ring.Dequeue();
@@ -78,11 +114,15 @@ internal sealed class EventLog : IDisposable
     /// when it reaches back far enough, otherwise re-reads the persisted tail. Also reports the next
     /// cursor and the earliest sequence still retained anywhere, so callers can detect truncation.
     /// </summary>
-    public (IReadOnlyList<Entry> Events, long NextCursor, long EarliestRetained) Read(long afterSeq, int limit)
+    public (IReadOnlyList<Entry> Events, long NextCursor, long EarliestRetained) Read(
+        long afterSeq,
+        int limit
+    )
     {
         limit = Math.Clamp(limit, 1, 1000);
         Entry[] recent;
-        long ringStart, sequence;
+        long ringStart,
+            sequence;
         lock (_lock)
         {
             ringStart = _ring.Count == 0 ? long.MaxValue : _ring.Peek().Seq;
@@ -94,24 +134,52 @@ internal sealed class EventLog : IDisposable
         {
             // Historical I/O never holds the producer lock. Include the live tail if disk lags.
             lock (_diskLock)
-                result = ReadPersisted(afterSeq, limit).Concat(recent).DistinctBy(e => e.Seq)
-                    .OrderBy(e => e.Seq).Take(limit).ToList();
+                result = ReadPersisted(afterSeq, limit)
+                    .Concat(recent)
+                    .DistinctBy(e => e.Seq)
+                    .OrderBy(e => e.Seq)
+                    .Take(limit)
+                    .ToList();
         }
         long next = result.Count == 0 ? Math.Max(afterSeq, sequence) : result[^1].Seq;
-        return (result, next, Math.Min(Interlocked.Read(ref _earliestRetained),
-            ringStart == long.MaxValue ? Interlocked.Read(ref _earliestRetained) : ringStart));
+        return (
+            result,
+            next,
+            Math.Min(
+                Interlocked.Read(ref _earliestRetained),
+                ringStart == long.MaxValue ? Interlocked.Read(ref _earliestRetained) : ringStart
+            )
+        );
     }
 
-    public long LastSeq { get { lock (_lock) return _seq; } }
+    public long LastSeq
+    {
+        get
+        {
+            lock (_lock)
+                return _seq;
+        }
+    }
 
     // Explicit barriers are for shutdown/tests; Append and recent-tail reads never wait for storage.
     internal void Flush()
     {
-        if (_pending == null) return;
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (_pending == null)
+            return;
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         long through;
-        lock (_lock) { ObjectDisposedException.ThrowIf(_disposed, this); through = _seq; }
-        _pending.Writer.WriteAsync(new Pending(null, completion, through)).AsTask().GetAwaiter().GetResult();
+        lock (_lock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            through = _seq;
+        }
+        _pending
+            .Writer.WriteAsync(new Pending(null, completion, through))
+            .AsTask()
+            .GetAwaiter()
+            .GetResult();
         completion.Task.GetAwaiter().GetResult();
     }
 
@@ -119,7 +187,8 @@ internal sealed class EventLog : IDisposable
     {
         lock (_lock)
         {
-            if (_disposed) return;
+            if (_disposed)
+                return;
             _disposed = true;
             _pending?.Writer.TryComplete();
         }
@@ -133,7 +202,8 @@ internal sealed class EventLog : IDisposable
         {
             while (await _pending!.Reader.WaitToReadAsync())
             {
-                if (_pending.Reader.Count < 128) await Task.Delay(100);
+                if (_pending.Reader.Count < 128)
+                    await Task.Delay(100);
                 lock (_diskLock)
                 {
                     int count = 0;
@@ -141,9 +211,15 @@ internal sealed class EventLog : IDisposable
                     {
                         try
                         {
-                            if (_writeFailure != null) throw _writeFailure;
-                            if (pending.Entry is { } entry) WriteEntry(entry);
-                            else { PersistGap(pending.Through); _writer!.Flush(); }
+                            if (_writeFailure != null)
+                                throw _writeFailure;
+                            if (pending.Entry is { } entry)
+                                WriteEntry(entry);
+                            else
+                            {
+                                PersistGap(pending.Through);
+                                _writer!.Flush();
+                            }
                             pending.Completion?.TrySetResult();
                         }
                         catch (Exception error)
@@ -152,21 +228,39 @@ internal sealed class EventLog : IDisposable
                             pending.Completion?.TrySetException(error);
                         }
                     }
-                    try { if (_writeFailure == null) _writer!.Flush(); }
-                    catch (Exception error) { _writeFailure ??= error; }
+                    try
+                    {
+                        if (_writeFailure == null)
+                            _writer!.Flush();
+                    }
+                    catch (Exception error)
+                    {
+                        _writeFailure ??= error;
+                    }
                 }
             }
             lock (_diskLock)
             {
-                try { if (_writeFailure == null) PersistGap(Interlocked.Read(ref _seq)); }
-                catch (Exception error) { _writeFailure ??= error; }
+                try
+                {
+                    if (_writeFailure == null)
+                        PersistGap(Interlocked.Read(ref _seq));
+                }
+                catch (Exception error)
+                {
+                    _writeFailure ??= error;
+                }
             }
         }
         finally
         {
             lock (_diskLock)
             {
-                try { _writer?.Dispose(); } catch { }
+                try
+                {
+                    _writer?.Dispose();
+                }
+                catch { }
                 _writer = null;
             }
         }
@@ -175,17 +269,22 @@ internal sealed class EventLog : IDisposable
     private void PersistGap(long through)
     {
         // Preserve the sequence high-water mark after dropped final events on a graceful stop.
-        if (through > _writtenSeq) WriteEntry(new Entry(through, _clock(), "events.gap", null, null, null, null));
+        if (through > _writtenSeq)
+            WriteEntry(new Entry(through, _clock(), "events.gap", null, null, null, null));
     }
 
-    private StreamWriter OpenWriter() => new(new FileStream(_path!, FileMode.Append, FileAccess.Write, FileShare.Read),
-        new UTF8Encoding(false));
+    private StreamWriter OpenWriter() =>
+        new(
+            new FileStream(_path!, FileMode.Append, FileAccess.Write, FileShare.Read),
+            new UTF8Encoding(false)
+        );
 
     private void WriteEntry(Entry entry)
     {
         string line = JsonSerializer.Serialize(entry, Json);
         _writer!.WriteLine(line);
-        _writtenBytes += Encoding.UTF8.GetByteCount(line) + Encoding.UTF8.GetByteCount(Environment.NewLine);
+        _writtenBytes +=
+            Encoding.UTF8.GetByteCount(line) + Encoding.UTF8.GetByteCount(Environment.NewLine);
         _writtenSeq = entry.Seq;
         RollIfNeeded();
     }
@@ -195,10 +294,13 @@ internal sealed class EventLog : IDisposable
         var result = new List<Entry>();
         foreach (string file in PersistedFiles())
         {
-            using var reader = new StreamReader(new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
+            using var reader = new StreamReader(
+                new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)
+            );
             while (result.Count < limit && reader.ReadLine() is { } line)
             {
-                if (line.Length == 0) continue;
+                if (line.Length == 0)
+                    continue;
                 Entry? entry = TryParse(line);
                 if (entry != null && entry.Seq > afterSeq)
                     result.Add(entry);
@@ -212,8 +314,10 @@ internal sealed class EventLog : IDisposable
     private IEnumerable<string> PersistedFiles()
     {
         string rolled = _path + ".1";
-        if (File.Exists(rolled)) yield return rolled;
-        if (File.Exists(_path!)) yield return _path!;
+        if (File.Exists(rolled))
+            yield return rolled;
+        if (File.Exists(_path!))
+            yield return _path!;
     }
 
     private void Recover()
@@ -221,12 +325,16 @@ internal sealed class EventLog : IDisposable
         _earliestRetained = long.MaxValue;
         foreach (string file in PersistedFiles())
         {
-            using var reader = new StreamReader(new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
+            using var reader = new StreamReader(
+                new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)
+            );
             while (reader.ReadLine() is { } line)
             {
-                if (line.Length == 0) continue;
+                if (line.Length == 0)
+                    continue;
                 Entry? entry = TryParse(line);
-                if (entry == null) continue;
+                if (entry == null)
+                    continue;
                 _seq = Math.Max(_seq, entry.Seq);
                 _earliestRetained = Math.Min(_earliestRetained, entry.Seq);
             }
@@ -250,18 +358,27 @@ internal sealed class EventLog : IDisposable
 
     private long ReadEarliest(string file)
     {
-        using var reader = new StreamReader(new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
+        using var reader = new StreamReader(
+            new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)
+        );
         while (reader.ReadLine() is { } line)
         {
             Entry? entry = TryParse(line);
-            if (entry != null) return entry.Seq;
+            if (entry != null)
+                return entry.Seq;
         }
         return _seq + 1;
     }
 
     private static Entry? TryParse(string line)
     {
-        try { return JsonSerializer.Deserialize<Entry>(line, Json); }
-        catch (JsonException) { return null; }
+        try
+        {
+            return JsonSerializer.Deserialize<Entry>(line, Json);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 }

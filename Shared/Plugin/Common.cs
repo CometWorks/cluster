@@ -15,7 +15,12 @@ public static class Common
     public static string GameVersion;
     public static string DataDir;
 
-    public static void SetPlugin(ICommonPlugin plugin, string name, string gameVersion, string storageDir)
+    public static void SetPlugin(
+        ICommonPlugin plugin,
+        string name,
+        string gameVersion,
+        string storageDir
+    )
     {
         Plugin = plugin;
         Logger = plugin.Log;

@@ -26,36 +26,46 @@ namespace ClusterPlugin;
 /// </summary>
 internal static class GridAddTrace
 {
-	private const int MinBlocks = 10;
+    private const int MinBlocks = 10;
 
-	public static void Install()
-	{
-		MyEntities.OnEntityAdd += Trace;
-	}
+    public static void Install()
+    {
+        MyEntities.OnEntityAdd += Trace;
+    }
 
-	private static void Trace(MyEntity entity)
-	{
-		try
-		{
-			if (entity is not MyCubeGrid grid || grid.BlocksCount < MinBlocks) return;
-			if (Skips(entity, ClusterConfig.GetBool("diag.gridAddTraceImports"))) return;
-			// One line per add; the stack is flattened so a grep for the entity id returns the
-			// whole story. Skip the two outermost frames (this method and the event invoker).
-			string stack = Environment.StackTrace.Replace(Environment.NewLine, " | ");
-			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] grid-add entity=" + entity.EntityId
-				+ " name='" + (entity.DisplayName ?? grid.Name ?? "?")
-				+ "' blocks=" + grid.BlocksCount + " stack=" + stack);
-		}
-		catch
-		{
-			// Diagnostics never break entity creation.
-		}
-	}
+    private static void Trace(MyEntity entity)
+    {
+        try
+        {
+            if (entity is not MyCubeGrid grid || grid.BlocksCount < MinBlocks)
+                return;
+            if (Skips(entity, ClusterConfig.GetBool("diag.gridAddTraceImports")))
+                return;
+            // One line per add; the stack is flattened so a grep for the entity id returns the
+            // whole story. Skip the two outermost frames (this method and the event invoker).
+            string stack = Environment.StackTrace.Replace(Environment.NewLine, " | ");
+            MyLog.Default?.WriteLineAndConsole(
+                "[ClusterPlugin] grid-add entity="
+                    + entity.EntityId
+                    + " name='"
+                    + (entity.DisplayName ?? grid.Name ?? "?")
+                    + "' blocks="
+                    + grid.BlocksCount
+                    + " stack="
+                    + stack
+            );
+        }
+        catch
+        {
+            // Diagnostics never break entity creation.
+        }
+    }
 
-	/// <summary>
-	/// T-0401: a handover import's activation Add (ClusterControlServer.ActivateEntities, marked by ImportAddDiag)
-	/// is already logged by the import path, and the stack walk cost it on the game thread mid-activation. Skipped
-	/// unless diag.gridAddTraceImports is true (the old behaviour, for an A/B). Every other add is traced as before.
-	/// </summary>
-	internal static bool Skips(object entity, bool traceImports) => !traceImports && ImportAddDiag.IsImportAdd(entity);
+    /// <summary>
+    /// T-0401: a handover import's activation Add (ClusterControlServer.ActivateEntities, marked by ImportAddDiag)
+    /// is already logged by the import path, and the stack walk cost it on the game thread mid-activation. Skipped
+    /// unless diag.gridAddTraceImports is true (the old behaviour, for an A/B). Every other add is traced as before.
+    /// </summary>
+    internal static bool Skips(object entity, bool traceImports) =>
+        !traceImports && ImportAddDiag.IsImportAdd(entity);
 }

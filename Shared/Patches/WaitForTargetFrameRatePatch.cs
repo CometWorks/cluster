@@ -12,14 +12,22 @@ namespace Shared.Patches;
 /// ClusterRuntime.UpdateDormancy sets/clears WaitForTargetFrameRateSeams.ClusterTargetFrequency;
 /// 0 (standalone servers, the World Authority) keeps the constructor's frequency.
 /// </summary>
-[HarmonyPatch(typeof(WaitForTargetFrameRate), nameof(WaitForTargetFrameRate.TickPerFrame), MethodType.Getter)]
+[HarmonyPatch(
+    typeof(WaitForTargetFrameRate),
+    nameof(WaitForTargetFrameRate.TickPerFrame),
+    MethodType.Getter
+)]
 public static class WaitForTargetFrameRatePatch
 {
     [HarmonyPrefix]
     private static bool TickPerFramePrefix(ref long __result)
     {
         var frequency = WaitForTargetFrameRateSeams.ClusterTargetFrequency;
-        if (frequency <= 0f || System.Threading.Volatile.Read(ref WaitForTargetFrameRateSeams.PendingControlCalls) > 0)
+        if (
+            frequency <= 0f
+            || System.Threading.Volatile.Read(ref WaitForTargetFrameRateSeams.PendingControlCalls)
+                > 0
+        )
             return true;
         __result = (int)Math.Round((float)MyGameTimer.Frequency / frequency);
         return false;

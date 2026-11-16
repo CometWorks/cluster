@@ -13,6 +13,10 @@ public static class Preloader
     // ReSharper disable once UnusedMember.Global
     public static void Finish()
     {
-        ClusterPlugin.ClusterPluginHost.Preload(ClusterNodePlugin.Plugin.Role, ClusterNodePlugin.Plugin.Name, ClusterNodePlugin.Plugin.Logger);
+        ClusterPlugin.ClusterPluginHost.Preload(
+            ClusterNodePlugin.Plugin.Role,
+            ClusterNodePlugin.Plugin.Name,
+            ClusterNodePlugin.Plugin.Logger
+        );
     }
 }

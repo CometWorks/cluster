@@ -3,12 +3,13 @@ using System.Runtime.CompilerServices;
 using PluginSdk.Logging;
 
 namespace Shared.Logging;
-    
+
 public class PluginLogger : LogFormatter, IPluginLogger
 {
     private readonly Logger logger;
 
-    public PluginLogger(string pluginName) : base($"{pluginName}: ")
+    public PluginLogger(string pluginName)
+        : base($"{pluginName}: ")
     {
         logger = Logger.Create(pluginName);
     }
@@ -20,8 +21,8 @@ public class PluginLogger : LogFormatter, IPluginLogger
     public bool IsErrorEnabled => true;
     public bool IsCriticalEnabled => true;
 
-    private void Write(LogLevel severity, string line, Exception exception)
-        => logger.Log(severity, line, exception);
+    private void Write(LogLevel severity, string line, Exception exception) =>
+        logger.Log(severity, line, exception);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Trace(Exception ex, string message, params object[] data)

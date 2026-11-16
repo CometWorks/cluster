@@ -13,16 +13,19 @@ namespace Shared.Patches;
 [HarmonyPatch]
 public static class MyFactionPatch
 {
-	private const string SetterName = "VRage.Game.ModAPI.IMyFaction.set_AcceptHumans";
+    private const string SetterName = "VRage.Game.ModAPI.IMyFaction.set_AcceptHumans";
 
-	private static MethodBase TargetMethod()
-		=> EconomyIl.Required(AccessTools.Method(typeof(MyFaction), SetterName), "MyFaction." + SetterName);
+    private static MethodBase TargetMethod() =>
+        EconomyIl.Required(
+            AccessTools.Method(typeof(MyFaction), SetterName),
+            "MyFaction." + SetterName
+        );
 
-	// ClusterPlugin patch point: MyFactionCollectionPatch.AcceptHumansPrefix
-	[HarmonyPrefix]
-	private static bool Prefix(MyFaction __instance, bool value)
-	{
-		var seam = MyFactionSeams.ClusterAcceptHumansPrefix;
-		return seam == null || seam(__instance, value);
-	}
+    // ClusterPlugin patch point: MyFactionCollectionPatch.AcceptHumansPrefix
+    [HarmonyPrefix]
+    private static bool Prefix(MyFaction __instance, bool value)
+    {
+        var seam = MyFactionSeams.ClusterAcceptHumansPrefix;
+        return seam == null || seam(__instance, value);
+    }
 }

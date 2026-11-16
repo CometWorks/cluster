@@ -27,32 +27,44 @@ public static class MyProjectilePatch
     }
 
     [HarmonyTranspiler]
-    private static IEnumerable<CodeInstruction> StartTranspiler(IEnumerable<CodeInstruction> instructions, MethodBase original)
+    private static IEnumerable<CodeInstruction> StartTranspiler(
+        IEnumerable<CodeInstruction> instructions,
+        MethodBase original
+    )
     {
         var il = instructions.ToList();
-        var positionChecked = AccessTools.Field(typeof(MyProjectile), "m_positionChecked")
-                              ?? throw new CodeInstructionNotFound("MyProjectile.m_positionChecked not found");
-        var maxTrajectory = AccessTools.Field(typeof(MyProjectile), "m_maxTrajectory")
-                            ?? throw new CodeInstructionNotFound("MyProjectile.m_maxTrajectory not found");
+        var positionChecked =
+            AccessTools.Field(typeof(MyProjectile), "m_positionChecked")
+            ?? throw new CodeInstructionNotFound("MyProjectile.m_positionChecked not found");
+        var maxTrajectory =
+            AccessTools.Field(typeof(MyProjectile), "m_maxTrajectory")
+            ?? throw new CodeInstructionNotFound("MyProjectile.m_maxTrajectory not found");
         var clamp = AccessTools.Method(typeof(MyProjectilePatch), nameof(ClampTrajectory));
 
         var stores = il.FindAllIndex(ci => ci.StoresField(positionChecked));
         if (stores.Count != 1)
-            throw new CodeInstructionNotFound($"{original.Name}: expected exactly one m_positionChecked store, found {stores.Count}");
+            throw new CodeInstructionNotFound(
+                $"{original.Name}: expected exactly one m_positionChecked store, found {stores.Count}"
+            );
         var at = stores[0] - 2;
         if (at < 0 || il[at].opcode != OpCodes.Ldarg_0 || il[at + 1].opcode != OpCodes.Ldc_I4_0)
-            throw new CodeInstructionNotFound($"{original.Name}: m_positionChecked store is not `this.m_positionChecked = false`");
+            throw new CodeInstructionNotFound(
+                $"{original.Name}: m_positionChecked store is not `this.m_positionChecked = false`"
+            );
 
         // ammoDefinition is the second parameter (this, index, ammoDefinition, ...).
-        il.InsertRange(at, new[]
-        {
-            new CodeInstruction(OpCodes.Ldarg_0).MoveLabelsFrom(il[at]),
-            new CodeInstruction(OpCodes.Ldarg_2),
-            new CodeInstruction(OpCodes.Ldarg_0),
-            new CodeInstruction(OpCodes.Ldfld, maxTrajectory),
-            new CodeInstruction(OpCodes.Call, clamp),
-            new CodeInstruction(OpCodes.Stfld, maxTrajectory),
-        });
+        il.InsertRange(
+            at,
+            new[]
+            {
+                new CodeInstruction(OpCodes.Ldarg_0).MoveLabelsFrom(il[at]),
+                new CodeInstruction(OpCodes.Ldarg_2),
+                new CodeInstruction(OpCodes.Ldarg_0),
+                new CodeInstruction(OpCodes.Ldfld, maxTrajectory),
+                new CodeInstruction(OpCodes.Call, clamp),
+                new CodeInstruction(OpCodes.Stfld, maxTrajectory),
+            }
+        );
         return il;
     }
 }

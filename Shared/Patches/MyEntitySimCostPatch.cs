@@ -8,9 +8,9 @@ using System.Reflection.Emit;
 using System.Threading;
 using HarmonyLib;
 using Sandbox.Game.Entities;
+using Shared.Tools;
 using VRage.Game.Entity;
 using VRage.ModAPI;
-using Shared.Tools;
 
 namespace ClusterPlugin;
 
@@ -41,201 +41,351 @@ namespace ClusterPlugin;
 [HarmonyPatch(typeof(MyParallelEntityUpdateOrchestrator))]
 internal static class MyEntitySimCostPatch
 {
-	/// <summary>
-	/// Read once per dispatch rather than per entity: ClusterConfig.Get walks a dictionary and
-	/// does a string compare, which is not something to do 90,000 times a second. Refreshed by
-	/// <see cref="RefreshEnabled"/> from the orchestrator's own dispatch entry points.
-	/// </summary>
-	private static bool m_enabled = true;
+    /// <summary>
+    /// Read once per dispatch rather than per entity: ClusterConfig.Get walks a dictionary and
+    /// does a string compare, which is not something to do 90,000 times a second. Refreshed by
+    /// <see cref="RefreshEnabled"/> from the orchestrator's own dispatch entry points.
+    /// </summary>
+    private static bool m_enabled = true;
 
-	internal static void RefreshEnabled()
-	{
-		m_enabled = ClusterRuntime.IsClustered && ClusterConfig.GetBool("balance.entityCostSampling");
-	}
+    internal static void RefreshEnabled()
+    {
+        m_enabled =
+            ClusterRuntime.IsClustered && ClusterConfig.GetBool("balance.entityCostSampling");
+    }
 
-	// ---- the timing wrappers -------------------------------------------------------------
-	//
-	// Each has the signature of the call it replaces, receiver first. The inner call is a
-	// virtual dispatch made from THIS assembly, which Harmony has not patched, so there is no
-	// recursion. The serial wrappers do not catch: an entity that throws out of its update did so
-	// before this patch existed too, and swallowing it here would hide it. The two parallel ones
-	// do (SE-1583), see below.
+    // ---- the timing wrappers -------------------------------------------------------------
+    //
+    // Each has the signature of the call it replaces, receiver first. The inner call is a
+    // virtual dispatch made from THIS assembly, which Harmony has not patched, so there is no
+    // recursion. The serial wrappers do not catch: an entity that throws out of its update did so
+    // before this patch existed too, and swallowing it here would hide it. The two parallel ones
+    // do (SE-1583), see below.
 
-	private static void Charge(MyEntity entity, long started)
-	{
-		// Interlocked inside AddSimCostTicks: the parallel handlers run on worker threads.
-		entity.AddSimCostTicks(Stopwatch.GetTimestamp() - started);
-	}
+    private static void Charge(MyEntity entity, long started)
+    {
+        // Interlocked inside AddSimCostTicks: the parallel handlers run on worker threads.
+        entity.AddSimCostTicks(Stopwatch.GetTimestamp() - started);
+    }
 
-	public static void UpdateBeforeSimulation(MyEntity entity)
-	{
-		if (!m_enabled) { entity.UpdateBeforeSimulation(); return; }
-		long started = Stopwatch.GetTimestamp();
-		try { entity.UpdateBeforeSimulation(); } finally { Charge(entity, started); }
-	}
+    public static void UpdateBeforeSimulation(MyEntity entity)
+    {
+        if (!m_enabled)
+        {
+            entity.UpdateBeforeSimulation();
+            return;
+        }
+        long started = Stopwatch.GetTimestamp();
+        try
+        {
+            entity.UpdateBeforeSimulation();
+        }
+        finally
+        {
+            Charge(entity, started);
+        }
+    }
 
-	public static void UpdateBeforeSimulation10(MyEntity entity)
-	{
-		if (!m_enabled) { entity.UpdateBeforeSimulation10(); return; }
-		long started = Stopwatch.GetTimestamp();
-		try { entity.UpdateBeforeSimulation10(); } finally { Charge(entity, started); }
-	}
+    public static void UpdateBeforeSimulation10(MyEntity entity)
+    {
+        if (!m_enabled)
+        {
+            entity.UpdateBeforeSimulation10();
+            return;
+        }
+        long started = Stopwatch.GetTimestamp();
+        try
+        {
+            entity.UpdateBeforeSimulation10();
+        }
+        finally
+        {
+            Charge(entity, started);
+        }
+    }
 
-	public static void UpdateBeforeSimulation100(MyEntity entity)
-	{
-		if (!m_enabled) { entity.UpdateBeforeSimulation100(); return; }
-		long started = Stopwatch.GetTimestamp();
-		try { entity.UpdateBeforeSimulation100(); } finally { Charge(entity, started); }
-	}
+    public static void UpdateBeforeSimulation100(MyEntity entity)
+    {
+        if (!m_enabled)
+        {
+            entity.UpdateBeforeSimulation100();
+            return;
+        }
+        long started = Stopwatch.GetTimestamp();
+        try
+        {
+            entity.UpdateBeforeSimulation100();
+        }
+        finally
+        {
+            Charge(entity, started);
+        }
+    }
 
-	public static void UpdateAfterSimulation(MyEntity entity)
-	{
-		if (!m_enabled) { entity.UpdateAfterSimulation(); return; }
-		long started = Stopwatch.GetTimestamp();
-		try { entity.UpdateAfterSimulation(); } finally { Charge(entity, started); }
-	}
+    public static void UpdateAfterSimulation(MyEntity entity)
+    {
+        if (!m_enabled)
+        {
+            entity.UpdateAfterSimulation();
+            return;
+        }
+        long started = Stopwatch.GetTimestamp();
+        try
+        {
+            entity.UpdateAfterSimulation();
+        }
+        finally
+        {
+            Charge(entity, started);
+        }
+    }
 
-	public static void UpdateAfterSimulation10(MyEntity entity)
-	{
-		if (!m_enabled) { entity.UpdateAfterSimulation10(); return; }
-		long started = Stopwatch.GetTimestamp();
-		try { entity.UpdateAfterSimulation10(); } finally { Charge(entity, started); }
-	}
+    public static void UpdateAfterSimulation10(MyEntity entity)
+    {
+        if (!m_enabled)
+        {
+            entity.UpdateAfterSimulation10();
+            return;
+        }
+        long started = Stopwatch.GetTimestamp();
+        try
+        {
+            entity.UpdateAfterSimulation10();
+        }
+        finally
+        {
+            Charge(entity, started);
+        }
+    }
 
-	public static void UpdateAfterSimulation100(MyEntity entity)
-	{
-		if (!m_enabled) { entity.UpdateAfterSimulation100(); return; }
-		long started = Stopwatch.GetTimestamp();
-		try { entity.UpdateAfterSimulation100(); } finally { Charge(entity, started); }
-	}
+    public static void UpdateAfterSimulation100(MyEntity entity)
+    {
+        if (!m_enabled)
+        {
+            entity.UpdateAfterSimulation100();
+            return;
+        }
+        long started = Stopwatch.GetTimestamp();
+        try
+        {
+            entity.UpdateAfterSimulation100();
+        }
+        finally
+        {
+            Charge(entity, started);
+        }
+    }
 
-	public static void Simulate(MyEntity entity)
-	{
-		if (!m_enabled) { entity.Simulate(); return; }
-		long started = Stopwatch.GetTimestamp();
-		try { entity.Simulate(); } finally { Charge(entity, started); }
-	}
+    public static void Simulate(MyEntity entity)
+    {
+        if (!m_enabled)
+        {
+            entity.Simulate();
+            return;
+        }
+        long started = Stopwatch.GetTimestamp();
+        try
+        {
+            entity.Simulate();
+        }
+        finally
+        {
+            Charge(entity, started);
+        }
+    }
 
-	// The parallel handlers take IMyParallelUpdateable, not MyEntity. Every implementer in the
-	// orchestrator's lists is a MyEntity, but the static type is not, so the charge is skipped
-	// rather than cast-and-throw: an un-chargeable implementer must not take the update with it.
-	//
-	// SE-1583: unlike the serial wrappers above, these two DO catch. A throw on a worker thread
-	// fails the whole ParallelTasks.ForEach, which the game loop turns into a server stop: one
-	// imported character stopped seven nodes in a row on 2026-11-15. The entity skips the rest of
-	// its update for this frame, the first throw of each entity is logged with its stack, and
-	// every throw is counted.
-	public static void UpdateBeforeSimulationParallel(IMyParallelUpdateable entity)
-	{
-		long started = Stopwatch.GetTimestamp();
-		try { entity.UpdateBeforeSimulationParallel(); }
-		catch (Exception exception) { Fault(entity, nameof(UpdateBeforeSimulationParallel), exception); }
-		finally { if (m_enabled && entity is MyEntity charged) Charge(charged, started); }
-	}
+    // The parallel handlers take IMyParallelUpdateable, not MyEntity. Every implementer in the
+    // orchestrator's lists is a MyEntity, but the static type is not, so the charge is skipped
+    // rather than cast-and-throw: an un-chargeable implementer must not take the update with it.
+    //
+    // SE-1583: unlike the serial wrappers above, these two DO catch. A throw on a worker thread
+    // fails the whole ParallelTasks.ForEach, which the game loop turns into a server stop: one
+    // imported character stopped seven nodes in a row on 2026-11-15. The entity skips the rest of
+    // its update for this frame, the first throw of each entity is logged with its stack, and
+    // every throw is counted.
+    public static void UpdateBeforeSimulationParallel(IMyParallelUpdateable entity)
+    {
+        long started = Stopwatch.GetTimestamp();
+        try
+        {
+            entity.UpdateBeforeSimulationParallel();
+        }
+        catch (Exception exception)
+        {
+            Fault(entity, nameof(UpdateBeforeSimulationParallel), exception);
+        }
+        finally
+        {
+            if (m_enabled && entity is MyEntity charged)
+                Charge(charged, started);
+        }
+    }
 
-	public static void UpdateAfterSimulationParallel(IMyParallelUpdateable entity)
-	{
-		long started = Stopwatch.GetTimestamp();
-		try { entity.UpdateAfterSimulationParallel(); }
-		catch (Exception exception) { Fault(entity, nameof(UpdateAfterSimulationParallel), exception); }
-		finally { if (m_enabled && entity is MyEntity charged) Charge(charged, started); }
-	}
+    public static void UpdateAfterSimulationParallel(IMyParallelUpdateable entity)
+    {
+        long started = Stopwatch.GetTimestamp();
+        try
+        {
+            entity.UpdateAfterSimulationParallel();
+        }
+        catch (Exception exception)
+        {
+            Fault(entity, nameof(UpdateAfterSimulationParallel), exception);
+        }
+        finally
+        {
+            if (m_enabled && entity is MyEntity charged)
+                Charge(charged, started);
+        }
+    }
 
-	private static readonly ConcurrentDictionary<long, byte> s_faulted = new ConcurrentDictionary<long, byte>();
-	private static long s_faults;
+    private static readonly ConcurrentDictionary<long, byte> s_faulted =
+        new ConcurrentDictionary<long, byte>();
+    private static long s_faults;
 
-	/// <summary>Exceptions caught in the parallel entity updates since start.</summary>
-	internal static long ParallelUpdateFaults => Interlocked.Read(ref s_faults);
+    /// <summary>Exceptions caught in the parallel entity updates since start.</summary>
+    internal static long ParallelUpdateFaults => Interlocked.Read(ref s_faults);
 
-	internal static void Fault(IMyParallelUpdateable entity, string update, Exception exception)
-	{
-		Interlocked.Increment(ref s_faults);
-		MyEntity named = entity as MyEntity;
-		if (!s_faulted.TryAdd(named?.EntityId ?? 0, 0)) return;
-		Console.WriteLine("[ClusterPlugin] parallel_update_fault update=" + update + " entity=" + (named?.EntityId ?? 0)
-			+ " type=" + entity.GetType().Name + " name=" + named?.DisplayName
-			+ " (logged once per entity; it skips the rest of this update, the node keeps running): " + exception);
-	}
+    internal static void Fault(IMyParallelUpdateable entity, string update, Exception exception)
+    {
+        Interlocked.Increment(ref s_faults);
+        MyEntity named = entity as MyEntity;
+        if (!s_faulted.TryAdd(named?.EntityId ?? 0, 0))
+            return;
+        Console.WriteLine(
+            "[ClusterPlugin] parallel_update_fault update="
+                + update
+                + " entity="
+                + (named?.EntityId ?? 0)
+                + " type="
+                + entity.GetType().Name
+                + " name="
+                + named?.DisplayName
+                + " (logged once per entity; it skips the rest of this update, the node keeps running): "
+                + exception
+        );
+    }
 
-	// ---- the redirects -------------------------------------------------------------------
+    // ---- the redirects -------------------------------------------------------------------
 
-	/// <summary>
-	/// Replace every call to <paramref name="target"/> with a call to the same-named wrapper on
-	/// this class, and THROW if the number of sites is not exactly <paramref name="expected"/>.
-	///
-	/// The count assertion is the whole safety argument. A silent zero-replacement transpiler
-	/// leaves SimCostTicks at 0 - which is indistinguishable from the bug this patch exists to
-	/// fix, and would be read as "the port did not help" rather than "the port did not apply".
-	/// A count that grows is equally a signal: the game added an update path this does not know
-	/// about, and the metric would be quietly missing part of the cost.
-	/// </summary>
-	private static IEnumerable<CodeInstruction> Redirect(IEnumerable<CodeInstruction> instructions,
-		MethodBase original, MethodInfo target, int expected)
-	{
-		MethodInfo wrapper = AccessTools.Method(typeof(MyEntitySimCostPatch), target.Name)
-			?? throw new CodeInstructionNotFound($"{original.Name}: no wrapper named {target.Name}");
-		List<CodeInstruction> il = instructions.ToList();
-		List<int> sites = il.FindAllIndex(ci => ci.Calls(target));
-		if (sites.Count != expected)
-			throw new CodeInstructionNotFound(
-				$"{original.Name}: expected {expected} call(s) to {target.DeclaringType?.Name}.{target.Name}, found {sites.Count}");
-		foreach (int site in sites)
-		{
-			il[site].opcode = OpCodes.Call;
-			il[site].operand = wrapper;
-		}
-		return il;
-	}
+    /// <summary>
+    /// Replace every call to <paramref name="target"/> with a call to the same-named wrapper on
+    /// this class, and THROW if the number of sites is not exactly <paramref name="expected"/>.
+    ///
+    /// The count assertion is the whole safety argument. A silent zero-replacement transpiler
+    /// leaves SimCostTicks at 0 - which is indistinguishable from the bug this patch exists to
+    /// fix, and would be read as "the port did not help" rather than "the port did not apply".
+    /// A count that grows is equally a signal: the game added an update path this does not know
+    /// about, and the metric would be quietly missing part of the cost.
+    /// </summary>
+    private static IEnumerable<CodeInstruction> Redirect(
+        IEnumerable<CodeInstruction> instructions,
+        MethodBase original,
+        MethodInfo target,
+        int expected
+    )
+    {
+        MethodInfo wrapper =
+            AccessTools.Method(typeof(MyEntitySimCostPatch), target.Name)
+            ?? throw new CodeInstructionNotFound(
+                $"{original.Name}: no wrapper named {target.Name}"
+            );
+        List<CodeInstruction> il = instructions.ToList();
+        List<int> sites = il.FindAllIndex(ci => ci.Calls(target));
+        if (sites.Count != expected)
+            throw new CodeInstructionNotFound(
+                $"{original.Name}: expected {expected} call(s) to {target.DeclaringType?.Name}.{target.Name}, found {sites.Count}"
+            );
+        foreach (int site in sites)
+        {
+            il[site].opcode = OpCodes.Call;
+            il[site].operand = wrapper;
+        }
+        return il;
+    }
 
-	private static MethodInfo Entity(string name) =>
-		AccessTools.DeclaredMethod(typeof(MyEntity), name, Type.EmptyTypes)
-		?? throw new CodeInstructionNotFound($"MyEntity.{name} not found");
+    private static MethodInfo Entity(string name) =>
+        AccessTools.DeclaredMethod(typeof(MyEntity), name, Type.EmptyTypes)
+        ?? throw new CodeInstructionNotFound($"MyEntity.{name} not found");
 
-	private static MethodInfo Parallel(string name) =>
-		AccessTools.DeclaredMethod(typeof(IMyParallelUpdateable), name, Type.EmptyTypes)
-		?? throw new CodeInstructionNotFound($"IMyParallelUpdateable.{name} not found");
+    private static MethodInfo Parallel(string name) =>
+        AccessTools.DeclaredMethod(typeof(IMyParallelUpdateable), name, Type.EmptyTypes)
+        ?? throw new CodeInstructionNotFound($"IMyParallelUpdateable.{name} not found");
 
-	// Site counts read off the current decompiled orchestrator: the *10 and *100 loops each walk
-	// a plain list and a "Heavy" list, hence two per method; UpdateAfterSimulation walks
-	// m_entitiesForUpdate and m_entitiesForUpdateAfter. 14 sites total.
+    // Site counts read off the current decompiled orchestrator: the *10 and *100 loops each walk
+    // a plain list and a "Heavy" list, hence two per method; UpdateAfterSimulation walks
+    // m_entitiesForUpdate and m_entitiesForUpdateAfter. 14 sites total.
 
-	[HarmonyTranspiler, HarmonyPatch("UpdateBeforeSimulation")]
-	private static IEnumerable<CodeInstruction> BeforeTranspiler(IEnumerable<CodeInstruction> il, MethodBase original)
-		=> Redirect(il, original, Entity(nameof(MyEntity.UpdateBeforeSimulation)), 1);
+    [HarmonyTranspiler, HarmonyPatch("UpdateBeforeSimulation")]
+    private static IEnumerable<CodeInstruction> BeforeTranspiler(
+        IEnumerable<CodeInstruction> il,
+        MethodBase original
+    ) => Redirect(il, original, Entity(nameof(MyEntity.UpdateBeforeSimulation)), 1);
 
-	[HarmonyTranspiler, HarmonyPatch("UpdateBeforeSimulation10")]
-	private static IEnumerable<CodeInstruction> Before10Transpiler(IEnumerable<CodeInstruction> il, MethodBase original)
-		=> Redirect(il, original, Entity(nameof(MyEntity.UpdateBeforeSimulation10)), 2);
+    [HarmonyTranspiler, HarmonyPatch("UpdateBeforeSimulation10")]
+    private static IEnumerable<CodeInstruction> Before10Transpiler(
+        IEnumerable<CodeInstruction> il,
+        MethodBase original
+    ) => Redirect(il, original, Entity(nameof(MyEntity.UpdateBeforeSimulation10)), 2);
 
-	[HarmonyTranspiler, HarmonyPatch("UpdateBeforeSimulation100")]
-	private static IEnumerable<CodeInstruction> Before100Transpiler(IEnumerable<CodeInstruction> il, MethodBase original)
-		=> Redirect(il, original, Entity(nameof(MyEntity.UpdateBeforeSimulation100)), 2);
+    [HarmonyTranspiler, HarmonyPatch("UpdateBeforeSimulation100")]
+    private static IEnumerable<CodeInstruction> Before100Transpiler(
+        IEnumerable<CodeInstruction> il,
+        MethodBase original
+    ) => Redirect(il, original, Entity(nameof(MyEntity.UpdateBeforeSimulation100)), 2);
 
-	[HarmonyTranspiler, HarmonyPatch("UpdateAfterSimulation")]
-	private static IEnumerable<CodeInstruction> AfterTranspiler(IEnumerable<CodeInstruction> il, MethodBase original)
-		=> Redirect(il, original, Entity(nameof(MyEntity.UpdateAfterSimulation)), 2);
+    [HarmonyTranspiler, HarmonyPatch("UpdateAfterSimulation")]
+    private static IEnumerable<CodeInstruction> AfterTranspiler(
+        IEnumerable<CodeInstruction> il,
+        MethodBase original
+    ) => Redirect(il, original, Entity(nameof(MyEntity.UpdateAfterSimulation)), 2);
 
-	[HarmonyTranspiler, HarmonyPatch("UpdateAfterSimulation10")]
-	private static IEnumerable<CodeInstruction> After10Transpiler(IEnumerable<CodeInstruction> il, MethodBase original)
-		=> Redirect(il, original, Entity(nameof(MyEntity.UpdateAfterSimulation10)), 2);
+    [HarmonyTranspiler, HarmonyPatch("UpdateAfterSimulation10")]
+    private static IEnumerable<CodeInstruction> After10Transpiler(
+        IEnumerable<CodeInstruction> il,
+        MethodBase original
+    ) => Redirect(il, original, Entity(nameof(MyEntity.UpdateAfterSimulation10)), 2);
 
-	[HarmonyTranspiler, HarmonyPatch("UpdateAfterSimulation100")]
-	private static IEnumerable<CodeInstruction> After100Transpiler(IEnumerable<CodeInstruction> il, MethodBase original)
-		=> Redirect(il, original, Entity(nameof(MyEntity.UpdateAfterSimulation100)), 2);
+    [HarmonyTranspiler, HarmonyPatch("UpdateAfterSimulation100")]
+    private static IEnumerable<CodeInstruction> After100Transpiler(
+        IEnumerable<CodeInstruction> il,
+        MethodBase original
+    ) => Redirect(il, original, Entity(nameof(MyEntity.UpdateAfterSimulation100)), 2);
 
-	[HarmonyTranspiler, HarmonyPatch(nameof(MyParallelEntityUpdateOrchestrator.DispatchSimulate))]
-	private static IEnumerable<CodeInstruction> SimulateTranspiler(IEnumerable<CodeInstruction> il, MethodBase original)
-		=> Redirect(il, original, Entity(nameof(MyEntity.Simulate)), 1);
+    [HarmonyTranspiler, HarmonyPatch(nameof(MyParallelEntityUpdateOrchestrator.DispatchSimulate))]
+    private static IEnumerable<CodeInstruction> SimulateTranspiler(
+        IEnumerable<CodeInstruction> il,
+        MethodBase original
+    ) => Redirect(il, original, Entity(nameof(MyEntity.Simulate)), 1);
 
-	[HarmonyTranspiler, HarmonyPatch("ParallelUpdateHandlerBeforeSimulation")]
-	private static IEnumerable<CodeInstruction> ParallelBeforeTranspiler(IEnumerable<CodeInstruction> il, MethodBase original)
-		=> Redirect(il, original, Parallel(nameof(IMyParallelUpdateable.UpdateBeforeSimulationParallel)), 1);
+    [HarmonyTranspiler, HarmonyPatch("ParallelUpdateHandlerBeforeSimulation")]
+    private static IEnumerable<CodeInstruction> ParallelBeforeTranspiler(
+        IEnumerable<CodeInstruction> il,
+        MethodBase original
+    ) =>
+        Redirect(
+            il,
+            original,
+            Parallel(nameof(IMyParallelUpdateable.UpdateBeforeSimulationParallel)),
+            1
+        );
 
-	[HarmonyTranspiler, HarmonyPatch("ParallelUpdateHandlerAfterSimulation")]
-	private static IEnumerable<CodeInstruction> ParallelAfterTranspiler(IEnumerable<CodeInstruction> il, MethodBase original)
-		=> Redirect(il, original, Parallel(nameof(IMyParallelUpdateable.UpdateAfterSimulationParallel)), 1);
+    [HarmonyTranspiler, HarmonyPatch("ParallelUpdateHandlerAfterSimulation")]
+    private static IEnumerable<CodeInstruction> ParallelAfterTranspiler(
+        IEnumerable<CodeInstruction> il,
+        MethodBase original
+    ) =>
+        Redirect(
+            il,
+            original,
+            Parallel(nameof(IMyParallelUpdateable.UpdateAfterSimulationParallel)),
+            1
+        );
 
-	// The config read, hung off the two dispatch entry points so the knob is live-switchable.
-	[HarmonyPrefix, HarmonyPatch(nameof(MyParallelEntityUpdateOrchestrator.DispatchBeforeSimulation))]
-	private static void RefreshBefore() => RefreshEnabled();
+    // The config read, hung off the two dispatch entry points so the knob is live-switchable.
+    [
+        HarmonyPrefix,
+        HarmonyPatch(nameof(MyParallelEntityUpdateOrchestrator.DispatchBeforeSimulation))
+    ]
+    private static void RefreshBefore() => RefreshEnabled();
 }

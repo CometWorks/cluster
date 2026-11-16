@@ -29,50 +29,75 @@ namespace ClusterPlugin;
 /// </summary>
 internal static class MeteorLifetime
 {
-	internal static readonly Guid Key = new Guid("5c1a0233-3e7e-4a2e-9d0e-b10c2e7e0381");
+    internal static readonly Guid Key = new Guid("5c1a0233-3e7e-4a2e-9d0e-b10c2e7e0381");
 
-	/// <summary>The least life a loaded meteor keeps: longer than an import takes to reach the round-trip gate.</summary>
-	internal const int LoadGraceMilliseconds = 30000;
+    /// <summary>The least life a loaded meteor keeps: longer than an import takes to reach the round-trip gate.</summary>
+    internal const int LoadGraceMilliseconds = 30000;
 
-	private sealed class State
-	{
-		public long Birth;
-	}
+    private sealed class State
+    {
+        public long Birth;
+    }
 
-	private static readonly ConditionalWeakTable<MyMeteor.MyMeteorGameLogic, State> States = new ConditionalWeakTable<MyMeteor.MyMeteorGameLogic, State>();
+    private static readonly ConditionalWeakTable<MyMeteor.MyMeteorGameLogic, State> States =
+        new ConditionalWeakTable<MyMeteor.MyMeteorGameLogic, State>();
 
-	private static bool Active => ClusterRuntime.IsClustered && !ClusterRuntime.IsWorldAuthority && Sync.IsServer;
+    private static bool Active =>
+        ClusterRuntime.IsClustered && !ClusterRuntime.IsWorldAuthority && Sync.IsServer;
 
-	private static long Now => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    private static long Now => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-	/// <summary>MyMeteorGameLogic.Init postfix, any thread (vanilla spawns meteors in parallel).</summary>
-	internal static void Initialized(MyMeteor.MyMeteorGameLogic logic, MyObjectBuilder_EntityBase builder)
-	{
-		if (!Active || builder is not MyObjectBuilder_Meteor meteor) return;
-		long now = Now;
-		long birth = long.TryParse(BlockBuilderEntry.Read(builder, Key), NumberStyles.Integer, CultureInfo.InvariantCulture, out long carried)
-			? carried : now;
-		States.AddOrUpdate(logic, new State { Birth = birth });
-		logic.m_timeCreated -= CarriedAge(now - birth, LifetimeMilliseconds(meteor.LinearVelocity.Length()));
-	}
+    /// <summary>MyMeteorGameLogic.Init postfix, any thread (vanilla spawns meteors in parallel).</summary>
+    internal static void Initialized(
+        MyMeteor.MyMeteorGameLogic logic,
+        MyObjectBuilder_EntityBase builder
+    )
+    {
+        if (!Active || builder is not MyObjectBuilder_Meteor meteor)
+            return;
+        long now = Now;
+        long birth = long.TryParse(
+            BlockBuilderEntry.Read(builder, Key),
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out long carried
+        )
+            ? carried
+            : now;
+        States.AddOrUpdate(logic, new State { Birth = birth });
+        logic.m_timeCreated -= CarriedAge(
+            now - birth,
+            LifetimeMilliseconds(meteor.LinearVelocity.Length())
+        );
+    }
 
-	/// <summary>MyMeteorGameLogic.GetObjectBuilder postfix: write the birth into the builder.</summary>
-	internal static void Saving(MyMeteor.MyMeteorGameLogic logic, MyObjectBuilder_EntityBase builder)
-	{
-		if (!Active || builder == null) return;
-		long birth = States.GetValue(logic, _ => new State { Birth = Now }).Birth;
-		BlockBuilderEntry.Write(builder, Key, birth.ToString(CultureInfo.InvariantCulture));
-	}
+    /// <summary>MyMeteorGameLogic.GetObjectBuilder postfix: write the birth into the builder.</summary>
+    internal static void Saving(
+        MyMeteor.MyMeteorGameLogic logic,
+        MyObjectBuilder_EntityBase builder
+    )
+    {
+        if (!Active || builder == null)
+            return;
+        long birth = States.GetValue(logic, _ => new State { Birth = Now }).Birth;
+        BlockBuilderEntry.Write(builder, Key, birth.ToString(CultureInfo.InvariantCulture));
+    }
 
-	/// <summary>The meteor's carried birth (Unix ms), null when it has none (test probe).</summary>
-	internal static long? Birth(MyMeteor meteor)
-		=> meteor?.GameLogic is MyMeteor.MyMeteorGameLogic logic && States.TryGetValue(logic, out State state) ? state.Birth : null;
+    /// <summary>The meteor's carried birth (Unix ms), null when it has none (test probe).</summary>
+    internal static long? Birth(MyMeteor meteor) =>
+        meteor?.GameLogic is MyMeteor.MyMeteorGameLogic logic
+        && States.TryGetValue(logic, out State state)
+            ? state.Birth
+            : null;
 
-	/// <summary>Vanilla's lifetime of a meteor at this speed (UpdateBeforeSimulation100).</summary>
-	internal static double LifetimeMilliseconds(double speed)
-		=> Math.Min(MyMeteor.MAX_TRAJECTORY_LENGTH / MyMeteor.SPEED, MyMeteor.MAX_TRAJECTORY_LENGTH / speed) * 1000;
+    /// <summary>Vanilla's lifetime of a meteor at this speed (UpdateBeforeSimulation100).</summary>
+    internal static double LifetimeMilliseconds(double speed) =>
+        Math.Min(
+            MyMeteor.MAX_TRAJECTORY_LENGTH / MyMeteor.SPEED,
+            MyMeteor.MAX_TRAJECTORY_LENGTH / speed
+        ) * 1000;
 
-	/// <summary>The age a loaded meteor resumes at: its real age, but never so old it has under the grace left.</summary>
-	internal static int CarriedAge(long ageMilliseconds, double lifetimeMilliseconds)
-		=> (int)Math.Max(0, Math.Min(ageMilliseconds, lifetimeMilliseconds - LoadGraceMilliseconds));
+    /// <summary>The age a loaded meteor resumes at: its real age, but never so old it has under the grace left.</summary>
+    internal static int CarriedAge(long ageMilliseconds, double lifetimeMilliseconds) =>
+        (int)Math.Max(0, Math.Min(ageMilliseconds, lifetimeMilliseconds - LoadGraceMilliseconds));
 }

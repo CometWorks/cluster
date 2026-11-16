@@ -20,10 +20,16 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyMaintenancePanelComponent), nameof(MyMaintenancePanelComponent.Serialize))]
 public static class MyMaintenancePanelComponentPatch
 {
-	[HarmonyPostfix]
-	private static void Postfix(MyMaintenancePanelComponent __instance, MyObjectBuilder_ComponentBase __result)
-	{
-		if (__instance.m_builderToInitFrom is { } pending && __result is MyObjectBuilder_MaintenancePanelComponent builder)
-			builder.Open = pending.Open;
-	}
+    [HarmonyPostfix]
+    private static void Postfix(
+        MyMaintenancePanelComponent __instance,
+        MyObjectBuilder_ComponentBase __result
+    )
+    {
+        if (
+            __instance.m_builderToInitFrom is { } pending
+            && __result is MyObjectBuilder_MaintenancePanelComponent builder
+        )
+            builder.Open = pending.Open;
+    }
 }

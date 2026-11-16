@@ -1,9 +1,18 @@
 namespace ClusterRegistry;
 
 /// <summary>One World Authority command result, journaled before its answer is sent (#1318). Generation is set by the registry.</summary>
-internal sealed record GlobalJournalEntry(long Order, string Subsystem, Guid OperationId, string Origin, string Payload, string Result,
-    long Generation = 0);
+internal sealed record GlobalJournalEntry(
+    long Order,
+    string Subsystem,
+    Guid OperationId,
+    string Origin,
+    string Payload,
+    string Result,
+    long Generation = 0
+);
+
 internal sealed record GlobalJournalAppend(GlobalJournalEntry[]? Entries);
+
 /// <param name="DroppedThrough">The highest order the capacity has dropped: a replay after an older save would miss entries.</param>
 internal sealed record GlobalJournalPage(GlobalJournalEntry[] Entries, long DroppedThrough);
 
@@ -29,13 +38,30 @@ internal sealed partial class GatewayRegistry
     private readonly SortedDictionary<long, GlobalJournalEntry> _globalJournal = [];
     private long _globalJournalDroppedThrough;
 
-    public int AppendGlobalJournal(string node, long epoch, long generation, GlobalJournalEntry[] entries)
+    public int AppendGlobalJournal(
+        string node,
+        long epoch,
+        long generation,
+        GlobalJournalEntry[] entries
+    )
     {
-        if (entries.Length == 0 || entries.Any(entry => entry.Order <= 0 || string.IsNullOrWhiteSpace(entry.Subsystem)
-                || entry.Subsystem.Length > 128 || entry.OperationId == Guid.Empty || entry.Origin == null || entry.Payload == null
-                || entry.Result == null || entry.Payload.Length + entry.Result.Length > GlobalJournalEntryChars)
-            || entries.Select(entry => entry.Order).Distinct().Count() != entries.Length)
-            throw new ArgumentException("A global journal append requires entries with distinct positive orders, a subsystem, an operation ID, a payload and a result");
+        if (
+            entries.Length == 0
+            || entries.Any(entry =>
+                entry.Order <= 0
+                || string.IsNullOrWhiteSpace(entry.Subsystem)
+                || entry.Subsystem.Length > 128
+                || entry.OperationId == Guid.Empty
+                || entry.Origin == null
+                || entry.Payload == null
+                || entry.Result == null
+                || entry.Payload.Length + entry.Result.Length > GlobalJournalEntryChars
+            )
+            || entries.Select(entry => entry.Order).Distinct().Count() != entries.Length
+        )
+            throw new ArgumentException(
+                "A global journal append requires entries with distinct positive orders, a subsystem, an operation ID, a payload and a result"
+            );
         lock (_lock)
         {
             // Not refused while Empty: a WA past its Final still serves the regular nodes it waits for (T-0048), and a
@@ -44,9 +70,16 @@ internal sealed partial class GatewayRegistry
             RequireNode(node, epoch);
             WorldAuthority authority = RequireWorldAuthority(node, epoch, generation);
             if (authority.LeaseExpires <= _clock())
-                throw new RegistryConflictException($"World Authority generation {generation} is fenced");
+                throw new RegistryConflictException(
+                    $"World Authority generation {generation} is fenced"
+                );
             long first = entries.Min(entry => entry.Order);
-            foreach (long stale in _globalJournal.Where(item => item.Value.Generation < generation && item.Key >= first).Select(item => item.Key).ToArray())
+            foreach (
+                long stale in _globalJournal
+                    .Where(item => item.Value.Generation < generation && item.Key >= first)
+                    .Select(item => item.Key)
+                    .ToArray()
+            )
                 _globalJournal.Remove(stale);
             foreach (GlobalJournalEntry entry in entries)
                 _globalJournal[entry.Order] = entry with { Generation = generation };
@@ -64,7 +97,9 @@ internal sealed partial class GatewayRegistry
     public GlobalJournalPage GlobalJournal(long after)
     {
         lock (_lock)
-            return new GlobalJournalPage(_globalJournal.Where(item => item.Key > after).Select(item => item.Value).ToArray(),
-                _globalJournalDroppedThrough);
+            return new GlobalJournalPage(
+                _globalJournal.Where(item => item.Key > after).Select(item => item.Value).ToArray(),
+                _globalJournalDroppedThrough
+            );
     }
 }

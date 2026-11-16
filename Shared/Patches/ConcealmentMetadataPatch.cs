@@ -14,6 +14,7 @@ internal static class ConcealmentMetadataPatch
     [HarmonyPostfix]
     private static void Postfix(MyCubeGrid __instance, MyObjectBuilder_EntityBase __result)
     {
-        if (ClusterRuntime.IsClustered) OfflineCompensation.Call("PreserveMetadata", __instance, __result);
+        if (ClusterRuntime.IsClustered)
+            OfflineCompensation.Call("PreserveMetadata", __instance, __result);
     }
 }

@@ -24,26 +24,38 @@ namespace Shared.Patches;
 /// and a body nobody on this node controls has no crosshair to keep. The update resumes on its own once the identity
 /// arrives or a player takes control. Each character is logged once with the owner id this node failed to resolve.
 /// </summary>
-[HarmonyPatch(typeof(MyCharacterWeaponPositionComponent), nameof(MyCharacterWeaponPositionComponent.Update))]
+[HarmonyPatch(
+    typeof(MyCharacterWeaponPositionComponent),
+    nameof(MyCharacterWeaponPositionComponent.Update)
+)]
 internal static class MyCharacterWeaponPositionComponentPatch
 {
-	private static readonly ConcurrentDictionary<long, byte> s_logged = new ConcurrentDictionary<long, byte>();
-	private static long s_skips;
+    private static readonly ConcurrentDictionary<long, byte> s_logged =
+        new ConcurrentDictionary<long, byte>();
+    private static long s_skips;
 
-	/// <summary>Updates skipped for a character without an identity since start (self-test and diagnostics).</summary>
-	internal static long Skips => Interlocked.Read(ref s_skips);
+    /// <summary>Updates skipped for a character without an identity since start (self-test and diagnostics).</summary>
+    internal static long Skips => Interlocked.Read(ref s_skips);
 
-	[HarmonyPrefix]
-	private static bool Prefix(MyCharacterWeaponPositionComponent __instance)
-	{
-		if (!ClusterRuntime.IsClustered || !Sync.IsDedicated) return true;
-		MyCharacter character = __instance.Character;
-		if (character == null || character.Definition == null || character.GetIdentity() != null) return true;
-		Interlocked.Increment(ref s_skips);
-		if (s_logged.TryAdd(character.EntityId, 0))
-			Console.WriteLine("[ClusterPlugin] character_without_identity entity=" + character.EntityId
-				+ " name=" + character.DisplayName + " owner=" + character.GetPlayerIdentityId()
-				+ ": weapon position update skipped until the identity is known (SE-1583)");
-		return false;
-	}
+    [HarmonyPrefix]
+    private static bool Prefix(MyCharacterWeaponPositionComponent __instance)
+    {
+        if (!ClusterRuntime.IsClustered || !Sync.IsDedicated)
+            return true;
+        MyCharacter character = __instance.Character;
+        if (character == null || character.Definition == null || character.GetIdentity() != null)
+            return true;
+        Interlocked.Increment(ref s_skips);
+        if (s_logged.TryAdd(character.EntityId, 0))
+            Console.WriteLine(
+                "[ClusterPlugin] character_without_identity entity="
+                    + character.EntityId
+                    + " name="
+                    + character.DisplayName
+                    + " owner="
+                    + character.GetPlayerIdentityId()
+                    + ": weapon position update skipped until the identity is known (SE-1583)"
+            );
+        return false;
+    }
 }

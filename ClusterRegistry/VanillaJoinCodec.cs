@@ -31,11 +31,24 @@ internal static class VanillaJoinCodec
         string? name = reader.ReadBool() ? reader.ReadString() : null;
         string? serviceName = reader.ReadBool() ? reader.ReadString() : null;
         byte[]? token = reader.ReadBool() ? reader.ReadByteArray(MaximumTokenBytes) : null;
-        return new ClientConnectedData(clientId, serviceName, name, isAdmin, join, token, experimentalMode, isProfiling);
+        return new ClientConnectedData(
+            clientId,
+            serviceName,
+            name,
+            isAdmin,
+            join,
+            token,
+            experimentalMode,
+            isProfiling
+        );
     }
 
     /// <summary>Frames a JOIN_RESULT exactly as MyNetworkWriter does for a reliable message.</summary>
-    public static byte[] EncodeJoinResultFrame(JoinResult result, bool serverExperimental = false, ulong admin = 0)
+    public static byte[] EncodeJoinResultFrame(
+        JoinResult result,
+        bool serverExperimental = false,
+        ulong admin = 0
+    )
     {
         var writer = new BitWriter(MessageHeaderBytes);
         writer.Write(admin, 64);
@@ -143,8 +156,16 @@ internal static class VanillaJoinCodec
     }
 }
 
-internal sealed record ClientConnectedData(ulong ClientId, string? ServiceName, string? Name, bool IsAdmin, bool Join,
-    byte[]? Token, bool ExperimentalMode, bool IsProfiling);
+internal sealed record ClientConnectedData(
+    ulong ClientId,
+    string? ServiceName,
+    string? Name,
+    bool IsAdmin,
+    bool Join,
+    byte[]? Token,
+    bool ExperimentalMode,
+    bool IsProfiling
+);
 
 /// <summary>VRage.Network.JoinResult, pinned by ordinal - the enum is serialized as its value.</summary>
 internal enum JoinResult

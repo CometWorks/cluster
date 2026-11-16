@@ -15,34 +15,46 @@ namespace ClusterPlugin;
 /// </summary>
 internal static class ServerDetailsReport
 {
-	private static volatile string s_data;
-	private static volatile bool s_wanted;
-	private static int s_computing;
+    private static volatile string s_data;
+    private static volatile bool s_wanted;
+    private static int s_computing;
 
-	/// <summary>The heartbeat's ServerData: the base64 blob while the registry asks for it, else null.</summary>
-	public static string ForHeartbeat => s_wanted ? s_data : null;
+    /// <summary>The heartbeat's ServerData: the base64 blob while the registry asks for it, else null.</summary>
+    public static string ForHeartbeat => s_wanted ? s_data : null;
 
-	/// <summary>The heartbeat reply's ServerDataWanted.</summary>
-	public static void Wanted(bool wanted)
-	{
-		s_wanted = wanted;
-		if (wanted && s_data == null && MySandboxGame.Static != null && Interlocked.Exchange(ref s_computing, 1) == 0)
-			MySandboxGame.Static.Invoke(Compute, "SE-1076 server details");
-	}
+    /// <summary>The heartbeat reply's ServerDataWanted.</summary>
+    public static void Wanted(bool wanted)
+    {
+        s_wanted = wanted;
+        if (
+            wanted
+            && s_data == null
+            && MySandboxGame.Static != null
+            && Interlocked.Exchange(ref s_computing, 1) == 0
+        )
+            MySandboxGame.Static.Invoke(Compute, "SE-1076 server details");
+    }
 
-	private static void Compute()
-	{
-		try
-		{
-			byte[] data = MyCachedServerItem.GetServerData();
-			s_data = Convert.ToBase64String(data);
-			MyLog.Default?.WriteLineAndConsole($"[ClusterPlugin] server details for the Gateway: {data.Length} bytes");
-		}
-		catch (Exception exception)
-		{
-			// No session yet, or a vanilla change: the next heartbeat reply asks again.
-			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] server details failed: " + exception.Message);
-		}
-		finally { Volatile.Write(ref s_computing, 0); }
-	}
+    private static void Compute()
+    {
+        try
+        {
+            byte[] data = MyCachedServerItem.GetServerData();
+            s_data = Convert.ToBase64String(data);
+            MyLog.Default?.WriteLineAndConsole(
+                $"[ClusterPlugin] server details for the Gateway: {data.Length} bytes"
+            );
+        }
+        catch (Exception exception)
+        {
+            // No session yet, or a vanilla change: the next heartbeat reply asks again.
+            MyLog.Default?.WriteLineAndConsole(
+                "[ClusterPlugin] server details failed: " + exception.Message
+            );
+        }
+        finally
+        {
+            Volatile.Write(ref s_computing, 0);
+        }
+    }
 }

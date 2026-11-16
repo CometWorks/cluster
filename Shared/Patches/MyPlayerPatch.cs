@@ -11,9 +11,9 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyPlayer), nameof(MyPlayer.Identity), MethodType.Setter)]
 public static class MyPlayerPatch
 {
-	[HarmonyPrefix]
-	private static void IdentityPrefix(MyPlayer __instance, MyIdentity value)
-	{
-		MyPlayerSeams.ClusterIdentityChanging?.Invoke(__instance, value);
-	}
+    [HarmonyPrefix]
+    private static void IdentityPrefix(MyPlayer __instance, MyIdentity value)
+    {
+        MyPlayerSeams.ClusterIdentityChanging?.Invoke(__instance, value);
+    }
 }

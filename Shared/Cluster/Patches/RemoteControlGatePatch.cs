@@ -14,19 +14,25 @@ namespace ClusterPlugin;
 /// </summary>
 public static class RemoteControlGatePatch
 {
-	public static Func<long, bool> IsFrozen { get; set; }
+    public static Func<long, bool> IsFrozen { get; set; }
 
-	public static void Install()
-	{
-		MyRemoteControlSeams.ClusterUseGate = Gate;
-	}
+    public static void Install()
+    {
+        MyRemoteControlSeams.ClusterUseGate = Gate;
+    }
 
-	private static UseActionResult? Gate(MyRemoteControl block, UseActionEnum useAction, long usedById)
-	{
-		long root = block?.CubeGrid?.EntityId ?? 0;
-		if (root == 0 || IsFrozen?.Invoke(root) != true) return null;
-		MyLog.Default?.WriteLine(
-			$"[ClusterPlugin] remote control denied: block={block.EntityId} root={root} usedBy={usedById} action={useAction} reason=frozen partition transfer in progress");
-		return UseActionResult.AccessDenied;
-	}
+    private static UseActionResult? Gate(
+        MyRemoteControl block,
+        UseActionEnum useAction,
+        long usedById
+    )
+    {
+        long root = block?.CubeGrid?.EntityId ?? 0;
+        if (root == 0 || IsFrozen?.Invoke(root) != true)
+            return null;
+        MyLog.Default?.WriteLine(
+            $"[ClusterPlugin] remote control denied: block={block.EntityId} root={root} usedBy={usedById} action={useAction} reason=frozen partition transfer in progress"
+        );
+        return UseActionResult.AccessDenied;
+    }
 }

@@ -21,40 +21,83 @@ namespace ClusterPlugin;
 /// </summary>
 public static class GridMoveService
 {
-	public static object Move(long entityId, double x, double y, double z)
-	{
-		if (!MyEntities.TryGetEntityById(entityId, out MyEntity entity) || entity is not MyCubeGrid grid)
-			return new { moved = false, entityId, reason = "not a grid on this node" };
-		if (grid.Closed || grid.MarkedForClose)
-			return new { moved = false, entityId, reason = "grid is closing" };
-		if (grid.IsStatic)
-			return new { moved = false, entityId, reason = "static grid; stations are never moved" };
-		if (grid.GetTopMostParent() != grid)
-			return new { moved = false, entityId, reason = "not a top-level grid" };
-		if (ClusterRuntime.IsFrozen(grid.EntityId))
-			return new { moved = false, entityId, reason = "frozen for a handover in progress" };
-		long[] pilots = grid.GetFatBlocks<MyCockpit>()
-			.Where(cockpit => cockpit.Pilot != null)
-			.Select(cockpit => cockpit.Pilot.EntityId).ToArray();
-		if (pilots.Length > 0)
-			return new { moved = false, entityId, reason = "a cockpit holds a pilot", pilots };
-		var group = MyCubeGridGroups.Static.Physical.GetGroup(grid);
-		if (group != null && group.Nodes.Count > 1)
-			return new { moved = false, entityId, reason = "mechanically attached to other grids",
-				attached = group.Nodes.Select(node => node.NodeData.EntityId).Where(id => id != entityId).ToArray() };
-		Vector3D from = grid.PositionComp.GetPosition();
-		MatrixD matrix = grid.WorldMatrix;
-		matrix.Translation = new Vector3D(x, y, z);
-		grid.Physics?.ClearSpeed();
-		grid.Teleport(matrix);
-		Vector3D to = grid.PositionComp.GetPosition();
-		return new
-		{
-			moved = true,
-			entityId,
-			blocks = grid.BlocksCount,
-			from = new[] { from.X, from.Y, from.Z },
-			to = new[] { to.X, to.Y, to.Z },
-		};
-	}
+    public static object Move(long entityId, double x, double y, double z)
+    {
+        if (
+            !MyEntities.TryGetEntityById(entityId, out MyEntity entity)
+            || entity is not MyCubeGrid grid
+        )
+            return new
+            {
+                moved = false,
+                entityId,
+                reason = "not a grid on this node",
+            };
+        if (grid.Closed || grid.MarkedForClose)
+            return new
+            {
+                moved = false,
+                entityId,
+                reason = "grid is closing",
+            };
+        if (grid.IsStatic)
+            return new
+            {
+                moved = false,
+                entityId,
+                reason = "static grid; stations are never moved",
+            };
+        if (grid.GetTopMostParent() != grid)
+            return new
+            {
+                moved = false,
+                entityId,
+                reason = "not a top-level grid",
+            };
+        if (ClusterRuntime.IsFrozen(grid.EntityId))
+            return new
+            {
+                moved = false,
+                entityId,
+                reason = "frozen for a handover in progress",
+            };
+        long[] pilots = grid.GetFatBlocks<MyCockpit>()
+            .Where(cockpit => cockpit.Pilot != null)
+            .Select(cockpit => cockpit.Pilot.EntityId)
+            .ToArray();
+        if (pilots.Length > 0)
+            return new
+            {
+                moved = false,
+                entityId,
+                reason = "a cockpit holds a pilot",
+                pilots,
+            };
+        var group = MyCubeGridGroups.Static.Physical.GetGroup(grid);
+        if (group != null && group.Nodes.Count > 1)
+            return new
+            {
+                moved = false,
+                entityId,
+                reason = "mechanically attached to other grids",
+                attached = group
+                    .Nodes.Select(node => node.NodeData.EntityId)
+                    .Where(id => id != entityId)
+                    .ToArray(),
+            };
+        Vector3D from = grid.PositionComp.GetPosition();
+        MatrixD matrix = grid.WorldMatrix;
+        matrix.Translation = new Vector3D(x, y, z);
+        grid.Physics?.ClearSpeed();
+        grid.Teleport(matrix);
+        Vector3D to = grid.PositionComp.GetPosition();
+        return new
+        {
+            moved = true,
+            entityId,
+            blocks = grid.BlocksCount,
+            from = new[] { from.X, from.Y, from.Z },
+            to = new[] { to.X, to.Y, to.Z },
+        };
+    }
 }

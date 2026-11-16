@@ -9,5 +9,5 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyMultiplayerServerBaseSeams
 {
-	public static Func<MyTimeSpan, MyTimeSpan> ClusterAdjustUpdateTime;
+    public static Func<MyTimeSpan, MyTimeSpan> ClusterAdjustUpdateTime;
 }

@@ -24,8 +24,16 @@ public static class MyProgrammableBlockPatch
     /// methods delegate to it. Inert until ClusterRuntime installs the frozen resolver.
     /// </summary>
     [HarmonyPrefix]
-    [HarmonyPatch("ExecuteCode", new[] { typeof(string), typeof(UpdateType), typeof(string) }, new[] { ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Out })]
-    private static bool ExecuteCodePrefix(MyProgrammableBlock __instance, ref MyProgrammableBlock.ScriptTerminationReason __result, ref string response)
+    [HarmonyPatch(
+        "ExecuteCode",
+        new[] { typeof(string), typeof(UpdateType), typeof(string) },
+        new[] { ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Out }
+    )]
+    private static bool ExecuteCodePrefix(
+        MyProgrammableBlock __instance,
+        ref MyProgrammableBlock.ScriptTerminationReason __result,
+        ref string response
+    )
     {
         if (ProgrammableBlockFreezePatch.IsFrozen == null)
             return true;
@@ -45,26 +53,41 @@ public static class MyProgrammableBlockPatch
     /// A null callback preserves the original lazy IGC context exactly.
     /// </summary>
     [HarmonyTranspiler]
-    [HarmonyPatch("CreateInstance", new[] { typeof(Assembly), typeof(IEnumerable<string>), typeof(string) })]
-    private static IEnumerable<CodeInstruction> CreateInstanceTranspiler(IEnumerable<CodeInstruction> instructions, MethodBase original)
+    [HarmonyPatch(
+        "CreateInstance",
+        new[] { typeof(Assembly), typeof(IEnumerable<string>), typeof(string) }
+    )]
+    private static IEnumerable<CodeInstruction> CreateInstanceTranspiler(
+        IEnumerable<CodeInstruction> instructions,
+        MethodBase original
+    )
     {
         var il = instructions.ToList();
-        var instance = AccessTools.Field(typeof(MyProgrammableBlock), "m_instance")
-                       ?? throw new CodeInstructionNotFound("MyProgrammableBlock.m_instance not found");
+        var instance =
+            AccessTools.Field(typeof(MyProgrammableBlock), "m_instance")
+            ?? throw new CodeInstructionNotFound("MyProgrammableBlock.m_instance not found");
         var prepare = AccessTools.Method(typeof(MyProgrammableBlockPatch), nameof(PrepareProgram));
 
-        var setters = il.FindAllIndex(ci => (ci.opcode == OpCodes.Callvirt || ci.opcode == OpCodes.Call)
-                                            && ci.operand is MethodInfo mi && mi.Name == "set_IGC_ContextGetter");
+        var setters = il.FindAllIndex(ci =>
+            (ci.opcode == OpCodes.Callvirt || ci.opcode == OpCodes.Call)
+            && ci.operand is MethodInfo mi
+            && mi.Name == "set_IGC_ContextGetter"
+        );
         if (setters.Count != 1)
-            throw new CodeInstructionNotFound($"{original.Name}: expected exactly one IGC_ContextGetter assignment, found {setters.Count}");
+            throw new CodeInstructionNotFound(
+                $"{original.Name}: expected exactly one IGC_ContextGetter assignment, found {setters.Count}"
+            );
 
-        il.InsertRange(setters[0] + 1, new[]
-        {
-            new CodeInstruction(OpCodes.Ldarg_0),
-            new CodeInstruction(OpCodes.Ldarg_0),
-            new CodeInstruction(OpCodes.Ldfld, instance),
-            new CodeInstruction(OpCodes.Call, prepare),
-        });
+        il.InsertRange(
+            setters[0] + 1,
+            new[]
+            {
+                new CodeInstruction(OpCodes.Ldarg_0),
+                new CodeInstruction(OpCodes.Ldarg_0),
+                new CodeInstruction(OpCodes.Ldfld, instance),
+                new CodeInstruction(OpCodes.Call, prepare),
+            }
+        );
         return il;
     }
 }

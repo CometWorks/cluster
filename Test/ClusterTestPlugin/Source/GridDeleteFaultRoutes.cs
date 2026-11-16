@@ -20,38 +20,72 @@ internal static class GridDeleteFaultRoutes
     public static void Register()
     {
         // POST /test-grid-delete-fault?entity= - arm: the next BeforeDelete of grid `entity` throws.
-        TestRoutes.Add("POST", "/test-grid-delete-fault", context =>
-        {
-            long grid = TestRoutes.Long(context, "entity");
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+        TestRoutes.Add(
+            "POST",
+            "/test-grid-delete-fault",
+            context =>
             {
-                if (!(MyEntities.GetEntityById(grid) is MyCubeGrid)) throw new InvalidOperationException($"No grid {grid} on this node");
-                EnsurePatched();
-                Interlocked.Exchange(ref m_grid, grid);
-                Plugin.Log($"grid-delete-fault armed grid={grid} (#1295)");
-                return (object)new { armed = true, grid };
-            }));
-        });
+                long grid = TestRoutes.Long(context, "entity");
+                TestRoutes.Json(
+                    context,
+                    200,
+                    TestRoutes.OnGameThread(() =>
+                    {
+                        if (!(MyEntities.GetEntityById(grid) is MyCubeGrid))
+                            throw new InvalidOperationException($"No grid {grid} on this node");
+                        EnsurePatched();
+                        Interlocked.Exchange(ref m_grid, grid);
+                        Plugin.Log($"grid-delete-fault armed grid={grid} (#1295)");
+                        return (object)new { armed = true, grid };
+                    })
+                );
+            }
+        );
         // GET /test-grid-delete-fault - how many faults were thrown.
-        TestRoutes.Add("GET", "/test-grid-delete-fault", context =>
-            TestRoutes.Json(context, 200, new { grid = Interlocked.Read(ref m_grid), thrown = Interlocked.Read(ref m_thrown) }));
+        TestRoutes.Add(
+            "GET",
+            "/test-grid-delete-fault",
+            context =>
+                TestRoutes.Json(
+                    context,
+                    200,
+                    new
+                    {
+                        grid = Interlocked.Read(ref m_grid),
+                        thrown = Interlocked.Read(ref m_thrown),
+                    }
+                )
+        );
     }
 
     private static void EnsurePatched()
     {
-        if (m_patched) return;
-        var original = AccessTools.Method(typeof(MyCubeGrid), "BeforeDelete")
+        if (m_patched)
+            return;
+        var original =
+            AccessTools.Method(typeof(MyCubeGrid), "BeforeDelete")
             ?? throw new MissingMethodException("MyCubeGrid.BeforeDelete");
-        new Harmony("ClusterTestPlugin.GridDeleteFault").Patch(original,
-            prefix: new HarmonyMethod(AccessTools.Method(typeof(GridDeleteFaultRoutes), nameof(BeforeDeletePrefix))));
+        new Harmony("ClusterTestPlugin.GridDeleteFault").Patch(
+            original,
+            prefix: new HarmonyMethod(
+                AccessTools.Method(typeof(GridDeleteFaultRoutes), nameof(BeforeDeletePrefix))
+            )
+        );
         m_patched = true;
     }
 
     private static void BeforeDeletePrefix(MyCubeGrid __instance)
     {
         long grid = Interlocked.Read(ref m_grid);
-        if (grid == 0 || __instance.EntityId != grid || Interlocked.CompareExchange(ref m_grid, 0, grid) != grid) return;
+        if (
+            grid == 0
+            || __instance.EntityId != grid
+            || Interlocked.CompareExchange(ref m_grid, 0, grid) != grid
+        )
+            return;
         Interlocked.Increment(ref m_thrown);
-        throw new NullReferenceException($"test fault in MyCubeGrid.BeforeDelete of grid {grid} (#1295)");
+        throw new NullReferenceException(
+            $"test fault in MyCubeGrid.BeforeDelete of grid {grid} (#1295)"
+        );
     }
 }

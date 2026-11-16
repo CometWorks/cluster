@@ -19,12 +19,16 @@ internal static class PanelTestRoutes
 {
     public static void Register()
     {
-        TestRoutes.Add("*", "/panel-test", context =>
-        {
-            long block = TestRoutes.Long(context, "block");
-            string open = context.Request.QueryString["open"];
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => Panels(block, open)));
-        });
+        TestRoutes.Add(
+            "*",
+            "/panel-test",
+            context =>
+            {
+                long block = TestRoutes.Long(context, "block");
+                string open = context.Request.QueryString["open"];
+                TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => Panels(block, open)));
+            }
+        );
     }
 
     private static object Panels(long blockId, string open)
@@ -33,23 +37,31 @@ internal static class PanelTestRoutes
             return new { found = false, panels = Array.Empty<object>() };
         var panels = new List<MyMaintenancePanelComponent>();
         foreach (MyComponentBase component in (MyComponentContainer)entity.Components)
-            if (component is MyMaintenancePanelComponent panel) panels.Add(panel);
+            if (component is MyMaintenancePanelComponent panel)
+                panels.Add(panel);
         if (!string.IsNullOrEmpty(open))
         {
-            MyMaintenancePanelComponent panel = panels.FirstOrDefault(candidate => candidate.SubType.String == open)
-                ?? throw new ArgumentException("No maintenance panel " + open + " on block " + blockId);
+            MyMaintenancePanelComponent panel =
+                panels.FirstOrDefault(candidate => candidate.SubType.String == open)
+                ?? throw new ArgumentException(
+                    "No maintenance panel " + open + " on block " + blockId
+                );
             panel.OpenCloseToggle();
         }
         return new
         {
             found = true,
-            panels = panels.Select(panel => new
-            {
-                subtype = panel.SubType.String,
-                status = panel.Status.ToString(),
-                pending = panel.m_builderToInitFrom != null,
-                serializedOpen = ((MyObjectBuilder_MaintenancePanelComponent)panel.Serialize()).Open,
-            }).ToArray(),
+            panels = panels
+                .Select(panel => new
+                {
+                    subtype = panel.SubType.String,
+                    status = panel.Status.ToString(),
+                    pending = panel.m_builderToInitFrom != null,
+                    serializedOpen = (
+                        (MyObjectBuilder_MaintenancePanelComponent)panel.Serialize()
+                    ).Open,
+                })
+                .ToArray(),
         };
     }
 }

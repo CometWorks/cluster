@@ -32,31 +32,51 @@ namespace Shared.Patches;
 public static class MyTerminalBlockClientRemovedPatch
 {
     private static readonly object Gate = new();
-    private static readonly Dictionary<object, Action<ulong>> Handlers = new(ReferenceEqualityComparer.Instance);
+    private static readonly Dictionary<object, Action<ulong>> Handlers = new(
+        ReferenceEqualityComparer.Instance
+    );
     private static MyClientCollection s_subscribedTo;
 
     /// <summary>Registered block handlers, for diagnostics and the self-check.</summary>
     public static int Count
     {
-        get { lock (Gate) return Handlers.Count; }
+        get
+        {
+            lock (Gate)
+                return Handlers.Count;
+        }
     }
 
     [HarmonyTargetMethods]
     private static IEnumerable<MethodBase> TargetMethods()
     {
-        yield return AccessTools.Method(typeof(MyTerminalBlock), "Init", new[] { typeof(MyObjectBuilder_CubeBlock), typeof(Sandbox.Game.Entities.MyCubeGrid) });
+        yield return AccessTools.Method(
+            typeof(MyTerminalBlock),
+            "Init",
+            new[] { typeof(MyObjectBuilder_CubeBlock), typeof(Sandbox.Game.Entities.MyCubeGrid) }
+        );
         yield return AccessTools.Method(typeof(MyTerminalBlock), "Closing");
     }
 
     [HarmonyTranspiler]
-    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, MethodBase original)
+    private static IEnumerable<CodeInstruction> Transpiler(
+        IEnumerable<CodeInstruction> instructions,
+        MethodBase original
+    )
     {
         var il = new List<CodeInstruction>(instructions);
         bool init = original.Name == "Init";
         string accessor = init ? "add_ClientRemoved" : "remove_ClientRemoved";
-        int at = il.IndexOfSingle(original, accessor, ci => ci.CallsNamed(accessor, typeof(MyClientCollection)));
+        int at = il.IndexOfSingle(
+            original,
+            accessor,
+            ci => ci.CallsNamed(accessor, typeof(MyClientCollection))
+        );
         il[at].opcode = OpCodes.Call;
-        il[at].operand = AccessTools.Method(typeof(MyTerminalBlockClientRemovedPatch), init ? nameof(Subscribe) : nameof(Unsubscribe));
+        il[at].operand = AccessTools.Method(
+            typeof(MyTerminalBlockClientRemovedPatch),
+            init ? nameof(Subscribe) : nameof(Unsubscribe)
+        );
         return il;
     }
 

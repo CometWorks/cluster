@@ -20,12 +20,27 @@ internal sealed record NpcGrid(
     [property: JsonPropertyName("y")] double Y,
     [property: JsonPropertyName("z")] double Z,
     [property: JsonPropertyName("u")] double UnvisitedSeconds,
-    [property: JsonPropertyName("k"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Kind = null,
-    [property: JsonPropertyName("o"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Offline = false,
-    [property: JsonPropertyName("d"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Drop = false,
-    [property: JsonPropertyName("e"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] long Expires = 0)
+    [property: JsonPropertyName("k"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? Kind = null,
+    [property:
+        JsonPropertyName("o"),
+        JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)
+    ]
+        bool Offline = false,
+    [property:
+        JsonPropertyName("d"),
+        JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)
+    ]
+        bool Drop = false,
+    [property:
+        JsonPropertyName("e"),
+        JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)
+    ]
+        long Expires = 0
+)
 {
-    [JsonIgnore] public bool IsNpc => Kind != "unowned";
+    [JsonIgnore]
+    public bool IsNpc => Kind != "unowned";
 }
 
 /// <summary>#1354: the cluster-wide NPC census every node polls (GET /registry/npc-census). Online and Offline count the NPC
@@ -38,7 +53,11 @@ internal sealed record NpcCensus(
     [property: JsonPropertyName("grids")] NpcGrid[] Grids,
     // SE-1316: the unix second the newest registry backup finished (its artifact released), null since the gateway started.
     // The nodes' bot ship cleanup runs on each new one and removes only ships that were already unused when it was taken.
-    [property: JsonPropertyName("backupAt"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? BackupAt = null);
+    [property:
+        JsonPropertyName("backupAt"),
+        JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)
+    ] long? BackupAt = null
+);
 
 internal sealed partial class DirectGateway
 {
@@ -47,6 +66,7 @@ internal sealed partial class DirectGateway
     private long _npcCensusOfflineRevision;
     private OfflinePartition[] _npcCensusOfflineRows = [];
     private NpcCensus? _npcCensus;
+
     /// <summary>SE-1316: the unix second the newest stored registry backup was released, 0 = none since start.</summary>
     private long _lastBackupAt;
 
@@ -58,7 +78,8 @@ internal sealed partial class DirectGateway
     /// </summary>
     private NpcCensus? NpcCensusNow()
     {
-        if (_lastPartitionReports is not { } reports) return null;
+        if (_lastPartitionReports is not { } reports)
+            return null;
         lock (_npcCensusLock)
         {
             OfflineTable offline = _registry!.OfflinePartitions(_npcCensusOfflineRevision);
@@ -69,11 +90,23 @@ internal sealed partial class DirectGateway
             }
             if (_npcCensus == null || !offline.Unchanged || _npcCensusReportsAt != reports.At)
             {
-                NpcGrid[] grids = MergeNpcCensus(reports.Reports.Select(x => x.Report), _npcCensusOfflineRows, out int online, out int offlineNpc);
+                NpcGrid[] grids = MergeNpcCensus(
+                    reports.Reports.Select(x => x.Report),
+                    _npcCensusOfflineRows,
+                    out int online,
+                    out int offlineNpc
+                );
                 _npcCensus = new NpcCensus(0, online, offlineNpc, grids);
                 _npcCensusReportsAt = reports.At;
             }
-            return _npcCensus with { BackupAt = _lastBackupAt == 0 ? null : Interlocked.Read(ref _lastBackupAt), AgeSeconds = Math.Round(Math.Max(0, (DateTime.UtcNow - reports.At).TotalSeconds), 1) };
+            return _npcCensus with
+            {
+                BackupAt = _lastBackupAt == 0 ? null : Interlocked.Read(ref _lastBackupAt),
+                AgeSeconds = Math.Round(
+                    Math.Max(0, (DateTime.UtcNow - reports.At).TotalSeconds),
+                    1
+                ),
+            };
         }
     }
 
@@ -82,24 +115,32 @@ internal sealed partial class DirectGateway
     /// keeps the smaller unvisited count, so a race can only delay a removal. An offline row's grid that is also
     /// online (a load the table has not caught up with) counts once, as the online row. The counts are of NPC grids.
     /// </summary>
-    internal static NpcGrid[] MergeNpcCensus(IEnumerable<PartitionReport> reports, IEnumerable<OfflinePartition> offline,
-        out int online, out int offlineNpc)
+    internal static NpcGrid[] MergeNpcCensus(
+        IEnumerable<PartitionReport> reports,
+        IEnumerable<OfflinePartition> offline,
+        out int online,
+        out int offlineNpc
+    )
     {
         var grids = new Dictionary<long, NpcGrid>();
         foreach (PartitionReport report in reports)
-            foreach (PartitionInfo partition in report.Partitions)
-                foreach (NpcGrid grid in partition.Npc ?? [])
-                    if (!grids.TryGetValue(grid.Id, out NpcGrid? seen) || grid.UnvisitedSeconds < seen.UnvisitedSeconds)
-                        grids[grid.Id] = grid;
+        foreach (PartitionInfo partition in report.Partitions)
+        foreach (NpcGrid grid in partition.Npc ?? [])
+            if (
+                !grids.TryGetValue(grid.Id, out NpcGrid? seen)
+                || grid.UnvisitedSeconds < seen.UnvisitedSeconds
+            )
+                grids[grid.Id] = grid;
         online = grids.Values.Count(x => x.IsNpc);
         offlineNpc = 0;
         foreach (OfflinePartition row in offline)
-            foreach (NpcGrid grid in row.Npc)
-                if (!grids.ContainsKey(grid.Id))
-                {
-                    grids[grid.Id] = grid with { Offline = true };
-                    if (grid.IsNpc) offlineNpc++;
-                }
+        foreach (NpcGrid grid in row.Npc)
+            if (!grids.ContainsKey(grid.Id))
+            {
+                grids[grid.Id] = grid with { Offline = true };
+                if (grid.IsNpc)
+                    offlineNpc++;
+            }
         return [.. grids.Values];
     }
 }

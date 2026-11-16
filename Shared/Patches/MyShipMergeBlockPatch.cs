@@ -20,7 +20,10 @@ namespace Shared.Patches;
 public static class MyShipMergeBlockPatch
 {
     [HarmonyPrefix]
-    private static bool GetOtherMergeBlockPrefix(MyShipMergeBlock __instance, ref MyShipMergeBlock __result)
+    private static bool GetOtherMergeBlockPrefix(
+        MyShipMergeBlock __instance,
+        ref MyShipMergeBlock __result
+    )
     {
         if (!ClusterRuntime.IsClustered || __instance.Physics?.RigidBody != null)
             return true;

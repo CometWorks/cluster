@@ -15,9 +15,9 @@ using Sandbox.Game.Replication.StateGroups;
 using VRage;
 using VRage.Game;
 using VRage.Game.Entity;
-using VRage.ObjectBuilders.Private;
 using VRage.Network;
 using VRage.ObjectBuilders;
+using VRage.ObjectBuilders.Private;
 using VRage.Replication;
 using VRageMath;
 
@@ -56,125 +56,245 @@ internal static class StaleViewRoutes
     public static void Register()
     {
         // POST /stale-view-test-spawn?x=&y=&z=&static=true - the fixture grid, its blocks in a row along +X.
-        TestRoutes.Add("POST", "/stale-view-test-spawn", context =>
-        {
-            var position = new Vector3D(Double(context, "x"), Double(context, "y"), Double(context, "z"));
-            bool isStatic = TestRoutes.Query(context, "static", "true") == "true";
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => Spawn(position, isStatic)));
-        });
-        // POST /stale-view-test-items?block=&subtype=Iron&amount=100 - ore into the block's first inventory.
-        TestRoutes.Add("POST", "/stale-view-test-items", context =>
-        {
-            long block = TestRoutes.Long(context, "block");
-            string subtype = TestRoutes.Query(context, "subtype", "Iron");
-            double amount = double.Parse(TestRoutes.Query(context, "amount", "100"), CultureInfo.InvariantCulture);
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+        TestRoutes.Add(
+            "POST",
+            "/stale-view-test-spawn",
+            context =>
             {
-                MyInventory inventory = Block(block).GetInventory(0)
-                    ?? throw new ArgumentException("No inventory on " + block);
-                var ore = (MyObjectBuilder_PhysicalObject)MyObjectBuilderSerializerKeen.CreateNewObject(
-                    new MyDefinitionId(typeof(MyObjectBuilder_Ore), subtype));
-                bool added = inventory.AddItems((MyFixedPoint)amount, ore);
-                return State(block, 0, added);
-            }));
-        });
+                var position = new Vector3D(
+                    Double(context, "x"),
+                    Double(context, "y"),
+                    Double(context, "z")
+                );
+                bool isStatic = TestRoutes.Query(context, "static", "true") == "true";
+                TestRoutes.Json(
+                    context,
+                    200,
+                    TestRoutes.OnGameThread(() => Spawn(position, isStatic))
+                );
+            }
+        );
+        // POST /stale-view-test-items?block=&subtype=Iron&amount=100 - ore into the block's first inventory.
+        TestRoutes.Add(
+            "POST",
+            "/stale-view-test-items",
+            context =>
+            {
+                long block = TestRoutes.Long(context, "block");
+                string subtype = TestRoutes.Query(context, "subtype", "Iron");
+                double amount = double.Parse(
+                    TestRoutes.Query(context, "amount", "100"),
+                    CultureInfo.InvariantCulture
+                );
+                TestRoutes.Json(
+                    context,
+                    200,
+                    TestRoutes.OnGameThread(() =>
+                    {
+                        MyInventory inventory =
+                            Block(block).GetInventory(0)
+                            ?? throw new ArgumentException("No inventory on " + block);
+                        var ore = (MyObjectBuilder_PhysicalObject)
+                            MyObjectBuilderSerializerKeen.CreateNewObject(
+                                new MyDefinitionId(typeof(MyObjectBuilder_Ore), subtype)
+                            );
+                        bool added = inventory.AddItems((MyFixedPoint)amount, ore);
+                        return State(block, 0, added);
+                    })
+                );
+            }
+        );
         // POST /stale-view-test-hold?block=&client=&armed=true|false - hold, or let go of, the sends of the block's
         // inventories to the client.
-        TestRoutes.Add("POST", "/stale-view-test-hold", context =>
-        {
-            long block = TestRoutes.Long(context, "block");
-            ulong client = ulong.Parse(TestRoutes.Query(context, "client"), CultureInfo.InvariantCulture);
-            bool armed = TestRoutes.Query(context, "armed", "true") == "true";
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+        TestRoutes.Add(
+            "POST",
+            "/stale-view-test-hold",
+            context =>
             {
-                EnsurePatched();
-                m_heldClient = client;
-                Interlocked.Exchange(ref m_heldBlock, armed ? block : 0);
-                if (!armed && MyMultiplayer.Static?.ReplicationLayer is MyReplicationServer server)
-                    foreach (MyEntityInventoryStateGroup group in Groups(Block(block)))
-                        server.AddToDirtyGroups(group);
-                Plugin.Log($"stale-view-test-hold armed={armed} client={client} block={block} heldSends={Interlocked.Read(ref m_heldSends)} (SE-1554)");
-                return (object)new { armed, client, block, heldSends = Interlocked.Read(ref m_heldSends) };
-            }));
-        });
+                long block = TestRoutes.Long(context, "block");
+                ulong client = ulong.Parse(
+                    TestRoutes.Query(context, "client"),
+                    CultureInfo.InvariantCulture
+                );
+                bool armed = TestRoutes.Query(context, "armed", "true") == "true";
+                TestRoutes.Json(
+                    context,
+                    200,
+                    TestRoutes.OnGameThread(() =>
+                    {
+                        EnsurePatched();
+                        m_heldClient = client;
+                        Interlocked.Exchange(ref m_heldBlock, armed ? block : 0);
+                        if (
+                            !armed
+                            && MyMultiplayer.Static?.ReplicationLayer is MyReplicationServer server
+                        )
+                            foreach (MyEntityInventoryStateGroup group in Groups(Block(block)))
+                                server.AddToDirtyGroups(group);
+                        Plugin.Log(
+                            $"stale-view-test-hold armed={armed} client={client} block={block} heldSends={Interlocked.Read(ref m_heldSends)} (SE-1554)"
+                        );
+                        return (object)
+                            new
+                            {
+                                armed,
+                                client,
+                                block,
+                                heldSends = Interlocked.Read(ref m_heldSends),
+                            };
+                    })
+                );
+            }
+        );
         // POST /stale-view-test-lose?block=&client= - the block's waiting inventory change as a delta that was sent
         // and never arrived.
-        TestRoutes.Add("POST", "/stale-view-test-lose", context =>
-        {
-            long block = TestRoutes.Long(context, "block");
-            ulong client = ulong.Parse(TestRoutes.Query(context, "client"), CultureInfo.InvariantCulture);
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+        TestRoutes.Add(
+            "POST",
+            "/stale-view-test-lose",
+            context =>
             {
-                var lost = new List<uint>();
-                var endpoint = new Endpoint(new EndpointId(client), 0);
-                foreach (MyEntityInventoryStateGroup group in Groups(Block(block)))
-                {
-                    if (group.m_clientInventoryUpdate == null || !group.m_clientInventoryUpdate.TryGetValue(endpoint, out var data) || !data.Dirty)
-                        continue;
-                    if (data.SendPackets.ContainsKey(LostPacketId)) throw new InvalidOperationException("One lost delta per inventory");
-                    MyEntityInventoryStateGroup.InventoryDeltaInformation delta = group.CalculateInventoryDiff(ref data);
-                    delta.MessageId = data.CurrentMessageId++;
-                    data.SendPackets[LostPacketId] = delta;
-                    data.Dirty = false;
-                    lost.Add(delta.MessageId);
-                }
-                Plugin.Log($"stale-view-test-lose client={client} block={block} messageIds=[{string.Join(",", lost)}] (SE-1554)");
-                return (object)new { client, block, lost };
-            }));
-        });
+                long block = TestRoutes.Long(context, "block");
+                ulong client = ulong.Parse(
+                    TestRoutes.Query(context, "client"),
+                    CultureInfo.InvariantCulture
+                );
+                TestRoutes.Json(
+                    context,
+                    200,
+                    TestRoutes.OnGameThread(() =>
+                    {
+                        var lost = new List<uint>();
+                        var endpoint = new Endpoint(new EndpointId(client), 0);
+                        foreach (MyEntityInventoryStateGroup group in Groups(Block(block)))
+                        {
+                            if (
+                                group.m_clientInventoryUpdate == null
+                                || !group.m_clientInventoryUpdate.TryGetValue(
+                                    endpoint,
+                                    out var data
+                                )
+                                || !data.Dirty
+                            )
+                                continue;
+                            if (data.SendPackets.ContainsKey(LostPacketId))
+                                throw new InvalidOperationException("One lost delta per inventory");
+                            MyEntityInventoryStateGroup.InventoryDeltaInformation delta =
+                                group.CalculateInventoryDiff(ref data);
+                            delta.MessageId = data.CurrentMessageId++;
+                            data.SendPackets[LostPacketId] = delta;
+                            data.Dirty = false;
+                            lost.Add(delta.MessageId);
+                        }
+                        Plugin.Log(
+                            $"stale-view-test-lose client={client} block={block} messageIds=[{string.Join(",", lost)}] (SE-1554)"
+                        );
+                        return (object)
+                            new
+                            {
+                                client,
+                                block,
+                                lost,
+                            };
+                    })
+                );
+            }
+        );
         // GET /stale-view-test-cell?grid=&x=&y=&z= - the block at a grid cell on this node: its entity id (0 for a
         // block without one, as armor) and type, or found=false.
-        TestRoutes.Add("GET", "/stale-view-test-cell", context =>
-        {
-            long gridId = TestRoutes.Long(context, "grid");
-            var cell = new Vector3I((int)Double(context, "x"), (int)Double(context, "y"), (int)Double(context, "z"));
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() =>
+        TestRoutes.Add(
+            "GET",
+            "/stale-view-test-cell",
+            context =>
             {
-                if (!MyEntities.TryGetEntityById(gridId, out MyEntity entity) || entity is not MyCubeGrid grid || grid.MarkedForClose)
-                    throw new KeyNotFoundException("No grid " + gridId + " on this node");
-                MySlimBlock slim = grid.GetCubeBlock(cell);
-                return (object)new
-                {
-                    grid = gridId,
-                    found = slim != null,
-                    block = slim?.FatBlock?.EntityId ?? 0,
-                    type = slim?.BlockDefinition.Id.ToString(),
-                    buildRatio = slim?.BuildLevelRatio,
-                    blocks = grid.BlocksCount,
-                };
-            }));
-        });
+                long gridId = TestRoutes.Long(context, "grid");
+                var cell = new Vector3I(
+                    (int)Double(context, "x"),
+                    (int)Double(context, "y"),
+                    (int)Double(context, "z")
+                );
+                TestRoutes.Json(
+                    context,
+                    200,
+                    TestRoutes.OnGameThread(() =>
+                    {
+                        if (
+                            !MyEntities.TryGetEntityById(gridId, out MyEntity entity)
+                            || entity is not MyCubeGrid grid
+                            || grid.MarkedForClose
+                        )
+                            throw new KeyNotFoundException("No grid " + gridId + " on this node");
+                        MySlimBlock slim = grid.GetCubeBlock(cell);
+                        return (object)
+                            new
+                            {
+                                grid = gridId,
+                                found = slim != null,
+                                block = slim?.FatBlock?.EntityId ?? 0,
+                                type = slim?.BlockDefinition.Id.ToString(),
+                                buildRatio = slim?.BuildLevelRatio,
+                                blocks = grid.BlocksCount,
+                            };
+                    })
+                );
+            }
+        );
         // GET /stale-view-test-state?block=&client= - the block on this node, and this node's view of the client.
-        TestRoutes.Add("GET", "/stale-view-test-state", context =>
-        {
-            long block = TestRoutes.Long(context, "block");
-            ulong client = ulong.Parse(TestRoutes.Query(context, "client", "0"), CultureInfo.InvariantCulture);
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => State(block, client, null)));
-        });
+        TestRoutes.Add(
+            "GET",
+            "/stale-view-test-state",
+            context =>
+            {
+                long block = TestRoutes.Long(context, "block");
+                ulong client = ulong.Parse(
+                    TestRoutes.Query(context, "client", "0"),
+                    CultureInfo.InvariantCulture
+                );
+                TestRoutes.Json(
+                    context,
+                    200,
+                    TestRoutes.OnGameThread(() => State(block, client, null))
+                );
+            }
+        );
     }
 
     private static IEnumerable<MyEntityInventoryStateGroup> Groups(MyCubeBlock block)
     {
         for (int i = 0; i < block.InventoryCount; i++)
-            if (MyExternalReplicable.FindByObject(block.GetInventory(i)) is MyInventoryReplicable replicable && replicable.m_stateGroup != null)
+            if (
+                MyExternalReplicable.FindByObject(block.GetInventory(i))
+                    is MyInventoryReplicable replicable
+                && replicable.m_stateGroup != null
+            )
                 yield return replicable.m_stateGroup;
     }
 
     private static void EnsurePatched()
     {
-        if (m_patched) return;
-        var original = AccessTools.Method(typeof(MyReplicationServer), "ScheduleStateGroupSync")
+        if (m_patched)
+            return;
+        var original =
+            AccessTools.Method(typeof(MyReplicationServer), "ScheduleStateGroupSync")
             ?? throw new MissingMethodException("MyReplicationServer.ScheduleStateGroupSync");
-        new Harmony("ClusterTestPlugin.StaleView").Patch(original,
-            prefix: new HarmonyMethod(AccessTools.Method(typeof(StaleViewRoutes), nameof(ScheduleStateGroupSyncPrefix))));
+        new Harmony("ClusterTestPlugin.StaleView").Patch(
+            original,
+            prefix: new HarmonyMethod(
+                AccessTools.Method(typeof(StaleViewRoutes), nameof(ScheduleStateGroupSyncPrefix))
+            )
+        );
         m_patched = true;
     }
 
     private static bool ScheduleStateGroupSyncPrefix(MyClient client, MyStateDataEntry groupEntry)
     {
         long block = Interlocked.Read(ref m_heldBlock);
-        if (block == 0 || client?.State == null || client.State.EndpointId.Id.Value != m_heldClient) return true;
-        if (groupEntry?.Group is not MyEntityInventoryStateGroup group || group.Inventory?.Owner?.EntityId != block) return true;
+        if (block == 0 || client?.State == null || client.State.EndpointId.Id.Value != m_heldClient)
+            return true;
+        if (
+            groupEntry?.Group is not MyEntityInventoryStateGroup group
+            || group.Inventory?.Owner?.EntityId != block
+        )
+            return true;
         Interlocked.Increment(ref m_heldSends);
         return false;
     }
@@ -183,7 +303,9 @@ internal static class StaleViewRoutes
         double.Parse(TestRoutes.Query(context, name), CultureInfo.InvariantCulture);
 
     private static MyCubeBlock Block(long id) =>
-        MyEntities.TryGetEntityById(id, out MyEntity entity) && entity is MyCubeBlock block && !block.MarkedForClose
+        MyEntities.TryGetEntityById(id, out MyEntity entity)
+        && entity is MyCubeBlock block
+        && !block.MarkedForClose
             ? block
             : throw new KeyNotFoundException("No block " + id + " on this node");
 
@@ -193,16 +315,23 @@ internal static class StaleViewRoutes
         grid.GridSizeEnum = MyCubeSize.Large;
         grid.IsStatic = isStatic;
         grid.CreatePhysics = true;
-        grid.PersistentFlags = MyPersistentEntityFlags2.InScene | MyPersistentEntityFlags2.CastShadows;
-        grid.PositionAndOrientation = new MyPositionAndOrientation(position, Vector3D.Forward, Vector3D.Up);
+        grid.PersistentFlags =
+            MyPersistentEntityFlags2.InScene | MyPersistentEntityFlags2.CastShadows;
+        grid.PositionAndOrientation = new MyPositionAndOrientation(
+            position,
+            Vector3D.Forward,
+            Vector3D.Up
+        );
         grid.DisplayName = Prefix + "grid";
         int x = 0;
         foreach ((string key, Type type, string subtype) in Fixture)
         {
             var id = new MyDefinitionId(type, subtype);
-            MyCubeBlockDefinition definition = MyDefinitionManager.Static.GetCubeBlockDefinition(id)
+            MyCubeBlockDefinition definition =
+                MyDefinitionManager.Static.GetCubeBlockDefinition(id)
                 ?? throw new ArgumentException("No definition " + id);
-            var block = (MyObjectBuilder_CubeBlock)MyObjectBuilderSerializerKeen.CreateNewObject(id);
+            var block = (MyObjectBuilder_CubeBlock)
+                MyObjectBuilderSerializerKeen.CreateNewObject(id);
             block.Min = new Vector3I(x, 0, 0);
             x += definition.Size.X;
             if (block is MyObjectBuilder_TerminalBlock terminal)
@@ -210,22 +339,31 @@ internal static class StaleViewRoutes
                 terminal.CustomName = Prefix + key;
                 terminal.ShowInTerminal = true;
             }
-            if (block is MyObjectBuilder_BatteryBlock battery) battery.CurrentStoredPower = 3f;
+            if (block is MyObjectBuilder_BatteryBlock battery)
+                battery.CurrentStoredPower = 3f;
             grid.CubeBlocks.Add(block);
         }
-        var built = (MyCubeGrid)(MyEntities.CreateFromObjectBuilderAndAdd(grid, fadeIn: false)
-            ?? throw new InvalidOperationException("Could not spawn the fixture grid"));
+        var built = (MyCubeGrid)(
+            MyEntities.CreateFromObjectBuilderAndAdd(grid, fadeIn: false)
+            ?? throw new InvalidOperationException("Could not spawn the fixture grid")
+        );
         return new
         {
             grid = built.EntityId,
-            blocks = built.GetFatBlocks().OfType<MyTerminalBlock>().ToDictionary(
-                block => block.CustomName.ToString().Substring(Prefix.Length),
-                block => (object)new
-                {
-                    block = block.EntityId,
-                    min = new[] { block.Min.X, block.Min.Y, block.Min.Z },
-                    position = Xyz(block.PositionComp.WorldAABB.Center),
-                }),
+            blocks = built
+                .GetFatBlocks()
+                .OfType<MyTerminalBlock>()
+                .ToDictionary(
+                    block => block.CustomName.ToString().Substring(Prefix.Length),
+                    block =>
+                        (object)
+                            new
+                            {
+                                block = block.EntityId,
+                                min = new[] { block.Min.X, block.Min.Y, block.Min.Z },
+                                position = Xyz(block.PositionComp.WorldAABB.Center),
+                            }
+                ),
         };
     }
 
@@ -235,8 +373,12 @@ internal static class StaleViewRoutes
     {
         MyCubeBlock block = Block(blockId);
         MyReplicationServer server = MyMultiplayer.Static?.ReplicationLayer as MyReplicationServer;
-        MyClient client = clientId == 0 ? null
-            : server?.m_clientStates.Values.FirstOrDefault(c => c.State.EndpointId.Id.Value == clientId);
+        MyClient client =
+            clientId == 0
+                ? null
+                : server?.m_clientStates.Values.FirstOrDefault(c =>
+                    c.State.EndpointId.Id.Value == clientId
+                );
         var inventories = new List<object>();
         for (int i = 0; i < block.InventoryCount; i++)
         {
@@ -244,47 +386,78 @@ internal static class StaleViewRoutes
             MyEntityInventoryStateGroup group = null;
             bool? held = null;
             uint networkId = 0;
-            if (MyExternalReplicable.FindByObject(inventory) is MyInventoryReplicable replicable && server != null)
+            if (
+                MyExternalReplicable.FindByObject(inventory) is MyInventoryReplicable replicable
+                && server != null
+            )
             {
-                try { networkId = server.GetNetworkIdByObject(replicable).Value; }
-                catch (Exception) { networkId = 0; }
+                try
+                {
+                    networkId = server.GetNetworkIdByObject(replicable).Value;
+                }
+                catch (Exception)
+                {
+                    networkId = 0;
+                }
                 group = replicable.m_stateGroup;
-                if (client != null) held = client.Replicables.ContainsKey(replicable);
+                if (client != null)
+                    held = client.Replicables.ContainsKey(replicable);
             }
             MyEntityInventoryStateGroup.InventoryClientData data = null;
-            if (client != null) group?.m_clientInventoryUpdate?.TryGetValue(client.State.EndpointId, out data);
-            inventories.Add(new
-            {
-                index = i,
-                mass = (double)inventory.CurrentMass,
-                volume = (double)inventory.CurrentVolume,
-                items = inventory.GetItems().Select(item => new
+            if (client != null)
+                group?.m_clientInventoryUpdate?.TryGetValue(client.State.EndpointId, out data);
+            inventories.Add(
+                new
                 {
-                    itemId = item.ItemId,
-                    type = item.Content.TypeId.ToString(),
-                    subtype = item.Content.SubtypeName,
-                    amount = (double)item.Amount,
-                }).ToArray(),
-                networkId,
-                clientHolds = held,
-                clientData = data == null ? null : new
-                {
-                    dirty = data.Dirty,
-                    messageId = data.CurrentMessageId,
-                    failed = data.FailedIncompletePackets.Count,
-                    unacked = data.SendPackets.Count,
-                    items = data.ClientItems.Select(item => new { itemId = item.Item.ItemId, amount = (double)item.Amount }).ToArray(),
-                },
-            });
+                    index = i,
+                    mass = (double)inventory.CurrentMass,
+                    volume = (double)inventory.CurrentVolume,
+                    items = inventory
+                        .GetItems()
+                        .Select(item => new
+                        {
+                            itemId = item.ItemId,
+                            type = item.Content.TypeId.ToString(),
+                            subtype = item.Content.SubtypeName,
+                            amount = (double)item.Amount,
+                        })
+                        .ToArray(),
+                    networkId,
+                    clientHolds = held,
+                    clientData = data == null
+                        ? null
+                        : new
+                        {
+                            dirty = data.Dirty,
+                            messageId = data.CurrentMessageId,
+                            failed = data.FailedIncompletePackets.Count,
+                            unacked = data.SendPackets.Count,
+                            items = data
+                                .ClientItems.Select(item => new
+                                {
+                                    itemId = item.Item.ItemId,
+                                    amount = (double)item.Amount,
+                                })
+                                .ToArray(),
+                        },
+                }
+            );
         }
         uint blockNetworkId = 0;
         bool? blockHeld = null;
         IMyReplicable blockReplicable = MyExternalReplicable.FindByObject(block);
         if (blockReplicable != null && server != null)
         {
-            try { blockNetworkId = server.GetNetworkIdByObject(blockReplicable).Value; }
-            catch (Exception) { blockNetworkId = 0; }
-            if (client != null) blockHeld = client.Replicables.ContainsKey(blockReplicable);
+            try
+            {
+                blockNetworkId = server.GetNetworkIdByObject(blockReplicable).Value;
+            }
+            catch (Exception)
+            {
+                blockNetworkId = 0;
+            }
+            if (client != null)
+                blockHeld = client.Replicables.ContainsKey(blockReplicable);
         }
         return new
         {
@@ -299,7 +472,9 @@ internal static class StaleViewRoutes
             replicable = blockReplicable?.GetType().Name,
             networkId = blockNetworkId,
             clientHolds = blockHeld,
-            clientContext = client == null ? null : ((MyClientState)client.State).Context.ToString(),
+            clientContext = client == null
+                ? null
+                : ((MyClientState)client.State).Context.ToString(),
             inventories,
         };
     }
