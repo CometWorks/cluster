@@ -74,6 +74,7 @@ from scenarios_rename import SCENARIOS_RENAME  # noqa: E402
 from scenarios_chat_event import SCENARIOS_CHAT_EVENT  # noqa: E402
 from scenarios_fast import SCENARIOS_FAST  # noqa: E402
 from scenarios_orphan import SCENARIOS_ORPHAN  # noqa: E402
+from scenarios_skins import SCENARIOS_SKINS  # noqa: E402
 from scenarios_panel import SCENARIOS_PANEL  # noqa: E402
 from scenarios_drift import SCENARIOS_DRIFT  # noqa: E402
 from scenarios_delete_fault import SCENARIOS_DELETE_FAULT  # noqa: E402
@@ -97,7 +98,7 @@ SCENARIOS = {**SCENARIOS_CORE, **SCENARIOS_LIVE, **SCENARIOS_EXT, **SCENARIOS_AD
              **SCENARIOS_REDELIVER, **SCENARIOS_PROPERTY_SYNC, **SCENARIOS_PANEL, **SCENARIOS_DRIFT, **SCENARIOS_SPAWN_PREVIEW, **SCENARIOS_BLOCKS,
              **SCENARIOS_CONTRACTS, **SCENARIOS_STALE_MEMBER, **SCENARIOS_RETIRE_LOADING, **SCENARIOS_MEMBER_LIMIT,
              **SCENARIOS_CHAT_NAMES, **SCENARIOS_ADMIN_ECONOMY, **SCENARIOS_RENAME, **SCENARIOS_CHAT_EVENT, **SCENARIOS_ASLEEP, **SCENARIOS_STAGED_BAGS,
-             **SCENARIOS_CLIENT_BALANCE, **SCENARIOS_SEED_ID, **SCENARIOS_SEED_COLLIDE, **SCENARIOS_STALE_VIEW}
+             **SCENARIOS_CLIENT_BALANCE, **SCENARIOS_SEED_ID, **SCENARIOS_SEED_COLLIDE, **SCENARIOS_STALE_VIEW, **SCENARIOS_SKINS}
 #: The longest a single scenario may take; used for the network-window guard.
 SCENARIO_BUDGET = timedelta(minutes=float(os.environ.get("CLUSTER_TEST_SCENARIO_BUDGET_MINUTES", "30")))
 #: Longest the suite will sit waiting for a network window to pass before giving up instead. The
