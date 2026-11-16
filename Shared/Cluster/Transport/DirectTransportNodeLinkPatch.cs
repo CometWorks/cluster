@@ -63,16 +63,65 @@ public static class DirectTransportNodeLinkPatch
 	/// waits behind megabytes of them. Commands and their responses are matched by sequence and
 	/// operation id, so they need reliability, not order.
 	/// </summary>
-	public static bool SendGlobal(byte[] payload, bool ordered = true)
+	public static bool SendGlobal(byte[] payload, bool ordered = true) => SendGlobal(payload, ordered, out _);
+
+	/// <param name="mark">For an ordered send, where the message ends in the ordered global queue; see <see cref="GlobalStillQueued"/>.</param>
+	public static bool SendGlobal(byte[] payload, bool ordered, out GlobalMark mark)
 	{
+		mark = default;
 		if (payload == null || payload.Length == 0) return false;
 		lock (GlobalSync)
 		{
 			if (m_globalPeer?.ConnectionState != ConnectionState.Connected) return false;
-			m_globalPeer.Send(NodeLinkCodec.Write(NodeLinkMessage.Global, 0, payload: payload, payloadLength: payload.Length), 0,
-				ordered ? DeliveryMethod.ReliableOrdered : DeliveryMethod.ReliableUnordered);
+			byte[] frame = NodeLinkCodec.Write(NodeLinkMessage.Global, 0, payload: payload, payloadLength: payload.Length);
+			if (ordered)
+			{
+				NoteOrderedDrain(m_globalPeer);
+				m_orderedSent += Fragments(frame.Length, m_globalPeer.Mtu);
+				mark = new GlobalMark(m_orderedDrains, m_orderedSent);
+			}
+			m_globalPeer.Send(frame, 0, ordered ? DeliveryMethod.ReliableOrdered : DeliveryMethod.ReliableUnordered);
 			return true;
 		}
+	}
+
+	/// <summary>SE-1577: a position in the ordered global queue, counted in LiteNetLib packets since the queue was last seen empty.</summary>
+	public readonly record struct GlobalMark(long Drains, long End);
+
+	// SE-1577: packets SendGlobal put on the ordered global channel since it was last seen empty, and how often it was seen empty.
+	private static long m_orderedSent;
+	private static long m_orderedDrains;
+
+	/// <summary>
+	/// SE-1577: whether the ordered global message sent with <paramref name="mark"/> is still in LiteNetLib's outgoing
+	/// queue. Other packets on channel 0 (client relays) only make this say true for longer; an empty queue clears
+	/// every mark.
+	/// </summary>
+	public static bool GlobalStillQueued(GlobalMark mark)
+	{
+		lock (GlobalSync)
+		{
+			if (m_globalPeer == null) return false;
+			NoteOrderedDrain(m_globalPeer);
+			return mark.Drains == m_orderedDrains
+				&& m_orderedSent - m_globalPeer.GetPacketsCountInReliableQueue(0, true) < mark.End;
+		}
+	}
+
+	private static void NoteOrderedDrain(NetPeer peer)
+	{
+		if (peer.GetPacketsCountInReliableQueue(0, true) != 0) return;
+		m_orderedDrains++;
+		m_orderedSent = 0;
+	}
+
+	/// <summary>How many packets LiteNetLib 1.3 splits a reliable frame into (NetPeer.SendInternal).</summary>
+	internal static int Fragments(int length, int mtu)
+	{
+		const int ChanneledHeader = 4, FragmentHeader = 6;
+		if (length + ChanneledHeader <= mtu) return 1;
+		int part = mtu - ChanneledHeader - FragmentHeader;
+		return (length + part - 1) / part;
 	}
 
 	/// <summary>T-0154 diagnostics: packets LiteNetLib still holds on the gateway link, per delivery
@@ -94,6 +143,12 @@ public static class DirectTransportNodeLinkPatch
 			globalUnordered = peer.GetPacketsCountInReliableQueue(0, false),
 			orderedTotal, unorderedTotal, mtu = peer.Mtu, ping = peer.Ping,
 		};
+	}
+
+	/// <summary>Packets LiteNetLib still holds on the ordered global channel; 0 without a link.</summary>
+	public static int GlobalOrderedDepth()
+	{
+		lock (GlobalSync) return m_globalPeer?.GetPacketsCountInReliableQueue(0, true) ?? 0;
 	}
 
 	public static bool SendPrefix(object __instance, ulong remoteUser, byte[] data, int byteCount,

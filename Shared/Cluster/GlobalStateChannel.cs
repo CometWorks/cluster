@@ -41,6 +41,16 @@ public static class GlobalStateChannel
 	private static long m_completedCommands;
 	private static long m_timedOutCommands;
 	private static double m_nextResync;
+	/// <summary>
+	/// SE-1577, World Authority: the last snapshot answered per node and subsystem, while it may still wait in the
+	/// ordered Gateway queue. Replicas ask again every second until a snapshot arrives; answering each request queued
+	/// a new 2-3 MB copy behind the last, and restarted nodes grew the queue to 17 million packets.
+	/// </summary>
+	private static readonly Dictionary<string, (DirectTransportNodeLinkPatch.GlobalMark Mark, double At)> QueuedSnapshots =
+		new Dictionary<string, (DirectTransportNodeLinkPatch.GlobalMark, double)>(StringComparer.Ordinal);
+	/// <summary>A queued snapshot the Gateway may have dropped (its node restarted) is answered again after this long.</summary>
+	private const double QueuedSnapshotMaxAgeMs = 60000;
+	private static long m_resyncsCoalesced;
 
 	public static void Start(string node)
 	{
@@ -303,6 +313,7 @@ public static class GlobalStateChannel
 				// T-0154: LiteNetLib packets still queued on the gateway link (channel 0, ordered =
 				// publishes, unordered = commands). Growth here is retained heap on this node.
 				linkQueue = DirectTransportNodeLinkPatch.GlobalQueueDepths(),
+				resyncsCoalesced = Interlocked.Read(ref m_resyncsCoalesced),
 				subsystems = States.OrderBy(x => x.Key).Select(x => new
 				{
 					subsystem = x.Key, generation = x.Value.Generation, sequence = x.Value.Sequence,
@@ -455,6 +466,17 @@ public static class GlobalStateChannel
 			return true;
 		}
 		if (envelope.Kind != "Resync") throw new InvalidOperationException("World Authority received an invalid global-state direction");
+		string queuedKey = envelope.Origin + "\n" + envelope.Subsystem;
+		(DirectTransportNodeLinkPatch.GlobalMark Mark, double At) queued;
+		bool known;
+		lock (Sync) known = QueuedSnapshots.TryGetValue(queuedKey, out queued);
+		// The snapshot still queued reaches the node first, followed by every broadcast since, so it answers this request too.
+		if (known && ClusterRuntime.LocalMilliseconds - queued.At < QueuedSnapshotMaxAgeMs
+			&& DirectTransportNodeLinkPatch.GlobalStillQueued(queued.Mark))
+		{
+			Interlocked.Increment(ref m_resyncsCoalesced);
+			return true;
+		}
 		long sequence;
 		string fallback;
 		Func<string> provider;
@@ -466,8 +488,11 @@ public static class GlobalStateChannel
 			SnapshotProviders.TryGetValue(envelope.Subsystem, out provider);
 		}
 		string payload = provider != null ? provider() : fallback;
-		if (payload != null)
-			Send(new Envelope("Snapshot", envelope.Generation, envelope.Subsystem, sequence, m_node, envelope.Origin, payload));
+		if (payload == null) return true;
+		if (!TrySend(new Envelope("Snapshot", envelope.Generation, envelope.Subsystem, sequence, m_node, envelope.Origin, payload),
+			out DirectTransportNodeLinkPatch.GlobalMark mark))
+			throw new InvalidOperationException("Global-state node link is disconnected");
+		lock (Sync) QueuedSnapshots[queuedKey] = (mark, ClusterRuntime.LocalMilliseconds);
 		return true;
 	}
 
@@ -733,8 +758,11 @@ public static class GlobalStateChannel
 		if (!TrySend(envelope)) throw new InvalidOperationException("Global-state node link is disconnected");
 	}
 
-	private static bool TrySend(Envelope envelope)
+	private static bool TrySend(Envelope envelope) => TrySend(envelope, out _);
+
+	private static bool TrySend(Envelope envelope, out DirectTransportNodeLinkPatch.GlobalMark mark)
 	{
+		mark = default;
 		if (ClusterRuntime.IsWorldAuthority && envelope.Kind == "Response" && envelope.Target == m_node)
 		{
 			if (ClusterRuntime.IsAuthorityFenced) return false;
@@ -750,7 +778,7 @@ public static class GlobalStateChannel
 		// antennas snapshot alone is ~5.8 MB per publish on a 64-cluster lattice, and every node
 		// reports its antennas every second); they travel on the unordered reliable channel.
 		return DirectTransportNodeLinkPatch.SendGlobal(JsonSerializer.SerializeToUtf8Bytes(envelope),
-			ordered: envelope.Kind is not ("Command" or "Response"));
+			envelope.Kind is not ("Command" or "Response"), out mark);
 	}
 
 	/// <summary>
@@ -805,6 +833,16 @@ public static class GlobalStateChannel
 		release.Set();
 		owner.Join(5000);
 		return (waitedMs, handledWhileRunning, ReceiveAtAuthority(command, fromQueue: true));
+	}
+
+	/// <summary>
+	/// SE-1577 self-test: <paramref name="count"/> Resync requests for <paramref name="subsystem"/> from
+	/// <paramref name="origin"/>, as a replica sends one every second while its snapshot has not arrived.
+	/// </summary>
+	internal static void SelfTestResync(string subsystem, string origin, int count)
+	{
+		for (int i = 0; i < count; i++)
+			ReceiveAtAuthority(new Envelope("Resync", ClusterRuntime.AuthorityGeneration, subsystem, 0, origin, null, string.Empty));
 	}
 
 	private static long m_testPartitionUntil;
