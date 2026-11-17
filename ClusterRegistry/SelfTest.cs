@@ -2895,7 +2895,7 @@ internal static partial class SelfTest
         Assert(book.GameTags(version, acceptAll: true).EndsWith(" acceptall1"));
         // #1529: vanilla advertises MyVersion.ToString(), the build number; the mod total is the measured one once known
         Assert(
-            AdmissionBook.BuildNumber("1.210.014") == "1210014"
+            AdmissionBook.BuildNumber("1.211.017") == "1211017"
                 && AdmissionBook.BuildNumber("odd") == "odd"
         );
         var modded = new AdmissionBook(
@@ -2903,8 +2903,8 @@ internal static partial class SelfTest
         );
         modded.ModsTotalSize = 1714928497;
         Assert(
-            modded.GameTags("1.210.014", acceptAll: false)
-                == "groupId0 version1210014 datahash mods2 gamemodeS10-3-3-3 view3000 modsTotalSize1714928497"
+            modded.GameTags("1.211.017", acceptAll: false)
+                == "groupId0 version1211017 datahash mods2 gamemodeS10-3-3-3 view3000 modsTotalSize1714928497"
         );
         // SE-1076: the server details blob as MyCachedServerItem.SendSettingsToSteam splits it, 93 bytes per rule
         Assert(!modded.ServerDataRules().Any());
