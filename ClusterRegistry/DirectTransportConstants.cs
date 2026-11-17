@@ -10,8 +10,8 @@ internal static class DirectTransportConstants
     // client compares it against its own APP_VERSION in MyJoinGameHelper.JoinGame and refuses the
     // join outright on any mismatch. Nothing at runtime derives these from the server build, so a
     // stale value here is invisible until a retail client tries to connect.
-    public const string VanillaVersion = "1.210.014";
-    public const string WireFingerprint = "SE-DirectTransport-v1/game-frame-1.210.014";
+    public const string VanillaVersion = "1.211.017";
+    public const string WireFingerprint = "SE-DirectTransport-v1/game-frame-1.211.017";
 
     // Steam frontend and backend node links. The Direct Transport client frontend sits on its own
     // port, so --steam and --direct can run side by side without colliding on their defaults.
