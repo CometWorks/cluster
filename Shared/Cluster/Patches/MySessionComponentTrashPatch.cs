@@ -54,6 +54,8 @@ public static class MySessionComponentTrashPatch
                 ClusterRuntime.IsClustered,
                 ClusterRuntime.IsWorldAuthority
             );
+        MySessionComponentTrashSeams.ClusterRunsVanillaVoxelRevert = () =>
+            !ClusterRuntime.IsClustered;
         MySessionComponentTrashSeams.ClusterRunsIdentityTrash = () =>
             ClusterNodeRole.RunsAuthoritativeSystems(
                 ClusterRuntime.IsClustered,

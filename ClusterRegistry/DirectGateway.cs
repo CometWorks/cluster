@@ -7672,6 +7672,28 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             }
             if (
                 _registry != null
+                && context.Request.HttpMethod == "GET"
+                && path.Equals(
+                    "/registry/voxel-reset-occupancy",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+            {
+                WriteJson(
+                    context,
+                    200,
+                    VoxelResetOccupancy.Build(
+                        DateTime.UtcNow,
+                        _lastPartitionReports,
+                        _registry.OfflinePartitions(0).Partitions,
+                        _registry.LivePartitionIds()
+                    ),
+                    redact: false
+                );
+                return;
+            }
+            if (
+                _registry != null
                 && path.StartsWith(
                     "/registry/partitions/offline",
                     StringComparison.OrdinalIgnoreCase

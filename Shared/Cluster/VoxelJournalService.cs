@@ -184,6 +184,9 @@ internal sealed class VoxelJournalService
     private static bool m_applying;
     public static VoxelJournalService Instance { get; private set; }
 
+    /// <summary>SE-1595, World Authority only: when each 64-voxel cube was last edited, for <see cref="VoxelResetService"/>.</summary>
+    internal VoxelEditLedger Ledger { get; }
+
     private VoxelJournalService()
     {
         m_gateway = Environment.GetEnvironmentVariable("CLUSTER_GATEWAY_REGISTRY")?.TrimEnd('/');
@@ -198,6 +201,7 @@ internal sealed class VoxelJournalService
         if (ClusterRuntime.IsWorldAuthority)
         {
             Directory.CreateDirectory(m_root);
+            Ledger = VoxelResetService.LoadLedger(m_root);
             Load();
             m_operationLog = LoadOperationLog(Path.Combine(m_root, "operations.oplog"));
             LoadCatalogBases();
@@ -653,6 +657,8 @@ internal sealed class VoxelJournalService
             m_replayScanTick = 0;
             ReplayAppearedStorages();
         }
+        if (ClusterRuntime.IsWorldAuthority)
+            VoxelResetService.Update(this, m_root);
     }
 
     /// <summary>
@@ -1077,7 +1083,11 @@ internal sealed class VoxelJournalService
         return removed.Count;
     }
 
-    private VoxelJournalCodec.Entry Append(VoxelJournalCodec.Entry proposed, bool apply)
+    private VoxelJournalCodec.Entry Append(
+        VoxelJournalCodec.Entry proposed,
+        bool apply,
+        bool trackEdit = true
+    )
     {
         VoxelJournalCodec.Entry entry;
         lock (m_lock)
@@ -1111,6 +1121,8 @@ internal sealed class VoxelJournalService
             m_operations.Add(entry.OperationId);
             m_operationLog.Write(entry.OperationId.ToByteArray());
             m_operationLog.Flush();
+            if (trackEdit)
+                TrackEdit(entry, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), seeding: false);
         }
         if (apply)
             m_inbound.Enqueue(entry);
@@ -2039,6 +2051,83 @@ internal sealed class VoxelJournalService
         return (endpoint.TrimEnd('/'), generation);
     }
 
+    private void TrackEdit(VoxelJournalCodec.Entry entry, long unix, bool seeding)
+    {
+        if (Ledger == null || entry.Kind != VoxelJournalCodec.EntryKind.Range)
+            return;
+        Vector3I min = entry.Min,
+            max = entry.Max;
+        if (seeding)
+            Ledger.Seed(entry.StorageName, min.X, min.Y, min.Z, max.X, max.Y, max.Z, unix);
+        else
+            Ledger.Touch(entry.StorageName, min.X, min.Y, min.Z, max.X, max.Y, max.Z, unix);
+    }
+
+    /// <summary>
+    /// SE-1595, World Authority, game thread: puts one 64-voxel cube of <paramref name="voxel"/> back to its
+    /// generated shape and ore, and journals that content so every node writes the same. Under the append lock,
+    /// so no node edit can be accepted for the cube in between: <paramref name="stillDue"/> sees every edit the
+    /// journal has taken. Returns false, changing nothing, when the cube was edited since the plan or this
+    /// World Authority has not applied every accepted entry of the storage yet (the reset's sequence would
+    /// make it skip them).
+    /// </summary>
+    internal bool ResetCube(MyVoxelBase voxel, long cube, Func<bool> stillDue)
+    {
+        string storage = voxel.StorageName;
+        lock (m_lock)
+        {
+            long tail = m_entries.TryGetValue(
+                storage,
+                out SortedDictionary<long, VoxelJournalCodec.Entry> entries
+            )
+                ? entries.Keys.DefaultIfEmpty(0).Max()
+                : 0;
+            if (tail > m_applied.GetValueOrDefault(storage) || !stillDue())
+                return false;
+            (int cx, int cy, int cz) = VoxelResetPolicy.CubeOf(cube);
+            int size = VoxelResetPolicy.CubeSize;
+            Vector3I min = new(cx * size, cy * size, cz * size);
+            Vector3I max = min + (size - 1);
+            voxel.Storage.ClampVoxelCoord(ref min);
+            voxel.Storage.ClampVoxelCoord(ref max);
+            m_applying = true;
+            try
+            {
+                ((MyStorageBase)voxel.Storage).DeleteRange(
+                    MyStorageDataTypeFlags.ContentAndMaterial,
+                    min,
+                    max,
+                    notify: true
+                );
+            }
+            finally
+            {
+                m_applying = false;
+            }
+            MyStorageData data = new(MyStorageDataTypeFlags.ContentAndMaterial);
+            data.Resize(min, max);
+            voxel.Storage.ReadRange(data, MyStorageDataTypeFlags.ContentAndMaterial, 0, min, max);
+            int count = data.Size3D.Size;
+            Append(
+                new VoxelJournalCodec.Entry(
+                    Guid.NewGuid(),
+                    ClusterRuntime.AuthorityGeneration,
+                    0,
+                    storage,
+                    min,
+                    max,
+                    MyStorageDataTypeFlags.ContentAndMaterial,
+                    data[MyStorageDataTypeEnum.Content].AsSpan(0, count).ToArray(),
+                    data[MyStorageDataTypeEnum.Material].AsSpan(0, count).ToArray()
+                ),
+                apply: false,
+                trackEdit: false
+            );
+            Ledger.MarkReset(storage, cube, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            return true;
+        }
+    }
+
     private void WriteFile(VoxelJournalCodec.Entry entry)
     {
         string map = Convert.ToHexString(
@@ -2112,6 +2201,11 @@ internal sealed class VoxelJournalService
                 throw new InvalidDataException("Duplicate voxel journal sequence");
             if (!m_operations.Add(entry.OperationId))
                 throw new InvalidDataException("Duplicate voxel journal operation");
+            TrackEdit(
+                entry,
+                new DateTimeOffset(File.GetLastWriteTimeUtc(path)).ToUnixTimeSeconds(),
+                seeding: true
+            );
         }
         foreach (
             VoxelJournalCodec.Entry entry in m_entries
