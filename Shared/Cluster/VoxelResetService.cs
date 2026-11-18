@@ -15,7 +15,7 @@ using VRageMath;
 namespace ClusterPlugin;
 
 /// <summary>
-/// SE-1595, World Authority: mined voxels grow back. A planet's 64-voxel cube, or a whole asteroid, that nobody
+/// SE-1595, World Authority: voxel reset of mined voxels. A planet's 64-voxel cube, or a whole asteroid, that nobody
 /// has edited for <c>voxelReset.ageSeconds</c> goes back to its generated shape and ore, unless a partition member
 /// (grid or character, on any node or in an offline partition) is within <c>voxelReset.gridMeters</c> or an online
 /// player within <c>voxelReset.playerMeters</c>. The World Authority writes the pristine content into its own

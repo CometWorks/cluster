@@ -398,7 +398,7 @@ public static class ClusterConfig
         // markers last this long plus up to a minute); 0 = vanilla's (the drop system definition's 15 min). Read by the node at
         // each spawn and by the WA's marker sweep (5 s). A bench sets a few seconds so drops come and go within a lane.
         ["drops.lifetimeSeconds"] = "0",
-        // SE-1595 (VoxelResetService), WORLD AUTHORITY: mined voxels grow back. A planet's 64-voxel cube, or a whole asteroid,
+        // SE-1595 (VoxelResetService), WORLD AUTHORITY: voxel reset of mined voxels. A planet's 64-voxel cube, or a whole asteroid,
         // that nobody has edited for ageSeconds goes back to its generated shape and ore, unless a partition member (grid or
         // character, online or in an offline partition) is within gridMeters of it or an online player within playerMeters.
         // The WA judges every scanSeconds and resets at most cubesPerUpdate cubes per update (4 updates/s). Voxels without a
