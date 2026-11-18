@@ -25,6 +25,19 @@ public static class MySessionComponentTrashSeams
     public static Func<bool> ClusterRunsGridTrash;
     public static Func<bool> ClusterRunsIdentityTrash;
 
+    // SE-1595: vanilla's voxel revert, false in a cluster whatever VoxelTrashRemovalEnabled says. Each node would
+    // revert on its own clock, seeing only its own grids and players; the World Authority's VoxelResetService
+    // resets voxels instead.
+    public static Func<bool> ClusterRunsVanillaVoxelRevert;
+
+    /// <summary>Called by the transpiler in place of <c>VoxelRevertor_Update()</c>: vanilla when the seam is unset.</summary>
+    public static void VoxelRevertorUpdate(MySessionComponentTrash trash)
+    {
+        var gate = ClusterRunsVanillaVoxelRevert;
+        if (gate == null || gate())
+            trash.VoxelRevertor_Update();
+    }
+
     /// <summary>The grid/voxel/forageable sweep gate the transpiler calls: vanilla (true) when unset.</summary>
     public static bool RunsGridTrash()
     {

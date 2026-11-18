@@ -18,7 +18,8 @@ namespace Shared.Patches;
 /// the original runs unchanged.</item>
 /// <item>UpdateAfterSimulation gates (transpiler): grid trash, voxel revert and forageable revert act on
 /// partition-owned state and run only where <see cref="MySessionComponentTrashSeams.ClusterRunsGridTrash"/>
-/// allows (regular nodes); identity cleanup is WA-owned global state and runs only where
+/// allows (regular nodes), and the voxel revert also only where <see cref="MySessionComponentTrashSeams.VoxelRevertorUpdate"/>
+/// allows (never in a cluster, SE-1595); identity cleanup is WA-owned global state and runs only where
 /// <see cref="MySessionComponentTrashSeams.ClusterRunsIdentityTrash"/> allows. Both gates read true while
 /// their seam is null, so vanilla is unchanged.</item>
 /// </list>
@@ -59,7 +60,7 @@ public static class MySessionComponentTrashPatch
     // Intended shape:
     //   if (RunsGridTrash()) { [grid sweep] }        -> gate 1 at the if-body start, skipping to gate 2
     //   if (RunsIdentityTrash()) CheckIdentitiesTrash(); -> gate 2 before the call, skipping to gate 3
-    //   if (RunsGridTrash()) { VoxelRevertor_Update(); RevertForageableItems(); } -> gate 3, skipping to ret
+    //   if (RunsGridTrash()) { Seams.VoxelRevertorUpdate(this); RevertForageableItems(); } -> gate 3, skipping to ret
     [HarmonyTranspiler]
     [HarmonyPatch(nameof(MySessionComponentTrash.UpdateAfterSimulation))]
     private static IEnumerable<CodeInstruction> UpdateAfterSimulationTranspiler(
@@ -141,6 +142,15 @@ public static class MySessionComponentTrashPatch
         il.InsertRange(
             checkIdentities - 1,
             new[] { gate2, new CodeInstruction(OpCodes.Brfalse, skipLabels[0]) }
+        );
+
+        // SE-1595: the voxel revert itself goes through a seam that a cluster keeps off (the call stays in place,
+        // its labels with it; only the target changes, and the static gate takes the same `this`).
+        CodeInstruction revertCall = il.Single(ci => ci.CallsNamed("VoxelRevertor_Update"));
+        revertCall.opcode = OpCodes.Call;
+        revertCall.operand = AccessTools.Method(
+            typeof(MySessionComponentTrashSeams),
+            nameof(MySessionComponentTrashSeams.VoxelRevertorUpdate)
         );
 
         // Gate 1 (if-body start): !RunsGridTrash -> gate 2. Takes over the if's body labels.
