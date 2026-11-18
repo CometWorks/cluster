@@ -24,7 +24,8 @@ internal static class GlobalSaveFile
         string adminSafeZonesRecord = null,
         string contractRecord = null,
         string offlineRatesRecord = null,
-        string promotionRecord = null
+        string promotionRecord = null,
+        string trashSettingsRecord = null
     )
     {
         if (checkpoint == null)
@@ -49,7 +50,8 @@ internal static class GlobalSaveFile
                 // present. WorldAuthority.md 5.5's settings store, §8.2's time-of-day state, the stored ships
                 // (SE1-0233), the admin safe zones (SE1-0252), then §6.3's accepted contracts (SE1-0247); a later
                 // section forces empty placeholders for the earlier ones it follows. The optional
-                // offline-rates slot precedes the promotion record for save compatibility.
+                // offline-rates slot precedes the promotion record for save compatibility. The admin's trash
+                // settings (SE-1596) come last; a save without them ends at the promotion record as before.
                 string[] sections =
                 {
                     characterRecord,
@@ -59,6 +61,7 @@ internal static class GlobalSaveFile
                     contractRecord,
                     offlineRatesRecord,
                     promotionRecord,
+                    trashSettingsRecord,
                 };
                 int count = Array.FindLastIndex(sections, section => section != null) + 1;
                 for (int i = 0; i < count; i++)
@@ -104,7 +107,8 @@ internal static class GlobalSaveFile
             adminSafeZonesRecord = null,
             contractRecord = null,
             offlineRatesRecord = null,
-            promotionRecord = null;
+            promotionRecord = null,
+            trashSettingsRecord = null;
         if (parsed.Body.Length >= 12 && BitConverter.ToUInt32(parsed.Body) == BodyMagic)
         {
             using MemoryStream combined = new(parsed.Body, writable: false);
@@ -204,12 +208,28 @@ internal static class GlobalSaveFile
                 if (
                     recordLength < 0
                     || recordLength > 4 * 1024 * 1024
-                    || recordLength != combined.Length - combined.Position
+                    || recordLength > combined.Length - combined.Position
                 )
                     throw new InvalidDataException(
                         "Invalid World Authority promotion record length"
                     );
                 promotionRecord =
+                    recordLength == 0
+                        ? null
+                        : Encoding.UTF8.GetString(reader.ReadBytes(recordLength));
+            }
+            if (combined.Position < combined.Length)
+            {
+                int recordLength = reader.ReadInt32();
+                if (
+                    recordLength < 0
+                    || recordLength > 64 * 1024
+                    || recordLength != combined.Length - combined.Position
+                )
+                    throw new InvalidDataException(
+                        "Invalid World Authority trash settings record length"
+                    );
+                trashSettingsRecord =
                     recordLength == 0
                         ? null
                         : Encoding.UTF8.GetString(reader.ReadBytes(recordLength));
@@ -232,7 +252,8 @@ internal static class GlobalSaveFile
             adminSafeZonesRecord,
             contractRecord,
             offlineRatesRecord,
-            promotionRecord
+            promotionRecord,
+            trashSettingsRecord
         );
     }
 
@@ -245,6 +266,7 @@ internal static class GlobalSaveFile
         string AdminSafeZonesRecord = null,
         string ContractRecord = null,
         string OfflineRatesRecord = null,
-        string PromotionRecord = null
+        string PromotionRecord = null,
+        string TrashSettingsRecord = null
     );
 }

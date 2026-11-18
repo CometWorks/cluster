@@ -725,6 +725,7 @@ public static class ClusterRuntime
         CharacterRegistryService.Install();
         PlayerProfileService.Install();
         TimeOfDayService.Install();
+        TrashSettingsService.Install();
         WeatherAuthorityService.Install();
         ConcealableContentService.Install();
         AsteroidSpawnService.Install();
@@ -1652,6 +1653,7 @@ public static class ClusterRuntime
         JetpackResyncService.Update();
         CharacterHomeService.Update();
         TimeOfDayService.Update();
+        TrashSettingsService.Update();
         WeatherAuthorityService.Update();
         ConcealableContentService.Update();
         AsteroidSpawnService.Update();
