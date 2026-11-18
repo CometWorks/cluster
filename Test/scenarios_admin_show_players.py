@@ -120,11 +120,27 @@ def p2_adm_showplayers(bench) -> None:
     # -- client 2 moves: the marker follows --
     character = api2.get_character()["entityId"]
     bench.cluster.node("node-2", f"/test-position?entity={character}&relativeTo={character}&x=300", "POST")
+    # The client takes a moment to show the teleport; until it does, the old marker is "near" client 2.
+    _require(
+        bench,
+        "SETUP: client 2 is 300 m from where its marker was",
+        bool(_poll(lambda: _distance(marker, _position(api2)) > 250 or None, MARKER_TIMEOUT)),
+        json.dumps(_position(api2)),
+    )
+    started = time.time()
     moved = _poll(lambda: _one_near(api1, name2, _position(api2)), MARKER_TIMEOUT)
-    bench.record("marker-moved", {"marker": moved, "client2": _position(api2), "all": _markers(api1)})
+    bench.record(
+        "marker-moved",
+        {
+            "marker": moved,
+            "seconds": round(time.time() - started, 1),
+            "client2": _position(api2),
+            "all": _markers(api1),
+        },
+    )
     bench.check(
-        "after client 2 moved 300 m, its one marker is at the new position",
-        moved is not None and _distance(marker, _position(api2)) > 250,
+        "after client 2 moved 300 m, its one marker is a new one at the new position",
+        moved is not None and moved["hash"] != marker["hash"],
         json.dumps({"markers": _markers(api1), "client2": _position(api2)}),
     )
 
