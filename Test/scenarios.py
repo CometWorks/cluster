@@ -1452,6 +1452,96 @@ def p3_sun_01(bench) -> None:
                     intervalMinutes=interval)
 
 
+
+# ---------------------------------------------------------------------------
+# P3-SUN-DRAG - SE-1596: a dragged Alt-F10 slider lands where the admin let go
+# ---------------------------------------------------------------------------
+
+def p3_sun_drag(bench) -> None:
+    """The Alt-F10 slider sends a value per frame while the admin drags it. Every node must end up at the
+    value the drag stopped at, within a few seconds, and so must the client's clock - forward and backward."""
+    bench.start_cluster()
+    api = bench.start_client(CLIENT_ID)
+    bench.wait_spawned(CLIENT_ID)
+    node_ids = [node.node_id for node in bench.cluster.config.nodes]
+
+    def statuses() -> dict[str, dict]:
+        return {node: bench.cluster.node(node, "/time-of-day") for node in node_ids}
+
+    env0 = api.get_environment()
+    bench.record("environment-before", env0)
+    interval = env0.get("sunRotationIntervalMinutes") or 120
+    start = (env0["timeOfDay"] + 5) % interval
+
+    def drag(first: float, last: float, label: str) -> None:
+        steps = 40
+        values = [first + (last - first) * i / (steps - 1) for i in range(steps)]
+        began = time.monotonic()
+        for value in values:
+            api.set_time_of_day(round(value % interval, 4))
+        dragged = time.monotonic() - began
+        target = round(last % interval, 4)
+
+        def landed():
+            rows = statuses()
+            offsets = {row["sunTimeOffsetMilliseconds"] for row in rows.values()}
+            if len(offsets) == 1 and all(
+                    _forward_minutes(row["timeOfDay"], target, interval) <= 0.5 for row in rows.values()):
+                return rows
+            return None
+
+        try:
+            rows = wait_until(landed, 30, f"every node to land on the {label} drag's last value")
+            took = time.monotonic() - began - dragged
+        except ClusterError:
+            rows, took = statuses(), None
+        bench.record(f"after-{label}-drag", {"values": values, "rows": rows, "settleSeconds": took})
+        bench.check(f"every node lands on the {label} drag's last value", took is not None,
+                    f"target {target}: " + str({node: row["timeOfDay"] for node, row in rows.items()}))
+        bench.check(f"the {label} drag lands within a few seconds", took is not None and took <= 10,
+                    f"{took} s after the drag ({dragged:.1f} s long)")
+        try:
+            env = wait_until(lambda: (lambda e: e if _forward_minutes(e["timeOfDay"], target, interval) <= 0.5
+                                      else None)(api.get_environment()),
+                             30, f"the client to show the {label} drag's last value")
+        except ClusterError:
+            env = api.get_environment()
+        bench.check(f"the client shows the {label} drag's last value",
+                    _forward_minutes(env["timeOfDay"], target, interval) <= 0.5,
+                    f"target {target}, client {env['timeOfDay']}")
+
+    drag(start, start + 30, "forward")
+    drag(start + 30, start + 10, "backward")
+    bench.screenshot(CLIENT_ID, "01-after-drags")
+
+    # A real drag delivers several values per frame to the node; the client's Remote API above cannot send them
+    # that fast, so the node's own handler takes a burst of 60 values back to back, three times.
+    attached = _attached(bench, CLIENT_ID) or "node-1"
+    for label, first, last in (("burst-1", start + 10, start + 50), ("burst-2", start + 50, start + 20),
+                               ("burst-3", start + 20, start + 70)):
+        target = round(last % interval, 4)
+        began = time.monotonic()
+        bench.cluster.node(attached, f"/admin-sync-time-burst?from={first % interval:.4f}&to={target}&count=60",
+                           "POST")
+
+        def landed_burst():
+            rows = statuses()
+            offsets = {row["sunTimeOffsetMilliseconds"] for row in rows.values()}
+            if len(offsets) == 1 and all(
+                    _forward_minutes(row["timeOfDay"], target, interval) <= 0.5 for row in rows.values()):
+                return rows
+            return None
+
+        try:
+            rows = wait_until(landed_burst, 30, f"every node to land on the {label}'s last value")
+            took = time.monotonic() - began
+        except ClusterError:
+            rows, took = statuses(), None
+        bench.record(f"after-{label}", {"rows": rows, "seconds": took})
+        bench.check(f"every node lands on the {label}'s last value within a few seconds",
+                    took is not None and took <= 10,
+                    f"target {target} after {took} s: " + str({node: row["timeOfDay"] for node, row in rows.items()}))
+
 SCENARIOS = {
     "P1-INF-01": (p1_inf_01, "diag endpoint self-test", "3"),
     "P1-INF-02": (p1_inf_02, "trigger endpoints self-test", "3"),
@@ -1468,4 +1558,5 @@ SCENARIOS = {
     "P3-CLU-01": (p3_clu_01, "three-node coverage: every ordered pair completes a handover", "3"),
     "P3-CLU-02": (p3_clu_02, "bidirectional player handover: three A->B->A round trips", "3"),
     "P3-SUN-01": (p3_sun_01, "admin time-of-day: WA offset, one client step, rejection, restart", "4"),
+    "P3-SUN-DRAG": (p3_sun_drag, "a dragged admin time-of-day slider lands on its last value (SE-1596)", "4"),
 }

@@ -136,6 +136,29 @@ Check(
         .PromotionRecord == null,
     "Older saves remain readable"
 );
+
+// SE-1596: an admin's trash settings follow the promotion record, and only once an admin changed them.
+const string trashSettings = "{\"Generation\":0,\"Version\":3}";
+var withTrash = GlobalSaveFile.ReadBundle(
+    GlobalSaveFile.Write(
+        new(),
+        1,
+        5,
+        0,
+        0,
+        "{\"Entries\":[]}",
+        promotionRecord: saved,
+        trashSettingsRecord: trashSettings
+    )
+);
+Check(
+    withTrash.PromotionRecord == saved && withTrash.TrashSettingsRecord == trashSettings,
+    "Trash settings round-trip behind the promotion record"
+);
+Check(
+    bundle.TrashSettingsRecord == null,
+    "Saves without trash settings end at the promotion record as before"
+);
 Set(7, 4, demotionRevision);
 PromotionService.RestoreRecord(bundle.PromotionRecord);
 PromotionService.Update();

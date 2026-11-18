@@ -41,6 +41,7 @@
   <ItemGroup>
     <Reference Include="Sandbox.Common"><HintPath>$(Dedicated64Dir)Sandbox.Common.dll</HintPath><Private>False</Private></Reference>
     <Reference Include="Sandbox.Game"><HintPath>$(Dedicated64Dir)Sandbox.Game.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="Sandbox.Graphics"><HintPath>$(Dedicated64Dir)Sandbox.Graphics.dll</HintPath><Private>False</Private></Reference>
     <Reference Include="SpaceEngineers.Game"><HintPath>$(Dedicated64Dir)SpaceEngineers.Game.dll</HintPath><Private>False</Private></Reference>
     <Reference Include="SpaceEngineers.ObjectBuilders"><HintPath>$(Dedicated64Dir)SpaceEngineers.ObjectBuilders.dll</HintPath><Private>False</Private></Reference>
     <Reference Include="VRage"><HintPath>$(Dedicated64Dir)VRage.dll</HintPath><Private>False</Private></Reference>

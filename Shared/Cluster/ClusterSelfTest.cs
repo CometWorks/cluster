@@ -75,6 +75,8 @@ internal static partial class ClusterSelfTest
         ("global-scrub", GlobalScrub),
         ("retention-deletes", RetentionDeletes),
         ("time-of-day", TimeOfDay),
+        ("trash-settings", TrashSettingsRules),
+        ("weather-change", WeatherChangeRules),
         ("round-trip-normalize", RoundTripNormalize),
         ("maintenance-panel-pending", MaintenancePanelPending),
         ("handover-drift", HandoverDrift),
