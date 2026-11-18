@@ -322,7 +322,8 @@ internal sealed class WorldAuthorityPersistence
         string shipStorage = null,
             adminSafeZones = null,
             contracts = null,
-            promotions = null;
+            promotions = null,
+            trashSettings = null;
         long ledgerOrder;
         if (
             !GlobalCommandLedger.TryCapture(
@@ -338,6 +339,7 @@ internal sealed class WorldAuthorityPersistence
                     adminSafeZones = AdminSafeZones.PersistedRecord();
                     contracts = ContractLedger.PersistedRecord();
                     promotions = PromotionService.PersistedRecord();
+                    trashSettings = TrashSettingsService.PersistedRecord();
                     return captured;
                 },
                 out MyObjectBuilder_Checkpoint checkpoint,
@@ -364,7 +366,8 @@ internal sealed class WorldAuthorityPersistence
                 adminSafeZones,
                 contracts,
                 OfflineRateCache.PersistedRecord(),
-                promotions
+                promotions,
+                trashSettings
             )
             {
                 LedgerOrder = ledgerOrder,
@@ -443,7 +446,8 @@ internal sealed class WorldAuthorityPersistence
             save.AdminSafeZonesRecord,
             save.ContractRecord,
             save.OfflineRatesRecord,
-            save.PromotionRecord
+            save.PromotionRecord,
+            save.TrashSettingsRecord
         );
         // T-0340: the gateway host's save store when the registry said so at registration, else m_root/saves as always.
         save.Path = ClusterProtocol.HostSaveStore.GlobalSave(
@@ -659,7 +663,8 @@ internal sealed class WorldAuthorityPersistence
         string AdminSafeZonesRecord = null,
         string ContractRecord = null,
         string OfflineRatesRecord = null,
-        string PromotionRecord = null
+        string PromotionRecord = null,
+        string TrashSettingsRecord = null
     )
     {
         public byte[] File { get; set; }

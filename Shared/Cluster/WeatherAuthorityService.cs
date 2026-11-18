@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Sandbox.Game.Entities;
 using Sandbox.Game.SessionComponents;
 using Sandbox.Game.World;
@@ -19,6 +21,13 @@ namespace ClusterPlugin;
 /// their own clients) and keep only the LIGHTNING ticks, whose vanilla target selection reads local
 /// players and grids - which only the hosting node has - so strikes execute exactly once per target
 /// without extra arbitration.
+/// <para>
+/// SE-1596: an admin's weather change on a regular node (the Alt-F10 Weather tab, <c>/weather</c>, <c>/rweather</c>,
+/// which all run on the admin's client and send the client's weather list up, or a plugin or mod calling the weather API
+/// on the node) used to be overwritten by the World Authority's next state. The node now sends the planets whose
+/// weathers changed to the World Authority, which takes them over and publishes at once, so every node shows the change
+/// within a few seconds. Meanwhile the node holds the World Authority's older states back, so the change doesn't flicker.
+/// </para>
 /// </summary>
 public static class WeatherAuthorityService
 {
@@ -32,7 +41,15 @@ public static class WeatherAuthorityService
     private static string m_lastPublished;
     private static double m_nextPublish;
 
-    private sealed record WeatherEffectState(
+    // Regular node: the World Authority's state last applied here, the base a local change is told apart from.
+    private static List<PlanetWeatherState> m_applied;
+    private static double m_holdUntil;
+
+    // World Authority: planets a node changed, applied on the game thread.
+    private static readonly ConcurrentQueue<List<PlanetWeatherState>> m_changes = new();
+    private const int ForwardTimeoutMilliseconds = 5000;
+
+    internal sealed record WeatherEffectState(
         string Weather,
         double PX,
         double PY,
@@ -49,7 +66,7 @@ public static class WeatherAuthorityService
         double SZ
     );
 
-    private sealed record PlanetWeatherState(
+    internal sealed record PlanetWeatherState(
         long PlanetId,
         int NextWeather,
         List<WeatherEffectState> Weathers
@@ -76,6 +93,8 @@ public static class WeatherAuthorityService
                     m_pending = payload;
             }
         );
+        GlobalStateChannel.RegisterCommandHandler(Subsystem, HandleChange);
+        MySectorWeatherComponentSeams.ClusterWeatherMaybeChanged = MaybeChanged;
     }
 
     /// <summary>Runs on the game thread: the WA publishes its weather state, nodes apply the pushed one.</summary>
@@ -90,6 +109,11 @@ public static class WeatherAuthorityService
         if (ClusterRuntime.IsWorldAuthority)
         {
             double now = ClusterRuntime.LocalMilliseconds;
+            bool changed = false;
+            while (m_changes.TryDequeue(out List<PlanetWeatherState> change))
+                changed |= TakeOver(component.ClusterWeatherData, change);
+            if (changed)
+                m_nextPublish = 0;
             if (now < m_nextPublish)
                 return;
             m_nextPublish = now + PublishIntervalMilliseconds;
@@ -103,6 +127,9 @@ public static class WeatherAuthorityService
         string pending;
         lock (Sync)
         {
+            // A change of this node's own is on its way to the World Authority: an older state would undo it here.
+            if (ClusterRuntime.LocalMilliseconds < m_holdUntil)
+                return;
             pending = m_pending;
             m_pending = null;
         }
@@ -110,6 +137,7 @@ public static class WeatherAuthorityService
             return;
         try
         {
+            m_applied = Parse(pending);
             component.ClusterApplyWeather(Deserialize(pending));
         }
         catch (Exception exception)
@@ -121,58 +149,206 @@ public static class WeatherAuthorityService
         }
     }
 
-    private static string Serialize(List<MyObjectBuilder_WeatherPlanetData> data) =>
-        JsonSerializer.Serialize(
-            (data ?? new List<MyObjectBuilder_WeatherPlanetData>())
-                .Where(planet => planet != null)
-                .Select(planet => new PlanetWeatherState(
-                    planet.PlanetId,
-                    planet.NextWeather,
-                    (planet.Weathers ?? new List<MyObjectBuilder_WeatherEffect>())
-                        .Select(effect => new WeatherEffectState(
-                            effect.Weather,
-                            effect.Position.X,
-                            effect.Position.Y,
-                            effect.Position.Z,
-                            effect.Velocity.X,
-                            effect.Velocity.Y,
-                            effect.Velocity.Z,
-                            effect.Radius,
-                            effect.Life,
-                            effect.MaxLife,
-                            effect.Intensity,
-                            effect.StartPoint.X,
-                            effect.StartPoint.Y,
-                            effect.StartPoint.Z
-                        ))
-                        .ToList()
-                ))
-                .OrderBy(planet => planet.PlanetId)
-                .ToList()
+    // -- SE-1596: a node's own weather change ------------------------------------------------------------------------
+
+    /// <summary>
+    /// Game thread, regular node: the weather list may have changed here (SyncIfDirty saw it dirty, or an admin's client
+    /// sent its list up). The planets whose weathers differ from the World Authority's last state go to it.
+    /// </summary>
+    private static void MaybeChanged(MySectorWeatherComponent component)
+    {
+        if (!ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority || m_applied == null)
+            return;
+        List<PlanetWeatherState> changed = ChangedPlanets(
+            m_applied,
+            States(component.ClusterWeatherData)
+        );
+        if (changed.Count == 0)
+            return;
+        // The change is the new base: it is not sent again, and the World Authority's answer replaces it anyway.
+        m_applied = m_applied
+            .Where(planet => changed.All(change => change.PlanetId != planet.PlanetId))
+            .Concat(changed)
+            .ToList();
+        string payload = JsonSerializer.Serialize(changed);
+        lock (Sync)
+            m_holdUntil = ClusterRuntime.LocalMilliseconds + ForwardTimeoutMilliseconds + 1000;
+        Console.WriteLine(
+            "[ClusterPlugin] weather change sent to the World Authority planets="
+                + string.Join(",", changed.Select(planet => planet.PlanetId))
+        );
+        Task.Run(() =>
+        {
+            bool sent = false;
+            try
+            {
+                GlobalStateChannel.SendCommand(Subsystem, payload, ForwardTimeoutMilliseconds);
+                sent = true;
+            }
+            catch (Exception error)
+            {
+                Console.WriteLine(
+                    "[ClusterPlugin] weather change not taken by the World Authority: "
+                        + SecretRedactor.Redact(error.Message)
+                );
+            }
+            // Taken: the World Authority publishes it at its next frame. Not taken: its state is the truth again.
+            lock (Sync)
+                m_holdUntil = sent ? ClusterRuntime.LocalMilliseconds + 1000 : 0;
+        });
+    }
+
+    /// <summary>World Authority, channel thread: a node's changed planets, taken over on the game thread.</summary>
+    private static string HandleChange(string origin, string payload)
+    {
+        List<PlanetWeatherState> change =
+            JsonSerializer.Deserialize<List<PlanetWeatherState>>(payload)
+            ?? throw new InvalidOperationException("Invalid weather change");
+        m_changes.Enqueue(change);
+        Console.WriteLine(
+            "[ClusterPlugin] weather change from "
+                + origin
+                + " planets="
+                + string.Join(",", change.Select(planet => planet.PlanetId))
+        );
+        return "{}";
+    }
+
+    /// <summary>
+    /// The planets of <paramref name="local"/> whose set of weathers differs from <paramref name="baseline"/>'s. A weather
+    /// is told by what an admin sets (name, start point, radius, length), not by what runs on by itself (life, position,
+    /// intensity). Pure, for the weather self-test section.
+    /// </summary>
+    internal static List<PlanetWeatherState> ChangedPlanets(
+        List<PlanetWeatherState> baseline,
+        List<PlanetWeatherState> local
+    ) =>
+        local
+            .Where(planet =>
+            {
+                PlanetWeatherState before = baseline.FirstOrDefault(entry =>
+                    entry.PlanetId == planet.PlanetId
+                );
+                return !Keys(before?.Weathers).SetEquals(Keys(planet.Weathers));
+            })
+            .ToList();
+
+    /// <summary>
+    /// World Authority: each changed planet's weathers become the node's, keeping this side's running copy of a weather
+    /// both have (it is fresher). The planet's schedule stays this side's. True when anything changed.
+    /// </summary>
+    private static bool TakeOver(
+        List<MyObjectBuilder_WeatherPlanetData> data,
+        List<PlanetWeatherState> change
+    )
+    {
+        bool changed = false;
+        foreach (PlanetWeatherState planet in change)
+        {
+            MyObjectBuilder_WeatherPlanetData target = data.FirstOrDefault(entry =>
+                entry != null && entry.PlanetId == planet.PlanetId
+            );
+            if (target == null)
+                continue;
+            List<MyObjectBuilder_WeatherEffect> current =
+                target.Weathers ?? new List<MyObjectBuilder_WeatherEffect>();
+            target.Weathers = TakeOver(current, ToEffects(planet.Weathers));
+            changed = true;
+        }
+        return changed;
+    }
+
+    /// <summary>The node's weathers, each replaced by this side's running copy when there is one. Pure, for the self-test.</summary>
+    internal static List<MyObjectBuilder_WeatherEffect> TakeOver(
+        List<MyObjectBuilder_WeatherEffect> current,
+        List<MyObjectBuilder_WeatherEffect> wanted
+    ) =>
+        wanted
+            .Select(effect =>
+                current.FirstOrDefault(running => Key(running) == Key(effect)) ?? effect
+            )
+            .ToList();
+
+    private static HashSet<(string, double, double, double, float, int)> Keys(
+        IEnumerable<WeatherEffectState> weathers
+    ) =>
+        (weathers ?? Enumerable.Empty<WeatherEffectState>())
+            .Select(effect =>
+                (effect.Weather, effect.SX, effect.SY, effect.SZ, effect.Radius, effect.MaxLife)
+            )
+            .ToHashSet();
+
+    private static (string, double, double, double, float, int) Key(
+        MyObjectBuilder_WeatherEffect effect
+    ) =>
+        (
+            effect.Weather,
+            effect.StartPoint.X,
+            effect.StartPoint.Y,
+            effect.StartPoint.Z,
+            effect.Radius,
+            effect.MaxLife
         );
 
+    private static List<PlanetWeatherState> Parse(string payload) =>
+        JsonSerializer.Deserialize<List<PlanetWeatherState>>(payload)
+        ?? new List<PlanetWeatherState>();
+
+    private static string Serialize(List<MyObjectBuilder_WeatherPlanetData> data) =>
+        JsonSerializer.Serialize(States(data));
+
+    internal static List<PlanetWeatherState> States(List<MyObjectBuilder_WeatherPlanetData> data) =>
+        (data ?? new List<MyObjectBuilder_WeatherPlanetData>())
+            .Where(planet => planet != null)
+            .Select(planet => new PlanetWeatherState(
+                planet.PlanetId,
+                planet.NextWeather,
+                (planet.Weathers ?? new List<MyObjectBuilder_WeatherEffect>())
+                    .Select(effect => new WeatherEffectState(
+                        effect.Weather,
+                        effect.Position.X,
+                        effect.Position.Y,
+                        effect.Position.Z,
+                        effect.Velocity.X,
+                        effect.Velocity.Y,
+                        effect.Velocity.Z,
+                        effect.Radius,
+                        effect.Life,
+                        effect.MaxLife,
+                        effect.Intensity,
+                        effect.StartPoint.X,
+                        effect.StartPoint.Y,
+                        effect.StartPoint.Z
+                    ))
+                    .ToList()
+            ))
+            .OrderBy(planet => planet.PlanetId)
+            .ToList();
+
     private static List<MyObjectBuilder_WeatherPlanetData> Deserialize(string payload) =>
-        (
-            JsonSerializer.Deserialize<List<PlanetWeatherState>>(payload)
-            ?? new List<PlanetWeatherState>()
-        )
+        Parse(payload)
             .Select(planet => new MyObjectBuilder_WeatherPlanetData
             {
                 PlanetId = planet.PlanetId,
                 NextWeather = planet.NextWeather,
-                Weathers = planet
-                    .Weathers.Select(effect => new MyObjectBuilder_WeatherEffect
-                    {
-                        Weather = effect.Weather,
-                        Position = new Vector3D(effect.PX, effect.PY, effect.PZ),
-                        Velocity = new Vector3D(effect.VX, effect.VY, effect.VZ),
-                        Radius = effect.Radius,
-                        Life = effect.Life,
-                        MaxLife = effect.MaxLife,
-                        Intensity = effect.Intensity,
-                        StartPoint = new Vector3D(effect.SX, effect.SY, effect.SZ),
-                    })
-                    .ToList(),
+                Weathers = ToEffects(planet.Weathers),
+            })
+            .ToList();
+
+    private static List<MyObjectBuilder_WeatherEffect> ToEffects(
+        IEnumerable<WeatherEffectState> weathers
+    ) =>
+        (weathers ?? Enumerable.Empty<WeatherEffectState>())
+            .Select(effect => new MyObjectBuilder_WeatherEffect
+            {
+                Weather = effect.Weather,
+                Position = new Vector3D(effect.PX, effect.PY, effect.PZ),
+                Velocity = new Vector3D(effect.VX, effect.VY, effect.VZ),
+                Radius = effect.Radius,
+                Life = effect.Life,
+                MaxLife = effect.MaxLife,
+                Intensity = effect.Intensity,
+                StartPoint = new Vector3D(effect.SX, effect.SY, effect.SZ),
             })
             .ToList();
 

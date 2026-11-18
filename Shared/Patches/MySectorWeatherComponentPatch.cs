@@ -10,6 +10,7 @@ using Sandbox.Game.Multiplayer;
 using Sandbox.Game.SessionComponents;
 using Sandbox.Game.World;
 using VRage.Game;
+using VRage.Network;
 using VRageMath;
 
 namespace Shared.Patches;
@@ -25,6 +26,8 @@ namespace Shared.Patches;
 /// <see cref="MySectorWeatherComponentSeams.WeatherPlayerPositionsOrLocal"/> - cluster-wide positions on the
 /// WA, this server's own online players otherwise - instead of Sync.Players.GetOnlinePlayers().</item>
 /// <item>CreateLightning (prefix/postfix): maintains the lightning counter (<see cref="MySectorWeatherComponentSeams.CountLightning"/>) - one per lightning vanilla added.</item>
+/// <item>SyncIfDirty (prefix) and UpdateWeathersOnClients (postfix, when a client raised it): report a possible change
+/// of the weather list to <see cref="MySectorWeatherComponentSeams.ClusterWeatherMaybeChanged"/> (SE-1596).</item>
 /// </list>
 /// </summary>
 [HarmonyPatch(typeof(MySectorWeatherComponent))]
@@ -284,6 +287,26 @@ public static class MySectorWeatherComponentPatch
         );
 
         return il;
+    }
+
+    [HarmonyPrefix]
+    [HarmonyPatch("SyncIfDirty")]
+    private static void SyncIfDirtyPrefix(MySectorWeatherComponent __instance)
+    {
+        if (__instance.m_weatherDirty)
+            MySectorWeatherComponentSeams.ClusterWeatherMaybeChanged?.Invoke(__instance);
+    }
+
+    // An admin's /weather, /rweather or Alt-F10 weather change runs on the client, which then sends its whole list
+    // up through this [Server] event; the server takes it without marking anything dirty.
+    [HarmonyPostfix]
+    [HarmonyPatch("UpdateWeathersOnClients")]
+    private static void UpdateWeathersOnClientsPostfix()
+    {
+        MySectorWeatherComponent component =
+            MySession.Static?.GetComponent<MySectorWeatherComponent>();
+        if (component != null && !MyEventContext.Current.IsLocallyInvoked)
+            MySectorWeatherComponentSeams.ClusterWeatherMaybeChanged?.Invoke(component);
     }
 
     [HarmonyPrefix]

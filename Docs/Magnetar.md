@@ -156,6 +156,10 @@ the registry, not the config dirs.
 
 On a node where Essentials is loaded, the node plugin replaces `!ess grids list` and adds `!grids list`, the name players know from Torch's Essentials. Both do the same, for any player: they list the player's grids on every node and in offline partitions, without loading any. A list that can't reach everything says so and leaves the markers of grids it couldn't see. The markers and positions follow `MarkerShowPosition` and `UtilityShowPosition` in `Essentials.cfg`. Without Essentials, neither command exists.
 
+## Admin screen
+
+The Alt-F10 Entity List and the PCU tab cover the whole cluster. The node the admin is on asks the other nodes over the plugin bus and the Gateway for the grids in offline partitions, then sends the admin one list. Rows from other nodes end in `[node-2]` and the like, offline grids in `[offline]`; the camera jump uses the row's position. Remove, Stop, Depower, Power and Remove owner on another node's entity run on that node, and the admin gets the outcome in chat; an offline grid is skipped with a note. In the PCU tab, offline grids show as `(offline) name` and don't count toward the total, because their PCU isn't known. A node that doesn't answer within 10 seconds is left out, and the chat says which. `CLUSTER_ADMIN_WIDEN=0` turns this off, along with the extra Entity List rows of T-0180.
+
 ## World tool
 
 `Tools/MagnetarWorld` builds against the stock DedicatedServer64 assemblies and resolves them at

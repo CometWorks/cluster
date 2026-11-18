@@ -725,6 +725,7 @@ public static class ClusterRuntime
         CharacterRegistryService.Install();
         PlayerProfileService.Install();
         TimeOfDayService.Install();
+        TrashSettingsService.Install();
         WeatherAuthorityService.Install();
         ConcealableContentService.Install();
         AsteroidSpawnService.Install();
@@ -1569,6 +1570,7 @@ public static class ClusterRuntime
         if (IsClustered)
             ClientDiagnostics.Update();
         GridListCommand.Update();
+        AdminMenuService.Update();
         WatchGameThreadExit();
         UpdateDormancy();
         ApplyPendingAuthorityGeneration();
@@ -1642,6 +1644,7 @@ public static class ClusterRuntime
         PromotionService.Update();
         OnlinePlayersService.Update();
         RemotePlayerMirrorService.Update();
+        AdminPlayerMarkers.Update(); // SE-1596: Alt-F10 Show players for players on other nodes; CLUSTER_ADMIN_SHOW_PLAYERS=0 turns it off
         PlayerStateService.Update();
         CharacterRegistryService.Update();
         PlayerProfileService.Update();
@@ -1650,6 +1653,7 @@ public static class ClusterRuntime
         JetpackResyncService.Update();
         CharacterHomeService.Update();
         TimeOfDayService.Update();
+        TrashSettingsService.Update();
         WeatherAuthorityService.Update();
         ConcealableContentService.Update();
         AsteroidSpawnService.Update();

@@ -654,7 +654,7 @@ public static class RemotePlayerMirrorService
     /// (SE-1192, SE-732). A client riding a handover out is left to the node it moves to, which gets this node's
     /// view of what it holds (<see cref="HeldBy"/>) at the export.
     /// </summary>
-    private static ulong[] Targets(MyReplicationServer replication)
+    internal static ulong[] Targets(MyReplicationServer replication)
     {
         MyClientCollection clients = Sync.Clients;
         if (clients == null)

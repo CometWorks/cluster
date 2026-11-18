@@ -153,6 +153,7 @@ public static class WorldAuthorityCheckpointPatch
         AdminSafeZones.RestoreRecord(bundle.AdminSafeZonesRecord);
         ContractLedger.RestoreRecord(bundle.ContractRecord);
         PromotionService.RestoreRecord(bundle.PromotionRecord);
+        TrashSettingsService.RestoreRecord(bundle.TrashSettingsRecord);
         OfflineRateCache.Restore(bundle.OfflineRatesRecord);
         checkpointSizeInBytes = checked((ulong)parsed.Body.LongLength);
         Restored = true;

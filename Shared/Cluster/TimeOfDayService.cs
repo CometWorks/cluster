@@ -51,6 +51,10 @@ public static class TimeOfDayService
     private static float? m_requested;
     private static long m_requestedAt;
 
+    // Regular node: the newest slider value not yet sent to the WA, and whether a forward is running.
+    private static float? m_forward;
+    private static bool m_forwarding;
+
     public sealed record TimeOfDaySnapshot(float TimeOfDay, long OffsetMilliseconds);
 
     /// <summary>The node-local view of the accumulated offset, read by SessionClockPatch every frame.</summary>
@@ -86,10 +90,36 @@ public static class TimeOfDayService
             return true;
         }
         // Never block on the WA round trip: the vanilla admin event delivers this on the game
-        // thread, and a blocking wait stalls the whole node for the timeout. Fire and log - the
-        // admin sees the result through the sun itself, and a lost forward is re-draggable.
-        System.Threading.Tasks.Task.Run(() =>
+        // thread, and a blocking wait stalls the whole node for the timeout. A dragged slider
+        // delivers several values per frame; one forward at a time, always the newest value, keeps
+        // them in order - a forward per value raced, and the WA settled on whichever came last.
+        lock (Sync)
         {
+            m_forward = time;
+            if (m_forwarding)
+                return true;
+            m_forwarding = true;
+        }
+        System.Threading.Tasks.Task.Run(ForwardNewest);
+        return true;
+    }
+
+    /// <summary>Background, regular node: sends the newest requested value until none is left.</summary>
+    private static void ForwardNewest()
+    {
+        while (true)
+        {
+            float time;
+            lock (Sync)
+            {
+                if (m_forward == null)
+                {
+                    m_forwarding = false;
+                    return;
+                }
+                time = m_forward.Value;
+                m_forward = null;
+            }
             try
             {
                 GlobalStateChannel.SendCommand(
@@ -107,8 +137,7 @@ public static class TimeOfDayService
                         + SecretRedactor.Redact(e.Message)
                 );
             }
-        });
-        return true;
+        }
     }
 
     /// <summary>
