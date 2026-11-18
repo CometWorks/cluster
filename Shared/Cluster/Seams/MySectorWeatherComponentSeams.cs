@@ -29,6 +29,10 @@ public static class MySectorWeatherComponentSeams
 
     public static Func<List<Vector3D>> ClusterWeatherPlayerPositions;
 
+    // SE-1596: the weather list may have changed on this server - SyncIfDirty found it dirty, or an admin's client
+    // sent its list up (UpdateWeathersOnClients). WeatherAuthorityService takes a regular node's change to the WA.
+    public static Action<MySectorWeatherComponent> ClusterWeatherMaybeChanged;
+
     private sealed class LightningCounter
     {
         public int Spawned;
