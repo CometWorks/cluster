@@ -1569,6 +1569,7 @@ public static class ClusterRuntime
         if (IsClustered)
             ClientDiagnostics.Update();
         GridListCommand.Update();
+        AdminMenuService.Update();
         WatchGameThreadExit();
         UpdateDormancy();
         ApplyPendingAuthorityGeneration();

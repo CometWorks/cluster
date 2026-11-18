@@ -112,6 +112,7 @@ internal static partial class ClusterSelfTest
         ("character-without-identity", CharacterWithoutIdentity),
         ("store-payment-settle", StorePaymentSettle),
         ("admin-player-markers", AdminPlayerMarkerRules),
+        ("admin-menu", AdminMenuRules),
     };
 
     /// <summary>
