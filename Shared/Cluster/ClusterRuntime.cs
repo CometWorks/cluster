@@ -1642,6 +1642,7 @@ public static class ClusterRuntime
         PromotionService.Update();
         OnlinePlayersService.Update();
         RemotePlayerMirrorService.Update();
+        AdminPlayerMarkers.Update(); // SE-1596: Alt-F10 Show players for players on other nodes; CLUSTER_ADMIN_SHOW_PLAYERS=0 turns it off
         PlayerStateService.Update();
         CharacterRegistryService.Update();
         PlayerProfileService.Update();

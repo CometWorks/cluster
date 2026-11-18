@@ -111,6 +111,7 @@ internal static partial class ClusterSelfTest
         ("handover-diff-budget", HandoverDiffBudget),
         ("character-without-identity", CharacterWithoutIdentity),
         ("store-payment-settle", StorePaymentSettle),
+        ("admin-player-markers", AdminPlayerMarkerRules),
     };
 
     /// <summary>

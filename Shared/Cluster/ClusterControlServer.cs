@@ -5182,6 +5182,7 @@ internal sealed partial class ClusterControlServer
     {
         ClientHandoverState snapshot = ReplicationServerPatch.Export(client, members);
         snapshot.MirrorHeld = RemotePlayerMirrorService.HeldBy(client); // SE-1192
+        AdminPlayerMarkers.Withdraw(client); // SE-1596
         string encoded = ClientHandoverCodec.Write(snapshot);
         Log(
             "client-view export client="
@@ -5384,6 +5385,7 @@ internal sealed partial class ClusterControlServer
         // KnownSectors are deliberately left empty so the destination node re-streams its own planet sectors.
         ClientHandoverState snapshot = ReplicationServerPatch.ExportDetached(client);
         snapshot.MirrorHeld = RemotePlayerMirrorService.HeldBy(client); // SE-1192
+        AdminPlayerMarkers.Withdraw(client); // SE-1596
         string encoded = ClientHandoverCodec.Write(snapshot);
         int destroyed = ReplicationServerPatch.Prune(client, snapshot);
         ReplicationServerPatch.Finish(client);
