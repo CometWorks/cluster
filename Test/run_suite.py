@@ -94,6 +94,7 @@ from scenarios_staged_bags import SCENARIOS_STAGED_BAGS  # noqa: E402
 from scenarios_seed_id import SCENARIOS_SEED_ID  # noqa: E402
 from scenarios_seed_collide import SCENARIOS_SEED_COLLIDE  # noqa: E402
 from scenarios_stale_view import SCENARIOS_STALE_VIEW  # noqa: E402
+from scenarios_thrust_flames import SCENARIOS_THRUST_FLAMES  # noqa: E402
 from scenarios_admin_menu import SCENARIOS_ADMIN_MENU  # noqa: E402
 from scenarios_admin_sync import SCENARIOS_ADMIN_SYNC  # noqa: E402
 
@@ -102,7 +103,7 @@ SCENARIOS = {**SCENARIOS_CORE, **SCENARIOS_ADMIN_SYNC, **SCENARIOS_LIVE, **SCENA
              **SCENARIOS_REDELIVER, **SCENARIOS_PROPERTY_SYNC, **SCENARIOS_PANEL, **SCENARIOS_DRIFT, **SCENARIOS_SPAWN_PREVIEW, **SCENARIOS_BLOCKS,
              **SCENARIOS_CONTRACTS, **SCENARIOS_STALE_MEMBER, **SCENARIOS_RETIRE_LOADING, **SCENARIOS_MEMBER_LIMIT,
              **SCENARIOS_CHAT_NAMES, **SCENARIOS_ADMIN_ECONOMY, **SCENARIOS_ADMIN_SHOW_PLAYERS, **SCENARIOS_RENAME, **SCENARIOS_CHAT_EVENT, **SCENARIOS_ASLEEP, **SCENARIOS_STAGED_BAGS,
-             **SCENARIOS_CLIENT_BALANCE, **SCENARIOS_SEED_ID, **SCENARIOS_SEED_COLLIDE, **SCENARIOS_STALE_VIEW, **SCENARIOS_SKINS, **SCENARIOS_ADMIN_MENU}
+             **SCENARIOS_CLIENT_BALANCE, **SCENARIOS_SEED_ID, **SCENARIOS_SEED_COLLIDE, **SCENARIOS_STALE_VIEW, **SCENARIOS_THRUST_FLAMES, **SCENARIOS_SKINS, **SCENARIOS_ADMIN_MENU}
 #: The longest a single scenario may take; used for the network-window guard.
 SCENARIO_BUDGET = timedelta(minutes=float(os.environ.get("CLUSTER_TEST_SCENARIO_BUDGET_MINUTES", "30")))
 #: Longest the suite will sit waiting for a network window to pass before giving up instead. The
