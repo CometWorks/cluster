@@ -182,5 +182,128 @@ internal static partial class ClusterSelfTest
                     + " listed. Too many rows on node-2: only the first 32 pages are listed.",
             "incomplete line"
         );
+        Check(
+            AdminMenuService.Incomplete(
+                new[] { AdminMenuService.UnindexedTag },
+                Array.Empty<string>()
+            )
+                == "Admin list: Some offline areas are not indexed yet, so their grids are not listed.",
+            "unindexed offline areas line"
+        );
+
+        CycleRules(Check);
+    }
+
+    /// <summary>
+    /// SE-1687, Cycle Objects over the cluster: the walk over the nodes' candidates is the walk vanilla's FindNext
+    /// makes over all the entities at once (First, Next, Previous, wrap-around, ties on the id), the offline grids'
+    /// metrics and the grid size checkboxes.
+    /// </summary>
+    private static void CycleRules(Action<bool, string> Check)
+    {
+        AdminMenuService.Pick P(float value, long id, string node) =>
+            new(value, id, 0, 0, 0, false, "g" + id) { Node = node };
+        // Biggest grids over three nodes: blocks per id, with a tie (40) between ids 5 and 6 on different nodes
+        var nodes = new Dictionary<string, AdminMenuService.Pick[]>
+        {
+            ["node-1"] = new[] { P(10, 1, "node-1"), P(40, 6, "node-1") },
+            ["node-2"] = new[] { P(500, 2, "node-2"), P(40, 5, "node-2"), P(0, 9, "node-2") },
+            ["offline"] = new[] { P(900, 3, "offline"), P(20, 4, "offline") },
+        };
+        var everything = nodes.Values.SelectMany(p => p).ToArray();
+
+        AdminMenuService.CycleStep Step(bool larger, float value, long id) =>
+            AdminMenuService.CycleStep.Of(
+                MyEntityCyclingOrder.BiggestGrids,
+                larger,
+                value,
+                id,
+                default
+            );
+
+        AdminMenuService.Pick Walk(AdminMenuService.CycleStep step) =>
+            AdminMenuService.Choose(
+                nodes.Values.Select(picks => AdminMenuService.Best(picks, step)),
+                step
+            );
+
+        AdminMenuService.Pick Single(AdminMenuService.CycleStep step)
+        {
+            AdminMenuService.Candidates all = AdminMenuService.Best(everything, step);
+            return all.Next ?? all.Wrap;
+        }
+
+        // First = reset: metric MinValue, findLarger false -> the biggest
+        var first = Walk(Step(false, float.MinValue, 0));
+        Check(first?.Id == 3 && first.Node == "offline", "First is the offline 900-block grid");
+        var order = new List<long>();
+        var at = first;
+        for (int i = 0; i < 6 && at != null; i++)
+        {
+            order.Add(at.Id);
+            var step = Step(false, at.Value, at.Id);
+            Check(Walk(step)?.Id == Single(step)?.Id, "Previous over nodes = over everything");
+            at = Walk(step);
+        }
+        Check(
+            order.SequenceEqual(new long[] { 3, 2, 6, 5, 4, 1 }),
+            "the walk down: " + string.Join(",", order)
+        );
+        Check(Walk(Step(false, 10, 1))?.Id == 3, "past the smallest it wraps to the biggest");
+        Check(Walk(Step(true, 40, 5))?.Id == 6, "Next from a tie goes to the bigger id");
+        Check(Walk(Step(true, 900, 3))?.Id == 1, "past the biggest Next wraps to the smallest");
+        Check(
+            AdminMenuService.Choose(Array.Empty<AdminMenuService.Candidates>(), Step(true, 0, 0))
+                == null,
+            "nothing anywhere is no pick"
+        );
+
+        // Grid size checkboxes and the offline metrics
+        var large = AdminMenuService.CycleStep.Of(
+            MyEntityCyclingOrder.BiggestGrids,
+            false,
+            float.MinValue,
+            0,
+            new CyclingOptions { Enabled = true, OnlyLargeGrids = true }
+        );
+        Check(
+            large.Skips(true, false) && !large.Skips(true, true) && large.Skips(false, false),
+            "large only"
+        );
+        var grids = new[]
+        {
+            new AdminMenuService.OfflineGrid(
+                11,
+                "big small",
+                false,
+                800,
+                0,
+                0,
+                0,
+                Array.Empty<long>(),
+                null
+            ),
+            new AdminMenuService.OfflineGrid(
+                12,
+                "big large",
+                true,
+                300,
+                0,
+                0,
+                0,
+                Array.Empty<long>(),
+                null
+            ),
+        };
+        Check(
+            AdminMenuService.OfflineCandidates(large, grids).Wrap?.Id == 12,
+            "the offline large grids only"
+        );
+        Check(
+            AdminMenuService.OfflineMetric(MyEntityCyclingOrder.Fastest, grids[0]) == 0
+                && AdminMenuService.OfflineMetric(MyEntityCyclingOrder.StaticObjects, grids[0])
+                    == 1,
+            "offline metrics: never fast, always static"
+        );
     }
 }

@@ -40,7 +40,7 @@ namespace ClusterPlugin;
 /// A node's reply on the bus holds at most 64 KiB, so a node's rows go gzipped in pages, and the asker fetches the
 /// further pages with more broadcasts, at most <see cref="MaxPages"/> per node.
 /// </summary>
-internal static class AdminMenuService
+internal static partial class AdminMenuService
 {
     private const string Plugin = "cluster-node";
     private const string ListTopic = "admin-entity-list";
@@ -57,6 +57,9 @@ internal static class AdminMenuService
     private const int MaxKnown = 200_000;
 
     internal const string OfflineTag = "offline";
+
+    /// <summary>In a Missing list: offline partitions whose grids the Gateway doesn't know yet (SE-1687).</summary>
+    internal const string UnindexedTag = "unindexed";
     internal const string AllNodes = "all";
 
     private static readonly string Node =
@@ -92,6 +95,8 @@ internal static class AdminMenuService
         PluginServices.Instance.RegisterHandler(Plugin, ActionTopic, OnAction);
         PluginServices.Instance.RegisterHandler(Plugin, GridsTopic, OnGrids);
         PluginServices.Instance.RegisterHandler(Plugin, PcuTopic, OnPcu);
+        PluginServices.Instance.RegisterHandler(Plugin, CycleTopic, OnCycle);
+        PluginServices.Instance.RegisterHandler(Plugin, SweepTopic, OnSweep);
     }
 
     // ---- rows on the wire ------------------------------------------------------------------------------------------
@@ -393,7 +398,7 @@ internal static class AdminMenuService
     {
         var watch = Stopwatch.StartNew();
         Guid key = Guid.NewGuid();
-        Task<OfflineGrid[]> offline = GridType(type) ? OfflineGridsAsync(null) : null;
+        Task<OfflineGrids> offline = GridType(type) ? OfflineGridsAsync(null) : null;
         var rows = new Dictionary<string, List<Row>>(StringComparer.Ordinal);
         var missing = new HashSet<string>(StringComparer.Ordinal);
         var pageCounts = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -458,8 +463,11 @@ internal static class AdminMenuService
         {
             try
             {
-                sleeping = (await offline.ConfigureAwait(false))
-                    .Where(grid =>
+                OfflineGrids answer = await offline.ConfigureAwait(false);
+                if (answer.Unknown > 0)
+                    missing.Add(UnindexedTag);
+                sleeping = answer
+                    .Grids.Where(grid =>
                         type == MyEntityList.MyEntityTypeEnum.Grids
                         || grid.Large == (type == MyEntityList.MyEntityTypeEnum.LargeGrids)
                     )
@@ -590,7 +598,10 @@ internal static class AdminMenuService
         double? Mass
     );
 
-    private static async Task<OfflineGrid[]> OfflineGridsAsync(long? owner)
+    /// <summary>Unknown = offline partitions whose grids the Gateway hasn't read yet: they are not in Grids.</summary>
+    internal sealed record OfflineGrids(OfflineGrid[] Grids, int Unknown);
+
+    private static async Task<OfflineGrids> OfflineGridsAsync(long? owner)
     {
         using HttpClient client = ClusterHttp.Client(Timeout);
         ClusterRuntime.AuthorizeRegistryClient(client);
@@ -631,7 +642,13 @@ internal static class AdminMenuService
                 )
             );
         }
-        return grids.ToArray();
+        return new OfflineGrids(
+            grids.ToArray(),
+            document.RootElement.TryGetProperty("unknown", out JsonElement unknown)
+            && unknown.ValueKind == JsonValueKind.Number
+                ? unknown.GetInt32()
+                : 0
+        );
     }
 
     internal static Row OfflineRow(OfflineGrid grid)
@@ -646,6 +663,10 @@ internal static class AdminMenuService
             X = Math.Round(grid.X),
             Y = Math.Round(grid.Y),
             Z = Math.Round(grid.Z),
+            Distance = NearestPlayer(
+                new Vector3D(grid.X, grid.Y, grid.Z),
+                (float)Math.Sqrt(float.MaxValue)
+            ),
             Owner = owner,
             OwnerName =
                 owner == 0 ? null : MySession.Static?.Players.TryGetIdentity(owner)?.DisplayName,
@@ -911,7 +932,7 @@ internal static class AdminMenuService
     )
     {
         var watch = Stopwatch.StartNew();
-        Task<OfflineGrid[]> offline = OfflineGridsAsync(identityId);
+        Task<OfflineGrids> offline = OfflineGridsAsync(identityId);
         PluginBroadcastResult result = await BroadcastAsync(
                 GridsTopic,
                 Encoding.UTF8.GetBytes(identityId.ToString(CultureInfo.InvariantCulture))
@@ -933,7 +954,10 @@ internal static class AdminMenuService
         OfflineGrid[] sleeping = Array.Empty<OfflineGrid>();
         try
         {
-            sleeping = await offline.ConfigureAwait(false);
+            OfflineGrids answer = await offline.ConfigureAwait(false);
+            if (answer.Unknown > 0)
+                missing.Add(UnindexedTag);
+            sleeping = answer.Grids;
         }
         catch (Exception exception)
             when (exception
@@ -1067,13 +1091,17 @@ internal static class AdminMenuService
     )
     {
         var parts = new List<string>();
-        string[] nodes = missing.Where(name => name != OfflineTag && name != AllNodes).ToArray();
+        string[] nodes = missing
+            .Where(name => name != OfflineTag && name != AllNodes && name != UnindexedTag)
+            .ToArray();
         if (missing.Contains(AllNodes))
             parts.Add("The other servers of the cluster did not answer, so they are not listed.");
         else if (nodes.Length > 0)
             parts.Add("No answer from " + string.Join(", ", nodes) + ", so they are not listed.");
         if (missing.Contains(OfflineTag))
             parts.Add("Grids in offline areas could not be listed.");
+        else if (missing.Contains(UnindexedTag))
+            parts.Add("Some offline areas are not indexed yet, so their grids are not listed.");
         if (truncated.Count > 0)
             parts.Add(
                 "Too many rows on "

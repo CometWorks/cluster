@@ -109,6 +109,152 @@ public static class AdminMenuClusterPatch
         }
     }
 
+    private static readonly Lazy<Action<float, long, Vector3D, bool>> CycleResponse = new(() =>
+        (Action<float, long, Vector3D, bool>)
+            Delegate.CreateDelegate(
+                typeof(Action<float, long, Vector3D, bool>),
+                AccessTools.Method(typeof(MyGuiScreenAdminMenu), "Cycle_Implementation")
+                    ?? throw new MissingMethodException(
+                        typeof(MyGuiScreenAdminMenu).FullName,
+                        "Cycle_Implementation"
+                    )
+            )
+    );
+
+    /// <summary>SE-1687: Cycle Objects (First / Next / Previous) walks the whole cluster. The GPS order stays
+    /// vanilla's: the client walks its own GPS list and never asks.</summary>
+    [HarmonyPatch(
+        typeof(MyGuiScreenAdminMenu),
+        nameof(MyGuiScreenAdminMenu.CycleRequest_Implementation)
+    )]
+    private static class CycleRequest
+    {
+        [HarmonyPrefix]
+        private static bool Prefix(
+            MyEntityCyclingOrder order,
+            bool reset,
+            bool findLarger,
+            float metricValue,
+            long currentEntityId,
+            CyclingOptions options
+        )
+        {
+            ulong admin = Admin();
+            if (admin == 0 || order == MyEntityCyclingOrder.Gps)
+                return true;
+            if (reset)
+            {
+                metricValue = float.MinValue;
+                currentEntityId = 0;
+                findLarger = false;
+            }
+            var step = AdminMenuService.CycleStep.Of(
+                order,
+                findLarger,
+                metricValue,
+                currentEntityId,
+                options
+            );
+            AdminMenuService.Candidates local = AdminMenuService.CycleCandidates(
+                step,
+                AdminMenuService.CyclesHere
+            );
+            void Send(AdminMenuService.Pick pick) =>
+                MyMultiplayer.RaiseStaticEvent(
+                    (IMyEventOwner s) => CycleResponse.Value,
+                    pick?.Value ?? (findLarger ? float.MaxValue : float.MinValue),
+                    pick?.Id ?? 0,
+                    pick == null ? Vector3D.Zero : new Vector3D(pick.X, pick.Y, pick.Z),
+                    pick?.Station == true,
+                    new EndpointId(admin)
+                );
+            Answer(
+                AdminMenuService.CycleAsync(step, local),
+                admin,
+                result =>
+                {
+                    Send(result.Pick);
+                    Chat(admin, AdminMenuService.CycleLine(result.Pick));
+                    Chat(admin, AdminMenuService.Incomplete(result.Missing, Array.Empty<string>()));
+                },
+                () => Send(AdminMenuService.Choose(new[] { local }, step))
+            );
+            return false;
+        }
+    }
+
+    /// <summary>SE-1687: the Trash Removal "Other" tab's Remove floating objects, Remove cargo bags and Stop entities
+    /// run on every node. Vanilla still does this node's part.</summary>
+    [HarmonyPatch]
+    private static class Sweeps
+    {
+        private static IEnumerable<MethodBase> TargetMethods() =>
+            new[]
+            {
+                "RemoveFloating_Implementation",
+                "RemoveCargoBags_Implementation",
+                "StopEntities_Implementation",
+            }.Select(name =>
+                AccessTools.Method(
+                    "Sandbox.Game.Screens.AdminMenu.MyTrashOtherTabContainer:" + name
+                )
+            );
+
+        [HarmonyPrefix]
+        private static void Prefix(MethodBase __originalMethod)
+        {
+            ulong admin = Admin();
+            if (admin == 0)
+                return;
+            var sweep = __originalMethod.Name switch
+            {
+                "RemoveFloating_Implementation" => AdminMenuService.Sweep.Floating,
+                "RemoveCargoBags_Implementation" => AdminMenuService.Sweep.CargoBags,
+                _ => AdminMenuService.Sweep.Stop,
+            };
+            Answer(
+                AdminMenuService.SweepAsync(sweep),
+                admin,
+                text =>
+                {
+                    Console.WriteLine($"[ClusterPlugin] admin sweep by {admin}: {text} (SE-1687)");
+                    Chat(admin, text);
+                },
+                () => { }
+            );
+        }
+    }
+
+    /// <summary>SE-1687: the Entity List's "distance from players" and the cycler's "biggest distance from players"
+    /// count the players on every node, not only the characters this node has.</summary>
+    [HarmonyPatch(typeof(MyEntityList), nameof(MyEntityList.GetPlayersMinimalDistance))]
+    private static class ListDistance
+    {
+        [HarmonyPostfix]
+        private static void Postfix(VRage.Game.Entity.MyEntity entity, ref float __result)
+        {
+            if (AdminMenuService.Active && entity != null)
+                __result = AdminMenuService.NearestPlayer(
+                    entity.PositionComp.GetPosition(),
+                    __result
+                );
+        }
+    }
+
+    [HarmonyPatch(typeof(MyEntityCycling), nameof(MyEntityCycling.GetPlayerDistance))]
+    private static class CycleDistance
+    {
+        [HarmonyPostfix]
+        private static void Postfix(VRage.Game.Entity.MyEntity entity, ref float __result)
+        {
+            if (AdminMenuService.Active && entity != null)
+                __result = AdminMenuService.NearestPlayer(
+                    entity.PositionComp.GetPosition(),
+                    __result
+                );
+        }
+    }
+
     [HarmonyPatch(
         typeof(MyGuiScreenAdminMenu),
         nameof(MyGuiScreenAdminMenu.ProceedEntitiesAction_Implementation)
