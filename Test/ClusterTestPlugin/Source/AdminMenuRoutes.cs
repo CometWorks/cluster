@@ -197,6 +197,114 @@ internal static class AdminMenuRoutes
                 );
             }
         );
+        // GET /admin-menu-cycle?order=BiggestGrids&larger=false&metric=&id=[&reset=true][&large=true|&small=true][&vanilla=true]
+        // - SE-1687: one Cycle Objects step as the patched CycleRequest makes it (or vanilla's FindNext on this node only)
+        TestRoutes.Add(
+            "GET",
+            "/admin-menu-cycle",
+            context =>
+            {
+                var order = (MyEntityCyclingOrder)
+                    Enum.Parse(
+                        typeof(MyEntityCyclingOrder),
+                        context.Request.QueryString["order"] ?? "BiggestGrids"
+                    );
+                bool reset = context.Request.QueryString["reset"] == "true";
+                bool larger = !reset && context.Request.QueryString["larger"] == "true";
+                float metric = reset
+                    ? float.MinValue
+                    : float.Parse(
+                        context.Request.QueryString["metric"] ?? "0",
+                        CultureInfo.InvariantCulture
+                    );
+                long id = reset
+                    ? 0
+                    : long.Parse(
+                        context.Request.QueryString["id"] ?? "0",
+                        CultureInfo.InvariantCulture
+                    );
+                var options = new CyclingOptions
+                {
+                    Enabled =
+                        context.Request.QueryString["large"] == "true"
+                        || context.Request.QueryString["small"] == "true",
+                    OnlyLargeGrids = context.Request.QueryString["large"] == "true",
+                    OnlySmallGrids = context.Request.QueryString["small"] == "true",
+                };
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                if (context.Request.QueryString["vanilla"] == "true")
+                {
+                    var (value, entity) = TestRoutes.OnGameThread(() =>
+                    {
+                        float v = metric;
+                        long e = id;
+                        MyEntityCycling.FindNext(order, ref v, ref e, larger, options);
+                        return (v, e);
+                    });
+                    TestRoutes.Json(
+                        context,
+                        200,
+                        new
+                        {
+                            value,
+                            id = entity,
+                            node = entity == 0 ? null : "here",
+                            ms = watch.ElapsedMilliseconds,
+                        }
+                    );
+                    return;
+                }
+                var step = AdminMenuService.CycleStep.Of(order, larger, metric, id, options);
+                AdminMenuService.Candidates local = TestRoutes.OnGameThread(() =>
+                    AdminMenuService.CycleCandidates(step, AdminMenuService.CyclesHere)
+                );
+                AdminMenuService.CycleResult result = AdminMenuService
+                    .CycleAsync(step, local)
+                    .GetAwaiter()
+                    .GetResult();
+                AdminMenuService.Pick pick = result.Pick;
+                TestRoutes.Json(
+                    context,
+                    200,
+                    new
+                    {
+                        value = pick?.Value ?? (larger ? float.MaxValue : float.MinValue),
+                        id = pick?.Id ?? 0,
+                        node = pick?.Node,
+                        name = pick?.Name,
+                        x = pick?.X,
+                        y = pick?.Y,
+                        z = pick?.Z,
+                        station = pick?.Station,
+                        chat = AdminMenuService.CycleLine(pick),
+                        missing = result.Missing,
+                        ms = watch.ElapsedMilliseconds,
+                    }
+                );
+            }
+        );
+        // POST /admin-menu-sweep?what=Floating|CargoBags|Stop[&vanilla=true] - SE-1687: a Trash "Other" tab button as the
+        // patched handler runs it: vanilla's loop here, then (unless vanilla=true) the other nodes' and their chat line
+        TestRoutes.Add(
+            "POST",
+            "/admin-menu-sweep",
+            context =>
+            {
+                var sweep = (AdminMenuService.Sweep)
+                    Enum.Parse(
+                        typeof(AdminMenuService.Sweep),
+                        context.Request.QueryString["what"] ?? "Stop"
+                    );
+                int local = TestRoutes.OnGameThread(() =>
+                    AdminMenuService.SweepHere(sweep, _ => true)
+                );
+                string text =
+                    context.Request.QueryString["vanilla"] == "true"
+                        ? null
+                        : AdminMenuService.SweepAsync(sweep).GetAwaiter().GetResult();
+                TestRoutes.Json(context, 200, new { local, text });
+            }
+        );
         // GET /admin-menu-known?id= - where the last list put an entity this node doesn't have (the camera jump)
         TestRoutes.Add(
             "GET",
