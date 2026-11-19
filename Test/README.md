@@ -207,3 +207,12 @@ cache replacement, unknown/modded policy, admission, conflicts, laser and pose. 
 runners do not establish all of their plan obligations; remaining full differentials/decisions
 are explicit in `coverage.py` and the acceptance map. Do not claim differential game, GUI, crash-injection or frame/traffic benchmarks from
 model/container checks.
+
+Player authentication checks: `ClusterRegistry --self-test player-access` covers
+whitelist/priority admission, ban precedence, expiry, persistence and unsupported
+roles. `--self-test player-moderation` includes real HTTP scope checks and fenced
+promotion-access publication. `dotnet run --project Test/PlayerModeration/PlayerModeration.csproj`
+checks the actual World Authority lease overlay, manual and default baselines,
+forgetting a player, replica and replacement-authority expiry, and origin fencing
+without a game process.
+The Cluster CLI `--self-test` checks the new policy verb against contract parity.

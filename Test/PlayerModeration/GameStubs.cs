@@ -123,6 +123,7 @@ namespace ClusterPlugin
         public static Action<string> Replica;
         public static Func<string, string, string> Set,
             Query;
+        public static Func<string, string, string> SetAccess;
         public static bool Journaled;
         public static string Published;
 
@@ -150,7 +151,10 @@ namespace ClusterPlugin
             bool journaled
         )
         {
-            Set = handler;
+            if (subsystem == "promotion-access")
+                SetAccess = handler;
+            else
+                Set = handler;
             Journaled = journaled;
         }
 

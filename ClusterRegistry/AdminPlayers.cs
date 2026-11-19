@@ -56,6 +56,11 @@ internal sealed partial class DirectGateway
                 "promotion_not_ready",
                 "World Authority promotions are still loading. Refresh before submitting a new action."
             );
+        if (!result.Success && result.Error == "promotion_managed_by_discord")
+            throw new PromotionRejectedException(
+                "promotion_managed_by_discord",
+                "Remove or lower the player's Discord promotion mapping before assigning a lower manual role."
+            );
         if (!result.Success)
             throw new InvalidOperationException(result.Error);
         return result.Payload;

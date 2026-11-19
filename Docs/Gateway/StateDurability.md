@@ -481,3 +481,34 @@ capability metadata to bypass that fence. Preserve a verified stopped backup bef
 migration; reverting to v1 requires restoring that pre-upgrade backup with compatible
 binaries into a separate stopped deployment, accepting loss of later changes. No
 in-place v2-to-v1 downgrade or managed v1-to-v2 migrator is supplied by this release.
+
+## Player access leases
+
+`player-access.json` beside Registry state retains the enabled whitelist and its
+last expiring decisions across Gateway restart. An expired whitelist remains
+closed to new joins. Policy writes flush and atomically rename before use.
+Runtime role grants carry their own expiry; neither an expired policy nor a
+priority entitlement bypasses a native ban or cooldown.
+
+World Authority promotion snapshots also retain Discord lease baselines, levels
+and expiry. The fenced journaled `promotion-access` owner applies the overlay on
+the game thread. Expiry restores the baseline and replicates through the normal
+promotion channel; a saved temporary Admin role therefore cannot become the
+baseline merely because authority changed. Disable and acknowledge access, save
+and stop before downgrading to packages without this metadata or converting a
+server. Source policies must be configured separately at the destination.
+
+The separate `player-access-required` marker retains the required cluster ID and
+minimum policy revision if the decision file is missing or restored from an older
+backup. Missing decisions therefore close admission instead of silently opening
+a prior whitelist. Only a fresh explicit disable removes that marker. Replica
+nodes also project expired promotion leases back to their saved baselines while
+an authority is unavailable; only the authority publishes durable map changes.
+
+A matching Quasar Host also persists player access intent in its Gateway launch
+specification. It supplies `QUASAR_PLAYER_WHITELIST` and
+`QUASAR_PLAYER_ACCESS_REVISION` before Gateway construction, closing a configured
+whitelist even with fresh or restored older Registry state. The revision rejects
+older published decisions. Launch intent alone never removes a persisted Registry
+restriction; a fresh explicit policy must acknowledge the change. Invalid launch
+intent refuses startup. No external lookup runs before admission.

@@ -20,7 +20,7 @@ namespace ClusterPlugin;
 /// re-broadcasts to its own attached clients). A reentrancy guard keeps the seam from reporting the
 /// cluster's own applications back.
 /// </summary>
-public static class PromotionService
+public static partial class PromotionService
 {
     private const string Subsystem = "promotions";
     private const int MaxEntries = 4096;
@@ -37,6 +37,7 @@ public static class PromotionService
     private static string m_pending;
     private static string m_applied;
     private static Dictionary<ulong, int> m_appliedLevels;
+    private static AccessPromotionLease[] m_appliedAccess = Array.Empty<AccessPromotionLease>();
     private static bool m_applying;
     private static volatile bool m_seeded;
     private static double m_readySince;
@@ -52,7 +53,10 @@ public static class PromotionService
         bool Seed = false
     );
 
-    public sealed record PromotionSnapshot(PromotionEntry[] Entries);
+    public sealed record PromotionSnapshot(
+        PromotionEntry[] Entries,
+        AccessPromotionLease[] Access = null
+    );
 
     /// <summary>Cluster backend sessions may use OFFLINE mode, where vanilla reports every
     /// nonzero id as Owner. Only the replicated promotion map grants a cluster bypass.</summary>
@@ -75,6 +79,11 @@ public static class PromotionService
         GlobalStateChannel.RegisterReplicaHandler(Subsystem, ReceiveSnapshot);
         GlobalStateChannel.RegisterSnapshot(Subsystem, Snapshot, ReceiveSnapshot);
         GlobalStateChannel.RegisterCommandHandler("promotion-set", SetFromGateway, journaled: true);
+        GlobalStateChannel.RegisterCommandHandler(
+            "promotion-access",
+            AccessFromGateway,
+            journaled: true
+        );
         GlobalStateChannel.RegisterQueryHandler("promotion-query", QueryFromGateway);
     }
 
@@ -133,6 +142,12 @@ public static class PromotionService
                         != entry.ExpectedRevision
                     )
                         throw new InvalidOperationException("promotion_revision_mismatch");
+                    if (
+                        Access.TryGetValue(entry.SteamId, out var lease)
+                        && lease.ExpiresAt > DateTimeOffset.UtcNow
+                        && entry.Level < lease.Level
+                    )
+                        throw new InvalidOperationException("promotion_managed_by_discord");
                     ReceiveReport(
                         origin,
                         JsonSerializer.Serialize(
@@ -165,6 +180,7 @@ public static class PromotionService
     {
         lock (SyncRoot)
         {
+            Access.Remove(steamId);
             if (!Levels.Remove(steamId))
                 return false;
             PublishMerged();
@@ -187,6 +203,7 @@ public static class PromotionService
             Levels.Clear();
             foreach (PromotionEntry entry in snapshot.Entries)
                 Levels.Add(entry.SteamId, entry);
+            RestoreAccess(snapshot);
             m_snapshot = m_pending = payload;
             m_seeded = true;
         }
@@ -251,24 +268,34 @@ public static class PromotionService
 
     private static void ReceiveReport(string origin, string payload)
     {
-        PromotionReport report = Read(payload);
+        MergeReport(Read(payload));
+    }
+
+    private static void MergeReport(PromotionReport report, bool defaultRole = false)
+    {
         lock (SyncRoot)
         {
             foreach (PromotionEntry entry in report.Entries)
             {
                 // Startup/transfer checkpoint data cannot undo a later explicit role, including None.
-                if (report.Seed && Levels.ContainsKey(entry.SteamId))
+                Access.TryGetValue(entry.SteamId, out var lease);
+                if (
+                    report.Seed
+                    && Levels.ContainsKey(entry.SteamId)
+                    && !(defaultRole && lease is { Baseline: null })
+                )
                     continue;
                 if (!Levels.ContainsKey(entry.SteamId) && Levels.Count >= MaxEntries)
                     throw new InvalidOperationException("Promotion map is full");
-                Levels.TryGetValue(entry.SteamId, out var current);
-                Levels[entry.SteamId] =
-                    current?.Level == entry.Level
-                        ? current
-                        : entry with
-                        {
-                            Revision = checked((current?.Revision ?? 0) + 1),
-                        };
+
+                int effective = entry.Level;
+                if (lease != null)
+                {
+                    Access[entry.SteamId] = lease with { Baseline = entry.Level };
+                    if (lease.ExpiresAt > DateTimeOffset.UtcNow)
+                        effective = Math.Max(effective, lease.Level);
+                }
+                SetAccessLevel(entry.SteamId, effective);
             }
             PublishMerged();
         }
@@ -280,7 +307,10 @@ public static class PromotionService
         lock (SyncRoot)
             payload = m_snapshot = JsonSerializer.Serialize(
                 new PromotionSnapshot(
-                    Levels.OrderBy(entry => entry.Key).Select(entry => entry.Value).ToArray()
+                    Levels.OrderBy(entry => entry.Key).Select(entry => entry.Value).ToArray(),
+                    Access.Count == 0
+                        ? null
+                        : Access.Values.OrderBy(lease => lease.SteamId).ToArray()
                 )
             );
         GlobalStateChannel.Publish(Subsystem, payload);
@@ -312,6 +342,9 @@ public static class PromotionService
         if (!m_seeded)
             return;
         GrantDefaultRole();
+        var now = DateTimeOffset.UtcNow;
+        if (ClusterRuntime.IsWorldAuthority && !ClusterRuntime.IsAuthorityFenced)
+            ExpireAccess(now);
         string payload;
         Dictionary<ulong, int> replicated;
         lock (SyncRoot)
@@ -321,11 +354,29 @@ public static class PromotionService
             payload = m_pending ?? m_applied;
             if (payload == null)
                 return;
-            replicated =
-                payload == m_applied
-                    ? m_appliedLevels
-                    : ReadSnapshot(payload)
-                        .Entries.ToDictionary(entry => entry.SteamId, entry => entry.Level);
+            if (payload != m_applied)
+            {
+                var snapshot = ReadSnapshot(payload);
+                m_appliedLevels = snapshot.Entries.ToDictionary(
+                    entry => entry.SteamId,
+                    entry => entry.Level
+                );
+                m_appliedAccess = snapshot.Access ?? Array.Empty<AccessPromotionLease>();
+            }
+            // Project the baseline locally even during an authority outage. Only the authority
+            // changes the durable map. Handle each expiry once per applied snapshot.
+            if (m_appliedAccess.Any(lease => lease.ExpiresAt <= now))
+            {
+                foreach (var lease in m_appliedAccess.Where(lease => lease.ExpiresAt <= now))
+                {
+                    if (lease.Baseline is int baseline)
+                        m_appliedLevels[lease.SteamId] = baseline;
+                    else
+                        m_appliedLevels.Remove(lease.SteamId);
+                }
+                m_appliedAccess = m_appliedAccess.Where(lease => lease.ExpiresAt > now).ToArray();
+            }
+            replicated = m_appliedLevels;
         }
         // Demotions first: local entries the authoritative map no longer contains.
         ulong[] demoted = session
@@ -350,7 +401,6 @@ public static class PromotionService
         lock (SyncRoot)
         {
             m_applied = payload;
-            m_appliedLevels = replicated;
             if (string.Equals(m_pending, payload, StringComparison.Ordinal))
                 m_pending = null;
         }
@@ -378,7 +428,11 @@ public static class PromotionService
                 .Cluster.Where(player =>
                     player.SteamId != 0
                     && player.SerialId == 0
-                    && !Levels.ContainsKey(player.SteamId)
+                    && (
+                        !Levels.ContainsKey(player.SteamId)
+                        || Access.TryGetValue(player.SteamId, out var lease)
+                            && lease.Baseline == null
+                    )
                 )
                 .Select(player => player.SteamId)
                 .Distinct()
@@ -389,10 +443,7 @@ public static class PromotionService
         Console.WriteLine(
             $"[ClusterPlugin] promotion default role={level} clients={string.Join(",", entries.Select(entry => entry.SteamId))}"
         );
-        ReceiveReport(
-            Node,
-            JsonSerializer.Serialize(new PromotionReport(Node, entries, Seed: true))
-        );
+        MergeReport(new PromotionReport(Node, entries, Seed: true), defaultRole: true);
     }
 
     /// <summary>
@@ -454,6 +505,7 @@ public static class PromotionService
                 != snapshot.Entries.Length
         )
             throw new InvalidOperationException("Invalid promotion snapshot");
+        ValidateAccess(snapshot.Access, snapshot.Entries);
         return snapshot;
     }
 

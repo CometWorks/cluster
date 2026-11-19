@@ -218,6 +218,52 @@ Refused(() =>
     )
 );
 
+// Discord leases preserve manual roles across revocation, authority replacement and replica expiry.
+string Access(int level, DateTimeOffset expiry, ulong user = 7) =>
+    JsonSerializer.Serialize(
+        new PromotionService.AccessPromotionPolicy(
+            expiry,
+            level == 0 ? [] : [new(user, level, expiry)]
+        )
+    );
+var expires = DateTimeOffset.UtcNow.AddMinutes(1);
+GlobalStateChannel.SetAccess("$gateway", Access(4, expires));
+Check(Entries().Single().Level == 4, "Discord role overlays manual level");
+Refused(() => Set(7, 2, Entries().Single().Revision));
+var leasedSave = PromotionService.PersistedRecord();
+GlobalStateChannel.SetAccess("$gateway", Access(0, expires));
+Check(Entries().Single().Level == 3, "Removing entitlement restores manual level");
+PromotionService.RestoreRecord(leasedSave);
+PromotionService.ExpireAccess(expires);
+PromotionService.Update();
+Check(
+    Entries().Single().Level == 3 && (int)MySession.Static.PromotedUsers[7] == 3,
+    "Replacement WA expires saved entitlement and applies baseline"
+);
+var expiredReplica = new PromotionService.PromotionSnapshot(
+    [new(7, 4, Entries().Single().Revision)],
+    [new(7, 3, 4, DateTimeOffset.UtcNow.AddSeconds(-1))]
+);
+ClusterRuntime.IsWorldAuthority = false;
+GlobalStateChannel.Replica(JsonSerializer.Serialize(expiredReplica));
+PromotionService.Update();
+Check(
+    (int)MySession.Static.PromotedUsers[7] == 3,
+    "Replica expires role while authority is unavailable"
+);
+ClusterRuntime.IsWorldAuthority = true;
+GlobalStateChannel.SetAccess("$gateway", Access(4, expires));
+Set(7, 4, Entries().Single().Revision);
+GlobalStateChannel.SetAccess("$gateway", Access(0, expires));
+Check(Entries().Single().Level == 4, "Explicit manual baseline survives entitlement removal");
+Set(7, 3, Entries().Single().Revision);
+Refused(() => GlobalStateChannel.SetAccess("node-a", Access(4, expires)));
+Refused(() => GlobalStateChannel.SetAccess("$gateway", Access(5, expires)));
+GlobalStateChannel.SetAccess("$gateway", Access(4, expires, 99));
+Check(PromotionService.Forget(99), "Forget clears the Discord overlay");
+PromotionService.ExpireAccess(expires);
+Check(!Entries().Any(entry => entry.SteamId == 99), "Expiry cannot recreate a forgotten promotion");
+
 // players.defaultRole: online players with no entry get the role once; explicit roles, None included, win.
 ClusterRuntime.LocalMilliseconds += 1000;
 OnlinePlayersService.Cluster =
@@ -269,8 +315,24 @@ Check(
 ClusterRuntime.IsWorldAuthority = true;
 PromotionService.Update();
 Check(Entries().Single(entry => entry.SteamId == 10).Level == 1, "Default role on the next check");
+
+// A temporary role on its own must not replace a new player's configured default.
+OnlinePlayersService.Cluster = [new("node-a", 11, 0)];
+GlobalStateChannel.SetAccess("$gateway", Access(4, expires, 11));
+ClusterRuntime.LocalMilliseconds += 1000;
+PromotionService.Update();
+Check(
+    Entries().Single(entry => entry.SteamId == 11).Level == 4,
+    "Discord overlays the default role"
+);
+GlobalStateChannel.SetAccess("$gateway", Access(0, expires));
+Check(
+    Entries().Single(entry => entry.SteamId == 11).Level == 1,
+    "Expiry or revocation restores the default role"
+);
 ClusterRuntime.IsAuthorityFenced = true;
-Refused(() => Set(7, 4, Entries().Single().Revision));
+Refused(() => GlobalStateChannel.SetAccess("$gateway", Access(4, expires)));
+Refused(() => Set(7, 4, Entries().Single(entry => entry.SteamId == 7).Revision));
 Console.WriteLine(
     "Promotion owner, game application, revisions, reconnect, snapshot codec, ledger replay and default role checks passed."
 );
