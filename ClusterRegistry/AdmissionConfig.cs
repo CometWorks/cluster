@@ -220,7 +220,7 @@ internal sealed class AdmissionBook
         + (acceptAll ? " acceptall1" : string.Empty);
 
     /// <summary>MyFinalBuildConstants.APP_VERSION.ToString(), what vanilla advertises (tag, game data, GameServer.Init):
-    /// the build number, 1.211.017 -> 1211017. The client's server details read the tag as a number (#1529).</summary>
+    /// the build number, 1.211.018 -> 1211018. The client's server details read the tag as a number (#1529).</summary>
     public static string BuildNumber(string version)
     {
         string[] parts = version.Split('.');
