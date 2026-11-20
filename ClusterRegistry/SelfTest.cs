@@ -194,6 +194,7 @@ internal static partial class SelfTest
     [
         ("accounting-clock", TestAccountingClock),
         ("diagnostic-reports", TestDiagnosticReports),
+        ("handover-import-rejection-reports", TestHandoverImportRejectionReports),
         ("linux-limits", TestLinuxLimits),
         ("endpoints", TestEndpoints),
         ("option-environment", TestOptionEnvironment),

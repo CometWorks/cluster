@@ -34,6 +34,7 @@ internal static partial class SelfTest
 
         /// <summary>T-0373: the source's /cluster/partitions answer (JSON); null answers like any other action.</summary>
         public volatile string? SourcePartitions;
+        public volatile string? ImportFailureBody;
         private readonly string _directory = Directory
             .CreateTempSubdirectory("handover-abort-selftest-")
             .FullName;
@@ -105,6 +106,8 @@ internal static partial class SelfTest
                             && node == "source"
                             && SourcePartitions is { } partitions
                                 ? System.Text.Encoding.UTF8.GetBytes(partitions)
+                            : call == "target import" && ImportFailureBody is { } refusal
+                                ? System.Text.Encoding.UTF8.GetBytes(refusal)
                             : action == "tee-status" ? "{\"known\":false}"u8.ToArray()
                             : "ok\n"u8.ToArray();
                         try
@@ -460,6 +463,132 @@ internal static partial class SelfTest
             }
             catch (IOException) { }
         }
+    }
+
+    private static void TestHandoverImportRejectionReports()
+    {
+        const string mismatch =
+            "System.IO.InvalidDataException: Frozen source and imported target object builders differ; "
+            + "residuals=1 residual-signature=0123456789abcdef residual-entities=42";
+        const string blocked = "handover_import_blocked";
+        const string failed = "handover_failure";
+        const ulong clientlessPartition = 42;
+        bool failDiscard = false;
+        using var scripted = new ScriptedHandover(
+            (call, _) =>
+                call == "target import" || call == "target discard" && failDiscard ? 500 : 200
+        );
+        NodeRegistration source = scripted.Registry.Nodes().Single(n => n.Node == "source");
+        scripted.Registry.ClaimPartition(clientlessPartition, source.Node, source.Epoch, 0);
+        scripted.SourcePartitions = """{"partitions":[{"id":42,"clients":[],"memberCount":1}]}""";
+        string directory = Directory.CreateTempSubdirectory("handover-import-reports-").FullName;
+        string? previousDirectory = Environment.GetEnvironmentVariable("ERROR_REPORTING_DIRECTORY");
+        try
+        {
+            Environment.SetEnvironmentVariable("ERROR_REPORTING_DIRECTORY", directory);
+            scripted.ImportFailureBody = mismatch;
+            foreach (ulong partition in new[] { ScriptedHandover.Partition, clientlessPartition })
+            {
+                int reports = Reports(blocked).Length;
+                var before = scripted.Registry.GetPartitionOwner(partition) with { };
+                int attempts = GatewayRegistry.HandoverValidationAborts;
+                for (int n = 1; n <= attempts + 1; n++)
+                {
+                    Exception? error = Run(partition);
+                    Assert(
+                        error
+                            is DirectGateway.HandoverImportException
+                            {
+                                Signature: "0123456789abcdef"
+                            }
+                    );
+                    Assert(scripted.Registry.HandoverScheduleBlocked(partition) == (n >= attempts));
+                    Assert(Reports(blocked).Length == reports + (n >= attempts ? 1 : 0));
+                }
+                var after = scripted.Registry.GetPartitionOwner(partition);
+                Assert(
+                    after.Node == before.Node
+                        && after.Epoch == before.Epoch
+                        && after.Generation == before.Generation
+                );
+                Assert(scripted.Registry.Incomplete().Length == 0);
+            }
+            Assert(Reports(failed).Length == 0);
+            Assert(
+                Reports(blocked)
+                    .All(r =>
+                        r.GetProperty("message").GetString()!.Contains("HTTP 500")
+                        && r.GetProperty("message")
+                            .GetString()!
+                            .Contains("residual-signature=0123456789abcdef")
+                        && r.GetProperty("exception").ValueKind
+                            == System.Text.Json.JsonValueKind.Null
+                    )
+            );
+            int imports = scripted.Count("target import");
+            int attemptsTotal = 2 * (GatewayRegistry.HandoverValidationAborts + 1);
+            Assert(
+                imports == attemptsTotal
+                    && scripted.Count("source capture") == imports
+                    && scripted.Count("target discard") == imports
+                    && scripted.Count("source thaw") == imports
+                    && scripted.Count("target commit") == 0
+                    && scripted.Count("source release") == 0
+                    && !scripted.ClientDisconnected
+            );
+
+            scripted.ImportFailureBody = "System.IO.IOException: unexpected import failure";
+            Assert(
+                Run(clientlessPartition)
+                    is DirectGateway.HandoverImportException { Signature: null }
+            );
+            Assert(
+                Reports(failed)
+                    .Single()
+                    .GetProperty("exception")
+                    .GetString()!
+                    .Contains("unexpected import failure")
+            );
+            Assert(
+                scripted
+                    .Registry.HandoverBlocks()
+                    .Single(b => b.Partition == clientlessPartition)
+                    .Attempts
+                    == GatewayRegistry.HandoverValidationAborts + 1
+            );
+
+            scripted.ImportFailureBody = mismatch;
+            failDiscard = true;
+            Assert(Run(clientlessPartition) is AggregateException);
+            Assert(
+                Reports(failed)
+                    .Any(r =>
+                        r.GetProperty("exception").GetString()!.Contains("AggregateException")
+                    )
+            );
+            Assert(Reports(blocked).Length == 2 && scripted.Registry.Incomplete().Length == 1);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ERROR_REPORTING_DIRECTORY", previousDirectory);
+            Directory.Delete(directory, recursive: true);
+        }
+
+        Exception? Run(ulong partition) =>
+            partition == clientlessPartition
+                ? scripted.Clientless(partition, null)
+                : scripted.Handover();
+
+        System.Text.Json.JsonElement[] Reports(string kind) =>
+            Directory
+                .GetFiles(directory, "*.json")
+                .Select(path =>
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(path));
+                    return doc.RootElement.Clone();
+                })
+                .Where(report => report.GetProperty("kind").GetString() == kind)
+                .ToArray();
     }
 
     /// <summary>

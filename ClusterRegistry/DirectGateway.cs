@@ -10533,14 +10533,9 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         }
         catch (Exception failure)
         {
-            DiagnosticReports.Write(
-                "handover_failure",
-                "Partition handover failed",
-                failure,
-                transferId,
-                partition,
-                "handover"
-            );
+            HandoverImportException? rejection = failure as HandoverImportException;
+            if (rejection?.Signature == null)
+                ReportHandoverFailure(transferId, partition, failure);
             if (!committed)
             {
                 List<Exception> cleanupFailures = [];
@@ -10653,18 +10648,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                             registry.Abort(transferId);
                             aborted = true;
                             LogTransfer(transferId, partition, "aborted");
-                            if (
-                                failure is HandoverImportException
-                                {
-                                    Signature: { } signature
-                                } rejected
-                            )
-                                registry.RecordValidationAbort(
-                                    partition,
-                                    signature,
-                                    rejected.Reason,
-                                    rejected.Entities
-                                );
+                            RecordImportValidationAbort(registry, transferId, rejection);
                         }
                     }
                     catch (Exception e)
@@ -10702,7 +10686,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 foreach (ClientSession each in unadopted)
                     ForceReconnect(each, "handover-abort-source-readopt-failed");
                 if (cleanupFailures.Count != 0)
-                    throw new AggregateException([failure, .. cleanupFailures]);
+                {
+                    var incomplete = new AggregateException([failure, .. cleanupFailures]);
+                    if (rejection?.Signature != null)
+                        ReportHandoverFailure(transferId, partition, incomplete);
+                    throw incomplete;
+                }
             }
             throw;
         }
@@ -11064,14 +11053,9 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         }
         catch (Exception failure)
         {
-            DiagnosticReports.Write(
-                "handover_failure",
-                "Partition handover failed",
-                failure,
-                transferId,
-                partition,
-                "handover"
-            );
+            HandoverImportException? rejection = failure as HandoverImportException;
+            if (rejection?.Signature == null)
+                ReportHandoverFailure(transferId, partition, failure);
             if (!committed)
             {
                 List<Exception> cleanupFailures = [];
@@ -11115,18 +11099,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         {
                             registry.Abort(transferId);
                             LogTransfer(transferId, partition, "aborted");
-                            if (
-                                failure is HandoverImportException
-                                {
-                                    Signature: { } signature
-                                } rejected
-                            )
-                                registry.RecordValidationAbort(
-                                    partition,
-                                    signature,
-                                    rejected.Reason,
-                                    rejected.Entities
-                                );
+                            RecordImportValidationAbort(registry, transferId, rejection);
                         }
                     }
                     catch (Exception e)
@@ -11135,7 +11108,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     }
                 }
                 if (cleanupFailures.Count != 0)
-                    throw new AggregateException([failure, .. cleanupFailures]);
+                {
+                    var incomplete = new AggregateException([failure, .. cleanupFailures]);
+                    if (rejection?.Signature != null)
+                        ReportHandoverFailure(transferId, partition, incomplete);
+                    throw incomplete;
+                }
             }
             throw;
         }
@@ -11914,6 +11892,45 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             );
             return null;
         }
+    }
+
+    private static void ReportHandoverFailure(
+        string transferId,
+        ulong partition,
+        Exception failure
+    ) =>
+        DiagnosticReports.Write(
+            "handover_failure",
+            "Partition handover failed",
+            failure,
+            transferId,
+            partition,
+            "handover"
+        );
+
+    /// <summary>Report a handled import refusal when the partition first enters HandoverBlocked.</summary>
+    private static void RecordImportValidationAbort(
+        GatewayRegistry registry,
+        string transferId,
+        HandoverImportException? rejection
+    )
+    {
+        if (
+            rejection?.Signature is { } signature
+            && registry.RecordValidationAbort(
+                rejection.Partition,
+                signature,
+                rejection.Reason,
+                rejection.Entities
+            )
+        )
+            DiagnosticReports.Write(
+                "handover_import_blocked",
+                rejection.Message,
+                transferId: transferId,
+                partition: rejection.Partition,
+                phase: "import"
+            );
     }
 
     /// <summary>
