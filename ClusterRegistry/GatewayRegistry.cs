@@ -5187,11 +5187,11 @@ internal sealed partial class GatewayRegistry : IDisposable
             : 2;
 
     /// <summary>
-    /// Records one Partitioning §6.10 validation abort. Alarm-level once the same-signature count reaches
-    /// the threshold: the partition is HandoverBlocked, scheduling backs off 1 min doubling to 1 h, and the
-    /// policy layer moves the counterpart of any pending co-location instead.
+    /// Records one Partitioning §6.10 validation abort. Returns true when the episode first reaches
+    /// the HandoverBlocked threshold. At and above it, scheduling backs off 1 min doubling to 1 h,
+    /// and the policy layer moves the counterpart of any pending co-location instead.
     /// </summary>
-    public void RecordValidationAbort(
+    public bool RecordValidationAbort(
         ulong partition,
         string signature,
         string reason,
@@ -5251,6 +5251,7 @@ internal sealed partial class GatewayRegistry : IDisposable
                 );
             }
             Persist();
+            return block.Attempts == HandoverValidationAborts;
         }
     }
 
