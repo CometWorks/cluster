@@ -23,6 +23,7 @@ internal static partial class SelfTest
 
         /// <summary>Every node control request in arrival order: "source adopt-ready", "target commit", ...</summary>
         public readonly ConcurrentQueue<string> Calls = new();
+        public readonly ConcurrentQueue<string> SwitchFrames = new();
 
         /// <summary>The same requests with their query string, for the assertions on what was asked.</summary>
         public readonly ConcurrentQueue<(
@@ -48,7 +49,11 @@ internal static partial class SelfTest
         private volatile bool _stop;
         private volatile string _attachedTo = "";
 
-        public ScriptedHandover(Func<string, int, int?> respond)
+        public ScriptedHandover(
+            Func<string, int, int?> respond,
+            Func<string, bool>? acknowledge = null,
+            bool leaveDuringDetach = false
+        )
         {
             int sourcePort = FreeTcpPort(),
                 targetPort = FreeTcpPort();
@@ -188,6 +193,24 @@ internal static partial class SelfTest
                     string kind = frame.GetProperty("kind").GetString()!,
                         endpoint = frame.GetProperty("endpoint").GetString()!;
                     if (kind is not ("attach" or "detach"))
+                        return;
+                    string action = (endpoint == _sourceEndpoint ? "source " : "target ") + kind;
+                    SwitchFrames.Enqueue(action);
+                    if (leaveDuringDetach && action == "source detach")
+                    {
+                        _relay!.Send(
+                            RelayIpcType.ClientEvent,
+                            0,
+                            new
+                            {
+                                clientId = Client,
+                                session = RelaySession,
+                                @event = "disconnected",
+                            }
+                        );
+                        return;
+                    }
+                    if (acknowledge?.Invoke(action) == false)
                         return;
                     if (kind == "attach")
                         _attachedTo = endpoint;
@@ -686,6 +709,61 @@ internal static partial class SelfTest
             scripted.Count("target discard") == 1 && scripted.Count("source thaw") == 1,
             "the abort did not discard the target copy and thaw the source"
         );
+    }
+
+    private static void TestHandoverSwitchFailure()
+    {
+        static void Check(bool condition, string message)
+        {
+            if (!condition)
+                throw new InvalidOperationException(message);
+        }
+
+        foreach (string interrupted in new[] { "source detach", "target attach", "client left" })
+        {
+            using var scripted = new ScriptedHandover(
+                (call, _) => call.EndsWith(" status", StringComparison.Ordinal) ? 503 : 200,
+                acknowledge: action => action != interrupted,
+                leaveDuringDetach: interrupted == "client left"
+            );
+            Stopwatch elapsed = Stopwatch.StartNew();
+            Exception? failure = scripted.Handover();
+            if (interrupted == "client left")
+            {
+                Check(
+                    failure is RegistryConflictException,
+                    $"Expected client departure, got {failure}"
+                );
+                Check(
+                    elapsed.Elapsed < TimeSpan.FromSeconds(8),
+                    "Client departure waited for the detach deadline"
+                );
+            }
+            else
+            {
+                for (int waited = 0; waited < 100 && !scripted.ClientDisconnected; waited++)
+                    Thread.Sleep(10);
+                Check(
+                    scripted.ClientDisconnected,
+                    $"Unconfirmed {interrupted} left the client routed"
+                );
+                Check(
+                    interrupted == "source detach"
+                        ? failure is TimeoutException
+                        : failure is IOException,
+                    $"Expected a real {interrupted} failure, got {failure}"
+                );
+            }
+            Assert(scripted.Owner == "source" && scripted.Registry.Incomplete().Length == 0);
+            Assert(scripted.Count("target discard") == 1 && scripted.Count("source thaw") == 1);
+            Assert(scripted.Count("source adopt") == 0 && scripted.Count("target adopt") == 0);
+            Assert(scripted.Count("target commit") == 0 && scripted.Count("source release") == 0);
+            Assert(scripted.SwitchFrames.Count(action => action == "source detach") == 1);
+            Assert(
+                scripted.SwitchFrames.Count(action => action == "target attach")
+                    == (interrupted == "target attach" ? 1 : 0)
+            );
+        }
     }
 
     /// <summary>

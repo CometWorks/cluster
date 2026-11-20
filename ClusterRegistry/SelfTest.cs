@@ -350,6 +350,7 @@ internal static partial class SelfTest
         ("handover-adopt-ready-transport-failure", TestHandoverAdoptReadyTransportFailure),
         ("handover-balance-readiness-budget", TestHandoverBalanceReadinessBudget),
         ("handover-abort-readopts-on-source", TestHandoverAbortReadoptsOnSource),
+        ("handover-switch-failure", TestHandoverSwitchFailure),
         ("handover-pass-skips-closed-node-item", TestHandoverPassSkipsClosedNodeItem),
         ("closed-node-placeholder-drains", TestClosedNodePlaceholderDrains),
         ("closed-node-placeholder-lease-lapse", TestClosedNodePlaceholderLeaseLapse),

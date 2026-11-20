@@ -599,7 +599,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         _running = false;
         foreach (ClientSession session in _clients.Values)
-            session.AdmissionCancellation.Cancel();
+            session.SessionCancellation.Cancel();
         foreach (HandoverPause pause in _handoverPauses.Values)
             pause.Release.TrySetResult();
         _stop.Set();
@@ -5556,7 +5556,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     authority,
                     "players",
                     JsonSerializer.Serialize(request),
-                    session.AdmissionCancellation.Token
+                    session.SessionCancellation.Token
                 );
                 GlobalCommandResult result =
                     JsonSerializer.Deserialize<GlobalCommandResult>(payload)
@@ -5844,7 +5844,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         deadline = DateTimeOffset.UtcNow + AttachRetryTimeout;
                     else if (DateTimeOffset.UtcNow >= deadline)
                         break;
-                    await Task.Delay(250, session.AdmissionCancellation.Token);
+                    await Task.Delay(250, session.SessionCancellation.Token);
                 }
                 Console.WriteLine(
                     $"Attach of client {session.ClientId} to {link.Endpoint} timed out after {AttachRetryTimeout.TotalSeconds:0}s"
@@ -5989,11 +5989,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     {
         lock (session.RelayLock)
         {
-            if (
-                !_clients.TryGetValue(session.ClientId, out ClientSession? current)
-                || !ReferenceEquals(current, session)
-            )
-                throw new IOException("Client disconnected during backend attach");
+            EnsureCurrentClientSession(session);
             link.Clients[session.ClientId] = session;
             session.Link = link;
             session.BackendEndpoint = link.Endpoint;
@@ -6003,12 +5999,55 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             SendAttach(link, session);
     }
 
-    private void SwitchBackend(ClientSession session, IPEndPoint backend)
+    private sealed class ClientSessionEndedException()
+        : IOException("Client session ended during backend switch");
+
+    private void EnsureCurrentClientSession(ClientSession session)
     {
-        bool ownsSwitch = !session.SwitchingBackend;
-        bool completed = false;
+        if (
+            !_clients.TryGetValue(session.ClientId, out ClientSession? current)
+            || !ReferenceEquals(current, session)
+        )
+            throw new ClientSessionEndedException();
+    }
+
+    private bool WaitForSwitchSignal(
+        ClientSession session,
+        ManualResetEventSlim signal,
+        TimeSpan timeout
+    )
+    {
+        bool signalled;
         try
         {
+            signalled =
+                timeout > TimeSpan.Zero && signal.Wait(timeout, session.SessionCancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            EnsureCurrentClientSession(session);
+            throw;
+        }
+        EnsureCurrentClientSession(session);
+        return signalled;
+    }
+
+    private void SwitchBackend(ClientSession session, IPEndPoint backend) =>
+        SwitchBackend(session, backend, out _);
+
+    private void SwitchBackend(
+        ClientSession session,
+        IPEndPoint backend,
+        out bool routeChangeStarted
+    )
+    {
+        routeChangeStarted = false;
+        bool ownsSwitch = !session.SwitchingBackend;
+        bool completed = false;
+        TimeSpan timeout = TimeSpan.FromSeconds(10);
+        try
+        {
+            EnsureCurrentClientSession(session);
             if (ownsSwitch)
             {
                 EnsurePlayerAdmissionReady(session);
@@ -6016,7 +6055,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             }
             NodeLink target = GetNodeLink(backend);
             ConnectBackend(target);
-            if (!target.Connected.Wait(10000))
+            if (!WaitForSwitchSignal(session, target.Connected, timeout))
                 throw new TimeoutException("Timed out connecting backend " + backend);
             lock (target.Sync)
             {
@@ -6025,35 +6064,47 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             }
             NodeLink? source;
             lock (session.RelayLock)
+            {
+                EnsureCurrentClientSession(session);
                 source = session.Link;
+            }
+            routeChangeStarted = true;
             if (source != null && !ReferenceEquals(source, target))
             {
-                if (SendDetach(source, session) && !session.DetachCompleted.Wait(10000))
+                if (
+                    SendDetach(source, session)
+                    && !WaitForSwitchSignal(session, session.DetachCompleted, timeout)
+                )
                     throw new TimeoutException(
                         "Timed out detaching source backend " + source.Endpoint
                     );
-                source.Clients.TryRemove(session.ClientId, out _);
+                source.Clients.TryRemove(
+                    new KeyValuePair<ulong, ClientSession>(session.ClientId, session)
+                );
             }
             lock (target.Sync)
             {
                 if (!target.IsConnected)
                     throw new IOException("Backend disconnected during switch " + backend);
             }
-            DateTimeOffset attachDeadline = DateTimeOffset.UtcNow.AddSeconds(10);
+            DateTimeOffset attachDeadline = DateTimeOffset.UtcNow + timeout;
             while (true)
             {
                 Attach(session, target);
                 TimeSpan remaining = attachDeadline - DateTimeOffset.UtcNow;
-                if (remaining <= TimeSpan.Zero || !session.AttachCompleted.Wait(remaining))
+                if (!WaitForSwitchSignal(session, session.AttachCompleted, remaining))
                     throw new IOException(
                         "Backend failed to attach client during switch " + backend
                     );
                 lock (session.RelayLock)
+                {
+                    EnsureCurrentClientSession(session);
                     if (
                         ReferenceEquals(session.AttachedLink, target)
                         && session.AttachedBindingRevision == session.BindingRevision
                     )
                         break;
+                }
             }
             completed = true;
         }
@@ -10125,9 +10176,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         bool prepared = false;
         bool committed = false;
         bool safeRoute = true;
-        // Sessions that have actually been moved onto the target backend, in switch order, so a
-        // failure part-way through the fan-out restores exactly those and leaves the rest alone.
+        // Restore acknowledged switches. A switch interrupted after it starts changing the route
+        // cannot tell which node processed it, so that session rejoins after the rollback.
         List<ClientSession> switchedSessions = [];
+        ClientSession? incompleteSwitch = null;
+        bool routeChangeStarted = false;
         // T-0369: the capture those sessions left the source with; an abort hands each its view back there.
         HandoverCapture? switchedWith = null;
         // T-0369: clients the TARGET adopted. Their replication view moved on there, so the captured view is stale:
@@ -10147,10 +10200,17 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     each,
                     () =>
                     {
-                        if ((committed || safeRoute) && RouteHealthy(each))
+                        if (
+                            (committed || safeRoute)
+                            && !ReferenceEquals(each, incompleteSwitch)
+                            && each.BackendEndpoint.Equals(committed ? backend : sourceBackend)
+                            && RouteHealthy(each)
+                        )
+                        {
                             FlushClientBacklog(each);
-                        if (committed && RouteHealthy(each))
-                            FlushServerBacklog(each);
+                            if (committed)
+                                FlushServerBacklog(each);
+                        }
                         each.BufferServerPackets = false;
                         each.ValidationLink = null;
                     }
@@ -10338,7 +10398,9 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     each.TargetReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
                 }
                 each.BufferServerPackets = true;
-                SwitchBackend(each, backend);
+                incompleteSwitch = each;
+                SwitchBackend(each, backend, out routeChangeStarted);
+                incompleteSwitch = null;
                 switchedSessions.Add(each);
                 lock (each.RelayLock)
                     each.ValidationLink = each.Link;
@@ -10534,10 +10596,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         catch (Exception failure)
         {
             HandoverImportException? rejection = failure as HandoverImportException;
-            if (rejection?.Signature == null)
+            bool reportAfterCleanupFailure =
+                failure is ClientSessionEndedException || rejection?.Signature != null;
+            if (!reportAfterCleanupFailure)
                 ReportHandoverFailure(transferId, partition, failure);
             if (!committed)
             {
+                if (!routeChangeStarted)
+                    incompleteSwitch = null;
                 List<Exception> cleanupFailures = [];
                 // Every session that made it onto the target goes back to the source, which is still
                 // holding the partition frozen; one that fails to come back is disconnected below.
@@ -10552,14 +10618,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     catch (Exception e)
                     {
                         stranded.Add(each);
-                        cleanupFailures.Add(e);
+                        if (e is not ClientSessionEndedException)
+                            cleanupFailures.Add(e);
                     }
                 }
                 if (switchedSessions.Count != 0 && stranded.Count == 0)
-                {
-                    safeRoute = true;
                     LogTransfer(transferId, partition, "source-restored");
-                }
                 if (prepared)
                 {
                     try
@@ -10650,6 +10714,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                             LogTransfer(transferId, partition, "aborted");
                             RecordImportValidationAbort(registry, transferId, rejection);
                         }
+                        safeRoute = true;
                     }
                     catch (Exception e)
                     {
@@ -10681,17 +10746,26 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
 
                 foreach (ClientSession each in sessions)
                     DiscardServerBacklog(each);
+                if (incompleteSwitch is { Client.Connected: true })
+                {
+                    Console.WriteLine(
+                        $"Ending client {incompleteSwitch.ClientId}'s session after an unconfirmed handover switch"
+                    );
+                    incompleteSwitch.Client?.Disconnect();
+                }
                 foreach (ClientSession each in stranded)
                     each.Client?.Disconnect();
                 foreach (ClientSession each in unadopted)
                     ForceReconnect(each, "handover-abort-source-readopt-failed");
                 if (cleanupFailures.Count != 0)
                 {
-                    var incomplete = new AggregateException([failure, .. cleanupFailures]);
-                    if (rejection?.Signature != null)
-                        ReportHandoverFailure(transferId, partition, incomplete);
-                    throw incomplete;
+                    AggregateException combined = new([failure, .. cleanupFailures]);
+                    if (reportAfterCleanupFailure)
+                        ReportHandoverFailure(transferId, partition, combined);
+                    throw combined;
                 }
+                if (failure is ClientSessionEndedException)
+                    throw new RegistryConflictException(failure.Message);
             }
             throw;
         }
@@ -13135,11 +13209,13 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             NodeLink? link = session.Link;
             if (link != null)
             {
-                link.Clients.TryRemove(session.ClientId, out _);
+                link.Clients.TryRemove(
+                    new KeyValuePair<ulong, ClientSession>(session.ClientId, session)
+                );
                 SendDetach(link, session);
             }
             session.Client = null;
-            session.AdmissionCancellation.Cancel();
+            session.SessionCancellation.Cancel();
         }
         return true;
     }
@@ -13524,7 +13600,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
 
         /// <summary>SE-1158: the skins the player's last inventory blob proved; null until a node asked.</summary>
         public volatile string[]? Skins;
-        public readonly CancellationTokenSource AdmissionCancellation = new();
+        public readonly CancellationTokenSource SessionCancellation = new();
         public int AdmissionStarted;
         public int AttachRetryStarted;
         public volatile string AdmissionState = "WaitingForClient";
