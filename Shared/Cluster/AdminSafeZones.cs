@@ -34,7 +34,7 @@ internal static partial class AdminSafeZones
     private const string Subsystem = "admin-safezones";
     private const int CommandTimeoutMilliseconds = 10000;
 
-    internal sealed record Request(string Op, long Id, string Zone = null);
+    internal sealed record Request(string Op, long Id, string Zone = null, ulong Player = 0, Passage Trip = null);
 
     /// <summary>A change in the outbox and the operation id every attempt at it is sent under (#1273).</summary>
     internal sealed record Queued(Request Request, Guid OperationId);
@@ -58,6 +58,8 @@ internal static partial class AdminSafeZones
 
     internal static void Install()
     {
+        if (!ClusterRuntime.IsWorldAuthority)
+            InstallLobbyTravel();
         GlobalStateChannel.RegisterCommandHandler(Subsystem, Handle, durable: true);
         GlobalStateChannel.RegisterReplicaHandler(Subsystem, Offer);
         GlobalStateChannel.RegisterSnapshot(Subsystem, Snapshot, Offer);
@@ -71,8 +73,10 @@ internal static partial class AdminSafeZones
         {
             if (s_zones == null)
                 TakeWorldFile();
+            ReconcileLobbyZone();
             return;
         }
+        UpdateLobbyEntry();
         Set newest;
         lock (Gate)
         {
@@ -163,7 +167,8 @@ internal static partial class AdminSafeZones
                         operationId,
                         CommandTimeoutMilliseconds
                     ),
-                Offer
+                Offer,
+                AcknowledgeTravel
             )
         )
             lock (Gate)
@@ -174,7 +179,8 @@ internal static partial class AdminSafeZones
     internal static bool FlushOutbox(
         List<Queued> outbox,
         Func<Request, Guid, string> send,
-        Action<string> offer
+        Action<string> offer,
+        Action<Queued> acknowledge = null
     )
     {
         while (true)
@@ -223,6 +229,7 @@ internal static partial class AdminSafeZones
             lock (Gate)
             {
                 offer(result);
+                acknowledge?.Invoke(next);
                 outbox.RemoveAt(0);
             }
         }
@@ -337,7 +344,9 @@ internal static partial class AdminSafeZones
                 throw new InvalidOperationException(
                     "the World Authority has not loaded the admin safe zones yet"
                 );
-            changed = Change(s_zones, request);
+            changed = request.Op == "Travel"
+                ? ChangeLobbyAccess(ref s_lobby, request)
+                : Change(s_zones, request);
             if (changed)
             {
                 s_version++;
@@ -394,7 +403,7 @@ internal static partial class AdminSafeZones
             return s_zones == null
                 ? null
                 : JsonSerializer.Serialize(
-                    new Set(ClusterRuntime.AuthorityGeneration, s_version, s_zones.Values.ToArray())
+                    new Set(ClusterRuntime.AuthorityGeneration, s_version, s_zones.Values.ToArray(), s_lobby)
                 );
     }
 
@@ -409,6 +418,7 @@ internal static partial class AdminSafeZones
             if (string.IsNullOrEmpty(record))
             {
                 s_zones = null;
+                s_lobby = null;
                 return;
             }
             Set set = ReadSet(record);
@@ -416,6 +426,7 @@ internal static partial class AdminSafeZones
                 set.Zones.ToDictionary(xml => FromXml(xml).EntityId)
             );
             s_version = set.Version;
+            s_lobby = set.Lobby;
         }
         Console.WriteLine(
             "[ClusterPlugin] admin safe zones restored from the global save: "

@@ -25,8 +25,8 @@ internal sealed partial class GatewayRegistry
             var owner = _state.Partitions.GetValueOrDefault(partition);
             string? node = owner != null && !owner.Recovering && owner.LeaseExpires > _clock()
                 ? owner.Node : null;
-            return new(_state.LobbyRevision, anchor with { Partition = partition }, node,
-                node == null ? "unavailable" : "assigned", _state.LobbyIntent?.Operation);
+            string state = node != null ? "assigned" : _state.OfflinePartitions.ContainsKey(partition) ? "offline" : "unavailable";
+            return new(_state.LobbyRevision, anchor with { Partition = partition }, node, state, _state.LobbyIntent?.Operation);
         }
     }
 

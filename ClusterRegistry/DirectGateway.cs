@@ -7563,7 +7563,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                             node.Epoch,
                             request.AccountingClock
                         ),
-                        ServerDataWanted: _admission.ServerData == null
+                        ServerDataWanted: _admission.ServerData == null,
+                        Lobby: node.Role == NodeRole.WA ? _registry.LobbyStatus().Anchor : null
                     )
                 );
                 return;
@@ -13961,7 +13962,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         bool ClusterDraining = false,
         bool TopologyTransfer = true,
         AccountingClockSample? AccountingClock = null,
-        bool ServerDataWanted = false
+        bool ServerDataWanted = false,
+        CometWorks.ClusterGateway.AdminContract.V1.LobbyAnchor? Lobby = null
     );
 
     // SE-1076: ServerDataWanted asks the node for MyCachedServerItem.GetServerData() in its next heartbeat's ServerData

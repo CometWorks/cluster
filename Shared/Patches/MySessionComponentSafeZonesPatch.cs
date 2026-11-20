@@ -12,6 +12,17 @@ namespace Shared.Patches;
 /// </summary>
 public static class MySessionComponentSafeZonesPatch
 {
+    [HarmonyPatch(typeof(MySafeZone), "IsSafe", typeof(MyEntity))]
+    private static class LobbyEntry
+    {
+        [HarmonyPostfix]
+        private static void Postfix(MySafeZone __instance, MyEntity entity, ref bool __result)
+        {
+            if (__result && AdminSafeZones.DeniesEntry(__instance.EntityId, entity.EntityId))
+                __result = false;
+        }
+    }
+
     [HarmonyPatch(
         typeof(MySessionComponentSafeZones),
         nameof(MySessionComponentSafeZones.CrateSafeZone)

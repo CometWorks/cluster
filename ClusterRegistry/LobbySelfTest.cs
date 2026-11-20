@@ -59,6 +59,13 @@ internal static partial class SelfTest
                 r.ReserveLobby(replace, new(1, null, 21));
                 r.RejectLobby(r.PendingLobby!, "invalid_station", "Ambiguous station");
                 Assert(r.LobbyStatus().Anchor?.GridId == grid && r.LobbyStatus().Revision == 1);
+                var holder = r.GetPartitionOwner(piece);
+                r.RegisterSave(new SaveId(piece, holder.Generation, 1), node.Node, node.Epoch, SaveKind.Final,
+                    1, "a", 1, "lobby/1", "http://localhost:1");
+                r.TakeOffline(new OfflineRequest(piece, node.Node, node.Epoch, holder.Generation, 1,
+                    1e7, 0, 0, 10, [[1e7, 0, 0, 10]], [grid], 100, "[]", "[]"));
+                Assert(r.IsOffline(piece) && r.LobbyStatus().Anchor?.GridId == grid && r.LobbyStatus() is { Owner: null, State: "offline" });
+                Assert(r.OfflineRow(piece)?.LoadRequestedNode == null);
             }
             using var reopened = new GatewayRegistry(dir, Admission);
             Assert(reopened.LobbyStatus().Anchor?.Name == "Faction Hall" && reopened.PendingLobby == null);

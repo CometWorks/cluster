@@ -8,6 +8,25 @@ namespace ClusterPlugin;
 
 internal static partial class ClusterSelfTest
 {
+    private static void LobbyEntry()
+    {
+        var lobby = new AdminSafeZones.Lobby(101, 202, []);
+        const ulong player = 90011;
+        var leave = new AdminSafeZones.Request("Travel", 101, Player: player, Trip: new(1, 100, true));
+        var enter = leave with { Trip = new(2, 50, false) };
+        if (AdminSafeZones.ReadSet("""{"Generation":1,"Version":5,"Zones":[]}""").Lobby != null
+            || AdminSafeZones.ChangeLobbyAccess(ref lobby, leave with { Id = 303 })
+            || !AdminSafeZones.ChangeLobbyAccess(ref lobby, leave)
+            || !lobby.Travel[player].Departed)
+            throw new InvalidOperationException("Invalid lobby migration or departure state");
+
+        lobby = AdminSafeZones.ReadSet(JsonSerializer.Serialize(new AdminSafeZones.Set(1, 6, [], lobby))).Lobby;
+        if (!lobby.Travel[player].Departed || AdminSafeZones.ChangeLobbyAccess(ref lobby, leave)
+            || !AdminSafeZones.ChangeLobbyAccess(ref lobby, enter)
+            || AdminSafeZones.ChangeLobbyAccess(ref lobby, leave) || lobby.Travel[player].Departed)
+            throw new InvalidOperationException("Lobby return or replay after recovery changed admission");
+    }
+
     /// <summary>
     /// #1273 (race F31): node A's Set(Z) is applied at the World Authority but its answer is lost, node B's Remove(Z)
     /// follows, then A's outbox retries. The World Authority side is the real command ledger in front of the real set

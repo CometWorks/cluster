@@ -1090,6 +1090,8 @@ public static class ClusterRuntime
                     FenceWorldAuthority();
                     return;
                 }
+                if (m_isWorldAuthority && heartbeat.RootElement.TryGetProperty("Lobby", out var lobby))
+                    AdminSafeZones.ReceiveLobbyAnchor(lobby);
                 if (
                     heartbeat.RootElement.TryGetProperty(
                         "AccountingClock",

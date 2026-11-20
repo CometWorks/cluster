@@ -216,9 +216,6 @@ internal sealed partial class GatewayRegistry
                 throw new RegistryConflictException(
                     $"Partition {request.Partition} has a handover in flight; refusing offline"
                 );
-            if (!(request.Drain && ShuttingDown) && _state.LobbyAnchor is { } lobby
-                && LivePartition(lobby.Partition, lobby.GridId) == request.Partition)
-                throw new RegistryConflictException("The active lobby station must stay online");
             if (!(request.Drain && ShuttingDown) && HasRemoteUse(request.Partition))
                 throw new RegistryConflictException(
                     $"Partition {request.Partition} has remote-use; refusing offline"
@@ -900,9 +897,6 @@ internal sealed partial class DirectGateway
                 _offlineWakeAsked.Remove(stale);
         if (offline.Length == 0)
             return;
-        var lobby = _registry.LobbyStatus().Anchor;
-        if (!_registry.ShuttingDown && lobby != null && offline.Any(row => row.Partition == lobby.Partition))
-            _registry.RequestOfflineLoad(lobby.Partition, null, "lobby");
         double leadBase = OfflineLeadSeconds;
         double maxSpeed = LookaheadMaxSpeed;
         // A report taken before the owner's close still lists the partition that just went offline (and a

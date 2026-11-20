@@ -60,7 +60,9 @@ public static partial class PromotionService
 
     /// <summary>Cluster backend sessions may use OFFLINE mode, where vanilla reports every
     /// nonzero id as Owner. Only the replicated promotion map grants a cluster bypass.</summary>
-    internal static bool IsModerator(ulong userId)
+    internal static bool IsModerator(ulong userId) => HasLevel(userId, MyPromoteLevel.Moderator);
+
+    internal static bool HasLevel(ulong userId, MyPromoteLevel minimum)
     {
         MySession session = MySession.Static;
         if (session == null)
@@ -69,7 +71,7 @@ public static partial class PromotionService
                 ClusterRuntime.IsClustered
                     ? session.PromotedUsers.GetValueOrDefault(userId)
                     : session.GetUserPromoteLevel(userId)
-            ) >= MyPromoteLevel.Moderator;
+            ) >= minimum;
     }
 
     internal static void Install()
