@@ -1,7 +1,97 @@
+using System.Text.Json;
+
 namespace ClusterRegistry;
 
 internal static partial class SelfTest
 {
+    private static void TestHandoverCaptureDeferralReports()
+    {
+        string directory = Directory.CreateTempSubdirectory("handover-capture-reports-").FullName;
+        string? previousDirectory = Environment.GetEnvironmentVariable("ERROR_REPORTING_DIRECTORY");
+        try
+        {
+            foreach (bool clientless in new[] { true, false })
+            foreach (
+                (int captureStatus, int thawStatus) in new[] { (409, 404), (409, 500), (500, 404) }
+            )
+            {
+                string spool = Path.Combine(
+                    directory,
+                    $"{clientless}-{captureStatus}-{thawStatus}"
+                );
+                Directory.CreateDirectory(spool);
+                Environment.SetEnvironmentVariable("ERROR_REPORTING_DIRECTORY", spool);
+                using var scripted = new ScriptedHandover(
+                    (call, nth) =>
+                        call switch
+                        {
+                            "source capture" when nth == 1 => captureStatus,
+                            "source thaw" => thawStatus,
+                            _ => 200,
+                        }
+                );
+                const ulong partition = ScriptedHandover.Partition;
+                scripted.SourcePartitions =
+                    $$"""{"partitions":[{"id":{{partition}},"memberCount":1,"clients":[]}]}""";
+                long generation = scripted.Registry.GetPartitionOwner(partition).Generation;
+                static Task Retry(TimeSpan _) => Task.CompletedTask;
+                Exception? failure = clientless
+                    ? scripted.Clientless(partition, Retry)
+                    : scripted.Handover(partition, Retry);
+                string[] reports = Directory.GetFiles(spool, "*.json");
+                PartitionOwnership owner = scripted.Registry.GetPartitionOwner(partition);
+                if (captureStatus == 409 && thawStatus == 404)
+                {
+                    Assert(failure == null);
+                    Assert(reports.Length == 0);
+                    Assert(owner.Node == "target" && owner.Generation == generation + 1);
+                    Assert(scripted.Registry.Incomplete().Length == 0);
+                    Assert(scripted.Count("source capture") == 2);
+                    Assert(scripted.Count("source thaw") == 1);
+                    Assert(scripted.Count("target prepare-import") == 1);
+                    Assert(scripted.Count("target commit") == 1);
+                    Assert(scripted.Count("source release") == 1);
+                    var captures = scripted
+                        .Requests.Where(x => x.Call == "source capture")
+                        .Select(x => x.Query)
+                        .ToArray();
+                    Assert(captures[0]["transferId"] != captures[1]["transferId"]);
+                    Assert(captures.All(query => query["generation"] == generation.ToString()));
+                    continue;
+                }
+
+                Assert(scripted.Count("source capture") == 1);
+                Assert(scripted.Count("target prepare-import") == 0);
+                Assert(owner.Node == "source" && owner.Generation == generation);
+                Assert(scripted.Registry.Incomplete().Length == (thawStatus == 500 ? 1 : 0));
+                string exception = reports
+                    .Select(file =>
+                    {
+                        using var report = JsonDocument.Parse(File.ReadAllText(file));
+                        return report.RootElement.GetProperty("exception").GetString();
+                    })
+                    .OfType<string>()
+                    .Single();
+                if (thawStatus == 500)
+                {
+                    Assert(failure is AggregateException);
+                    Assert(exception.Contains(nameof(AggregateException)));
+                    Assert(exception.Contains("500"));
+                }
+                else
+                {
+                    Assert(failure is HttpRequestException);
+                    Assert(exception.Contains("500"));
+                }
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ERROR_REPORTING_DIRECTORY", previousDirectory);
+            Directory.Delete(directory, true);
+        }
+    }
+
     /// <summary>
     /// T-0354b, P3-HND-02 on the T-0354 build (2026-10-03 15:13:47): the scenario spawns a cell and moves it at once. Since
     /// T-0354 the node claims a new layout's id a frame or two after making it, and the capture asked inside that window
