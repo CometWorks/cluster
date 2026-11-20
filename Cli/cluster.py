@@ -1332,6 +1332,8 @@ class Cluster:
             "CLUSTER_CONFIG_HASH": CONFIG_HASH,
             "CLUSTER_BINARY_VERSION": BINARY_VERSION,
             "CLUSTER_REPLICATION_TABLE_HASH": self.config.replication_table_hash(),
+            # The Gateway advertises the game version of this DS, read at every start (SE-1763).
+            "SPACE_ENGINEERS_BIN64": str(self.config.ds64),
             "CLUSTER_WORLD": str(self.config.split_world),
             "CLUSTER_SYNC_DISTANCE": str(self.config.sync_distance),
             **self._multi_host_gateway_env(),

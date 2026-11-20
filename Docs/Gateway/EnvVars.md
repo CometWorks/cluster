@@ -6,7 +6,7 @@ Every variable read by the node plugins, the Gateway, and the cluster CLI.
 
 | Variable | Meaning |
 | --- | --- |
-| `SPACE_ENGINEERS_BIN64` | game `DedicatedServer64` directory: source of the Windows native DLLs the Linux wrappers load (`Havok.dll`, `RecastDetour.dll`, `VRage.Native.dll`) and of game-owned managed assemblies the archive does not ship (`HavokWrapper`, `EOSSDK`, `Microsoft.CodeAnalysis`, `SharpDX.*`, `ProtoBuf.Net`, ...). Without it the server falls back to `<four levels above the server dll>/Bin64` (the repo layout). |
+| `SPACE_ENGINEERS_BIN64` | game `DedicatedServer64` directory: source of the Windows native DLLs the Linux wrappers load (`Havok.dll`, `RecastDetour.dll`, `VRage.Native.dll`) and of game-owned managed assemblies the archive does not ship (`HavokWrapper`, `EOSSDK`, `Microsoft.CodeAnalysis`, `SharpDX.*`, `ProtoBuf.Net`, ...). The Gateway reads the game version it advertises on Steam and EOS (`SpaceEngineersGame.SE_VERSION` in `SpaceEngineers.Game.dll`) from here on every start and refuses to start without it. Without it the server falls back to `<four levels above the server dll>/Bin64` (the repo layout). |
 | `SPACE_ENGINEERS_CONTENT` | game `Content` directory. Without it the server walks upward looking for the content anchor. |
 | `SPACE_ENGINEERS_CLIENT_CONTENT` | client `Content` for worlds that need client-only assets; defaults to a path derived from `SPACE_ENGINEERS_CONTENT`. |
 | `SPACE_ENGINEERS_PREMADE_WORLD` | premade checkpoint a node loads (sets `PremadeCheckpointPath`). |
@@ -85,7 +85,7 @@ Environment-only:
 | `CLUSTER_BINARY_VERSION` / `CLUSTER_REPLICATION_TABLE_HASH` | join-compatibility fencing |
 | `CLUSTER_WORLD` | the Gateway's copy of the split world. Its `Sandbox.sbc` settings and mod list, hashed at Gateway start, fence node admission (`Shared/Cluster/WorldSettingsHash.cs`) |
 | `CLUSTER_SYNC_DISTANCE` | advertised sync distance |
-| `CLUSTER_DIRECT_TRANSPORT_VERSION` | DT wire version override |
+| `CLUSTER_DIRECT_TRANSPORT_VERSION` | optional guard: the Gateway refuses to start unless the DS in `SPACE_ENGINEERS_BIN64` is this game version |
 | `CLUSTER_HANDOVER_VALIDATION_ABORTS` | test hook: injected validation aborts |
 | `CLUSTER_HANDOVER_BLOCK_SWEEP_SECONDS` | SE-1185: how often the Gateway drops the handover blocks of partitions with no owner and no recovery running (default 30). A merge, split or archive that retires a blocked partition clears its block at once; the sweep catches the rest, such as a partition released by its node |
 | `CLUSTER_ROUTE_OVER_REPORT_GRACE_SECONDS` | how long a registry client route may outvote a node report that says the partition has no clients (default 120). Covers the switch-settling window; past it the node report wins, so a stale route can no longer pin a partition against every handover for the life of the cluster. Applies to both the automatic-handover scheduler and the clientless-handover guard. |
