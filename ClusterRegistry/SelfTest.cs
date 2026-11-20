@@ -204,6 +204,7 @@ internal static partial class SelfTest
         ("codec", TestCodec),
         ("admin-contract", TestAdminContract),
         ("client-diagnostics", TestClientDiagnostics),
+        ("lobby-anchor", TestLobbyAnchor),
         ("offline-admin", TestOfflineAdmin),
         ("executor-contract", TestExecutorContract),
         ("executor-spawning-receipt", TestExecutorSpawningBeforeReceipt),

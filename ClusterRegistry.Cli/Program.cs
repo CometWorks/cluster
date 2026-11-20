@@ -70,6 +70,8 @@ internal static class Program
         ("recovery-readiness", "GET /admin/v1/recovery-readiness", []),
         ("nodes", "GET /admin/v1/nodes", []),
         ("world-authority", "GET /admin/v1/world-authority", []),
+        ("lobby", "GET /admin/v1/lobby", []),
+        ("lobby-set {file}", "PUT /admin/v1/lobby", []),
         ("partitions", "GET /admin/v1/partitions", []),
         ("offline-partitions", "GET /admin/v1/offline/partitions", []),
         ("offline-details {node} {partition}", "GET /admin/v1/offline/details", []),
@@ -754,6 +756,8 @@ internal static class Program
                             or "plan"
                             or "offline-partitions"
                             or "offline-details"
+                            or "lobby"
+                            or "lobby-set"
                             or "offline-cache"
                             or "offline-prediction"
                             or "offline-cache-clear"
@@ -872,6 +876,7 @@ internal static class Program
                     if (string.IsNullOrWhiteSpace(node) || positional.Count != 0)
                         throw new ArgumentException(Usage);
                     break;
+                case "lobby-set":
                 case "rotation-set":
                 case "handover-config-set":
                 case "config-set":
@@ -880,7 +885,8 @@ internal static class Program
                         throw new ArgumentException(Usage);
                     (method, command) = (
                         "PUT",
-                        command == "rotation-set" ? "rotation"
+                        command == "lobby-set" ? "lobby"
+                        : command == "rotation-set" ? "rotation"
                         : command == "config-set" ? "config"
                         : command == "player-access-set" ? "players/access"
                         : "handover-config"

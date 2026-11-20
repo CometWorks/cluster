@@ -556,6 +556,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 ? StartPollThread("Gateway-Client-Poll", _front)
                 : null;
         StartSessionMaintenance();
+        if (_registry != null) _ = Task.Run(RunLobbyWorker);
         _backThread = _options.ExternalRelay
             ? null
             : StartPollThread("Gateway-Backend-Poll", _back);

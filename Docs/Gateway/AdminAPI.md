@@ -385,3 +385,7 @@ older packages do not implement this capability.
 Release metadata declares `playerAuthentication: 1` in
 `cli/deployment-capabilities.json`. Quasar refuses deployment inputs from a
 package lacking that capability while this cluster has an enabled access policy.
+
+## Lobby anchor
+
+The [lobby anchor contract](Lobby.md) defines the versioned read and write used by Quasar's Partitions view.
