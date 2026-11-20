@@ -10596,9 +10596,13 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         }
         catch (Exception failure)
         {
+            // A pending apply refuses capture before freezing. Wait for rollback to confirm it
+            // was a deferral. A placeholder also needs its ownership claim released.
+            bool capturePending = failure is RegistryApplyPendingRefusal && !placeholderClaimed;
+            bool sessionEnded = failure is ClientSessionEndedException;
             HandoverImportException? rejection = failure as HandoverImportException;
             bool reportAfterCleanupFailure =
-                failure is ClientSessionEndedException || rejection?.Signature != null;
+                capturePending || sessionEnded || rejection?.Signature != null;
             if (!reportAfterCleanupFailure)
                 ReportHandoverFailure(transferId, partition, failure);
             if (!committed)
@@ -10688,11 +10692,13 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                             $" clients={string.Join(",", returned.Except(unadopted).Select(x => x.ClientId))}"
                         );
                 }
+                bool sourceHadNoCapture = false;
                 if (captured)
                 {
                     try
                     {
                         bool found = await PostCleanup(ClusterUrl(source, "thaw") + fence);
+                        sourceHadNoCapture = !found;
                         LogTransfer(
                             transferId,
                             partition,
@@ -10712,7 +10718,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         {
                             registry.Abort(transferId);
                             aborted = true;
-                            LogTransfer(transferId, partition, "aborted");
+                            LogHandoverAbort(
+                                transferId,
+                                partition,
+                                capturePending && sourceHadNoCapture
+                            );
                             RecordImportValidationAbort(registry, transferId, rejection);
                         }
                         safeRoute = true;
@@ -10765,7 +10775,9 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         ReportHandoverFailure(transferId, partition, combined);
                     throw combined;
                 }
-                if (failure is ClientSessionEndedException)
+                if (capturePending && (!sourceHadNoCapture || !aborted))
+                    ReportHandoverFailure(transferId, partition, failure);
+                if (sessionEnded)
                     throw new RegistryConflictException(failure.Message);
             }
             throw;
@@ -11128,8 +11140,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         }
         catch (Exception failure)
         {
+            bool capturePending = failure is RegistryApplyPendingRefusal;
             HandoverImportException? rejection = failure as HandoverImportException;
-            if (rejection?.Signature == null)
+            bool reportAfterCleanupFailure = capturePending || rejection?.Signature != null;
+            if (!reportAfterCleanupFailure)
                 ReportHandoverFailure(transferId, partition, failure);
             if (!committed)
             {
@@ -11150,11 +11164,13 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         cleanupFailures.Add(e);
                     }
                 }
+                bool sourceHadNoCapture = false;
                 if (captured)
                 {
                     try
                     {
                         bool found = await PostCleanup(ClusterUrl(source, "thaw") + fence);
+                        sourceHadNoCapture = !found;
                         LogTransfer(
                             transferId,
                             partition,
@@ -11173,7 +11189,11 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         if (begun)
                         {
                             registry.Abort(transferId);
-                            LogTransfer(transferId, partition, "aborted");
+                            LogHandoverAbort(
+                                transferId,
+                                partition,
+                                capturePending && sourceHadNoCapture
+                            );
                             RecordImportValidationAbort(registry, transferId, rejection);
                         }
                     }
@@ -11185,10 +11205,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 if (cleanupFailures.Count != 0)
                 {
                     var incomplete = new AggregateException([failure, .. cleanupFailures]);
-                    if (rejection?.Signature != null)
+                    if (reportAfterCleanupFailure)
                         ReportHandoverFailure(transferId, partition, incomplete);
                     throw incomplete;
                 }
+                if (capturePending && (!sourceHadNoCapture || !begun))
+                    ReportHandoverFailure(transferId, partition, failure);
             }
             throw;
         }
@@ -11872,14 +11894,32 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         SendToNode(session.Link, session.ClientConnectedPacket);
     }
 
-    private void LogTransfer(string transferId, ulong partition, string state, string extra = "")
+    private void LogHandoverAbort(string transferId, ulong partition, bool captureDeferred) =>
+        LogTransfer(
+            transferId,
+            partition,
+            "aborted",
+            captureDeferred ? " reason=registry-apply-pending" : "",
+            publishReport: !captureDeferred
+        );
+
+    private void LogTransfer(
+        string transferId,
+        ulong partition,
+        string state,
+        string extra = "",
+        bool publishReport = true
+    )
     {
         long? atMs = _handoverTelemetry.Stamp(transferId, state);
         if (
-            state.Contains("failed", StringComparison.OrdinalIgnoreCase)
-            || state.Contains("abort", StringComparison.OrdinalIgnoreCase)
-            || state.Contains("timeout", StringComparison.OrdinalIgnoreCase)
-            || state.Contains("recover", StringComparison.OrdinalIgnoreCase)
+            publishReport
+            && (
+                state.Contains("failed", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("abort", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("timeout", StringComparison.OrdinalIgnoreCase)
+                || state.Contains("recover", StringComparison.OrdinalIgnoreCase)
+            )
         )
             DiagnosticReports.Write(
                 "handover_event",
