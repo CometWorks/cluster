@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -13,7 +14,9 @@ namespace ClusterPlugin;
 /// </summary>
 internal static partial class AdminSafeZones
 {
-    internal sealed record Set(long Generation, long Version, string[] Zones);
+    internal sealed record Passage(long Generation, long Milliseconds, bool Departed);
+    internal sealed record Lobby(long Grid, long Zone, Dictionary<ulong, Passage> Travel);
+    internal sealed record Set(long Generation, long Version, string[] Zones, Lobby Lobby = null);
 
     /// <summary>The zone's builder as XML, without the entities it holds: each node works those out itself.</summary>
     internal static string ToXml(MyObjectBuilder_SafeZone zone)

@@ -100,6 +100,7 @@ internal static partial class ClusterSelfTest
         ("residual-shape", ResidualShapeRules),
         ("prepare-scope", PrepareScopeRules),
         ("admin-safezone-retry", AdminSafeZoneRetry),
+        ("lobby-entry", LobbyEntry),
         ("ship-storage-takes", ShipStorageTakes),
         ("ship-storage-retry", ShipStorageRetry),
         ("mod-channel-v1", ModChannelV1Rules),
