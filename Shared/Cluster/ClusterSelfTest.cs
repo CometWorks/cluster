@@ -80,6 +80,7 @@ internal static partial class ClusterSelfTest
         ("round-trip-normalize", RoundTripNormalize),
         ("maintenance-panel-pending", MaintenancePanelPending),
         ("handover-drift", HandoverDrift),
+        ("big-grid-compare", BigGridCompare),
         ("havok-disposed-world", HavokDisposedWorld),
         ("antenna-delta", AntennaDelta),
         ("antenna-parse-alloc", AntennaParseAllocation),
