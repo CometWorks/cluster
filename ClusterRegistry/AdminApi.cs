@@ -43,6 +43,7 @@ internal sealed partial class DirectGateway
         ["rotationPublication"] = "v1",
         ["playerModeration"] = "v1",
         ["playerAccess"] = "v1",
+        ["lobbyAnchor"] = "v1",
         ["offlinePartitions"] = "v1",
     };
 
@@ -296,6 +297,11 @@ internal sealed partial class DirectGateway
             // Same structured snapshot as the legacy front door (Orchestration §11.1), now with
             // the versioned envelope and scope checks. Filters ride the query string unchanged.
             WriteAdminEnvelope(context, DiagSnapshot(context));
+            return;
+        }
+        if (path.Equals(Admin.AdminProtocol.RoutePrefix + "/lobby", StringComparison.OrdinalIgnoreCase))
+        {
+            WriteAdminEnvelope(context, _registry.LobbyStatus());
             return;
         }
         if (

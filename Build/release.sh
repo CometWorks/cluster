@@ -149,7 +149,7 @@ SDKPIN
 chmod +x "$STAGING/cli/cluster" "$STAGING/cli/cluster-status" "$STAGING/cli/gateway-admin"
 # Documentation: how to run a cluster, the REST APIs of the Gateway and the node plugins, the
 # CLI tools shipped here, and the environment variables everything reads.
-for doc in ClientDiagnostics.md ClusterCLI.md AdminAPI.md GatewayAPI.md NodeAPI.md EnvVars.md ManagedDeployment.md PluginServices.md NodeScaling.md NodeControl.md; do
+for doc in ClientDiagnostics.md ClusterCLI.md AdminAPI.md Lobby.md GatewayAPI.md NodeAPI.md EnvVars.md ManagedDeployment.md PluginServices.md NodeScaling.md NodeControl.md; do
     cp -a "$REPO/Docs/Gateway/$doc" "$STAGING/docs/"
 done
 cp -a "$REPO/Docs/Magnetar.md" "$REPO/Docs/ClusterManager.md" "$STAGING/docs/"
@@ -206,7 +206,7 @@ for required in gateway-rs/gateway-rs gateway-rs/libsteam_api.so gateway-rs/LICE
         plugins/Concealment/Concealment.dll plugins/Concealment/Concealment.xml plugins/Concealment/provenance.json plugins/Concealment/canonical-configuration.json \
         plugins/Concealment/licenses/concealment/LICENSE plugins/Concealment/licenses/accounting/NOTICE \
         cli/cluster cli/cluster-status cli/cluster.py cli/gateway_supervisor.py cli/magnetar_config.py cli/cluster_hostd.py cli/managed_deployment.py cli/gateway-admin \
-        docs/ClusterCLI.md docs/AdminAPI.md docs/GatewayAPI.md docs/NodeAPI.md docs/EnvVars.md docs/NodeControl.md \
+        docs/ClusterCLI.md docs/AdminAPI.md docs/Lobby.md docs/GatewayAPI.md docs/NodeAPI.md docs/EnvVars.md docs/NodeControl.md \
         examples/Cluster-Simple/Sandbox.sbc README.md LICENSE; do
     [[ -e "$STAGING/$required" ]] || { echo "missing from staging: $required" >&2; exit 1; }
 done

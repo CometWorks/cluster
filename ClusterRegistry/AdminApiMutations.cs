@@ -26,6 +26,11 @@ internal sealed partial class DirectGateway
         }
 
         string prefix = Admin.AdminProtocol.RoutePrefix;
+        if (context.Request.HttpMethod == "PUT" && path.Equals(prefix + "/lobby", StringComparison.OrdinalIgnoreCase))
+        {
+            AdminSetLobby(context, actor);
+            return;
+        }
         if (
             context.Request.HttpMethod == "PUT"
             && path.Equals(prefix + "/players/access", StringComparison.OrdinalIgnoreCase)
