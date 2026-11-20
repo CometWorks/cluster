@@ -48,11 +48,7 @@ public sealed class GridListCommand : CommandModule
         )
             return;
         m_registered = true;
-        if (
-            !AppDomain
-                .CurrentDomain.GetAssemblies()
-                .Any(assembly => assembly.GetName().Name == "Essentials")
-        )
+        if (!EssentialsAssembly.IsLoaded(AppDomain.CurrentDomain.GetAssemblies()))
             return;
         m_handler = PluginServices.Instance.RegisterHandler(Plugin, Topic, OnList);
         ServerCommands.Register(
