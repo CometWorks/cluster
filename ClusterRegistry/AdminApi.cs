@@ -42,6 +42,7 @@ internal sealed partial class DirectGateway
         ["clientDiagnostics"] = "v1",
         ["rotationPublication"] = "v1",
         ["playerModeration"] = "v1",
+        ["playerAccess"] = "v1",
         ["offlinePartitions"] = "v1",
     };
 

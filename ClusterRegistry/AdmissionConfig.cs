@@ -64,6 +64,7 @@ internal sealed class AdmissionBook
     private readonly ConcurrentDictionary<ulong, DateTimeOffset> _kicked = new();
 
     public AdmissionSettings Settings { get; }
+    public PlayerAccessBook PlayerAccess { get; }
 
     private long _modsTotalSize = -1;
 
@@ -119,9 +120,15 @@ internal sealed class AdmissionBook
     // MyCachedServerItem.RULE_LENGTH
     private const int ServerDataChunk = 93;
 
-    public AdmissionBook(AdmissionSettings settings)
+    public AdmissionBook(
+        AdmissionSettings settings,
+        string? directory = null,
+        string? target = null,
+        PlayerAccessLaunchIntent? launch = null
+    )
     {
         Settings = settings;
+        PlayerAccess = new(directory, target, launch);
         _banned = [.. settings.Banned ?? []];
         _administrators = [.. settings.Administrators ?? []];
         _reserved = [.. settings.Reserved ?? []];
@@ -194,8 +201,10 @@ internal sealed class AdmissionBook
             return JoinResult.KickedRecently;
         if (!Settings.FamilySharing && ownerId != 0 && ownerId != userId)
             return JoinResult.FamilySharing;
+        if (!PlayerAccess.CheckAdmission(userId, DateTimeOffset.UtcNow, out bool hasPriority))
+            return JoinResult.NotInGroup;
         // Admins and reserved ids bypass the cap - reserved slots are not a separate pool (§3.1).
-        if (_administrators.Contains(userId) || _reserved.Contains(userId))
+        if (_administrators.Contains(userId) || _reserved.Contains(userId) || hasPriority)
             return null;
         if (Settings.MemberLimit > 0 && clusterPlayers >= Settings.MemberLimit)
             return JoinResult.ServerFull;

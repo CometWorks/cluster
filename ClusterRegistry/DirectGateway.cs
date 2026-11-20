@@ -459,7 +459,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         + $"leases of nodes not on {hold.GatewayHost} are held inside them"
                 );
         }
-        _admission = new AdmissionBook(AdmissionSettings.Load(options.AdmissionConfig));
+        _admission = new AdmissionBook(
+            AdmissionSettings.Load(options.AdmissionConfig),
+            options.RegistryDirectory,
+            _registry is null ? null : "cluster:" + _registry.AdminStatus(0).ClusterId,
+            PlayerAccessLaunchIntent.FromEnvironment()
+        );
         _banStore = BanStore.Open(options.RegistryDirectory);
         foreach (ulong banned in _banStore?.Load() ?? [])
             _admission.Ban(banned, true);
@@ -5416,6 +5421,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
 
     private void AdmitValidatedClient(ClientSession session)
     {
+        // Group/password responses can arrive after an access policy changed.
+        if (!_admission.PlayerAccess.Allows(session.ClientId, DateTimeOffset.UtcNow))
+        {
+            RejectClient(session, JoinResult.NotInGroup);
+            return;
+        }
         if (session.RouteDeferred != null && session.RegistryRoute == null && _registry != null)
         {
             // One wait per session: a second verdict (group status, a repeated ticket) arriving

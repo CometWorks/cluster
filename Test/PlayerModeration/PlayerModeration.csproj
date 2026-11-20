@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../Shared/Cluster/PromotionService.cs" Link="PromotionService.cs" />
+    <Compile Include="../../Shared/Cluster/PromotionAccess.cs" Link="PromotionAccess.cs" />
     <Compile Include="../../Shared/Cluster/GlobalCommandLedger.cs" Link="GlobalCommandLedger.cs" />
     <Compile Include="../../Shared/Cluster/Models/GlobalCommandModel.cs" Link="GlobalCommandModel.cs" />
     <Compile Include="../../Shared/Cluster/GlobalSaveFile.cs" Link="GlobalSaveFile.cs" />

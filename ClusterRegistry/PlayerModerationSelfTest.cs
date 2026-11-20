@@ -108,6 +108,8 @@ internal static partial class SelfTest
                 );
             else if (notReady)
                 result = string.Empty;
+            else if (subsystem == "promotion-access")
+                result = "{}";
             else
             {
                 Interlocked.Increment(ref commands);
@@ -253,6 +255,50 @@ internal static partial class SelfTest
             Assert(
                 capabilities.GetProperty("features").GetProperty("playerModeration").GetString()
                     == "v1"
+            );
+            Assert(
+                capabilities.GetProperty("features").GetProperty("playerAccess").GetString() == "v1"
+            );
+            var accessNow = DateTimeOffset.UtcNow;
+            var accessPolicy = new Admin.PlayerAccessPolicy(
+                1,
+                "cluster:" + registry.AdminStatus(0).ClusterId,
+                1,
+                accessNow,
+                accessNow.AddMinutes(2),
+                true,
+                true,
+                [new(7, true, true, true, 3, accessNow.AddMinutes(1))]
+            );
+            string accessBody = JsonSerializer.Serialize(accessPolicy);
+            Assert(Request("/players/access", null, "PUT", body: accessBody).Status == 401);
+            Assert(Request("/players/access", "query", "PUT", body: accessBody).Status == 403);
+            Assert(Request("/players/access", method: "PUT", body: accessBody).Status == 200);
+            Assert(
+                book.PlayerAccess.Allows(7, DateTimeOffset.UtcNow)
+                    && !book.PlayerAccess.Allows(8, DateTimeOffset.UtcNow)
+            );
+            Assert(Request("/players/access", method: "PUT", body: accessBody).Status == 200);
+            Assert(
+                Request(
+                    "/players/access",
+                    method: "PUT",
+                    body: JsonSerializer.Serialize(accessPolicy with { Target = "cluster:other" })
+                ).Status == 400
+            );
+            Assert(
+                Request(
+                    "/players/access",
+                    method: "PUT",
+                    body: JsonSerializer.Serialize(
+                        accessPolicy with
+                        {
+                            Revision = 2,
+                            Enabled = false,
+                            Whitelist = false,
+                        }
+                    )
+                ).Status == 200
             );
             foreach (
                 var route in new[]

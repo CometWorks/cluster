@@ -24,6 +24,7 @@ internal static class Program
                    | rotation | rotation-set FILE (RotationPublication JSON)
                    | client-diagnostics --node NODE
                    | config-set FILE (AdminConfigUpdate JSON; '-' reads stdin)
+                   | player-access-set FILE (PlayerAccessPolicy JSON; '-' reads stdin)
                    | node-close SLOT [--force-after N] | node-kill SLOT NODE EPOCH
                    | wa-move [--force-after N]
                    | trigger TASK [--node N] [--partition P] [--unthrottled]
@@ -97,6 +98,7 @@ internal static class Program
         ("clients", "GET /admin/v1/clients", []),
         ("player-moderation", "GET /admin/v1/players/moderation", []),
         ("player-promotion {userId} Admin 0", "PUT /admin/v1/players/{userId}/promotion", []),
+        ("player-access-set {file}", "PUT /admin/v1/players/access", []),
         ("clear-kick-cooldown {userId}", "DELETE /admin/v1/admission/kicks/{userId}", []),
         ("player-forget {userId}", "DELETE /admin/v1/players/{userId}", []),
         ("kick {id}", "POST /admin/v1/clients/{id}/kick", []),
@@ -787,6 +789,7 @@ internal static class Program
                             or "unban"
                             or "player-moderation"
                             or "player-promotion"
+                            or "player-access-set"
                             or "player-forget"
                             or "clear-kick-cooldown"
                             or "chat"
@@ -872,12 +875,14 @@ internal static class Program
                 case "rotation-set":
                 case "handover-config-set":
                 case "config-set":
+                case "player-access-set":
                     if (positional.Count != 1)
                         throw new ArgumentException(Usage);
                     (method, command) = (
                         "PUT",
                         command == "rotation-set" ? "rotation"
                         : command == "config-set" ? "config"
+                        : command == "player-access-set" ? "players/access"
                         : "handover-config"
                     );
                     body =

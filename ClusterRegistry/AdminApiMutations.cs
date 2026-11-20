@@ -8,6 +8,7 @@ namespace ClusterRegistry;
 /// The mutating half of the admin contract (Orchestration.md §11). Every route goes
 /// through BeginMutation: manage scope, a required Idempotency-Key, and one durable
 /// operation record whose outcome a retry replays instead of repeating the effect.
+/// Expiring player-access refreshes use monotonic snapshot replacement instead.
 /// </summary>
 internal sealed partial class DirectGateway
 {
@@ -25,6 +26,14 @@ internal sealed partial class DirectGateway
         }
 
         string prefix = Admin.AdminProtocol.RoutePrefix;
+        if (
+            context.Request.HttpMethod == "PUT"
+            && path.Equals(prefix + "/players/access", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            AdminSetPlayerAccess(context, actor);
+            return;
+        }
         if (
             context.Request.HttpMethod == "PUT"
             && path.StartsWith(prefix + "/players/", StringComparison.OrdinalIgnoreCase)
