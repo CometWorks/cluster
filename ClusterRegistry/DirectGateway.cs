@@ -403,12 +403,17 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
 
     public DirectGateway(GatewayOptions options)
     {
+        // Read on every start from the DS the nodes run, so a game update needs no cluster release.
+        string gameVersion = GameVersion.Current;
+        Console.WriteLine(
+            $"Game version {gameVersion} (DedicatedServer64 SpaceEngineersGame.SE_VERSION)"
+        );
         string? expectedVersion = Environment.GetEnvironmentVariable(
             "CLUSTER_DIRECT_TRANSPORT_VERSION"
         );
-        if (expectedVersion != null && expectedVersion != DirectTransportConstants.VanillaVersion)
+        if (expectedVersion != null && expectedVersion != gameVersion)
             throw new InvalidOperationException(
-                $"Direct Transport codec is pinned to {DirectTransportConstants.VanillaVersion}, not {expectedVersion}"
+                $"The cluster's DedicatedServer64 is game {gameVersion}, not {expectedVersion} (CLUSTER_DIRECT_TRANSPORT_VERSION)"
             );
         _options = options;
         _http = new HttpClient(
@@ -472,14 +477,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         _eos =
             options.EosListen == null
                 ? null
-                : new EosFrontend(options.EosListen, DirectTransportConstants.VanillaVersion);
+                : new EosFrontend(options.EosListen, GameVersion.Current);
         // T-0229: with --relay external gateway-rs is the Steam frontend; C# keeps the decisions.
         _steam =
             options.SteamListen == null || options.ExternalRelay
                 ? null
                 : new SteamFrontend(
                     options.SteamListen,
-                    DirectTransportConstants.VanillaVersion,
+                    GameVersion.Current,
                     _admission,
                     acceptAllTag: options.DirectFrontend
                 )
@@ -556,7 +561,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 ? StartPollThread("Gateway-Client-Poll", _front)
                 : null;
         StartSessionMaintenance();
-        if (_registry != null) _ = Task.Run(RunLobbyWorker);
+        if (_registry != null)
+            _ = Task.Run(RunLobbyWorker);
         _backThread = _options.ExternalRelay
             ? null
             : StartPollThread("Gateway-Backend-Poll", _back);
@@ -12787,8 +12793,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         );
         return new
         {
-            vanillaVersion = DirectTransportConstants.VanillaVersion,
-            wireFingerprint = DirectTransportConstants.WireFingerprint,
+            vanillaVersion = GameVersion.Current,
+            wireFingerprint = GameVersion.WireFingerprint,
             counters = new
             {
                 clientPackets = Interlocked.Read(ref _clientPackets),

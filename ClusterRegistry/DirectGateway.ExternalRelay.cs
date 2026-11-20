@@ -274,7 +274,7 @@ internal sealed partial class DirectGateway
                     enabled = _options.SteamListen != null,
                     bind = _options.SteamListen?.Address.ToString(),
                     port = _options.SteamListen?.Port ?? 0,
-                    version = AdmissionBook.BuildNumber(DirectTransportConstants.VanillaVersion),
+                    version = AdmissionBook.BuildNumber(GameVersion.Current),
                 },
                 backlog = new
                 {
@@ -649,10 +649,7 @@ internal sealed partial class DirectGateway
                     mapName = _admission.Settings.WorldName,
                     maxPlayers = _admission.Settings.MemberLimit,
                     passwordProtected = _admission.Settings.PasswordProtected,
-                    tags = _admission.GameTags(
-                        DirectTransportConstants.VanillaVersion,
-                        _options.DirectFrontend
-                    ),
+                    tags = _admission.GameTags(GameVersion.Current, _options.DirectFrontend),
                     modCount = _admission.Settings.ModCount,
                     modsTotalSize = _admission.ModsTotalSize,
                     rules = _admission

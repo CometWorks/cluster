@@ -458,6 +458,8 @@ internal static partial class SelfTest
         // T-0347: no late-save hold in the fixtures - they reopen a registry and claim at once, with no node there to
         // report its host's journals as every real node does at registration. late-saves sets the hold it tests.
         GatewayRegistry.LateSaveHold = TimeSpan.Zero;
+        // The fixtures run without a DS install; the admission section reads a real one when it finds one.
+        GameVersion.UseForSelfTest("1.211.018");
         // T-0227: every registry write in every section is checked against a reload of the store.
         GatewayRegistry.VerifyStoreAfterWrite = true;
         // SELFTEST_KEEP_GOING=1 runs every section and lists the failures, instead of stopping at the first.
@@ -2893,7 +2895,21 @@ internal static partial class SelfTest
         Assert(book.Reject(2, 2, 0, false, false) == null);
         // Tag shape, not the version value - taken from the constant so a version bump never
         // has to touch this assertion.
-        string version = DirectTransportConstants.VanillaVersion;
+        // SE-1763: the advertised version is the DS's SE_VERSION in MyVersion's form, read at every Gateway start
+        Assert(
+            GameVersion.Format(1211018) == "1.211.018" && GameVersion.Format(1210014) == "1.210.014"
+        );
+        Assert(AdmissionBook.BuildNumber(GameVersion.Format(1211018)) == "1211018");
+        Assert(Throws<InvalidOperationException>(() => GameVersion.Read(null)));
+        Assert(Throws<FileNotFoundException>(() => GameVersion.Read(Path.GetTempPath())));
+        string? ds64 = Environment.GetEnvironmentVariable("SPACE_ENGINEERS_BIN64");
+        if (ds64 != null && File.Exists(Path.Combine(ds64, "SpaceEngineers.Game.dll")))
+        {
+            string read = GameVersion.Read(ds64);
+            Console.WriteLine($"self-test admission: {ds64} is game {read}");
+            Assert(System.Text.RegularExpressions.Regex.IsMatch(read, @"^1\.\d{3}\.\d{3}$"));
+        }
+        string version = GameVersion.Current;
         Assert(
             book.GameTags(version, acceptAll: false)
                 == $"groupId0 version{AdmissionBook.BuildNumber(version)} datahash mods0 gamemodeS1-1-1-1 view3000 modsTotalSize0"
@@ -10414,7 +10430,7 @@ internal static partial class SelfTest
             .GetAwaiter()
             .GetResult();
         Assert(
-            status.Contains(DirectTransportConstants.WireFingerprint, StringComparison.Ordinal)
+            status.Contains(GameVersion.WireFingerprint, StringComparison.Ordinal)
                 && status.Contains("lastClientActivity", StringComparison.Ordinal)
         );
         using (System.Text.Json.JsonDocument parsed = System.Text.Json.JsonDocument.Parse(status))
@@ -17077,6 +17093,20 @@ internal static partial class SelfTest
     {
         if (!value)
             throw new InvalidOperationException("self-test failed");
+    }
+
+    private static bool Throws<T>(Action action)
+        where T : Exception
+    {
+        try
+        {
+            action();
+        }
+        catch (T)
+        {
+            return true;
+        }
+        return false;
     }
 
     private static void AssertThrows(Action action)

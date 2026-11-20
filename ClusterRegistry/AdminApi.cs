@@ -127,7 +127,7 @@ internal sealed partial class DirectGateway
                 new Admin.GatewayHealth(
                     "cluster-gateway",
                     _registry != null,
-                    DirectTransportConstants.WireFingerprint
+                    GameVersion.WireFingerprint
                 )
             );
             return;
@@ -299,7 +299,12 @@ internal sealed partial class DirectGateway
             WriteAdminEnvelope(context, DiagSnapshot(context));
             return;
         }
-        if (path.Equals(Admin.AdminProtocol.RoutePrefix + "/lobby", StringComparison.OrdinalIgnoreCase))
+        if (
+            path.Equals(
+                Admin.AdminProtocol.RoutePrefix + "/lobby",
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
         {
             WriteAdminEnvelope(context, _registry.LobbyStatus());
             return;
