@@ -109,7 +109,9 @@ FAMILY = {
                      "SoundBlock", "Jukebox", "HeatVentBlock", "ExhaustBlock", "Parachute", "TerminalBlock",
                      "CargoContainer", "Collector", "ConveyorSorter", "Conveyor", "ConveyorConnector",
                      "FunctionalBlock/LargeBlockAlgaeFarm", "FunctionalBlock/LargeBlockFarmPlot",
-                     "FunctionalBlock/LargeBlockConduitDamaged"), "plain"),
+                     "FunctionalBlock/LargeBlockConduitDamaged", "FunctionalBlock/LargeBlockSeparationCharge",
+                     "FunctionalBlock/SmallBlockSeparationCharge", "FunctionalBlock/LargeBlockPrototechMicroEmitter",
+                     "FunctionalBlock/SmallBlockPrototechMicroEmitter"), "plain"),
 }
 # Fields that change on their own while a block sits idle (power drawn, fuel burnt, game-time clocks,
 # production timers, the update timer a block arms and disarms itself, an idle turret's or
