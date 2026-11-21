@@ -1400,8 +1400,6 @@ def p2_laser_far(bench):
     bench.check(
         "the woken station's laser is linked again", bool(_poll(linked, 120, 2))
     )
-    # Last, because Remote's open-terminal requests the far grid's replication without ever releasing it, so
-    # the client keeps it as remote presence and its partition stays online (SE-1796 follow-up).
     time.sleep(3)
     opened = _open_terminal(api, target_grid, timeout=60)
     bench.record("far-laser-terminal", opened)
@@ -1422,6 +1420,28 @@ def p2_laser_far(bench):
         json.dumps(denied),
     )
     api.close_remote_terminal()
+
+    # SE-1802: the remote terminal pins the unstreamed far grid as the client's permanent replicable;
+    # closing it must drop the pin, or the client counts as remote presence and the station never sleeps.
+    def presence():
+        node = (_owner_of(bench, target_grid) or ("node-1", 0))[0]
+        rows = _try_node(bench, node, "/partitions").get("partitions", [])
+        return next(
+            (p.get("remoteUsers") for p in rows if p.get("id") == partition), []
+        )
+
+    released = bool(_poll(lambda: not presence(), 30))
+    bench.record(
+        "far-laser-terminal-released",
+        {"owner": _owner_of(bench, target_grid), "remoteUsers": presence()},
+    )
+    bench.check(
+        "closing the far terminal releases the client's remote presence", released
+    )
+    bench.check(
+        "the far station goes offline after its terminal closed",
+        bool(_poll(lambda: _offline_row(bench, partition), 120)),
+    )
     bench.exercised(
         sameNodeGps=True,
         hudRelay=bool(hud),
