@@ -611,6 +611,40 @@ class NodeConfigSeedTest(Fixture):
         self.assertEqual(seen[0]["CLUSTER_NODE_HOST"], "polaris-lan")
         self.assertEqual(seen[0]["CLUSTER_NODE_ID"], "node-30")
 
+    def test_node_command_line_carries_the_log_retention(self):
+        # SE-1830: Magnetar's defaults when unset, the configured limits otherwise; an older Magnetar gets
+        # no flags, and configured limits on one are refused instead of silently dropped.
+        from test_managed_deployment import fake_magnetar
+        magnetar = self.root / "magnetar"
+        argvs = []
+
+        def start(version, **kwargs):
+            fake_magnetar(magnetar / "MagnetarInterim.dll", version)
+            instance = self.make(host="polaris-lan", magnetar=magnetar, **kwargs)
+            with patch.object(instance, "require_plugin_sdk", lambda: None), \
+                    patch.object(instance, "refresh_premade_world", lambda node: None), \
+                    patch.object(instance, "prepare_magnetar_config", lambda node: self.root), \
+                    patch.object(instance, "_spawn", lambda name, argv, env, cwd=None: argvs.append(argv)):
+                node = f"node-{40 + len(argvs)}"
+                instance._new_regular_node(node)
+                instance.start_node(node)
+            return argvs[-1]
+
+        def flags(argv):
+            return [arg for i, arg in enumerate(argv) if arg.startswith("-logMax") or argv[i - 1].startswith("-logMax")]
+
+        self.assertEqual(["-logMaxAgeDays", "14", "-logMaxSizeMB", "1024"], flags(start((2, 4, 3, 11))))
+        with patch.dict(os.environ, {"CLUSTER_LOG_MAX_AGE_DAYS": "3", "CLUSTER_LOG_MAX_SIZE_MB": "0"}):
+            self.assertEqual(["-logMaxAgeDays", "3", "-logMaxSizeMB", "0"], flags(start((2, 4, 4, 0))))
+        self.assertEqual(["-logMaxAgeDays", "7", "-logMaxSizeMB", "1024"],
+                         flags(start((2, 4, 3, 11), log_retention={"maxAgeDays": 7})))
+        self.assertEqual([], flags(start((2, 4, 3, 10))))
+        with self.assertRaisesRegex(cluster.ClusterError, "2.4.3.11"):
+            start((2, 4, 3, 10), log_retention={"maxSizeMB": 50})
+        for bad in ("-1", "1.5", "lots"):
+            with patch.dict(os.environ, {"CLUSTER_LOG_MAX_SIZE_MB": bad}), self.assertRaisesRegex(ValueError, "whole number"):
+                self.make(magnetar=magnetar)
+
     def test_the_host_store_switch_is_the_gateways_and_a_node_needs_only_its_host(self):
         # T-0340: the registry alone switches the per-host save store on - CLUSTER_HOST_STORE=1 in the GATEWAY's
         # environment, inherited from the launcher's - and tells each node in its registration answer. What a node

@@ -394,3 +394,53 @@ def write_config(config: Path, cluster: Path | None = None, transport: Path | No
         _write_xml(_profile(PROFILES[r], hub_ids, role_dev, role_local, debug), profiles / f"{PROFILES[r]}.xml")
     _write_xml(_profile("Current", hub_ids, dev_ids, local_ids + installed_extra_ids, debug), profiles / "Current.xml")
     return [TRANSPORT_ID] + [PROFILES[r] for r in roles] + [CONCEALMENT_ID] + extra_ids
+
+
+# SE-1830: Magnetar 2.4.3.11 deletes a node's old dedicated server logs at every start, by age
+# (-logMaxAgeDays) and total size (-logMaxSizeMB); 0 turns a limit off. Older builds forward unknown
+# options to Pulsar and the DS, so the flags go only to a launcher that supports them.
+LOG_RETENTION_DEFAULTS = {"maxAgeDays": 14, "maxSizeMB": 1024}
+LOG_RETENTION_FLAGS = {"maxAgeDays": "-logMaxAgeDays", "maxSizeMB": "-logMaxSizeMB"}
+LOG_RETENTION_MAGNETAR = (2, 4, 3, 11)
+
+
+def log_retention(value: object) -> dict[str, int] | None:
+    """Validate a ``logRetention`` setting: an object with optional whole numbers ``maxAgeDays`` and
+    ``maxSizeMB``, 0 or more. None means not configured. Missing limits get Magnetar's defaults."""
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) - set(LOG_RETENTION_DEFAULTS):
+        raise ValueError("logRetention takes only maxAgeDays and maxSizeMB")
+    limits = {**LOG_RETENTION_DEFAULTS, **value}
+    for key, limit in limits.items():
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError(f"logRetention.{key} must be a whole number, 0 or more (0 turns the limit off)")
+    return limits
+
+
+def magnetar_version(launcher: Path) -> tuple[int, ...] | None:
+    """The file version of the Magnetar build beside ``launcher`` (MagnetarInterim.bin is a native
+    apphost; MagnetarInterim.dll carries the version resource), or None when unreadable."""
+    try:
+        data = launcher.with_suffix(".dll").read_bytes()
+    except OSError:
+        return None
+    at = data.find(b"\xbd\x04\xef\xfe")  # VS_FIXEDFILEINFO signature
+    if at < 0 or len(data) < at + 16:
+        return None
+    ms, ls = int.from_bytes(data[at + 8:at + 12], "little"), int.from_bytes(data[at + 12:at + 16], "little")
+    return ms >> 16, ms & 0xFFFF, ls >> 16, ls & 0xFFFF
+
+
+def log_retention_args(launcher: Path, limits: dict[str, int] | None) -> list[str]:
+    """The node's log retention flags: the configured limits, else Magnetar's defaults, spelled out
+    so the command line shows them. None for an older Magnetar unless limits were configured, which
+    then is an error instead of a silently ignored setting."""
+    version = magnetar_version(launcher)
+    if version is None or version < LOG_RETENTION_MAGNETAR:
+        if limits is not None:
+            raise ValueError("logRetention needs Magnetar 2.4.3.11 or newer; the launcher at "
+                             f"{launcher} is {'.'.join(map(str, version)) if version else 'of unknown version'}")
+        return []
+    limits = limits or LOG_RETENTION_DEFAULTS
+    return [arg for key, flag in LOG_RETENTION_FLAGS.items() for arg in (flag, str(limits[key]))]

@@ -66,6 +66,12 @@ follows the load, not one heap per core) and `DOTNET_GCNoAffinitize=1` (the node
 threads to the same cores); `workstation` sets `DOTNET_gcServer=0`, the runtime default. Workstation GC runs a
 blocking gen2 collection on one thread, which froze 4-9 GB nodes for 10-51 s under host CPU contention. The
 Gateway process is not affected.
+The optional `logRetention` sets how many dedicated server logs each node keeps, the World Authority included
+(SE-1830). Magnetar deletes the node's old `SpaceEngineersDedicated_*.log` files at every start: those older than
+`maxAgeDays`, then the oldest until the rest fit in `maxSizeMB`. Both are whole numbers, 0 or more; 0 turns that
+limit off, and a missing one keeps Magnetar's default (14 days, 1024 MB). Preparation writes them into every node's
+arguments as `-logMaxAgeDays` and `-logMaxSizeMB`. They need Magnetar 2.4.3.11 or newer in the dependency snapshot:
+with an older one the nodes get no flags, and a specification that sets `logRetention` is refused.
 
 ### Hung nodes
 

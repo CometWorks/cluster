@@ -276,6 +276,13 @@ SSH_TARGET = re.compile(r"^(local|([A-Za-z0-9._-]+@)?[A-Za-z0-9][A-Za-z0-9.-]*)$
 WINDOW = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$")
 
 
+def _log_retention_env() -> dict[str, int] | None:
+    limits = {key: os.environ.get(name, "").strip() for key, name in
+              (("maxAgeDays", "CLUSTER_LOG_MAX_AGE_DAYS"), ("maxSizeMB", "CLUSTER_LOG_MAX_SIZE_MB"))}
+    limits = {key: int(value) if value.isdigit() else value for key, value in limits.items() if value}
+    return limits or None
+
+
 def local_host() -> str:
     """This host's name as the node-control model uses it: CLUSTER_NODE_HOST, else the short hostname."""
     return os.environ.get("CLUSTER_NODE_HOST", "").strip() or socket.gethostname().split(".")[0]
@@ -805,7 +812,12 @@ class Config:
     dedicated_require: dict[str, str] = field(default_factory=lambda: dict(
         pair.split("=", 1) for pair in os.environ.get("CLUSTER_NODE_DEDICATED_REQUIRE", "").split(",") if "=" in pair))
 
+    # SE-1830: the nodes' dedicated server log limits (Magnetar -logMaxAgeDays / -logMaxSizeMB), the
+    # managed spec's logRetention: CLUSTER_LOG_MAX_AGE_DAYS / CLUSTER_LOG_MAX_SIZE_MB. None = Magnetar's defaults.
+    log_retention: dict[str, int] | None = field(default_factory=lambda: _log_retention_env())
+
     def __post_init__(self) -> None:
+        self.log_retention = magnetar_config.log_retention(self.log_retention)
         if self.transport_binaries is not None and self.transport_source is not None:
             raise ValueError("choose compiled Direct Transport or a source checkout, not both")
         if self.world_template is None:
@@ -2060,7 +2072,14 @@ class Cluster:
             "-profile", magnetar_config.PROFILES[self._role_key(node)], *update_args,
             "-multiInstance", "-noconsent", "-noimplicitmod",
             "-noconsole", "-ignorelastsession",
-            "-port", node.backend.rpartition(":")[2], "-path", str(data)], self._node_env(node, standalone), cwd=config)
+            "-port", node.backend.rpartition(":")[2], "-path", str(data), *self._log_retention_args()],
+            self._node_env(node, standalone), cwd=config)
+
+    def _log_retention_args(self) -> list[str]:
+        try:
+            return magnetar_config.log_retention_args(self.config.launcher, self.config.log_retention)
+        except ValueError as error:
+            raise ClusterError(str(error)) from None
 
     @staticmethod
     def _ksm_shim(node: "NodeSpec") -> list[str]:
