@@ -1497,7 +1497,7 @@ def p3_rec_01(bench) -> None:
     # Leg (b): disarm, let node-2 serve, then fence it mid-run.
     bench.cluster.post("/debug/reject-node?slot=node-2&mode=off")
     process = bench.cluster.start_node("node-2")
-    bench.cluster.wait_ready(nodes=["node-2"], timeout=300)
+    bench.cluster.wait_ready(nodes=["node-2"], timeout=300, serving=True)
     bench.quiesce()
     spawned = bench.cluster.node("node-2", "/trash-test-spawn?x=700000&y=0&z=0&blocks=4", "POST")
     grid = spawned["grid"]
