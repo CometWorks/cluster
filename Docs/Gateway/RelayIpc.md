@@ -132,7 +132,7 @@ correlation.
 | 11 | `JoinAnswer` (answer to 10) | `{decision:"accept"/"hold"/"reject", reason?}`. On accept, C# then sets `link` with a `SessionUpdate`. On hold, gateway-rs re-asks every second while the request is held |
 | 12 | `ClientMessage` (Rust→C#) | `{clientId, session, messageId, packet:base64}` for the messages C# acts on: 14 CLIENT_CONNECTED and 8 CLIENT_READY. The packet is still relayed per the rules |
 | 15 | `ClientEvent` (Rust→C#) | `{clientId, session, event, detail?}`. Events: `disconnected{reason}`, `backlogOverflow{which}`, `backlogExpired`, `targetReady{endpoint}`, `silent`, `ackBacklog`, `duplicateServerData` |
-| 16 | `Disconnect` | `{clientId, session, reason, joinResult?}`. With `joinResult`, a synthesized JOIN_RESULT goes first and the disconnect follows 250 ms later. C# does not wait for `disconnected` forever: a session it has sent `Disconnect` for is removed by its next force-reconnect, or after 45 s (#1221) |
+| 16 | `Disconnect` | `{clientId, session, reason, blockMs?}`. A refusal's JOIN_RESULT goes first as a `ClientSend`, and C# sends the `Disconnect` 250 ms later. With `blockMs` it is a boot (SE-1824): the Steam frontend closes the P2P session at once and refuses the client's session requests and packets for that long; Direct Transport just disconnects. C# does not wait for `disconnected` forever: a session it has sent `Disconnect` for is removed by its next force-reconnect, or after 45 s (#1221) |
 | 17 | `ForceReconnect` | `{clientId, session, reason}`. The channel-0 control message, then a disconnect after 25 ms |
 | 18 | `SessionUpdate` (corr optional) | `{clientId, session, link?, attached?, routable?, switching?, attachPending?, bufferServer?, suppressJoin?, validationLink?, flushClient?, flushServer?, discardServer?, resetTypeTable?}`. Fields that are present are applied in one step on the owning worker. The flushes run after the fields are applied and forward only if the new state allows it, which keeps today's `FlushClientBacklog` and `FinishSwitching` semantics. Answered `{ok, clientBacklog, serverBacklog}` when a correlation is given |
 | 19 | `ReplayConnect` (corr) | `{clientId, session}`. Sends the captured CLIENT_CONNECTED to `link` (`AttachBackend`) |
@@ -165,8 +165,11 @@ gateway-rs is then the whole Steam frontend of `SteamFrontend.cs`; C# keeps admi
   GameServer SteamID), the only id a vanilla client treats as "the host left"; C# learns it from
   `Status` (a `{purpose:"steam-identity"}` request every 5 s until known). A Steam session that shows
   no CLIENT_CONNECTED within 5 s is a client still playing an ended session: C# force-reconnects it
-  again until 15 s after the first forced reconnect, then refuses it with a synthesized
-  `JOIN_RESULT{UserNotConnected}` (fatal to a vanilla client: back to the main menu).
+  again until 15 s after the first forced reconnect, then boots it: the host-left message once more
+  and a `Disconnect` with `blockMs` (`CLUSTER_STEAM_BOOT_BLOCK_SECONDS`, default 20 s). The client's
+  Steam reports the connection failed, which vanilla handles like the host leaving: a clean unload
+  and its reconnector. SE-1824: the `JOIN_RESULT{UserNotConnected}` used before made a vanilla client
+  dispose its multiplayer session before unloading the world, which fails for a player in a cockpit.
 - SE-1553: the in-process Steam frontend follows the same two rules (the GameServer id in a forced reconnect, a
   session without a login ended after 5 s); before, its clients ignored forced reconnects.
   `/transport/status` lists such clients under `reconnectStreaks` until they are admitted again.
