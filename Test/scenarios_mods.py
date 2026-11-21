@@ -584,7 +584,7 @@ def p2_mod_v1(bench) -> None:
         folder.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(REFERENCE_SOURCE, folder / "Reference.cs")
     bench.cluster.start()
-    bench.cluster.wait_ready()
+    bench.cluster.wait_ready(serving=True)
     # The stations below must stay on the node that made them until the scenario moves one.
     bench.cluster.post("/automatic/pause")
 

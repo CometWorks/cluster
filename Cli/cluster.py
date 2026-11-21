@@ -2816,22 +2816,31 @@ class Cluster:
             shutil.rmtree(target)
         shutil.copytree(self.config.split_world, target, ignore=shutil.ignore_patterns("saves"))
 
-    def wait_ready(self, timeout: float = 300, nodes: list[str] | None = None) -> None:
+    def wait_ready(self, timeout: float = 300, nodes: list[str] | None = None, serving: bool = False) -> None:
+        """Wait for the Gateway and each node's "Game ready". With ``serving``, a node is ready only
+        once it also logs ``node_state=Serving``: "Game ready" comes while it still claims and loads
+        its partitions, and a grid spawned in that window is lost (SE-1804). A node that logs
+        ``node_state=Failed`` instead fails the wait at once."""
         if self.config.multi_host and nodes is None:
             self.wait_ready_multi_host(max(timeout, 600))
             return
-        pending = {"gateway": "Gateway listening"}
+        pending = {"gateway": ["Gateway listening"]}
         for node in self.config.nodes:
             if nodes is not None and node.node_id not in nodes:
                 continue
-            pending[node.node_id] = "Game ready"
+            pending[node.node_id] = ["Game ready"] + (["node_state=Serving"] if serving else [])
         deadline = time.time() + timeout
         while pending and time.time() < deadline:
-            for name, marker in list(pending.items()):
+            for name, markers in list(pending.items()):
                 log = self.config.root / f"{name}.log"
-                if log.exists() and marker in log.read_text(errors="replace"):
-                    print(f"[cluster] {name}: {marker}")
+                text = log.read_text(errors="replace") if log.exists() else ""
+                while markers and markers[0] in text:
+                    print(f"[cluster] {name}: {markers.pop(0)}")
+                if not markers:
                     del pending[name]
+                elif serving and name != "gateway" and "node_state=Failed" in text:
+                    failed = next(line for line in text.splitlines() if "node_state=Failed" in line)
+                    raise ClusterError(f"{name} failed before it was Serving: {failed.strip()}")
             for name, process in self.processes.items():
                 # Exit code 0 is no excuse: a node whose world fails to load logs "Exiting.." and
                 # leaves cleanly, and waiting out the timeout for it only hides the reason.
@@ -2840,7 +2849,8 @@ class Cluster:
             if pending:
                 time.sleep(1)
         if pending:
-            raise ClusterError(f"not ready within {timeout}s: {', '.join(sorted(pending))}")
+            raise ClusterError(f"not ready within {timeout}s: "
+                               + ", ".join(f"{name} (no {markers[0]!r})" for name, markers in sorted(pending.items())))
         # T-0102: a node that lost a plugin is still "Game ready" - the process runs, the world
         # loads, only the plugin is missing. Report and carry on: by this point clients are
         # about to attach and halting is worse than a fleet-wide warning, whereas the warm-up

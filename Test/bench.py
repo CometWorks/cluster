@@ -177,7 +177,8 @@ class Bench:
         self.cluster.kill()
         self.cluster.prepare(wipe=True)   # a bench run root is always reset
         self.cluster.start(nodes)
-        self.cluster.wait_ready(nodes=nodes)
+        # Serving, not just "Game ready": lanes spawn fixtures right after this returns (SE-1804).
+        self.cluster.wait_ready(nodes=nodes, serving=True)
 
     def remote_port(self, port: int) -> int:
         """The scenarios name ports as 24158 + n; the bench runs them at the host's base + n."""

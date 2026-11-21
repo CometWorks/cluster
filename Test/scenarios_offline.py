@@ -1541,7 +1541,7 @@ def offline_partial_gas(bench):
         (folder / "OfflinePartial.sbc").write_bytes(raw)
     bench.record("definition-only-mod.sbc", raw.decode())
     bench.cluster.start()
-    bench.cluster.wait_ready()
+    bench.cluster.wait_ready(serving=True)
     bench.cluster.handover_config({"offline.enabled": "false", "offline.quietMeters": "0", "offline.settleFrames": "0"})
     owner = bench.cluster.node("node-1", "/identity-test-create?name=partial-gas-owner", "POST")["identityId"]
     # No client is needed: scripted Workshop IDs cannot be downloaded by a retail client.
