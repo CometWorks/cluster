@@ -1,6 +1,8 @@
 using System;
 using System.Linq;
 using System.Text;
+using Sandbox.Common.ObjectBuilders.Definitions;
+using Sandbox.Definitions;
 using Sandbox.Game;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Character;
@@ -20,34 +22,77 @@ namespace ClusterTestPlugin;
 /// <c>/drift-test?action=</c> (POST) with <c>block=</c> or <c>grid=</c>:
 /// <c>warhead-runout</c> a countdown that ran out without an explosion (CountdownMs -1, still counting down, dropped
 /// from MyWarheads), <c>empty-group</c> a block group with no blocks, <c>overfill</c> a reactor holding 0.0032 kg more
-/// uranium than the load restores, <c>pilot</c> (with <c>owner=</c>) a character of that identity
-/// seated in the cockpit, <c>suit</c> (with <c>level=</c>) that pilot's suit oxygen. <c>/drift-test-state</c> (GET)
+/// uranium than the load restores, <c>overfill-ore</c> (SE-1556) a cargo container full of stone and ice, the ice
+/// 0.00076 kg over what the load restores beside the stone, <c>pilot</c> (with <c>owner=</c>) a character of that identity
+/// seated in the cockpit, <c>suit</c> (with <c>level=</c>) that pilot's suit oxygen, <c>overfill-pilot</c> (SE-1557) that pilot's
+/// inventory holding hydrogen bottles and then three oxygen bottles more than the load restores beside them, which needs
+/// <c>constrain-inventories</c> (no id) on every node first: survival's inventory limits in the creative bench world. <c>/drift-test-state</c> (GET)
 /// reports all of it for a list of <c>blocks=</c>.
 /// </summary>
 internal static class DriftTestRoutes
 {
     private static readonly MyDefinitionId Uranium = new(typeof(MyObjectBuilder_Ingot), "Uranium");
+    private static readonly MyDefinitionId Stone = new(typeof(MyObjectBuilder_Ore), "Stone");
+    private static readonly MyDefinitionId Ice = new(typeof(MyObjectBuilder_Ore), "Ice");
+    private static readonly MyDefinitionId OxygenBottle = new(
+        typeof(MyObjectBuilder_OxygenContainerObject),
+        "OxygenBottle"
+    );
 
     public static void Register()
     {
-        TestRoutes.Add("POST", "/drift-test", context =>
-        {
-            string action = context.Request.QueryString["action"] ?? throw new ArgumentException("Missing action");
-            long id = TestRoutes.Long(context, action == "empty-group" ? "grid" : "block");
-            long owner = action == "pilot" ? TestRoutes.Long(context, "owner") : 0;
-            float level = action == "suit" ? float.Parse(context.Request.QueryString["level"], System.Globalization.CultureInfo.InvariantCulture) : 0;
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => Act(action, id, owner, level)));
-        });
-        TestRoutes.Add("GET", "/drift-test-state", context =>
-        {
-            long[] blocks = (context.Request.QueryString["blocks"] ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries).Select(long.Parse).ToArray();
-            TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => blocks.Select(State).ToArray()));
-        });
+        TestRoutes.Add(
+            "POST",
+            "/drift-test",
+            context =>
+            {
+                string action =
+                    context.Request.QueryString["action"]
+                    ?? throw new ArgumentException("Missing action");
+                long id =
+                    action == "constrain-inventories"
+                        ? 0
+                        : TestRoutes.Long(context, action == "empty-group" ? "grid" : "block");
+                long owner = action == "pilot" ? TestRoutes.Long(context, "owner") : 0;
+                float level =
+                    action == "suit"
+                        ? float.Parse(
+                            context.Request.QueryString["level"],
+                            System.Globalization.CultureInfo.InvariantCulture
+                        )
+                        : 0;
+                TestRoutes.Json(
+                    context,
+                    200,
+                    TestRoutes.OnGameThread(() => Act(action, id, owner, level))
+                );
+            }
+        );
+        TestRoutes.Add(
+            "GET",
+            "/drift-test-state",
+            context =>
+            {
+                long[] blocks = (context.Request.QueryString["blocks"] ?? "")
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(long.Parse)
+                    .ToArray();
+                TestRoutes.Json(
+                    context,
+                    200,
+                    TestRoutes.OnGameThread(() => blocks.Select(State).ToArray())
+                );
+            }
+        );
     }
 
-    private static T Entity<T>(long id) where T : MyEntity
-        => MyEntities.TryGetEntityById(id, out MyEntity entity) && entity is T typed && !entity.MarkedForClose
-            ? typed : throw new InvalidOperationException($"{typeof(T).Name} {id} is not on this node");
+    private static T Entity<T>(long id)
+        where T : MyEntity =>
+        MyEntities.TryGetEntityById(id, out MyEntity entity)
+        && entity is T typed
+        && !entity.MarkedForClose
+            ? typed
+            : throw new InvalidOperationException($"{typeof(T).Name} {id} is not on this node");
 
     private static object Act(string action, long id, long owner, float level)
     {
@@ -65,7 +110,13 @@ internal static class DriftTestRoutes
             {
                 var grid = Entity<MyCubeGrid>(id);
                 grid.BlockGroups.Add(new MyBlockGroup { Name = new StringBuilder("Railguns") });
-                return new { grid = id, groups = ((MyObjectBuilder_CubeGrid)grid.GetObjectBuilder()).BlockGroups.Select(group => new { name = group.Name, blocks = group.Blocks.Count }) };
+                return new
+                {
+                    grid = id,
+                    groups = ((MyObjectBuilder_CubeGrid)grid.GetObjectBuilder()).BlockGroups.Select(
+                        group => new { name = group.Name, blocks = group.Blocks.Count }
+                    ),
+                };
             }
             case "overfill":
             {
@@ -75,23 +126,113 @@ internal static class DriftTestRoutes
                 // The load restores at most MaxVolume / volume in float arithmetic; partition 4519's reactor held 0.0032 kg
                 // over that after a station refuel. AddItems would refuse it, so it goes in past the check.
                 foreach (var fuel in reactor.BlockDefinition.FuelInfos)
-                    inventory.AddItemsInternal((MyFixedPoint)((double)inventory.MaxVolume / (double)fuel.FuelDefinition.Volume + 0.0032), fuel.FuelItem);
+                    inventory.AddItemsInternal(
+                        (MyFixedPoint)(
+                            (double)inventory.MaxVolume / (double)fuel.FuelDefinition.Volume
+                            + 0.0032
+                        ),
+                        fuel.FuelItem
+                    );
+                return State(id);
+            }
+            case "overfill-ore":
+            {
+                MyInventory inventory = Entity<MyCargoContainer>(id).GetInventory();
+                inventory.Clear();
+                // SE-1556: partition 51971's harvester container, full of stone and ice, the ice 0.00076 kg over what
+                // the load restores beside the stone (ComputeAmountThatFits against the stone's volume). Neither stack
+                // is over an empty container. AddItems would refuse the ice, so it goes in past the check.
+                float volume = MyDefinitionManager.Static.GetPhysicalItemDefinition(Stone).Volume;
+                MyFixedPoint stone = (MyFixedPoint)(
+                    (double)inventory.MaxVolume / (double)volume * 0.167951
+                );
+                double fits =
+                    ((double)inventory.MaxVolume - (double)(stone * volume))
+                    * (1.0 / (double)volume);
+                inventory.AddItemsInternal(
+                    stone,
+                    new MyObjectBuilder_Ore { SubtypeName = "Stone" }
+                );
+                inventory.AddItemsInternal(
+                    (MyFixedPoint)fits + (MyFixedPoint)0.00076,
+                    new MyObjectBuilder_Ore { SubtypeName = "Ice" }
+                );
                 return State(id);
             }
             case "pilot":
             {
                 var cockpit = Entity<MyCockpit>(id);
-                MyCharacter character = MyCharacter.CreateCharacter(cockpit.WorldMatrix, Vector3.Zero, "se1154-pilot", "Default_Astronaut",
-                    null, null, findNearPos: false, identityId: owner, addDefaultItems: false);
+                MyCharacter character = MyCharacter.CreateCharacter(
+                    cockpit.WorldMatrix,
+                    Vector3.Zero,
+                    "se1154-pilot",
+                    "Default_Astronaut",
+                    null,
+                    null,
+                    findNearPos: false,
+                    identityId: owner,
+                    addDefaultItems: false
+                );
                 cockpit.AttachPilot(character, 0, storeOriginalPilotWorld: false);
                 return State(id);
             }
             case "suit":
             {
-                MyCharacter pilot = Entity<MyCockpit>(id).Pilot ?? throw new InvalidOperationException($"Cockpit {id} has no pilot");
+                MyCharacter pilot =
+                    Entity<MyCockpit>(id).Pilot
+                    ?? throw new InvalidOperationException($"Cockpit {id} has no pilot");
                 MyDefinitionId oxygen = MyCharacterOxygenComponent.OxygenId;
                 pilot.OxygenComponent.UpdateStoredGasLevel(ref oxygen, level);
                 return State(id);
+            }
+            case "constrain-inventories":
+            {
+                // SE-1557: the bench world is creative, where a character's inventory has no limit (MyInventory.IsConstrained
+                // is MyPerGameSettings.ConstrainInventory, the survival flag, for a character). The live world is survival.
+                MyPerGameSettings.ConstrainInventory = () => true;
+                return new { constrained = true };
+            }
+            case "overfill-pilot":
+            {
+                MyCharacter pilot =
+                    Entity<MyCockpit>(id).Pilot
+                    ?? throw new InvalidOperationException($"Cockpit {id} has no pilot");
+                MyInventory inventory = pilot.GetInventory();
+                inventory.Clear();
+                // SE-1557: Bot Trader Steven's pilot carried 1 + 24 + 9 bottles in a 4 m³ suit and the load kept 6 of the last
+                // 9. Here: hydrogen bottles filling half the suit, then the oxygen bottles that fit beside them and three more.
+                // AddItems would refuse the extra bottles, so they go in past the check.
+                float volume = MyDefinitionManager
+                    .Static.GetPhysicalItemDefinition(OxygenBottle)
+                    .Volume;
+                int hydrogen = (int)((double)inventory.MaxVolume / 2 / volume);
+                inventory.AddItemsInternal(
+                    hydrogen,
+                    new MyObjectBuilder_GasContainerObject
+                    {
+                        SubtypeName = "HydrogenBottle",
+                        GasLevel = 1f,
+                    }
+                );
+                int fits = (int)(
+                    ((double)inventory.MaxVolume - (double)inventory.CurrentVolume) / volume
+                );
+                inventory.AddItemsInternal(
+                    fits + 3,
+                    new MyObjectBuilder_OxygenContainerObject
+                    {
+                        SubtypeName = "OxygenBottle",
+                        GasLevel = 1f,
+                    }
+                );
+                return new
+                {
+                    id,
+                    pilot = pilot.EntityId,
+                    hydrogen,
+                    fits,
+                    oxygen = inventory.GetItemAmount(OxygenBottle).ToString(),
+                };
             }
             default:
                 throw new ArgumentException($"Unknown drift action '{action}'");
@@ -100,17 +241,49 @@ internal static class DriftTestRoutes
 
     private static object State(long id)
     {
-        if (!MyEntities.TryGetEntityById(id, out MyEntity entity) || entity.MarkedForClose) return new { id, found = false };
+        if (!MyEntities.TryGetEntityById(id, out MyEntity entity) || entity.MarkedForClose)
+            return new { id, found = false };
         return entity switch
         {
-            MyWarhead warhead => new { id, found = true, countdownMs = (int)warhead.m_countdownMs, isCountingDown = warhead.IsCountingDown },
-            MyReactor reactor => (object)new { id, found = true, uranium = reactor.GetInventory().GetItemAmount(Uranium).ToString() },
+            MyWarhead warhead => new
+            {
+                id,
+                found = true,
+                countdownMs = (int)warhead.m_countdownMs,
+                isCountingDown = warhead.IsCountingDown,
+            },
+            MyReactor reactor => (object)
+                new
+                {
+                    id,
+                    found = true,
+                    uranium = reactor.GetInventory().GetItemAmount(Uranium).ToString(),
+                },
+            MyCargoContainer cargo => new
+            {
+                id,
+                found = true,
+                stone = cargo.GetInventory().GetItemAmount(Stone).ToString(),
+                ice = cargo.GetInventory().GetItemAmount(Ice).ToString(),
+            },
             MyCockpit cockpit => new
             {
-                id, found = true, pilot = cockpit.Pilot?.EntityId ?? 0, suit = cockpit.Pilot?.OxygenComponent?.SuitOxygenLevel,
+                id,
+                found = true,
+                pilot = cockpit.Pilot?.EntityId ?? 0,
+                suit = cockpit.Pilot?.OxygenComponent?.SuitOxygenLevel,
                 groups = cockpit.CubeGrid.BlockGroups.Count,
+                oxygenBottles = cockpit
+                    .Pilot?.GetInventory()
+                    ?.GetItemAmount(OxygenBottle)
+                    .ToString(),
             },
-            MyCubeBlock block => new { id, found = true, groups = block.CubeGrid.BlockGroups.Count },
+            MyCubeBlock block => new
+            {
+                id,
+                found = true,
+                groups = block.CubeGrid.BlockGroups.Count,
+            },
             _ => new { id, found = true },
         };
     }

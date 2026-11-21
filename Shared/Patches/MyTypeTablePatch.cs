@@ -14,9 +14,13 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyTypeTable), nameof(MyTypeTable.Get), typeof(Type))]
 public static class MyTypeTablePatch
 {
-	[HarmonyPrefix]
-	private static bool GetPrefix(MyTypeTable __instance, Type type, ref MySynchronizedTypeInfo __result)
-	{
-		return ReplicationTypeTablePatch.Prefix(__instance, type, ref __result);
-	}
+    [HarmonyPrefix]
+    private static bool GetPrefix(
+        MyTypeTable __instance,
+        Type type,
+        ref MySynchronizedTypeInfo __result
+    )
+    {
+        return ReplicationTypeTablePatch.Prefix(__instance, type, ref __result);
+    }
 }

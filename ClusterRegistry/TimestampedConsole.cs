@@ -26,7 +26,8 @@ internal sealed class TimestampedWriter(TextWriter inner) : TextWriter
 
     private void Stamp()
     {
-        if (!atLineStart) return;
+        if (!atLineStart)
+            return;
         inner.Write(DateTime.Now.ToString("HH:mm:ss "));
         atLineStart = false;
     }
@@ -37,18 +38,21 @@ internal sealed class TimestampedWriter(TextWriter inner) : TextWriter
         {
             Stamp();
             inner.Write(value);
-            if (value == '\n') atLineStart = true;
+            if (value == '\n')
+                atLineStart = true;
         }
     }
 
     public override void Write(string? value)
     {
-        if (value is null) return;
+        if (value is null)
+            return;
         lock (gate)
         {
             Stamp();
             inner.Write(value);
-            if (value.EndsWith('\n')) atLineStart = true;
+            if (value.EndsWith('\n'))
+                atLineStart = true;
         }
     }
 

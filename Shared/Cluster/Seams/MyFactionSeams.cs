@@ -9,5 +9,5 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyFactionSeams
 {
-	public static Func<MyFaction, bool, bool> ClusterAcceptHumansPrefix;
+    public static Func<MyFaction, bool, bool> ClusterAcceptHumansPrefix;
 }

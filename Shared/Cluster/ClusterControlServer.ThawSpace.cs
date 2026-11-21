@@ -41,123 +41,189 @@ namespace ClusterPlugin;
 /// </remarks>
 internal sealed partial class ClusterControlServer
 {
-	private readonly record struct ThawBody(MyEntity Entity, FrozenState State, BoundingBoxD Box, bool Outside);
+    private readonly record struct ThawBody(
+        MyEntity Entity,
+        FrozenState State,
+        BoundingBoxD Box,
+        bool Outside
+    );
 
-	/// <summary>Game thread, inside the thaw's timed slice (its reorders count in the thaw's addReorder* fields).</summary>
-	/// <returns>The handover_thaw fields. In BOTH arms (with import.thawEnsureSpace or diag.importAddTimers), observe-only,
-	/// computed before any ensure - the size class of the commit: thawDyn (top-level dynamic bodies to enable), thawOut
-	/// (dynamic bodies not inside exactly one existing cluster), thawOutM (the largest side of their union box) and
-	/// thawGroupsOut (the groups below MaximumForSplit that would hold an outside body). With the knob: ensureBodies,
-	/// ensureOut, ensureApplied (0/1), ensureBoxM (the union's largest side, 0 when not applied); grouped also
-	/// ensureGroups, ensureGroupsOut, ensureGroupBodies, ensureGroupOut, ensureGroupBoxM and ensureGroupMs (per group, in
-	/// ensure order).</returns>
-	private static string ThawEnsureSpace(Transfer transfer)
-	{
-		bool knob = ClusterConfig.GetBool("import.thawEnsureSpace");
-		if ((!knob && !ClusterConfig.GetBool("diag.importAddTimers")) || MyPhysics.Clusters == null) return "";
-		ListReader<MyClusterTree.MyCluster> clusters = MyPhysics.Clusters.GetClusters();
-		Vector3 inflate = MyClusterTree.IdealClusterSize / 100f;
-		double limit = MyClusterTree.MaximumForSplit.AbsMax();
-		List<ThawBody> all = new(), topLevel = new();
-		int outside = 0;
-		BoundingBoxD union = BoundingBoxD.CreateInvalid();
-		foreach ((long id, FrozenState state) in transfer.Frozen)
-		{
-			if (!state.HadPhysics || !state.PhysicsEnabled) continue;
-			if (!MyEntities.TryGetEntityById(id, out MyEntity entity) || entity.MarkedForClose) continue;
-			if (entity.Physics is not MyPhysicsBody body || body.IsStaticForCluster) continue;
-			BoundingBoxD box = entity.PositionComp.WorldAABB.GetInflated(inflate);
-			ThawBody thawBody = new(entity, state, box, !InsideOneCluster(clusters, box));
-			all.Add(thawBody);
-			// A hierarchy child (a seated pilot) is restored after its parent by RestoreFrozen and lies inside the
-			// parent's box; only top-level bodies are grouped and enabled early.
-			if (entity.Parent == null) topLevel.Add(thawBody);
-			if (!thawBody.Outside) continue;
-			outside++;
-			union.Include(box);
-		}
-		(List<List<ThawBody>> groups, List<BoundingBoxD> boxes) = Group(topLevel, limit);
-		string fields = " thawDyn=" + topLevel.Count + " thawOut=" + outside
-			+ " thawOutM=" + (outside > 0 ? union.Size.AbsMax() : 0).ToString("F0", CultureInfo.InvariantCulture)
-			+ " thawGroupsOut=" + groups.Count(g => g.Any(x => x.Outside));
-		if (!knob) return fields;
-		if (ClusterConfig.GetBool("import.thawEnsureGroups"))
-			return fields + " ensureBodies=" + topLevel.Count + " ensureOut=" + outside + EnsureGroups(groups, boxes, outside, limit);
-		bool applied = outside >= 2 && union.Size.AbsMax() < limit;
-		if (applied) MyPhysics.EnsurePhysicsSpace(union);
-		return fields + " ensureBodies=" + all.Count + " ensureOut=" + outside + " ensureApplied=" + (applied ? 1 : 0)
-			+ " ensureBoxM=" + (applied ? union.Size.AbsMax() : 0).ToString("F0", CultureInfo.InvariantCulture);
-	}
+    /// <summary>Game thread, inside the thaw's timed slice (its reorders count in the thaw's addReorder* fields).</summary>
+    /// <returns>The handover_thaw fields. In BOTH arms (with import.thawEnsureSpace or diag.importAddTimers), observe-only,
+    /// computed before any ensure - the size class of the commit: thawDyn (top-level dynamic bodies to enable), thawOut
+    /// (dynamic bodies not inside exactly one existing cluster), thawOutM (the largest side of their union box) and
+    /// thawGroupsOut (the groups below MaximumForSplit that would hold an outside body). With the knob: ensureBodies,
+    /// ensureOut, ensureApplied (0/1), ensureBoxM (the union's largest side, 0 when not applied); grouped also
+    /// ensureGroups, ensureGroupsOut, ensureGroupBodies, ensureGroupOut, ensureGroupBoxM and ensureGroupMs (per group, in
+    /// ensure order).</returns>
+    private static string ThawEnsureSpace(Transfer transfer)
+    {
+        bool knob = ClusterConfig.GetBool("import.thawEnsureSpace");
+        if ((!knob && !ClusterConfig.GetBool("diag.importAddTimers")) || MyPhysics.Clusters == null)
+            return "";
+        ListReader<MyClusterTree.MyCluster> clusters = MyPhysics.Clusters.GetClusters();
+        Vector3 inflate = MyClusterTree.IdealClusterSize / 100f;
+        double limit = MyClusterTree.MaximumForSplit.AbsMax();
+        List<ThawBody> all = new(),
+            topLevel = new();
+        int outside = 0;
+        BoundingBoxD union = BoundingBoxD.CreateInvalid();
+        foreach ((long id, FrozenState state) in transfer.Frozen)
+        {
+            if (!state.HadPhysics || !state.PhysicsEnabled)
+                continue;
+            if (!MyEntities.TryGetEntityById(id, out MyEntity entity) || entity.MarkedForClose)
+                continue;
+            if (entity.Physics is not MyPhysicsBody body || body.IsStaticForCluster)
+                continue;
+            BoundingBoxD box = entity.PositionComp.WorldAABB.GetInflated(inflate);
+            ThawBody thawBody = new(entity, state, box, !InsideOneCluster(clusters, box));
+            all.Add(thawBody);
+            // A hierarchy child (a seated pilot) is restored after its parent by RestoreFrozen and lies inside the
+            // parent's box; only top-level bodies are grouped and enabled early.
+            if (entity.Parent == null)
+                topLevel.Add(thawBody);
+            if (!thawBody.Outside)
+                continue;
+            outside++;
+            union.Include(box);
+        }
+        (List<List<ThawBody>> groups, List<BoundingBoxD> boxes) = Group(topLevel, limit);
+        string fields =
+            " thawDyn="
+            + topLevel.Count
+            + " thawOut="
+            + outside
+            + " thawOutM="
+            + (outside > 0 ? union.Size.AbsMax() : 0).ToString("F0", CultureInfo.InvariantCulture)
+            + " thawGroupsOut="
+            + groups.Count(g => g.Any(x => x.Outside));
+        if (!knob)
+            return fields;
+        if (ClusterConfig.GetBool("import.thawEnsureGroups"))
+            return fields
+                + " ensureBodies="
+                + topLevel.Count
+                + " ensureOut="
+                + outside
+                + EnsureGroups(groups, boxes, outside, limit);
+        bool applied = outside >= 2 && union.Size.AbsMax() < limit;
+        if (applied)
+            MyPhysics.EnsurePhysicsSpace(union);
+        return fields
+            + " ensureBodies="
+            + all.Count
+            + " ensureOut="
+            + outside
+            + " ensureApplied="
+            + (applied ? 1 : 0)
+            + " ensureBoxM="
+            + (applied ? union.Size.AbsMax() : 0).ToString("F0", CultureInfo.InvariantCulture);
+    }
 
-	/// <summary>t0404b: cut the bodies into groups below <paramref name="limit"/> along the longest axis of their union.</summary>
-	private static (List<List<ThawBody>> Groups, List<BoundingBoxD> Boxes) Group(List<ThawBody> bodies, double limit)
-	{
-		List<List<ThawBody>> groups = new();
-		List<BoundingBoxD> boxes = new();
-		if (bodies.Count == 0) return (groups, boxes);
-		BoundingBoxD all = BoundingBoxD.CreateInvalid();
-		foreach (ThawBody body in bodies) all.Include(body.Box);
-		int axis = all.Size.AbsMaxComponent();
-		foreach (ThawBody body in bodies.OrderBy(x => x.Box.Min.GetDim(axis)))
-		{
-			if (groups.Count > 0)
-			{
-				BoundingBoxD grown = boxes[^1];
-				grown.Include(body.Box);
-				if (grown.Size.AbsMax() < limit)
-				{
-					groups[^1].Add(body);
-					boxes[^1] = grown;
-					continue;
-				}
-			}
-			groups.Add(new List<ThawBody> { body });
-			boxes.Add(body.Box);
-		}
-		return (groups, boxes);
-	}
+    /// <summary>t0404b: cut the bodies into groups below <paramref name="limit"/> along the longest axis of their union.</summary>
+    private static (List<List<ThawBody>> Groups, List<BoundingBoxD> Boxes) Group(
+        List<ThawBody> bodies,
+        double limit
+    )
+    {
+        List<List<ThawBody>> groups = new();
+        List<BoundingBoxD> boxes = new();
+        if (bodies.Count == 0)
+            return (groups, boxes);
+        BoundingBoxD all = BoundingBoxD.CreateInvalid();
+        foreach (ThawBody body in bodies)
+            all.Include(body.Box);
+        int axis = all.Size.AbsMaxComponent();
+        foreach (ThawBody body in bodies.OrderBy(x => x.Box.Min.GetDim(axis)))
+        {
+            if (groups.Count > 0)
+            {
+                BoundingBoxD grown = boxes[^1];
+                grown.Include(body.Box);
+                if (grown.Size.AbsMax() < limit)
+                {
+                    groups[^1].Add(body);
+                    boxes[^1] = grown;
+                    continue;
+                }
+            }
+            groups.Add(new List<ThawBody> { body });
+            boxes.Add(body.Box);
+        }
+        return (groups, boxes);
+    }
 
-	/// <summary>t0404b: per group, ensure its box, then enable its bodies (with their frozen velocities, as RestoreFrozen
-	/// does).</summary>
-	private static string EnsureGroups(List<List<ThawBody>> groups, List<BoundingBoxD> boxes, int outside, double limit)
-	{
-		if (outside < 2) return " ensureApplied=0 ensureBoxM=0 ensureGroups=0 ensureGroupsOut=0";
-		List<string> ms = new(groups.Count);
-		double largest = 0;
-		for (int index = 0; index < groups.Count; index++)
-		{
-			long t0 = Stopwatch.GetTimestamp();
-			// A group whose box is itself at the limit (one body that large) gets no ensure: its bodies add as before.
-			if (boxes[index].Size.AbsMax() < limit) MyPhysics.EnsurePhysicsSpace(boxes[index]);
-			ms.Add((Stopwatch.GetElapsedTime(t0).TotalMilliseconds).ToString("F2", CultureInfo.InvariantCulture));
-			largest = System.Math.Max(largest, boxes[index].Size.AbsMax());
-			foreach (ThawBody body in groups[index])
-			{
-				if (body.Entity.MarkedForClose || body.Entity.Physics == null) continue;
-				body.Entity.Physics.Enabled = body.State.PhysicsEnabled;
-				body.Entity.Physics.LinearVelocity = body.State.LinearVelocity;
-				body.Entity.Physics.AngularVelocity = body.State.AngularVelocity;
-			}
-		}
-		return " ensureApplied=1 ensureBoxM=" + largest.ToString("F0", CultureInfo.InvariantCulture)
-			+ " ensureGroups=" + groups.Count + " ensureGroupsOut=" + groups.Count(g => g.Any(x => x.Outside))
-			+ " ensureGroupBodies=" + string.Join(",", groups.Select(g => g.Count))
-			+ " ensureGroupOut=" + string.Join(",", groups.Select(g => g.Count(x => x.Outside)))
-			+ " ensureGroupBoxM=" + string.Join(",", boxes.Select(b => b.Size.AbsMax().ToString("F0", CultureInfo.InvariantCulture)))
-			+ " ensureGroupMs=" + string.Join(",", ms);
-	}
+    /// <summary>t0404b: per group, ensure its box, then enable its bodies (with their frozen velocities, as RestoreFrozen
+    /// does).</summary>
+    private static string EnsureGroups(
+        List<List<ThawBody>> groups,
+        List<BoundingBoxD> boxes,
+        int outside,
+        double limit
+    )
+    {
+        if (outside < 2)
+            return " ensureApplied=0 ensureBoxM=0 ensureGroups=0 ensureGroupsOut=0";
+        List<string> ms = new(groups.Count);
+        double largest = 0;
+        for (int index = 0; index < groups.Count; index++)
+        {
+            long t0 = Stopwatch.GetTimestamp();
+            // A group whose box is itself at the limit (one body that large) gets no ensure: its bodies add as before.
+            if (boxes[index].Size.AbsMax() < limit)
+                MyPhysics.EnsurePhysicsSpace(boxes[index]);
+            ms.Add(
+                (Stopwatch.GetElapsedTime(t0).TotalMilliseconds).ToString(
+                    "F2",
+                    CultureInfo.InvariantCulture
+                )
+            );
+            largest = System.Math.Max(largest, boxes[index].Size.AbsMax());
+            foreach (ThawBody body in groups[index])
+            {
+                if (body.Entity.MarkedForClose || body.Entity.Physics == null)
+                    continue;
+                body.Entity.Physics.Enabled = body.State.PhysicsEnabled;
+                body.Entity.Physics.LinearVelocity = body.State.LinearVelocity;
+                body.Entity.Physics.AngularVelocity = body.State.AngularVelocity;
+            }
+        }
+        return " ensureApplied=1 ensureBoxM="
+            + largest.ToString("F0", CultureInfo.InvariantCulture)
+            + " ensureGroups="
+            + groups.Count
+            + " ensureGroupsOut="
+            + groups.Count(g => g.Any(x => x.Outside))
+            + " ensureGroupBodies="
+            + string.Join(",", groups.Select(g => g.Count))
+            + " ensureGroupOut="
+            + string.Join(",", groups.Select(g => g.Count(x => x.Outside)))
+            + " ensureGroupBoxM="
+            + string.Join(
+                ",",
+                boxes.Select(b => b.Size.AbsMax().ToString("F0", CultureInfo.InvariantCulture))
+            )
+            + " ensureGroupMs="
+            + string.Join(",", ms);
+    }
 
-	/// <summary>AddObject's no-reorder case for a dynamic body: its (inflated) box overlaps exactly one cluster and lies
-	/// inside it.</summary>
-	private static bool InsideOneCluster(ListReader<MyClusterTree.MyCluster> clusters, BoundingBoxD box)
-	{
-		MyClusterTree.MyCluster only = null;
-		foreach (MyClusterTree.MyCluster cluster in clusters)
-		{
-			if (cluster.AABB.Contains(box) == ContainmentType.Disjoint) continue;
-			if (only != null) return false;
-			only = cluster;
-		}
-		return only != null && only.AABB.Contains(box) == ContainmentType.Contains;
-	}
+    /// <summary>AddObject's no-reorder case for a dynamic body: its (inflated) box overlaps exactly one cluster and lies
+    /// inside it.</summary>
+    private static bool InsideOneCluster(
+        ListReader<MyClusterTree.MyCluster> clusters,
+        BoundingBoxD box
+    )
+    {
+        MyClusterTree.MyCluster only = null;
+        foreach (MyClusterTree.MyCluster cluster in clusters)
+        {
+            if (cluster.AABB.Contains(box) == ContainmentType.Disjoint)
+                continue;
+            if (only != null)
+                return false;
+            only = cluster;
+        }
+        return only != null && only.AABB.Contains(box) == ContainmentType.Contains;
+    }
 }

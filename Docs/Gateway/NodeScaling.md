@@ -32,7 +32,9 @@ automatic loop (never during recovery) drains it:
 2. every envelope component on a retiring node is pinned to a receiver: for a recycle the spare activated in its
    place, otherwise the node already holding the component's envelope neighbours, else the least projected load.
    The co-location loop then carries each pinned component member by member, clients last, with every
-   join/settle/backoff deferral of an automatic handover. Clients switch nodes seamlessly;
+   join/settle/backoff deferral of an automatic handover. Clients switch nodes seamlessly. Co-location never
+   homes a component on a retiring node: a member that cannot leave it (HandoverBlocked) stays behind alone,
+   and its neighbours are not handed back to it (SE-1553);
 3. a retiring node that owns nothing is closed; it reports Empty (the report-driven close also releases rows the
    node no longer reports, T-0312 12f361b);
 4. the registry turns the node's plan slot to `Kill`; the launcher stops the process (it usually exits by itself

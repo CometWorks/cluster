@@ -6,7 +6,7 @@ Every variable read by the node plugins, the Gateway, and the cluster CLI.
 
 | Variable | Meaning |
 | --- | --- |
-| `SPACE_ENGINEERS_BIN64` | game `DedicatedServer64` directory: source of the Windows native DLLs the Linux wrappers load (`Havok.dll`, `RecastDetour.dll`, `VRage.Native.dll`) and of game-owned managed assemblies the archive does not ship (`HavokWrapper`, `EOSSDK`, `Microsoft.CodeAnalysis`, `SharpDX.*`, `ProtoBuf.Net`, ...). Without it the server falls back to `<four levels above the server dll>/Bin64` (the repo layout). |
+| `SPACE_ENGINEERS_BIN64` | game `DedicatedServer64` directory: source of the Windows native DLLs the Linux wrappers load (`Havok.dll`, `RecastDetour.dll`, `VRage.Native.dll`) and of game-owned managed assemblies the archive does not ship (`HavokWrapper`, `EOSSDK`, `Microsoft.CodeAnalysis`, `SharpDX.*`, `ProtoBuf.Net`, ...). The Gateway reads the game version it advertises on Steam and EOS (`SpaceEngineersGame.SE_VERSION` in `SpaceEngineers.Game.dll`) from here on every start and refuses to start without it. Without it the server falls back to `<four levels above the server dll>/Bin64` (the repo layout). |
 | `SPACE_ENGINEERS_CONTENT` | game `Content` directory. Without it the server walks upward looking for the content anchor. |
 | `SPACE_ENGINEERS_CLIENT_CONTENT` | client `Content` for worlds that need client-only assets; defaults to a path derived from `SPACE_ENGINEERS_CONTENT`. |
 | `SPACE_ENGINEERS_PREMADE_WORLD` | premade checkpoint a node loads (sets `PremadeCheckpointPath`). |
@@ -77,6 +77,7 @@ Environment-only:
 | `CLUSTER_GATEWAY_HOST` | T-0321: the gateway host's hosts-file name. Nodes whose registered host differs are remote: they may not advertise loopback endpoints (refused at registration), and the network-window lease hold applies to them |
 | `CLUSTER_NETWORK_WINDOWS` | T-0321: `HH:MM-HH:MM[,...]` gateway-local time (may cross midnight). Inside a window and its grace a remote node's lapsed lease is held (not Dead, partitions kept, balancing paused) and so is its host's executor lease. Unset = off |
 | `CLUSTER_LIVE_PROCESS_GRACE_SECONDS` | #1218: how long after its last renewal a node's lapsed lease is held while its host's executor (Quasar.Host, cluster-hostd) reports the node's process Ready, fresh within 20 s: not Dead, partitions kept. A frozen process (a blocking GC under CPU contention) survives; a crash still dies at its lease, because the next poll reports it Gone. Default 60 (the simulation-stall kill); `0` = off |
+| `CLUSTER_CLIENT_SILENCE_SECONDS` / `CLUSTER_CLIENT_LOADING_SILENCE_SECONDS` | SE-1450: how long a Steam client may send nothing before the Gateway ends its session (Steam P2P has no disconnect detection of its own): 180 s once it is world-ready (CLIENT_READY), 600 s before that, because a vanilla client is silent while it downloads mods and loads the world |
 | `CLUSTER_NETWORK_WINDOW_GRACE_SECONDS` | hold continues this long after a window ends (default 30) |
 | `CLUSTER_FAULT_SILENCE_HOSTS` | T-0321 fault injection: path of a file with one host name per line (re-read each second); requests from nodes of those hosts (their `X-Cluster-Host`) and executor polls for them are aborted without an answer |
 | `CLUSTER_INTERNAL_NETWORKS` | CIDRs allowed for non-loopback `--direct` beside `--steam` |
@@ -84,7 +85,7 @@ Environment-only:
 | `CLUSTER_BINARY_VERSION` / `CLUSTER_REPLICATION_TABLE_HASH` | join-compatibility fencing |
 | `CLUSTER_WORLD` | the Gateway's copy of the split world. Its `Sandbox.sbc` settings and mod list, hashed at Gateway start, fence node admission (`Shared/Cluster/WorldSettingsHash.cs`) |
 | `CLUSTER_SYNC_DISTANCE` | advertised sync distance |
-| `CLUSTER_DIRECT_TRANSPORT_VERSION` | DT wire version override |
+| `CLUSTER_DIRECT_TRANSPORT_VERSION` | optional guard: the Gateway refuses to start unless the DS in `SPACE_ENGINEERS_BIN64` is this game version |
 | `CLUSTER_HANDOVER_VALIDATION_ABORTS` | test hook: injected validation aborts |
 | `CLUSTER_HANDOVER_BLOCK_SWEEP_SECONDS` | SE-1185: how often the Gateway drops the handover blocks of partitions with no owner and no recovery running (default 30). A merge, split or archive that retires a blocked partition clears its block at once; the sweep catches the rest, such as a partition released by its node |
 | `CLUSTER_ROUTE_OVER_REPORT_GRACE_SECONDS` | how long a registry client route may outvote a node report that says the partition has no clients (default 120). Covers the switch-settling window; past it the node report wins, so a stale route can no longer pin a partition against every handover for the life of the cluster. Applies to both the automatic-handover scheduler and the clientless-handover guard. |

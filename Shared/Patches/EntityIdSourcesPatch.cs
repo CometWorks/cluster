@@ -15,10 +15,10 @@ using Sandbox.Game.World;
 using VRage;
 using VRage.Game;
 using VRage.Game.ModAPI;
-using VRage.ObjectBuilders;
 using VRage.Library.Utils;
 using VRage.ModAPI;
 using VRage.Network;
+using VRage.ObjectBuilders;
 
 namespace Shared.Patches;
 
@@ -59,7 +59,12 @@ public static class EntityIdBlockPlacementPatch
     [HarmonyPatch("BuildBlocksRequest")]
     private static void BuildBlocksRequestPrefix(ref HashSet<MyCubeGrid.MyBlockLocation> locations)
     {
-        if (!EntityIdAllocator.Enabled || !Sync.IsServer || MyEventContext.Current.IsLocallyInvoked || locations == null)
+        if (
+            !EntityIdAllocator.Enabled
+            || !Sync.IsServer
+            || MyEventContext.Current.IsLocallyInvoked
+            || locations == null
+        )
             return;
         var fresh = new HashSet<MyCubeGrid.MyBlockLocation>();
         foreach (MyCubeGrid.MyBlockLocation location in locations)
@@ -78,7 +83,9 @@ public static class EntityIdProjectorPatch
 {
     /// <summary>All grids through one helper: old ids that appear in several grids (TopBlockId,
     /// RotorEntityId, SubGridId) map to the same new id.</summary>
-    internal static MyEntityIdRemapHelper RemapConsistently(IEnumerable<MyObjectBuilder_CubeGrid> grids)
+    internal static MyEntityIdRemapHelper RemapConsistently(
+        IEnumerable<MyObjectBuilder_CubeGrid> grids
+    )
     {
         var helper = new MyEntityIdRemapHelper();
         foreach (MyObjectBuilder_CubeGrid grid in grids)
@@ -92,7 +99,12 @@ public static class EntityIdProjectorPatch
     [HarmonyPatch("OnNewBlueprintSuccess")]
     private static void OnNewBlueprintSuccessPrefix(List<MyObjectBuilder_CubeGrid> projectedGrids)
     {
-        if (!EntityIdAllocator.Enabled || !Sync.IsServer || MyEventContext.Current.IsLocallyInvoked || projectedGrids == null)
+        if (
+            !EntityIdAllocator.Enabled
+            || !Sync.IsServer
+            || MyEventContext.Current.IsLocallyInvoked
+            || projectedGrids == null
+        )
             return;
         RemapConsistently(projectedGrids);
     }
@@ -116,11 +128,18 @@ public static class EntityIdProjectorPatch
         if (VRage.Utils.MyUtils.MainThread == Thread.CurrentThread)
             Track(__instance, helper, grids);
         else
-            MySandboxGame.Static.Invoke(() => Track(__instance, helper, grids), "Cluster projector remap");
+            MySandboxGame.Static.Invoke(
+                () => Track(__instance, helper, grids),
+                "Cluster projector remap"
+            );
         return false;
     }
 
-    private static void Track(MyProjectorBase projector, MyEntityIdRemapHelper helper, List<MyObjectBuilder_CubeGrid> grids)
+    private static void Track(
+        MyProjectorBase projector,
+        MyEntityIdRemapHelper helper,
+        List<MyObjectBuilder_CubeGrid> grids
+    )
     {
         MyBlueprintIdTracker.OnRemap(projector, helper);
         projector.SetNewBlueprint(grids);
@@ -133,20 +152,36 @@ public static class EntityIdProjectorPatch
 public static class EntityIdProjectorRemapScopePatch
 {
     /// <summary>A stack so a nested call cannot share a map; the helper is created on first use.</summary>
-    [ThreadStatic] private static List<MyEntityIdRemapHelper> t_scopes;
+    [ThreadStatic]
+    private static List<MyEntityIdRemapHelper> t_scopes;
 
     private static IEnumerable<MethodBase> TargetMethods()
     {
         yield return AccessTools.Method(typeof(MyProjectorBase), "OnSpawnProjection");
-        yield return AccessTools.Method(typeof(MyProjectorBase), nameof(MyProjectorBase.UpdateOnceBeforeFrame));
-        yield return AccessTools.Method(typeof(MyProjectorBase), nameof(MyProjectorBase.GetObjectBuilderCubeBlock));
+        yield return AccessTools.Method(
+            typeof(MyProjectorBase),
+            nameof(MyProjectorBase.UpdateOnceBeforeFrame)
+        );
+        yield return AccessTools.Method(
+            typeof(MyProjectorBase),
+            nameof(MyProjectorBase.GetObjectBuilderCubeBlock)
+        );
     }
 
     [HarmonyTranspiler]
-    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, MethodBase original)
+    private static IEnumerable<CodeInstruction> Transpiler(
+        IEnumerable<CodeInstruction> instructions,
+        MethodBase original
+    )
     {
-        MethodInfo vanilla = AccessTools.Method(typeof(MyEntities), nameof(MyEntities.RemapObjectBuilder));
-        MethodInfo scoped = AccessTools.Method(typeof(EntityIdProjectorRemapScopePatch), nameof(RemapInScope));
+        MethodInfo vanilla = AccessTools.Method(
+            typeof(MyEntities),
+            nameof(MyEntities.RemapObjectBuilder)
+        );
+        MethodInfo scoped = AccessTools.Method(
+            typeof(EntityIdProjectorRemapScopePatch),
+            nameof(RemapInScope)
+        );
         List<CodeInstruction> code = instructions.ToList();
         int replaced = 0;
         foreach (CodeInstruction instruction in code)
@@ -158,7 +193,9 @@ public static class EntityIdProjectorRemapScopePatch
             }
         }
         if (replaced != 1)
-            throw new InvalidOperationException($"MyProjectorBase.{original.Name}: expected 1 MyEntities.RemapObjectBuilder call, found {replaced}");
+            throw new InvalidOperationException(
+                $"MyProjectorBase.{original.Name}: expected 1 MyEntities.RemapObjectBuilder call, found {replaced}"
+            );
         return code;
     }
 
@@ -194,7 +231,12 @@ public static class EntityIdFloatingObjectPatch
     [HarmonyPatch("RequestSpawnCreative_Implementation")]
     private static void RequestSpawnCreativePrefix(MyObjectBuilder_FloatingObject obj)
     {
-        if (!EntityIdAllocator.Enabled || MyEventContext.Current.IsLocallyInvoked || obj == null || obj.EntityId == 0)
+        if (
+            !EntityIdAllocator.Enabled
+            || MyEventContext.Current.IsLocallyInvoked
+            || obj == null
+            || obj.EntityId == 0
+        )
             return;
         obj.EntityId = MyEntityIdentifier.AllocateId();
     }
@@ -208,15 +250,24 @@ public static class EntityIdPlanetPatch
     {
         yield return AccessTools.Method(typeof(MyGuiScreenDebugSpawnMenu), "SpawnPlanet_Server");
         InterfaceMapping map = typeof(MyVoxelMaps).GetInterfaceMap(typeof(IMyVoxelMaps));
-        int index = Array.FindIndex(map.InterfaceMethods, m => m.Name == nameof(IMyVoxelMaps.SpawnPlanet));
+        int index = Array.FindIndex(
+            map.InterfaceMethods,
+            m => m.Name == nameof(IMyVoxelMaps.SpawnPlanet)
+        );
         if (index < 0)
             throw new InvalidOperationException("MyVoxelMaps: IMyVoxelMaps.SpawnPlanet not found");
         yield return map.TargetMethods[index];
-        yield return AccessTools.Method(typeof(MyWorldGenerator.OperationCreatePlanet), nameof(MyWorldGenerator.OperationCreatePlanet.Apply));
+        yield return AccessTools.Method(
+            typeof(MyWorldGenerator.OperationCreatePlanet),
+            nameof(MyWorldGenerator.OperationCreatePlanet.Apply)
+        );
     }
 
     [HarmonyTranspiler]
-    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, MethodBase original)
+    private static IEnumerable<CodeInstruction> Transpiler(
+        IEnumerable<CodeInstruction> instructions,
+        MethodBase original
+    )
     {
         MethodInfo random = AccessTools.Method(typeof(MyRandom), nameof(MyRandom.NextLong));
         MethodInfo node = AccessTools.Method(typeof(EntityIdPlanetPatch), nameof(PlanetId));
@@ -232,10 +283,12 @@ public static class EntityIdPlanetPatch
             }
         }
         if (replaced != 1)
-            throw new InvalidOperationException($"{original.DeclaringType?.Name}.{original.Name}: expected 1 MyRandom.NextLong call, found {replaced}");
+            throw new InvalidOperationException(
+                $"{original.DeclaringType?.Name}.{original.Name}: expected 1 MyRandom.NextLong call, found {replaced}"
+            );
         return code;
     }
 
-    private static long PlanetId(MyRandom random)
-        => EntityIdAllocator.Enabled ? MyEntityIdentifier.AllocateId() : random.NextLong();
+    private static long PlanetId(MyRandom random) =>
+        EntityIdAllocator.Enabled ? MyEntityIdentifier.AllocateId() : random.NextLong();
 }

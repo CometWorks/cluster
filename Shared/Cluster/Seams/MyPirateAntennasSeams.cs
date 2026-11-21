@@ -8,6 +8,6 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyPirateAntennasSeams
 {
-	// ClusterPlugin seam adapter for MyPirateAntennasPatch.UpdateDroneSpawningPrefix
-	public static Func<bool> ClusterDroneSpawningPrefix;
+    // ClusterPlugin seam adapter for MyPirateAntennasPatch.UpdateDroneSpawningPrefix
+    public static Func<bool> ClusterDroneSpawningPrefix;
 }

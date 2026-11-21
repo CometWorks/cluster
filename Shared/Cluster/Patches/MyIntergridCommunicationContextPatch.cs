@@ -8,9 +8,11 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyIntergridCommunicationContextPatch
 {
-	public static void Install()
-	{
-		MyIntergridCommunicationContextSeams.ClusterSendRemoteUnicast = IgcDeliveryService.SendRemoteUnicast;
-		MyIntergridCommunicationContextSeams.ClusterSendRemoteBroadcast = IgcDeliveryService.SendRemoteBroadcast;
-	}
+    public static void Install()
+    {
+        MyIntergridCommunicationContextSeams.ClusterSendRemoteUnicast =
+            IgcDeliveryService.SendRemoteUnicast;
+        MyIntergridCommunicationContextSeams.ClusterSendRemoteBroadcast =
+            IgcDeliveryService.SendRemoteBroadcast;
+    }
 }

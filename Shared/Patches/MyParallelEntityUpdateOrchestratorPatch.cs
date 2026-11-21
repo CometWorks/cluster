@@ -70,54 +70,91 @@ public static class MyParallelEntityUpdateOrchestratorPatch
 
     [HarmonyTranspiler]
     [HarmonyPatch(nameof(MyParallelEntityUpdateOrchestrator.DispatchOnceBeforeFrame))]
-    private static IEnumerable<CodeInstruction> DispatchOnceBeforeFrameTranspiler(IEnumerable<CodeInstruction> instructions, MethodBase original)
+    private static IEnumerable<CodeInstruction> DispatchOnceBeforeFrameTranspiler(
+        IEnumerable<CodeInstruction> instructions,
+        MethodBase original
+    )
     {
         var il = instructions.ToList();
-        var setRecord = AccessTools.Method(typeof(Dictionary<MyEntity, MyParallelUpdateFlags>), "set_Item");
+        var setRecord = AccessTools.Method(
+            typeof(Dictionary<MyEntity, MyParallelUpdateFlags>),
+            "set_Item"
+        );
         var getFlags = AccessTools.PropertyGetter(typeof(MyEntity), nameof(MyEntity.Flags));
         var clear = AccessTools.Method(typeof(List<MyEntity>), nameof(List<MyEntity>.Clear));
-        var defer = AccessTools.Method(typeof(MyParallelEntityUpdateOrchestratorPatch), nameof(Defer));
-        var requeue = AccessTools.Method(typeof(MyParallelEntityUpdateOrchestratorPatch), nameof(Requeue));
+        var defer = AccessTools.Method(
+            typeof(MyParallelEntityUpdateOrchestratorPatch),
+            nameof(Defer)
+        );
+        var requeue = AccessTools.Method(
+            typeof(MyParallelEntityUpdateOrchestratorPatch),
+            nameof(Requeue)
+        );
 
         // Anchor 1: the single m_lastUpdateRecord[myEntity] &= ~BEFORE_NEXT_FRAME store, followed by
         // the entity's Flags read (from which the entity local's load instruction is copied).
         var records = il.FindAllIndex(ci => ci.Calls(setRecord));
         if (records.Count != 1)
-            throw new CodeInstructionNotFound($"{original.Name}: expected exactly one m_lastUpdateRecord store, found {records.Count}");
+            throw new CodeInstructionNotFound(
+                $"{original.Name}: expected exactly one m_lastUpdateRecord store, found {records.Count}"
+            );
         var record = records[0];
         if (record + 2 >= il.Count || !il[record + 1].IsLdloc() || !il[record + 2].Calls(getFlags))
-            throw new CodeInstructionNotFound($"{original.Name}: the m_lastUpdateRecord store is not followed by the entity's Flags read");
+            throw new CodeInstructionNotFound(
+                $"{original.Name}: the m_lastUpdateRecord store is not followed by the entity's Flags read"
+            );
         var loadEntity = il[record + 1];
 
         // The `continue` target: the first conditional branch after the Flags read is the
         // `if ((flags & NeedsUpdateBeforeNextFrame) != 0)` test, whose false edge is the loop
         // increment (the if is the last statement of the loop body). Verify it lands on `j++`.
-        var branch = il.FindIndex(record + 2, ci => ci.opcode == OpCodes.Brfalse || ci.opcode == OpCodes.Brfalse_S);
+        var branch = il.FindIndex(
+            record + 2,
+            ci => ci.opcode == OpCodes.Brfalse || ci.opcode == OpCodes.Brfalse_S
+        );
         if (branch < 0 || il[branch].operand is not Label next)
-            throw new CodeInstructionNotFound($"{original.Name}: no conditional branch after the entity's Flags read");
+            throw new CodeInstructionNotFound(
+                $"{original.Name}: no conditional branch after the entity's Flags read"
+            );
         var target = il.FindIndex(ci => ci.labels.Contains(next));
-        if (target < 0 || target + 2 >= il.Count || !il[target].IsLdloc() || il[target + 1].opcode != OpCodes.Ldc_I4_1 || il[target + 2].opcode != OpCodes.Add)
-            throw new CodeInstructionNotFound($"{original.Name}: the NeedsUpdateBeforeNextFrame branch does not target the loop increment");
+        if (
+            target < 0
+            || target + 2 >= il.Count
+            || !il[target].IsLdloc()
+            || il[target + 1].opcode != OpCodes.Ldc_I4_1
+            || il[target + 2].opcode != OpCodes.Add
+        )
+            throw new CodeInstructionNotFound(
+                $"{original.Name}: the NeedsUpdateBeforeNextFrame branch does not target the loop increment"
+            );
 
         // Anchor 2: the single m_entitiesForUpdateOnce.Clear() call.
         var clears = il.FindAllIndex(ci => ci.Calls(clear));
         if (clears.Count != 1)
-            throw new CodeInstructionNotFound($"{original.Name}: expected exactly one List<MyEntity>.Clear call, found {clears.Count}");
+            throw new CodeInstructionNotFound(
+                $"{original.Name}: expected exactly one List<MyEntity>.Clear call, found {clears.Count}"
+            );
         var clearAt = clears[0];
 
         // Tail first so the earlier index stays valid.
-        il.InsertRange(clearAt + 1, new[]
-        {
-            new CodeInstruction(OpCodes.Ldarg_0),
-            new CodeInstruction(OpCodes.Call, requeue),
-        });
-        il.InsertRange(record + 1, new[]
-        {
-            new CodeInstruction(OpCodes.Ldarg_0),
-            new CodeInstruction(loadEntity.opcode, loadEntity.operand),
-            new CodeInstruction(OpCodes.Call, defer),
-            new CodeInstruction(OpCodes.Brtrue, next),
-        });
+        il.InsertRange(
+            clearAt + 1,
+            new[]
+            {
+                new CodeInstruction(OpCodes.Ldarg_0),
+                new CodeInstruction(OpCodes.Call, requeue),
+            }
+        );
+        il.InsertRange(
+            record + 1,
+            new[]
+            {
+                new CodeInstruction(OpCodes.Ldarg_0),
+                new CodeInstruction(loadEntity.opcode, loadEntity.operand),
+                new CodeInstruction(OpCodes.Call, defer),
+                new CodeInstruction(OpCodes.Brtrue, next),
+            }
+        );
         return il;
     }
 }

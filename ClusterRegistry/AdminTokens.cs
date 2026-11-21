@@ -18,7 +18,12 @@ internal sealed record AdminActor(string Name, Admin.AdminScope Scope);
 /// </summary>
 internal sealed class AdminTokenFile(string path)
 {
-    internal sealed record TokenEntry(string Name, Admin.AdminScope Scope, string Sha256, string? PreviousSha256 = null);
+    internal sealed record TokenEntry(
+        string Name,
+        Admin.AdminScope Scope,
+        string Sha256,
+        string? PreviousSha256 = null
+    );
 
     private sealed record FileShape(TokenEntry[] Tokens);
 
@@ -49,7 +54,10 @@ internal sealed class AdminTokenFile(string path)
         {
             foreach (TokenEntry entry in _tokens)
             {
-                if (HashEquals(supplied, entry.Sha256) || entry.PreviousSha256 != null && HashEquals(supplied, entry.PreviousSha256))
+                if (
+                    HashEquals(supplied, entry.Sha256)
+                    || entry.PreviousSha256 != null && HashEquals(supplied, entry.PreviousSha256)
+                )
                     return new AdminActor(entry.Name, entry.Scope);
             }
         }
@@ -59,9 +67,16 @@ internal sealed class AdminTokenFile(string path)
     private static bool HashEquals(byte[] supplied, string expectedHex)
     {
         byte[] expected;
-        try { expected = Convert.FromHexString(expectedHex); }
-        catch (FormatException) { return false; }
-        return expected.Length == supplied.Length && CryptographicOperations.FixedTimeEquals(expected, supplied);
+        try
+        {
+            expected = Convert.FromHexString(expectedHex);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+        return expected.Length == supplied.Length
+            && CryptographicOperations.FixedTimeEquals(expected, supplied);
     }
 
     private void Reload(bool throwOnError)
@@ -75,11 +90,17 @@ internal sealed class AdminTokenFile(string path)
             {
                 if (info.LastWriteTimeUtc == _mtime && info.Length == _length)
                     return;
-                FileShape? shape = JsonSerializer.Deserialize<FileShape>(File.ReadAllBytes(path), Json);
+                FileShape? shape = JsonSerializer.Deserialize<FileShape>(
+                    File.ReadAllBytes(path),
+                    Json
+                );
                 TokenEntry[] tokens = shape?.Tokens ?? [];
                 foreach (TokenEntry entry in tokens)
                 {
-                    if (string.IsNullOrWhiteSpace(entry.Name) || string.IsNullOrWhiteSpace(entry.Sha256))
+                    if (
+                        string.IsNullOrWhiteSpace(entry.Name)
+                        || string.IsNullOrWhiteSpace(entry.Sha256)
+                    )
                         throw new JsonException("Every admin token needs a name and a sha256 hash");
                 }
                 _tokens = tokens;
@@ -88,14 +109,22 @@ internal sealed class AdminTokenFile(string path)
                 _warned = false;
             }
         }
-        catch (Exception e) when (e is IOException or JsonException or FileNotFoundException or UnauthorizedAccessException)
+        catch (Exception e)
+            when (e
+                    is IOException
+                        or JsonException
+                        or FileNotFoundException
+                        or UnauthorizedAccessException
+            )
         {
             if (throwOnError)
                 throw new ArgumentException($"Cannot read admin token file '{path}': {e.Message}");
             if (!_warned)
             {
                 _warned = true;
-                Console.Error.WriteLine($"Admin token file '{path}' is unreadable; keeping the previous token set: {e.Message}");
+                Console.Error.WriteLine(
+                    $"Admin token file '{path}' is unreadable; keeping the previous token set: {e.Message}"
+                );
             }
         }
     }

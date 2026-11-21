@@ -33,7 +33,7 @@ namespace ClusterPlugin;
 /// SO A DEPARTURE IS HELD for <see cref="GraceSeconds"/> before it is announced, and cancelled if
 /// the same (SteamId, SerialId) reappears within it; the arrival that cancels it is not announced
 /// either, since nobody was told about the departure. A real logout cannot be confused with this:
-/// re-entering means loading the world, tens of seconds, never the sub-second gaps measured here.
+/// re-entering means loading the world, minutes on a live cluster, never the gaps measured here.
 /// The hold also cannot invent a departure - <see cref="Flush"/> re-checks the merged list at the
 /// moment it would speak, so a player still online is dropped silently however the hold was armed.
 ///
@@ -67,131 +67,182 @@ namespace ClusterPlugin;
 /// </summary>
 public static class ClusterPresenceAnnouncer
 {
-	/// <summary>Off switch, matching the mirror's: CLUSTER_PRESENCE_ANNOUNCE=0 restores silence.</summary>
-	private static readonly bool Enabled =
-		(Environment.GetEnvironmentVariable("CLUSTER_PRESENCE_ANNOUNCE") ?? "1") != "0";
+    /// <summary>Off switch, matching the mirror's: CLUSTER_PRESENCE_ANNOUNCE=0 restores silence.</summary>
+    private static readonly bool Enabled =
+        (Environment.GetEnvironmentVariable("CLUSTER_PRESENCE_ANNOUNCE") ?? "1") != "0";
 
-	/// <summary>SE-1081: CLUSTER_PRESENCE_DIRECT=1 announces Direct Transport players as well.</summary>
-	private static readonly bool AnnounceDirect =
-		Environment.GetEnvironmentVariable("CLUSTER_PRESENCE_DIRECT") == "1";
+    /// <summary>SE-1081: CLUSTER_PRESENCE_DIRECT=1 announces Direct Transport players as well.</summary>
+    private static readonly bool AnnounceDirect =
+        Environment.GetEnvironmentVariable("CLUSTER_PRESENCE_DIRECT") == "1";
 
-	/// <summary>
-	/// How long a departure is held before it is spoken, so a handover gap can cancel it.
-	/// Five seconds is two orders of magnitude above the gaps measured (67 ms - 1.03 s) and two
-	/// orders below a genuine re-entry, which has to load the world first. CLUSTER_PRESENCE_GRACE=0
-	/// announces immediately, restoring the pre-fix behaviour for a bisect.
-	/// </summary>
-	private static readonly double GraceSeconds = ParseGrace();
+    /// <summary>
+    /// How long a departure is held before it is spoken, so a gap in the merged list can cancel it.
+    /// A handover leaves gaps of 67 ms - 1.03 s. SE-1590: a respawn switch leaves far longer ones. A
+    /// dead player previewing a medbay on another node is moved there and drops off its node's report;
+    /// when the target never adopts it, the Gateway gives up after its 10 s ready deadline (20 s for a
+    /// respawn ship, each poll bounded by its 10 s node-call timeout) and moves the client back.
+    /// octahedron-test 2026-11-15 12:48-12:57 CET: a Steam player clicking through spawn points left
+    /// and rejoined the cluster in chat every ~10 s. 45 s covers the longest switch with margin and
+    /// stays below a genuine re-entry, which has to load the world first (2-3 min on that cluster).
+    /// The cost is that a real logout is announced 45 s late. CLUSTER_PRESENCE_GRACE=0 announces
+    /// immediately, restoring the pre-fix behaviour for a bisect.
+    /// </summary>
+    private static readonly double GraceSeconds = ParseGrace();
 
-	private static double ParseGrace()
-	{
-		string raw = Environment.GetEnvironmentVariable("CLUSTER_PRESENCE_GRACE");
-		if (string.IsNullOrWhiteSpace(raw)) return 5.0;
-		return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed)
-			&& parsed >= 0.0 ? parsed : 5.0;
-	}
+    private const double DefaultGraceSeconds = 45.0;
 
-	private static readonly object SyncRoot = new object();
+    private static double ParseGrace()
+    {
+        string raw = Environment.GetEnvironmentVariable("CLUSTER_PRESENCE_GRACE");
+        if (string.IsNullOrWhiteSpace(raw))
+            return DefaultGraceSeconds;
+        return
+            double.TryParse(
+                raw,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out double parsed
+            )
+            && parsed >= 0.0
+            ? parsed
+            : DefaultGraceSeconds;
+    }
 
-	/// <summary>Departures waiting out <see cref="GraceSeconds"/>, keyed as the merged list is.</summary>
-	private static readonly Dictionary<(ulong SteamId, int SerialId), (string Name, DateTime DueAt)> Pending = new();
+    private static readonly object SyncRoot = new object();
 
-	private static Timer m_flushTimer;
+    /// <summary>Departures waiting out <see cref="GraceSeconds"/>, keyed as the merged list is.</summary>
+    private static readonly Dictionary<
+        (ulong SteamId, int SerialId),
+        (string Name, DateTime DueAt)
+    > Pending = new();
 
-	internal static void Install()
-	{
-		OnlinePlayersService.PlayerEnteredCluster += (entry, seeding) => Announce(entry, seeding, true);
-		OnlinePlayersService.PlayerLeftCluster += (entry, seeding) => Announce(entry, seeding, false);
-		// A held departure has to be spoken even if nothing else ever happens in the cluster, so it
-		// cannot be flushed lazily on the next delta - the quiet cluster is exactly the case where
-		// the last player leaving would go unannounced forever.
-		m_flushTimer = new Timer(_ => Flush(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
-	}
+    private static Timer m_flushTimer;
 
-	private static void Announce(OnlinePlayersService.OnlinePlayerEntry entry, bool seeding, bool entered)
-	{
-		// Seeding is the first snapshot this process sees, where every player present is reported as
-		// arriving. Announcing those would have a World Authority restart tell the cluster that
-		// everyone just logged in.
-		if (!Enabled || seeding || !ClusterRuntime.IsClustered || !ClusterRuntime.IsWorldAuthority) return;
-		if (!Announces(entry, AnnounceDirect)) return;
-		var key = (entry.SteamId, entry.SerialId);
-		string name = NameOf(entry);
-		if (entered)
-		{
-			lock (SyncRoot)
-			{
-				// Cancels the held departure AND says nothing itself: the cluster was never told
-				// this player left, so telling it they arrived would be the same false statement
-				// with the halves swapped.
-				if (Pending.Remove(key)) return;
-			}
-			Say(name + " joined the cluster", entry.SteamId, true);
-			return;
-		}
-		if (GraceSeconds <= 0.0)
-		{
-			Say(name + " left the cluster", entry.SteamId, false);
-			return;
-		}
-		lock (SyncRoot)
-			Pending[key] = (name, DateTime.UtcNow.AddSeconds(GraceSeconds));
-	}
+    internal static void Install()
+    {
+        OnlinePlayersService.PlayerEnteredCluster += (entry, seeding) =>
+            Announce(entry, seeding, true);
+        OnlinePlayersService.PlayerLeftCluster += (entry, seeding) =>
+            Announce(entry, seeding, false);
+        // A held departure has to be spoken even if nothing else ever happens in the cluster, so it
+        // cannot be flushed lazily on the next delta - the quiet cluster is exactly the case where
+        // the last player leaving would go unannounced forever.
+        m_flushTimer = new Timer(
+            _ => Flush(),
+            null,
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(1)
+        );
+    }
 
-	/// <summary>
-	/// Whether a login or logout of this entry is worth a chat line. A second character on the same
-	/// account is not a second person arriving, and a Direct Transport client is a bot (SE-1081).
-	/// </summary>
-	internal static bool Announces(OnlinePlayersService.OnlinePlayerEntry entry, bool announceDirect) =>
-		entry.SerialId == 0 && (announceDirect || !entry.DirectTransport);
+    private static void Announce(
+        OnlinePlayersService.OnlinePlayerEntry entry,
+        bool seeding,
+        bool entered
+    )
+    {
+        // Seeding is the first snapshot this process sees, where every player present is reported as
+        // arriving. Announcing those would have a World Authority restart tell the cluster that
+        // everyone just logged in.
+        if (!Enabled || seeding || !ClusterRuntime.IsClustered || !ClusterRuntime.IsWorldAuthority)
+            return;
+        if (!Announces(entry, AnnounceDirect))
+            return;
+        var key = (entry.SteamId, entry.SerialId);
+        string name = NameOf(entry);
+        if (entered)
+        {
+            lock (SyncRoot)
+            {
+                // Cancels the held departure AND says nothing itself: the cluster was never told
+                // this player left, so telling it they arrived would be the same false statement
+                // with the halves swapped.
+                if (Pending.Remove(key))
+                    return;
+            }
+            Say(name + " joined the cluster", entry.SteamId, true);
+            return;
+        }
+        if (GraceSeconds <= 0.0)
+        {
+            Say(name + " left the cluster", entry.SteamId, false);
+            return;
+        }
+        lock (SyncRoot)
+            Pending[key] = (name, DateTime.UtcNow.AddSeconds(GraceSeconds));
+    }
 
-	/// <summary>Speak the departures whose grace has run out and that are really gone.</summary>
-	private static void Flush()
-	{
-		if (Pending.Count == 0) return;
-		List<(ulong SteamId, int SerialId, string Name)> due = null;
-		DateTime now = DateTime.UtcNow;
-		lock (SyncRoot)
-		{
-			foreach (var pair in Pending)
-			{
-				if (pair.Value.DueAt > now) continue;
-				(due ??= new List<(ulong, int, string)>())
-					.Add((pair.Key.SteamId, pair.Key.SerialId, pair.Value.Name));
-			}
-			foreach (var row in due ?? Enumerable.Empty<(ulong SteamId, int SerialId, string Name)>())
-				Pending.Remove((row.SteamId, row.SerialId));
-		}
-		if (due == null) return;
-		// Losing authority, or a snapshot that re-adds the player without raising an Entered delta,
-		// would otherwise have us announce a departure for somebody sitting in the world. The
-		// merged list is the authority on who is here; the hold is only what gives us time to ask.
-		OnlinePlayersService.OnlinePlayerEntry[] present =
-			ClusterRuntime.IsWorldAuthority ? OnlinePlayersService.Cluster : null;
-		if (present == null) return;
-		foreach (var row in due)
-		{
-			if (present.Any(e => e.SteamId == row.SteamId && e.SerialId == row.SerialId)) continue;
-			Say(row.Name + " left the cluster", row.SteamId, false);
-		}
-	}
+    /// <summary>
+    /// Whether a login or logout of this entry is worth a chat line. A second character on the same
+    /// account is not a second person arriving, and a Direct Transport client is a bot (SE-1081).
+    /// </summary>
+    internal static bool Announces(
+        OnlinePlayersService.OnlinePlayerEntry entry,
+        bool announceDirect
+    ) => entry.SerialId == 0 && (announceDirect || !entry.DirectTransport);
 
-	private static string NameOf(OnlinePlayersService.OnlinePlayerEntry entry) =>
-		string.IsNullOrEmpty(entry.Name) ? entry.SteamId.ToString() : entry.Name;
+    /// <summary>Speak the departures whose grace has run out and that are really gone.</summary>
+    private static void Flush()
+    {
+        if (Pending.Count == 0)
+            return;
+        List<(ulong SteamId, int SerialId, string Name)> due = null;
+        DateTime now = DateTime.UtcNow;
+        lock (SyncRoot)
+        {
+            foreach (var pair in Pending)
+            {
+                if (pair.Value.DueAt > now)
+                    continue;
+                (due ??= new List<(ulong, int, string)>()).Add(
+                    (pair.Key.SteamId, pair.Key.SerialId, pair.Value.Name)
+                );
+            }
+            foreach (
+                var row in due ?? Enumerable.Empty<(ulong SteamId, int SerialId, string Name)>()
+            )
+                Pending.Remove((row.SteamId, row.SerialId));
+        }
+        if (due == null)
+            return;
+        // Losing authority, or a snapshot that re-adds the player without raising an Entered delta,
+        // would otherwise have us announce a departure for somebody sitting in the world. The
+        // merged list is the authority on who is here; the hold is only what gives us time to ask.
+        OnlinePlayersService.OnlinePlayerEntry[] present = ClusterRuntime.IsWorldAuthority
+            ? OnlinePlayersService.Cluster
+            : null;
+        if (present == null)
+            return;
+        foreach (var row in due)
+        {
+            if (present.Any(e => e.SteamId == row.SteamId && e.SerialId == row.SerialId))
+                continue;
+            Say(row.Name + " left the cluster", row.SteamId, false);
+        }
+    }
 
-	private static void Say(string line, ulong steamId, bool entered)
-	{
-		try
-		{
-			ChatAuthorityPatch.SendFromControl(Sync.MyId, line);
-		}
-		catch (Exception exception)
-		{
-			// Raised on the global-state-channel thread, or on the flush timer: a throw here would
-			// stop the remaining delta handlers, and an announcement is the least important thing
-			// in this pipeline.
-			Console.WriteLine("[ClusterPlugin] presence announcement failed steam=" + steamId
-				+ " entered=" + entered + ": " + exception);
-		}
-	}
+    private static string NameOf(OnlinePlayersService.OnlinePlayerEntry entry) =>
+        string.IsNullOrEmpty(entry.Name) ? entry.SteamId.ToString() : entry.Name;
+
+    private static void Say(string line, ulong steamId, bool entered)
+    {
+        try
+        {
+            ChatAuthorityPatch.SendFromControl(Sync.MyId, line);
+        }
+        catch (Exception exception)
+        {
+            // Raised on the global-state-channel thread, or on the flush timer: a throw here would
+            // stop the remaining delta handlers, and an announcement is the least important thing
+            // in this pipeline.
+            Console.WriteLine(
+                "[ClusterPlugin] presence announcement failed steam="
+                    + steamId
+                    + " entered="
+                    + entered
+                    + ": "
+                    + exception
+            );
+        }
+    }
 }

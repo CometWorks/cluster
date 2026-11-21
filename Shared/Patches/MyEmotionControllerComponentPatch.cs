@@ -22,22 +22,36 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyEmotionControllerComponent), nameof(MyEmotionControllerComponent.Serialize))]
 public static class MyEmotionControllerComponentPatch
 {
-	private static long s_guarded;
+    private static long s_guarded;
 
-	[HarmonyPrefix]
-	private static bool Prefix(MyEmotionControllerComponent __instance, ref MyObjectBuilder_ComponentBase __result)
-	{
-		if (__instance.m_selectedLCDsIds?.Value != null) return true;
-		if (MyComponentFactory.Static.CreateObjectBuilder(__instance) is not MyObjectBuilder_EmotionControllerComponent builder) return true;
-		builder.RemoveExistingComponentOnNewInsert = __instance.RemoveExistingComponentOnNewInsert;
-		MyObjectBuilder_EmotionControllerComponent loaded = __instance.m_deserializeBuilder;
-		builder.SelectedLCDsIds = loaded?.SelectedLCDsIds != null
-			? new List<long>(loaded.SelectedLCDsIds)
-			: new List<long> { __instance.Entity?.EntityId ?? 0 };
-		builder.SelectedEmotionSubtype = loaded != null ? loaded.SelectedEmotionSubtype : __instance.m_selectedEmotionSubtype?.Value ?? "";
-		__result = builder;
-		if (++s_guarded <= 5 || s_guarded % 100 == 0)
-			MyLog.Default?.WriteLine($"emotion_controller_serialize_guard entity={__instance.Entity?.EntityId} fromBuilder={loaded != null} count={s_guarded} (T-0316)");
-		return false;
-	}
+    [HarmonyPrefix]
+    private static bool Prefix(
+        MyEmotionControllerComponent __instance,
+        ref MyObjectBuilder_ComponentBase __result
+    )
+    {
+        if (__instance.m_selectedLCDsIds?.Value != null)
+            return true;
+        if (
+            MyComponentFactory.Static.CreateObjectBuilder(__instance)
+            is not MyObjectBuilder_EmotionControllerComponent builder
+        )
+            return true;
+        builder.RemoveExistingComponentOnNewInsert = __instance.RemoveExistingComponentOnNewInsert;
+        MyObjectBuilder_EmotionControllerComponent loaded = __instance.m_deserializeBuilder;
+        builder.SelectedLCDsIds =
+            loaded?.SelectedLCDsIds != null
+                ? new List<long>(loaded.SelectedLCDsIds)
+                : new List<long> { __instance.Entity?.EntityId ?? 0 };
+        builder.SelectedEmotionSubtype =
+            loaded != null
+                ? loaded.SelectedEmotionSubtype
+                : __instance.m_selectedEmotionSubtype?.Value ?? "";
+        __result = builder;
+        if (++s_guarded <= 5 || s_guarded % 100 == 0)
+            MyLog.Default?.WriteLine(
+                $"emotion_controller_serialize_guard entity={__instance.Entity?.EntityId} fromBuilder={loaded != null} count={s_guarded} (T-0316)"
+            );
+        return false;
+    }
 }

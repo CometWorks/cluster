@@ -2,8 +2,8 @@ using System;
 using System.Runtime.CompilerServices;
 using ClusterPlugin;
 using HarmonyLib;
-using Sandbox.Game.Multiplayer;
 using Sandbox.Game.GameSystems;
+using Sandbox.Game.Multiplayer;
 using SpaceEngineers.Game.Entities.Blocks;
 using VRage.Utils;
 
@@ -34,9 +34,11 @@ public static class MyAirVentPatch
     private sealed class State
     {
         public Action Handler;
+
         // How many publishes this vent has made since it was added to the scene, so the first few after
         // an import can be logged without spamming a long-lived block.
         public int PublishTraceCount;
+
         // The value before vanilla's UpdateAfterSimulation100 write, for the postfix trace.
         public MyAirVentBlockRoomInfo Previous;
     }
@@ -119,11 +121,19 @@ public static class MyAirVentPatch
         if (!Sync.IsServer)
             return;
         MyOxygenBlock oxygenBlock = vent.GetOxygenBlock();
-        bool isRoomAirtight = oxygenBlock != null && oxygenBlock.Room != null && oxygenBlock.Room.IsAirtight;
-        float roomEnvironmentOxygen = (oxygenBlock != null && oxygenBlock.Room != null) ? oxygenBlock.Room.EnvironmentOxygen : 0f;
+        bool isRoomAirtight =
+            oxygenBlock != null && oxygenBlock.Room != null && oxygenBlock.Room.IsAirtight;
+        float roomEnvironmentOxygen =
+            (oxygenBlock != null && oxygenBlock.Room != null)
+                ? oxygenBlock.Room.EnvironmentOxygen
+                : 0f;
         float oxygenLevel = oxygenBlock?.OxygenLevel(vent.CubeGrid.GridSize) ?? 0f;
         MyAirVentBlockRoomInfo previous = vent.m_blockRoomInfo.Value;
-        vent.m_blockRoomInfo.Value = new MyAirVentBlockRoomInfo(isRoomAirtight, oxygenLevel, roomEnvironmentOxygen);
+        vent.m_blockRoomInfo.Value = new MyAirVentBlockRoomInfo(
+            isRoomAirtight,
+            oxygenLevel,
+            roomEnvironmentOxygen
+        );
         if (States.TryGetValue(vent, out var state) && state.PublishTraceCount < 6)
             Trace(vent, state, previous);
     }
@@ -135,15 +145,27 @@ public static class MyAirVentPatch
     {
         state.PublishTraceCount++;
         MyAirVentBlockRoomInfo current = vent.m_blockRoomInfo.Value;
-        bool sent = previous.IsRoomAirtight != current.IsRoomAirtight
+        bool sent =
+            previous.IsRoomAirtight != current.IsRoomAirtight
             || previous.OxygenLevel != current.OxygenLevel
             || previous.RoomEnvironmentOxygen != current.RoomEnvironmentOxygen;
         MyLog.Default.WriteLineAndConsole(
-            "[AirVentPublish] grid=" + (vent.CubeGrid != null ? vent.CubeGrid.EntityId : 0L)
-            + " block=" + vent.EntityId
-            + " n=" + state.PublishTraceCount
-            + " sent=" + sent
-            + " wasAirtight=" + previous.IsRoomAirtight + " wasOxygen=" + previous.OxygenLevel
-            + " nowAirtight=" + current.IsRoomAirtight + " nowOxygen=" + current.OxygenLevel);
+            "[AirVentPublish] grid="
+                + (vent.CubeGrid != null ? vent.CubeGrid.EntityId : 0L)
+                + " block="
+                + vent.EntityId
+                + " n="
+                + state.PublishTraceCount
+                + " sent="
+                + sent
+                + " wasAirtight="
+                + previous.IsRoomAirtight
+                + " wasOxygen="
+                + previous.OxygenLevel
+                + " nowAirtight="
+                + current.IsRoomAirtight
+                + " nowOxygen="
+                + current.OxygenLevel
+        );
     }
 }

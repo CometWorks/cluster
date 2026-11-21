@@ -28,6 +28,7 @@ public class PluginConfig : IPluginConfig
     }
 
     private bool enabled = true;
+
     // TODO: Implement your config fields here
     // The default values here will apply to Client and Dedicated.
     // The default values for Torch are defined in TorchPlugin.

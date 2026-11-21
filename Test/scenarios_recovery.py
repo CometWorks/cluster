@@ -1171,6 +1171,32 @@ def p2_hang_01(bench) -> None:
 
 p2_hang_01.regular_nodes = 3
 
+def p1_strhash_01(bench) -> None:
+    """SE-1606: a script parsing a definition id whose subtype has the hash of a known string hung the game thread for
+    good (vanilla MyStringHash waits on its own lock to format the duplicate key error), and three nodes were fenced on
+    octahedron-test. DotNetCompat's MyStringHashPatch fixes it. The node self-test `string-hash-collision` registers a
+    colliding pair on worker threads: each attempt must throw within 5 s (the section fails at once if the patch is not
+    loaded). The node then still answers a request served by the game thread."""
+    bench.start_cluster(nodes=["node-1", "wa-1"])
+    try:
+        section = bench.cluster.node("node-1", "/self-test?section=string-hash-collision")
+    except ClusterError as error:
+        section = {"error": str(error)}
+    bench.record("self-test-string-hash-collision", section)
+    bench.check("node self-test section `string-hash-collision` passes",
+                section.get("ok") is True and "string-hash-collision" in section.get("ran", []), json.dumps(section)[:400])
+    answered = []
+    for _ in range(3):
+        try:
+            answered.append("partitions" in bench.cluster.node("node-1", "/partitions", timeout=40))
+        except Exception as error:  # noqa: BLE001
+            answered.append(str(error)[:200])
+        time.sleep(2)
+    bench.check("the game thread still answers /partitions after the collision", answered == [True] * 3, json.dumps(answered))
+    bench.check("the collision is logged", bool(_lines(bench, "node-1", r"\[DotNetCompat\] MyStringHash collision")))
+    bench.exercised(selfTestSections=["string-hash-collision"])
+
+
 SCENARIOS_RECOVERY = {
     "P1-DRAIN-01": (p1_drain_01, "registry-driven drain", "3"),
     "P1-REC-05a": (p1_rec_05a, "graceful drain-and-rotate", "4"),
@@ -1186,4 +1212,5 @@ SCENARIOS_RECOVERY = {
     "P2-WAR-03": (p2_war_03, "a global save that does not land shows in the status, and a refusal logs the Registry's answer", "3"),
     "P2-WAR-04": (p2_war_04, "a SIGTERM of the Gateway keeps the newest save rows and the nodes stay up", "3"),
     "P2-HANG-01": (p2_hang_01, "a hung node that owns nothing logs its stacks before its exit watchdog ends it (SE-883)", "3"),
+    "P1-STRHASH-01": (p1_strhash_01, "a MyStringHash collision throws instead of hanging the game thread (SE-1606)", "1"),
 }

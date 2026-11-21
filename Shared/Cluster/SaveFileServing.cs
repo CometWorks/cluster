@@ -32,22 +32,40 @@ public sealed class SaveFileWorker : IDisposable
             {
                 foreach (Action work in m_work.GetConsumingEnumerable())
                 {
-                    try { work(); }
-                    catch (Exception error) { failed(error); }
+                    try
+                    {
+                        work();
+                    }
+                    catch (Exception error)
+                    {
+                        failed(error);
+                    }
                 }
-            }) { Name = "ClusterSaveFile-" + i, IsBackground = true }.Start();
+            })
+            {
+                Name = "ClusterSaveFile-" + i,
+                IsBackground = true,
+            }.Start();
     }
 
     /// <summary>Whether the request is one this worker serves: a save file read.</summary>
     public static bool Serves(string method, string path) =>
-        method == "GET" && path.TrimEnd('/').EndsWith("/save-file", StringComparison.OrdinalIgnoreCase);
+        method == "GET"
+        && path.TrimEnd('/').EndsWith("/save-file", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Queues <paramref name="handle"/> when the request is a save file read (true); else the caller handles it inline.</summary>
     public bool Dispatch(string method, string path, Action handle)
     {
-        if (Inline || !Serves(method, path)) return false;
-        try { m_work.Add(handle); }
-        catch (InvalidOperationException) { return false; }   // disposed: the listener is stopping
+        if (Inline || !Serves(method, path))
+            return false;
+        try
+        {
+            m_work.Add(handle);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        } // disposed: the listener is stopping
         return true;
     }
 
@@ -64,7 +82,14 @@ public static class SaveFileStream
     /// </summary>
     public static FileStream Open(string path, long offset)
     {
-        var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 81920, FileOptions.SequentialScan);
+        var file = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            81920,
+            FileOptions.SequentialScan
+        );
         if (offset < 0 || offset > file.Length)
         {
             file.Dispose();
@@ -82,7 +107,8 @@ public static class SaveFileStream
         while (count > 0)
         {
             int read = file.Read(buffer, 0, (int)Math.Min(buffer.Length, count));
-            if (read <= 0) throw new EndOfStreamException("Save file ended " + count + " byte(s) early");
+            if (read <= 0)
+                throw new EndOfStreamException("Save file ended " + count + " byte(s) early");
             output.Write(buffer, 0, read);
             count -= read;
         }

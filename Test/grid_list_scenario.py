@@ -49,6 +49,8 @@ FAR = PREFIX + "Far"
 OLD = PREFIX + "Old"
 NEW = PREFIX + "New"
 LAST = PREFIX + "Last"
+# SE-1727: named as Magnetar names a hub build (cache folder + random suffix), never just Essentials
+HUB_ASSEMBLY = "Essentials-f130e28c_se1727"
 
 
 def build() -> None:
@@ -56,12 +58,13 @@ def build() -> None:
     out = PLUGINS / ".build"
     subprocess.run(
         ["nice", "dotnet", "build", str(REPO / "ServerPlugin/ServerPlugin.csproj"), "-c", "Release",
-         "--nologo", "-v", "q", f"-p:Magnetar={os.environ['MAGNETAR_HOME']}", "-o", str(out)],
+         "--nologo", "-v", "q", f"-p:Magnetar={os.environ['MAGNETAR_HOME']}", f"-p:AssemblyName={HUB_ASSEMBLY}",
+         "-o", str(out)],
         check=True,
     )  # fmt: skip
     folder = PLUGINS / "Essentials"
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "Essentials.dll").write_bytes((out / "Essentials.dll").read_bytes())
+    (folder / "Essentials.dll").write_bytes((out / f"{HUB_ASSEMBLY}.dll").read_bytes())
     (folder / "Essentials.xml").write_text(
         '<?xml version="1.0"?>\n<PluginData xmlns:xsd="http://www.w3.org/2001/XMLSchema" '
         'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="GitHubPlugin">'

@@ -29,6 +29,7 @@ internal interface ITrackedCollection
 {
     void Attach(IRegistryChangeSink? sink, string table);
     Type RowType { get; }
+
     /// <summary>Whether the collection holds <paramref name="key"/>, and its row (null for a set).</summary>
     bool TryGetRow(object key, out object? row);
     IEnumerable<KeyValuePair<object, object?>> Rows();
@@ -36,46 +37,61 @@ internal interface ITrackedCollection
     object ParseKey(string key);
 }
 
-internal sealed class TrackedDictionary<TKey, TValue> : Dictionary<TKey, TValue>, ITrackedCollection where TKey : notnull
+internal sealed class TrackedDictionary<TKey, TValue> : Dictionary<TKey, TValue>, ITrackedCollection
+    where TKey : notnull
 {
     private IRegistryChangeSink? _sink;
     private string _table = "";
 
     public TrackedDictionary() { }
-    public TrackedDictionary(IEqualityComparer<TKey>? comparer) : base(comparer) { }
+
+    public TrackedDictionary(IEqualityComparer<TKey>? comparer)
+        : base(comparer) { }
 
     public new TValue this[TKey key]
     {
         get => base[key];
-        set { base[key] = value; _sink?.Changed(_table, key); }
+        set
+        {
+            base[key] = value;
+            _sink?.Changed(_table, key);
+        }
     }
 
-    public new void Add(TKey key, TValue value) { base.Add(key, value); _sink?.Changed(_table, key); }
+    public new void Add(TKey key, TValue value)
+    {
+        base.Add(key, value);
+        _sink?.Changed(_table, key);
+    }
 
     public new bool TryAdd(TKey key, TValue value)
     {
-        if (!base.TryAdd(key, value)) return false;
+        if (!base.TryAdd(key, value))
+            return false;
         _sink?.Changed(_table, key);
         return true;
     }
 
     public new bool Remove(TKey key)
     {
-        if (!base.Remove(key)) return false;
+        if (!base.Remove(key))
+            return false;
         _sink?.Changed(_table, key);
         return true;
     }
 
     public new bool Remove(TKey key, [MaybeNullWhen(false)] out TValue value)
     {
-        if (!base.Remove(key, out value)) return false;
+        if (!base.Remove(key, out value))
+            return false;
         _sink?.Changed(_table, key);
         return true;
     }
 
     public new void Clear()
     {
-        if (Count == 0) return;
+        if (Count == 0)
+            return;
         base.Clear();
         _sink?.Reset(_table);
     }
@@ -83,50 +99,78 @@ internal sealed class TrackedDictionary<TKey, TValue> : Dictionary<TKey, TValue>
     /// <summary>The row under <paramref name="key"/> was changed in place.</summary>
     public void Touch(TKey key) => _sink?.Changed(_table, key);
 
-    void ITrackedCollection.Attach(IRegistryChangeSink? sink, string table) { _sink = sink; _table = table; }
+    void ITrackedCollection.Attach(IRegistryChangeSink? sink, string table)
+    {
+        _sink = sink;
+        _table = table;
+    }
+
     Type ITrackedCollection.RowType => typeof(TValue);
+
     bool ITrackedCollection.TryGetRow(object key, out object? row)
     {
         bool found = base.TryGetValue((TKey)key, out TValue? value);
         row = value;
         return found;
     }
-    IEnumerable<KeyValuePair<object, object?>> ITrackedCollection.Rows() => this.Select(x => new KeyValuePair<object, object?>(x.Key, x.Value));
+
+    IEnumerable<KeyValuePair<object, object?>> ITrackedCollection.Rows() =>
+        this.Select(x => new KeyValuePair<object, object?>(x.Key, x.Value));
+
     void ITrackedCollection.LoadRow(object key, object? row) => base[(TKey)key] = (TValue)row!;
+
     object ITrackedCollection.ParseKey(string key) => RegistryStore.ParseKey<TKey>(key);
 }
 
-internal sealed class TrackedSet<T> : HashSet<T>, ITrackedCollection where T : notnull
+internal sealed class TrackedSet<T> : HashSet<T>, ITrackedCollection
+    where T : notnull
 {
     private IRegistryChangeSink? _sink;
     private string _table = "";
 
     public new bool Add(T item)
     {
-        if (!base.Add(item)) return false;
+        if (!base.Add(item))
+            return false;
         _sink?.Changed(_table, item);
         return true;
     }
 
     public new bool Remove(T item)
     {
-        if (!base.Remove(item)) return false;
+        if (!base.Remove(item))
+            return false;
         _sink?.Changed(_table, item);
         return true;
     }
 
     public new void Clear()
     {
-        if (Count == 0) return;
+        if (Count == 0)
+            return;
         base.Clear();
         _sink?.Reset(_table);
     }
 
-    void ITrackedCollection.Attach(IRegistryChangeSink? sink, string table) { _sink = sink; _table = table; }
+    void ITrackedCollection.Attach(IRegistryChangeSink? sink, string table)
+    {
+        _sink = sink;
+        _table = table;
+    }
+
     Type ITrackedCollection.RowType => typeof(bool);
-    bool ITrackedCollection.TryGetRow(object key, out object? row) { row = null; return base.Contains((T)key); }
-    IEnumerable<KeyValuePair<object, object?>> ITrackedCollection.Rows() => this.Select(x => new KeyValuePair<object, object?>(x, null));
+
+    bool ITrackedCollection.TryGetRow(object key, out object? row)
+    {
+        row = null;
+        return base.Contains((T)key);
+    }
+
+    IEnumerable<KeyValuePair<object, object?>> ITrackedCollection.Rows() =>
+        this.Select(x => new KeyValuePair<object, object?>(x, null));
+
     void ITrackedCollection.LoadRow(object key, object? row) => base.Add((T)key);
+
     object ITrackedCollection.ParseKey(string key) => RegistryStore.ParseKey<T>(key);
 }
 
@@ -143,48 +187,123 @@ internal sealed class TrackedList<T> : List<T>, ITrackedCollection
     public new T this[int index]
     {
         get => base[index];
-        set { base[index] = value; _sink?.Changed(_table, (long)index); }
+        set
+        {
+            base[index] = value;
+            _sink?.Changed(_table, (long)index);
+        }
     }
 
-    public new void Add(T item) { base.Add(item); _sink?.Changed(_table, (long)(Count - 1)); }
+    public new void Add(T item)
+    {
+        base.Add(item);
+        _sink?.Changed(_table, (long)(Count - 1));
+    }
 
     public new void AddRange(IEnumerable<T> items)
     {
         int from = Count;
         base.AddRange(items);
-        for (int index = from; index < Count; index++) _sink?.Changed(_table, (long)index);
+        for (int index = from; index < Count; index++)
+            _sink?.Changed(_table, (long)index);
     }
 
-    public new void Insert(int index, T item) { base.Insert(index, item); _sink?.Reset(_table); }
-    public new bool Remove(T item) { if (!base.Remove(item)) return false; _sink?.Reset(_table); return true; }
-    public new void RemoveAt(int index) { base.RemoveAt(index); _sink?.Reset(_table); }
-    public new void RemoveRange(int index, int count) { base.RemoveRange(index, count); if (count > 0) _sink?.Reset(_table); }
-    public new int RemoveAll(Predicate<T> match) { int removed = base.RemoveAll(match); if (removed > 0) _sink?.Reset(_table); return removed; }
-    public new void Clear() { if (Count == 0) return; base.Clear(); _sink?.Reset(_table); }
-    public new void Sort() { base.Sort(); _sink?.Reset(_table); }
-    public new void Sort(Comparison<T> comparison) { base.Sort(comparison); _sink?.Reset(_table); }
-    public new void Reverse() { base.Reverse(); _sink?.Reset(_table); }
+    public new void Insert(int index, T item)
+    {
+        base.Insert(index, item);
+        _sink?.Reset(_table);
+    }
+
+    public new bool Remove(T item)
+    {
+        if (!base.Remove(item))
+            return false;
+        _sink?.Reset(_table);
+        return true;
+    }
+
+    public new void RemoveAt(int index)
+    {
+        base.RemoveAt(index);
+        _sink?.Reset(_table);
+    }
+
+    public new void RemoveRange(int index, int count)
+    {
+        base.RemoveRange(index, count);
+        if (count > 0)
+            _sink?.Reset(_table);
+    }
+
+    public new int RemoveAll(Predicate<T> match)
+    {
+        int removed = base.RemoveAll(match);
+        if (removed > 0)
+            _sink?.Reset(_table);
+        return removed;
+    }
+
+    public new void Clear()
+    {
+        if (Count == 0)
+            return;
+        base.Clear();
+        _sink?.Reset(_table);
+    }
+
+    public new void Sort()
+    {
+        base.Sort();
+        _sink?.Reset(_table);
+    }
+
+    public new void Sort(Comparison<T> comparison)
+    {
+        base.Sort(comparison);
+        _sink?.Reset(_table);
+    }
+
+    public new void Reverse()
+    {
+        base.Reverse();
+        _sink?.Reset(_table);
+    }
 
     public void Touch(int index) => _sink?.Changed(_table, (long)index);
 
-    void ITrackedCollection.Attach(IRegistryChangeSink? sink, string table) { _sink = sink; _table = table; }
+    void ITrackedCollection.Attach(IRegistryChangeSink? sink, string table)
+    {
+        _sink = sink;
+        _table = table;
+    }
+
     Type ITrackedCollection.RowType => typeof(T);
+
     bool ITrackedCollection.TryGetRow(object key, out object? row)
     {
         long index = (long)key;
-        if (index < 0 || index >= Count) { row = null; return false; }
+        if (index < 0 || index >= Count)
+        {
+            row = null;
+            return false;
+        }
         row = base[(int)index];
         return true;
     }
+
     IEnumerable<KeyValuePair<object, object?>> ITrackedCollection.Rows()
     {
-        for (int index = 0; index < Count; index++) yield return new KeyValuePair<object, object?>((long)index, base[index]);
+        for (int index = 0; index < Count; index++)
+            yield return new KeyValuePair<object, object?>((long)index, base[index]);
     }
+
     void ITrackedCollection.LoadRow(object key, object? row)
     {
-        if ((long)key != Count) throw new InvalidDataException($"Registry table {_table} is missing row {Count}");
+        if ((long)key != Count)
+            throw new InvalidDataException($"Registry table {_table} is missing row {Count}");
         base.Add((T)row!);
     }
+
     object ITrackedCollection.ParseKey(string key) => long.Parse(key, CultureInfo.InvariantCulture);
 }
 
@@ -216,7 +335,10 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
     /// answer "does this partition have a durable save" from a small in-memory summary.
     /// </summary>
     public const string ArchiveTable = "ArchivedSaves";
-    private SqliteCommand _archiveInsert = null!, _archiveDelete = null!, _archiveSelect = null!;
+    private SqliteCommand _archiveInsert = null!,
+        _archiveDelete = null!,
+        _archiveSelect = null!;
+
     /// <summary>Archive changes for the next <see cref="Write"/>, in order: (partition, key, row) inserts one
     /// save, (partition, null, null) removes every archived save of that partition.</summary>
     private readonly List<(ulong Partition, string? Key, ArchivedRow? Row)> _archiveOps = [];
@@ -234,12 +356,22 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
     /// archived save row.
     /// </summary>
     public const string StampTable = "ArchiveRetention";
+
     internal sealed record ArchiveStamp(long ArchivedMs, bool Swept, int Legacy);
+
     /// <summary>Stamp changes for the next <see cref="Write"/>, in order (null: the stamp is removed).</summary>
     private readonly List<(ulong Partition, ArchiveStamp? Stamp)> _stampOps = [];
-    private SqliteCommand _stampUpsert = null!, _stampDelete = null!, _stampDue = null!, _stampRead = null!;
+    private SqliteCommand _stampUpsert = null!,
+        _stampDelete = null!,
+        _stampDue = null!,
+        _stampRead = null!;
 
-    private sealed class Statements(SqliteCommand upsert, SqliteCommand delete, SqliteCommand clear, SqliteCommand select)
+    private sealed class Statements(
+        SqliteCommand upsert,
+        SqliteCommand delete,
+        SqliteCommand clear,
+        SqliteCommand select
+    )
     {
         public readonly SqliteCommand Upsert = upsert;
         public readonly SqliteCommand Delete = delete;
@@ -257,11 +389,17 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
     public RegistryStore(string directory, Type stateType)
     {
         _path = Path.Combine(directory, FileName);
-        _tracked = stateType.GetProperties()
+        _tracked = stateType
+            .GetProperties()
             .Where(p => typeof(ITrackedCollection).IsAssignableFrom(p.PropertyType))
             .ToDictionary(p => p.Name, StringComparer.Ordinal);
-        _small = stateType.GetProperties().Where(p => !_tracked.ContainsKey(p.Name) && IsPersisted(p)).ToArray();
-        _db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = _path, Pooling = false }.ToString());
+        _small = stateType
+            .GetProperties()
+            .Where(p => !_tracked.ContainsKey(p.Name) && IsPersisted(p))
+            .ToArray();
+        _db = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = _path, Pooling = false }.ToString()
+        );
         try
         {
             _db.Open();
@@ -270,7 +408,10 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
         catch (SqliteException error)
         {
             _db.Dispose();
-            throw new InvalidDataException($"Registry store {_path} is unreadable: {error.Message}", error);
+            throw new InvalidDataException(
+                $"Registry store {_path} is unreadable: {error.Message}",
+                error
+            );
         }
     }
 
@@ -285,37 +426,78 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
         {
             Execute($"CREATE TABLE IF NOT EXISTS \"{table}\"(k TEXT NOT NULL PRIMARY KEY, v BLOB)");
             _statements[table] = new Statements(
-                Prepare($"INSERT INTO \"{table}\"(k, v) VALUES($k, $v) ON CONFLICT(k) DO UPDATE SET v = excluded.v", "$k", "$v"),
+                Prepare(
+                    $"INSERT INTO \"{table}\"(k, v) VALUES($k, $v) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                    "$k",
+                    "$v"
+                ),
                 Prepare($"DELETE FROM \"{table}\" WHERE k = $k", "$k"),
                 Prepare($"DELETE FROM \"{table}\""),
-                Prepare($"SELECT v FROM \"{table}\" WHERE k = $k", "$k"));
+                Prepare($"SELECT v FROM \"{table}\" WHERE k = $k", "$k")
+            );
         }
-        Execute($"CREATE TABLE IF NOT EXISTS \"{ArchiveTable}\"(k TEXT NOT NULL PRIMARY KEY, p INTEGER NOT NULL, g INTEGER NOT NULL, l INTEGER NOT NULL, v BLOB)");
+        Execute(
+            $"CREATE TABLE IF NOT EXISTS \"{ArchiveTable}\"(k TEXT NOT NULL PRIMARY KEY, p INTEGER NOT NULL, g INTEGER NOT NULL, l INTEGER NOT NULL, v BLOB)"
+        );
         Execute($"CREATE INDEX IF NOT EXISTS \"{ArchiveTable}_p\" ON \"{ArchiveTable}\"(p)");
-        _archiveInsert = PrepareTyped($"INSERT INTO \"{ArchiveTable}\"(k, p, g, l, v) VALUES($k, $p, $g, $l, $v) ON CONFLICT(k) DO UPDATE SET p = excluded.p, g = excluded.g, l = excluded.l, v = excluded.v",
-            ("$k", SqliteType.Text), ("$p", SqliteType.Integer), ("$g", SqliteType.Integer), ("$l", SqliteType.Integer), ("$v", SqliteType.Blob));
-        _archiveDelete = PrepareTyped($"DELETE FROM \"{ArchiveTable}\" WHERE p = $p", ("$p", SqliteType.Integer));
-        _archiveSelect = PrepareTyped($"SELECT k, g, l, v FROM \"{ArchiveTable}\" WHERE p = $p ORDER BY rowid", ("$p", SqliteType.Integer));
+        _archiveInsert = PrepareTyped(
+            $"INSERT INTO \"{ArchiveTable}\"(k, p, g, l, v) VALUES($k, $p, $g, $l, $v) ON CONFLICT(k) DO UPDATE SET p = excluded.p, g = excluded.g, l = excluded.l, v = excluded.v",
+            ("$k", SqliteType.Text),
+            ("$p", SqliteType.Integer),
+            ("$g", SqliteType.Integer),
+            ("$l", SqliteType.Integer),
+            ("$v", SqliteType.Blob)
+        );
+        _archiveDelete = PrepareTyped(
+            $"DELETE FROM \"{ArchiveTable}\" WHERE p = $p",
+            ("$p", SqliteType.Integer)
+        );
+        _archiveSelect = PrepareTyped(
+            $"SELECT k, g, l, v FROM \"{ArchiveTable}\" WHERE p = $p ORDER BY rowid",
+            ("$p", SqliteType.Integer)
+        );
         using SqliteCommand count = _db.CreateCommand();
         count.CommandText = $"SELECT COUNT(*) FROM \"{ArchiveTable}\"";
         ArchivedRows = (long)count.ExecuteScalar()!;
         // T-0400. The partial index holds only partitions still to sweep, in archive order: the pass reads the due
         // ones from it in bounded slices, and the swept ones (most of the table, eventually) cost it nothing.
-        Execute($"CREATE TABLE IF NOT EXISTS \"{StampTable}\"(p INTEGER NOT NULL PRIMARY KEY, a INTEGER NOT NULL, s INTEGER NOT NULL, n INTEGER NOT NULL)");
-        Execute($"CREATE INDEX IF NOT EXISTS \"{StampTable}_due\" ON \"{StampTable}\"(a, p) WHERE s = 0");
-        _stampUpsert = PrepareTyped($"INSERT INTO \"{StampTable}\"(p, a, s, n) VALUES($p, $a, $s, $n) ON CONFLICT(p) DO UPDATE SET a = excluded.a, s = excluded.s, n = excluded.n",
-            ("$p", SqliteType.Integer), ("$a", SqliteType.Integer), ("$s", SqliteType.Integer), ("$n", SqliteType.Integer));
-        _stampDelete = PrepareTyped($"DELETE FROM \"{StampTable}\" WHERE p = $p", ("$p", SqliteType.Integer));
-        _stampDue = PrepareTyped($"SELECT p, a FROM \"{StampTable}\" WHERE s = 0 AND a <= $cutoff AND (a, p) > ($a, $p) ORDER BY a, p LIMIT $limit",
-            ("$cutoff", SqliteType.Integer), ("$a", SqliteType.Integer), ("$p", SqliteType.Integer), ("$limit", SqliteType.Integer));
-        _stampRead = PrepareTyped($"SELECT a, s, n FROM \"{StampTable}\" WHERE p = $p", ("$p", SqliteType.Integer));
+        Execute(
+            $"CREATE TABLE IF NOT EXISTS \"{StampTable}\"(p INTEGER NOT NULL PRIMARY KEY, a INTEGER NOT NULL, s INTEGER NOT NULL, n INTEGER NOT NULL)"
+        );
+        Execute(
+            $"CREATE INDEX IF NOT EXISTS \"{StampTable}_due\" ON \"{StampTable}\"(a, p) WHERE s = 0"
+        );
+        _stampUpsert = PrepareTyped(
+            $"INSERT INTO \"{StampTable}\"(p, a, s, n) VALUES($p, $a, $s, $n) ON CONFLICT(p) DO UPDATE SET a = excluded.a, s = excluded.s, n = excluded.n",
+            ("$p", SqliteType.Integer),
+            ("$a", SqliteType.Integer),
+            ("$s", SqliteType.Integer),
+            ("$n", SqliteType.Integer)
+        );
+        _stampDelete = PrepareTyped(
+            $"DELETE FROM \"{StampTable}\" WHERE p = $p",
+            ("$p", SqliteType.Integer)
+        );
+        _stampDue = PrepareTyped(
+            $"SELECT p, a FROM \"{StampTable}\" WHERE s = 0 AND a <= $cutoff AND (a, p) > ($a, $p) ORDER BY a, p LIMIT $limit",
+            ("$cutoff", SqliteType.Integer),
+            ("$a", SqliteType.Integer),
+            ("$p", SqliteType.Integer),
+            ("$limit", SqliteType.Integer)
+        );
+        _stampRead = PrepareTyped(
+            $"SELECT a, s, n FROM \"{StampTable}\" WHERE p = $p",
+            ("$p", SqliteType.Integer)
+        );
     }
 
     /// <summary>T-0400: stamps the partition archived at <paramref name="archivedMs"/> (not swept) with the next write.</summary>
-    public void Stamp(ulong partition, long archivedMs) => _stampOps.Add((partition, new ArchiveStamp(archivedMs, false, 0)));
+    public void Stamp(ulong partition, long archivedMs) =>
+        _stampOps.Add((partition, new ArchiveStamp(archivedMs, false, 0)));
 
     /// <summary>T-0400: records with the next write that retention swept the partition's files.</summary>
-    public void MarkSwept(ulong partition, long archivedMs, int legacy) => _stampOps.Add((partition, new ArchiveStamp(archivedMs, true, legacy)));
+    public void MarkSwept(ulong partition, long archivedMs, int legacy) =>
+        _stampOps.Add((partition, new ArchiveStamp(archivedMs, true, legacy)));
 
     /// <summary>T-0400: the partition's stamp as the next write will leave it (committed, then queued), or null.</summary>
     public ArchiveStamp? ReadStamp(ulong partition)
@@ -324,9 +506,15 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
         _stampRead.Transaction = null;
         _stampRead.Parameters[0].Value = (long)partition;
         using (SqliteDataReader reader = _stampRead.ExecuteReader())
-            if (reader.Read()) stamp = new ArchiveStamp(reader.GetInt64(0), reader.GetInt64(1) != 0, (int)reader.GetInt64(2));
+            if (reader.Read())
+                stamp = new ArchiveStamp(
+                    reader.GetInt64(0),
+                    reader.GetInt64(1) != 0,
+                    (int)reader.GetInt64(2)
+                );
         foreach ((ulong opPartition, ArchiveStamp? queued) in _stampOps)
-            if (opPartition == partition) stamp = queued;
+            if (opPartition == partition)
+                stamp = queued;
         return stamp;
     }
 
@@ -335,13 +523,18 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
     public Dictionary<ulong, ArchiveStamp?> QueuedStamps()
     {
         var result = new Dictionary<ulong, ArchiveStamp?>();
-        foreach ((ulong partition, ArchiveStamp? stamp) in _stampOps) result[partition] = stamp;
+        foreach ((ulong partition, ArchiveStamp? stamp) in _stampOps)
+            result[partition] = stamp;
         return result;
     }
 
     /// <summary>T-0400: up to <paramref name="limit"/> committed unswept stamps archived at or before
     /// <paramref name="cutoffMs"/>, in (archived, partition) order after <paramref name="after"/>. An index range read.</summary>
-    public List<(ulong Partition, long ArchivedMs)> DueStamps(long cutoffMs, (long ArchivedMs, ulong Partition) after, int limit)
+    public List<(ulong Partition, long ArchivedMs)> DueStamps(
+        long cutoffMs,
+        (long ArchivedMs, ulong Partition) after,
+        int limit
+    )
     {
         var result = new List<(ulong, long)>();
         _stampDue.Transaction = null;
@@ -350,7 +543,8 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
         _stampDue.Parameters[2].Value = (long)after.Partition;
         _stampDue.Parameters[3].Value = (long)limit;
         using SqliteDataReader reader = _stampDue.ExecuteReader();
-        while (reader.Read()) result.Add(((ulong)reader.GetInt64(0), reader.GetInt64(1)));
+        while (reader.Read())
+            result.Add(((ulong)reader.GetInt64(0), reader.GetInt64(1)));
         return result;
     }
 
@@ -358,8 +552,14 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
     /// Its own read-only connection (WAL: no writer is blocked), so the caller does NOT hold the registry lock.</summary>
     public long CountDueReadOnly(long cutoffMs)
     {
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-            { DataSource = _path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = _path,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString()
+        );
         connection.Open();
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = $"SELECT COUNT(*) FROM \"{StampTable}\" WHERE s = 0 AND a <= $cutoff";
@@ -384,12 +584,19 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
         _archiveSelect.Parameters[0].Value = (long)partition;
         using (SqliteDataReader reader = _archiveSelect.ExecuteReader())
             while (reader.Read())
-                rows[reader.GetString(0)] = new ArchivedRow(reader.GetInt64(1), reader.GetInt64(2) != 0, (byte[])reader.GetValue(3));
+                rows[reader.GetString(0)] = new ArchivedRow(
+                    reader.GetInt64(1),
+                    reader.GetInt64(2) != 0,
+                    (byte[])reader.GetValue(3)
+                );
         foreach ((ulong opPartition, string? key, ArchivedRow? row) in _archiveOps)
         {
-            if (opPartition != partition) continue;
-            if (key == null) rows.Clear();
-            else rows[key] = row!;
+            if (opPartition != partition)
+                continue;
+            if (key == null)
+                rows.Clear();
+            else
+                rows[key] = row!;
         }
         return rows.Select(x => (x.Key, x.Value)).ToList();
     }
@@ -402,7 +609,11 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
     /// Returns the partitions stamped and, read-only for the log, per newly stamped partition its newest save's
     /// Created and ClusterTime (the age proxy; never used to delete).
     /// </summary>
-    public (int Stamped, int Dropped, List<(ulong Partition, DateTimeOffset? Created, long? ClusterTime)> Legacy) StampUnstamped(long nowMs)
+    public (
+        int Stamped,
+        int Dropped,
+        List<(ulong Partition, DateTimeOffset? Created, long? ClusterTime)> Legacy
+    ) StampUnstamped(long nowMs)
     {
         var legacy = new List<(ulong, DateTimeOffset?, long?)>();
         using SqliteTransaction transaction = _db.BeginTransaction();
@@ -411,13 +622,22 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
             command.Transaction = transaction;
             // SQLite returns the bare columns of the row holding the MAX (its ClusterTime with its Created). The row
             // JSON is a BLOB: CAST makes json_extract read it as text, not as JSONB.
-            command.CommandText = $"SELECT p, MAX(json_extract(CAST(v AS TEXT), '$.Created')), json_extract(CAST(v AS TEXT), '$.ClusterTime') "
+            command.CommandText =
+                $"SELECT p, MAX(json_extract(CAST(v AS TEXT), '$.Created')), json_extract(CAST(v AS TEXT), '$.ClusterTime') "
                 + $"FROM \"{ArchiveTable}\" WHERE p NOT IN (SELECT p FROM \"{StampTable}\") GROUP BY p";
             using SqliteDataReader reader = command.ExecuteReader();
             while (reader.Read())
             {
-                DateTimeOffset? created = !reader.IsDBNull(1) && DateTimeOffset.TryParse(reader.GetString(1), CultureInfo.InvariantCulture,
-                    DateTimeStyles.AssumeUniversal, out DateTimeOffset parsed) ? parsed : null;
+                DateTimeOffset? created =
+                    !reader.IsDBNull(1)
+                    && DateTimeOffset.TryParse(
+                        reader.GetString(1),
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.AssumeUniversal,
+                        out DateTimeOffset parsed
+                    )
+                        ? parsed
+                        : null;
                 long? clusterTime = reader.IsDBNull(2) ? null : reader.GetInt64(2);
                 legacy.Add(((ulong)reader.GetInt64(0), created, clusterTime));
             }
@@ -426,7 +646,8 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
         using (SqliteCommand command = _db.CreateCommand())
         {
             command.Transaction = transaction;
-            command.CommandText = $"DELETE FROM \"{StampTable}\" WHERE p NOT IN (SELECT p FROM \"{ArchiveTable}\")";
+            command.CommandText =
+                $"DELETE FROM \"{StampTable}\" WHERE p NOT IN (SELECT p FROM \"{ArchiveTable}\")";
             dropped = command.ExecuteNonQuery();
         }
         _stampUpsert.Transaction = transaction;
@@ -451,11 +672,18 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
         command.CommandText = $"SELECT p, a, s, n FROM \"{StampTable}\"";
         using SqliteDataReader reader = command.ExecuteReader();
         while (reader.Read())
-            result[(ulong)reader.GetInt64(0)] = new ArchiveStamp(reader.GetInt64(1), reader.GetInt64(2) != 0, (int)reader.GetInt64(3));
+            result[(ulong)reader.GetInt64(0)] = new ArchiveStamp(
+                reader.GetInt64(1),
+                reader.GetInt64(2) != 0,
+                (int)reader.GetInt64(3)
+            );
         return result;
     }
 
-    private SqliteCommand PrepareTyped(string sql, params (string Name, SqliteType Type)[] parameters)
+    private SqliteCommand PrepareTyped(
+        string sql,
+        params (string Name, SqliteType Type)[] parameters
+    )
     {
         SqliteCommand command = _db.CreateCommand();
         command.CommandText = sql;
@@ -470,7 +698,8 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
     {
         var result = new Dictionary<ulong, long>();
         using SqliteCommand command = _db.CreateCommand();
-        command.CommandText = $"SELECT p, MAX(CASE WHEN l <> 0 THEN g ELSE -1 END) FROM \"{ArchiveTable}\" GROUP BY p";
+        command.CommandText =
+            $"SELECT p, MAX(CASE WHEN l <> 0 THEN g ELSE -1 END) FROM \"{ArchiveTable}\" GROUP BY p";
         using SqliteDataReader reader = command.ExecuteReader();
         while (reader.Read())
             result[(ulong)reader.GetInt64(0)] = reader.GetInt64(1);
@@ -478,9 +707,26 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
     }
 
     /// <summary>Queues one save row into the archive; it lands in the same transaction as the rest of the next write.</summary>
-    public void Archive(ulong partition, string key, long generation, bool located, object row, Type rowType)
+    public void Archive(
+        ulong partition,
+        string key,
+        long generation,
+        bool located,
+        object row,
+        Type rowType
+    )
     {
-        _archiveOps.Add((partition, key, new ArchivedRow(generation, located, JsonSerializer.SerializeToUtf8Bytes(row, rowType))));
+        _archiveOps.Add(
+            (
+                partition,
+                key,
+                new ArchivedRow(
+                    generation,
+                    located,
+                    JsonSerializer.SerializeToUtf8Bytes(row, rowType)
+                )
+            )
+        );
         ArchivedRows++;
     }
 
@@ -500,9 +746,12 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
         for (int index = 0; index < _archiveOps.Count; index++)
         {
             (ulong opPartition, string? key, ArchivedRow? row) = _archiveOps[index];
-            if (opPartition != partition) continue;
-            if (key == null) rows.Clear();
-            else rows[key] = row!.Value;
+            if (opPartition != partition)
+                continue;
+            if (key == null)
+                rows.Clear();
+            else
+                rows[key] = row!.Value;
         }
         _archiveOps.Add((partition, null, null));
         // T-0400: back in memory, no longer archived: the stamp goes too (a re-archive stamps it afresh).
@@ -525,21 +774,46 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
             command.Parameters.AddWithValue("$k", key);
             command.Parameters.AddWithValue("$p", (long)partition);
             using SqliteDataReader reader = command.ExecuteReader();
-            if (reader.Read()) row = new ArchivedRow(reader.GetInt64(0), reader.GetInt64(1) != 0, (byte[])reader.GetValue(2));
+            if (reader.Read())
+                row = new ArchivedRow(
+                    reader.GetInt64(0),
+                    reader.GetInt64(1) != 0,
+                    (byte[])reader.GetValue(2)
+                );
         }
         foreach ((ulong opPartition, string? opKey, ArchivedRow? queued) in _archiveOps)
         {
-            if (opPartition != partition) continue;
-            if (opKey == null) row = null;
-            else if (opKey == key) row = queued;
+            if (opPartition != partition)
+                continue;
+            if (opKey == null)
+                row = null;
+            else if (opKey == key)
+                row = queued;
         }
         return row;
     }
 
     /// <summary>T-0340 step 7: rewrites one archived save row in place with the next write (the upsert of
     /// <see cref="Archive"/>, without counting a new row). Caller holds the registry lock.</summary>
-    public void Rearchive(ulong partition, string key, long generation, bool located, object row, Type rowType) =>
-        _archiveOps.Add((partition, key, new ArchivedRow(generation, located, JsonSerializer.SerializeToUtf8Bytes(row, rowType))));
+    public void Rearchive(
+        ulong partition,
+        string key,
+        long generation,
+        bool located,
+        object row,
+        Type rowType
+    ) =>
+        _archiveOps.Add(
+            (
+                partition,
+                key,
+                new ArchivedRow(
+                    generation,
+                    located,
+                    JsonSerializer.SerializeToUtf8Bytes(row, rowType)
+                )
+            )
+        );
 
     /// <summary>
     /// T-0323: which of <paramref name="ids"/> any COMMITTED archived save row names, as a quoted JSON string anywhere in
@@ -551,8 +825,14 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
     public HashSet<string> ArchiveMentionsReadOnly(IReadOnlyCollection<string> ids)
     {
         var found = new HashSet<string>(StringComparer.Ordinal);
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-            { DataSource = _path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = _path,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString()
+        );
         connection.Open();
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = $"SELECT 1 FROM \"{ArchiveTable}\" WHERE instr(v, $n) > 0 LIMIT 1";
@@ -560,7 +840,8 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
         foreach (string id in ids)
         {
             needle.Value = Quoted(id);
-            if (command.ExecuteScalar() != null) found.Add(id);
+            if (command.ExecuteScalar() != null)
+                found.Add(id);
         }
         return found;
     }
@@ -572,7 +853,8 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
         foreach (string id in ids)
         {
             byte[] quoted = Quoted(id);
-            if (_archiveOps.Any(op => op.Row != null && op.Row.Value.AsSpan().IndexOf(quoted) >= 0)) found.Add(id);
+            if (_archiveOps.Any(op => op.Row != null && op.Row.Value.AsSpan().IndexOf(quoted) >= 0))
+                found.Add(id);
         }
         return found;
     }
@@ -596,8 +878,11 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
     }
 
     /// <summary>What a whole-state JSON document carries: writable, not indexed, not [JsonIgnore].</summary>
-    internal static bool IsPersisted(PropertyInfo property) => property.CanWrite && property.GetIndexParameters().Length == 0
-        && property.GetCustomAttribute<System.Text.Json.Serialization.JsonIgnoreAttribute>() == null;
+    internal static bool IsPersisted(PropertyInfo property) =>
+        property.CanWrite
+        && property.GetIndexParameters().Length == 0
+        && property.GetCustomAttribute<System.Text.Json.Serialization.JsonIgnoreAttribute>()
+            == null;
 
     private void Execute(string sql)
     {
@@ -625,18 +910,27 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
     }
 
     /// <summary>Reads the whole state. Tracking is NOT attached; the caller does that once normalised.</summary>
-    public T Load<T>() where T : class, new() => Load<T>(remember: true);
+    public T Load<T>()
+        where T : class, new() => Load<T>(remember: true);
 
     /// <summary>A second, independent read of the stored state (the self-test's completeness check).</summary>
-    public T LoadFresh<T>() where T : class, new() => Load<T>(remember: false);
+    public T LoadFresh<T>()
+        where T : class, new() => Load<T>(remember: false);
 
     /// <summary>One small-state property as stored, without opening the registry (boot lineage peeks).</summary>
     public static byte[]? PeekState(string directory, string property)
     {
         string path = Path.Combine(directory, FileName);
-        if (!File.Exists(path)) return null;
-        using var db = new SqliteConnection(new SqliteConnectionStringBuilder
-            { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+        if (!File.Exists(path))
+            return null;
+        using var db = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString()
+        );
         db.Open();
         using SqliteCommand command = db.CreateCommand();
         command.CommandText = $"SELECT v FROM \"{StateTable}\" WHERE k = $k";
@@ -644,13 +938,24 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
         return command.ExecuteScalar() as byte[];
     }
 
-    private T Load<T>(bool remember) where T : class, new()
+    private T Load<T>(bool remember)
+        where T : class, new()
     {
-        try { return LoadRows<T>(remember); }
-        catch (SqliteException error) { throw new InvalidDataException($"Registry store {_path} is unreadable: {error.Message}", error); }
+        try
+        {
+            return LoadRows<T>(remember);
+        }
+        catch (SqliteException error)
+        {
+            throw new InvalidDataException(
+                $"Registry store {_path} is unreadable: {error.Message}",
+                error
+            );
+        }
     }
 
-    private T LoadRows<T>(bool remember) where T : class, new()
+    private T LoadRows<T>(bool remember)
+        where T : class, new()
     {
         // The small properties are rebuilt as one JSON object so the serializer applies exactly the
         // types, converters and defaults it applies to a whole-state document.
@@ -665,31 +970,41 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
             {
                 string name = reader.GetString(0);
                 byte[] value = (byte[])reader.GetValue(1);
-                if (_small.All(p => p.Name != name)) continue;   // a property this build no longer has
+                if (_small.All(p => p.Name != name))
+                    continue; // a property this build no longer has
                 writer.WritePropertyName(name);
                 writer.WriteRawValue(value, skipInputValidation: true);
-                if (remember) _writtenSmall[name] = value;
+                if (remember)
+                    _writtenSmall[name] = value;
             }
             writer.WriteEndObject();
         }
-        T state = JsonSerializer.Deserialize<T>(buffer.ToArray()) ?? throw new InvalidDataException("Empty registry state");
+        T state =
+            JsonSerializer.Deserialize<T>(buffer.ToArray())
+            ?? throw new InvalidDataException("Empty registry state");
         foreach ((string table, PropertyInfo property) in _tracked)
         {
             var collection = (ITrackedCollection)Activator.CreateInstance(property.PropertyType)!;
             using SqliteCommand command = _db.CreateCommand();
             // rowid order is insertion order: dictionaries come back in the order they were built,
             // the Lineage list is keyed by index and checked contiguous by LoadRow.
-            bool list = property.PropertyType.IsGenericType && property.PropertyType.GetGenericTypeDefinition() == typeof(TrackedList<>);
+            bool list =
+                property.PropertyType.IsGenericType
+                && property.PropertyType.GetGenericTypeDefinition() == typeof(TrackedList<>);
             command.CommandText = list
                 ? $"SELECT k, v FROM \"{table}\" ORDER BY CAST(k AS INTEGER)"
                 : $"SELECT k, v FROM \"{table}\" ORDER BY rowid";
             using SqliteDataReader reader = command.ExecuteReader();
             Type rowType = collection.RowType;
-            bool set = property.PropertyType.IsGenericType && property.PropertyType.GetGenericTypeDefinition() == typeof(TrackedSet<>);
+            bool set =
+                property.PropertyType.IsGenericType
+                && property.PropertyType.GetGenericTypeDefinition() == typeof(TrackedSet<>);
             while (reader.Read())
             {
                 object key = collection.ParseKey(reader.GetString(0));
-                object? row = set ? null : JsonSerializer.Deserialize((byte[])reader.GetValue(1), rowType);
+                object? row = set
+                    ? null
+                    : JsonSerializer.Deserialize((byte[])reader.GetValue(1), rowType);
                 collection.LoadRow(key, row);
             }
             property.SetValue(state, collection);
@@ -706,8 +1021,10 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
 
     public void Changed(string table, object key)
     {
-        if (_reset.Contains(table)) return;
-        if (!_dirty.TryGetValue(table, out HashSet<object>? keys)) _dirty[table] = keys = [];
+        if (_reset.Contains(table))
+            return;
+        if (!_dirty.TryGetValue(table, out HashSet<object>? keys))
+            _dirty[table] = keys = [];
         keys.Add(key);
     }
 
@@ -720,7 +1037,8 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
     /// <summary>Marks everything changed: the next <see cref="Write"/> rewrites the whole state.</summary>
     public void ResetAll()
     {
-        foreach (string table in _tracked.Keys) Reset(table);
+        foreach (string table in _tracked.Keys)
+            Reset(table);
         _writtenSmall.Clear();
     }
 
@@ -799,8 +1117,15 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
         var written = new List<(string Name, byte[] Bytes)>();
         foreach (PropertyInfo property in _small)
         {
-            byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(property.GetValue(state), property.PropertyType);
-            if (_writtenSmall.TryGetValue(property.Name, out byte[]? previous) && previous.AsSpan().SequenceEqual(bytes)) continue;
+            byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(
+                property.GetValue(state),
+                property.PropertyType
+            );
+            if (
+                _writtenSmall.TryGetValue(property.Name, out byte[]? previous)
+                && previous.AsSpan().SequenceEqual(bytes)
+            )
+                continue;
             small.Upsert.Transaction = transaction;
             small.Upsert.Parameters[0].Value = property.Name;
             small.Upsert.Parameters[1].Value = bytes;
@@ -809,7 +1134,8 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
             rows++;
         }
         transaction.Commit();
-        foreach ((string name, byte[] bytes) in written) _writtenSmall[name] = bytes;
+        foreach ((string name, byte[] bytes) in written)
+            _writtenSmall[name] = bytes;
         _dirty.Clear();
         _reset.Clear();
         _archiveOps.Clear();
@@ -819,11 +1145,20 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
         RowsWritten += rows;
     }
 
-    private static void Upsert(Statements statements, SqliteTransaction transaction, object key, object? row, Type rowType)
+    private static void Upsert(
+        Statements statements,
+        SqliteTransaction transaction,
+        object key,
+        object? row,
+        Type rowType
+    )
     {
         statements.Upsert.Transaction = transaction;
         statements.Upsert.Parameters[0].Value = FormatKey(key);
-        statements.Upsert.Parameters[1].Value = rowType == typeof(bool) ? Array.Empty<byte>() : JsonSerializer.SerializeToUtf8Bytes(row, rowType);
+        statements.Upsert.Parameters[1].Value =
+            rowType == typeof(bool)
+                ? Array.Empty<byte>()
+                : JsonSerializer.SerializeToUtf8Bytes(row, rowType);
         statements.Upsert.ExecuteNonQuery();
     }
 
@@ -840,29 +1175,40 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
         int repaired = 0;
         void Check(string table, ITrackedCollection collection, object key, object? row)
         {
-            if (collection.RowType == typeof(bool)) return;   // a set's rows carry no value
-            if (_reset.Contains(table) || _dirty.TryGetValue(table, out HashSet<object>? pending) && pending.Contains(key)) return;
+            if (collection.RowType == typeof(bool))
+                return; // a set's rows carry no value
+            if (
+                _reset.Contains(table)
+                || _dirty.TryGetValue(table, out HashSet<object>? pending) && pending.Contains(key)
+            )
+                return;
             Statements statements = _statements[table];
             statements.Select.Transaction = null;
             statements.Select.Parameters[0].Value = FormatKey(key);
             byte[]? stored = statements.Select.ExecuteScalar() as byte[];
             byte[] live = JsonSerializer.SerializeToUtf8Bytes(row, collection.RowType);
             AuditedRows++;
-            if (stored != null && stored.AsSpan().SequenceEqual(live)) return;
-            Console.WriteLine($"WARNING: registry store audit: {table}[{FormatKey(key)}] changed without being recorded"
-                + (stored == null ? " (row missing from the store)" : "") + "; repairing on the next write");
+            if (stored != null && stored.AsSpan().SequenceEqual(live))
+                return;
+            Console.WriteLine(
+                $"WARNING: registry store audit: {table}[{FormatKey(key)}] changed without being recorded"
+                    + (stored == null ? " (row missing from the store)" : "")
+                    + "; repairing on the next write"
+            );
             Changed(table, key);
             repaired++;
         }
         foreach ((string table, object key) in hot)
         {
             var collection = (ITrackedCollection)_tracked[table].GetValue(state)!;
-            if (collection.TryGetRow(key, out object? row)) Check(table, collection, key, row);
+            if (collection.TryGetRow(key, out object? row))
+                Check(table, collection, key, row);
         }
         foreach ((string table, PropertyInfo property) in _tracked)
         {
             var collection = (ITrackedCollection)property.GetValue(state)!;
-            if (collection.RowType == typeof(bool)) continue;
+            if (collection.RowType == typeof(bool))
+                continue;
             // The keys are snapshotted once per pass over the table, so each audit costs its budget,
             // not a walk from the start of a 200k-row dictionary to the cursor.
             int cursor = _auditCursor.GetValueOrDefault(table);
@@ -870,7 +1216,8 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
                 _auditKeys[table] = keys = collection.Rows().Select(row => row.Key).ToArray();
             int end = Math.Min(keys.Length, cursor + budget);
             for (int index = cursor; index < end; index++)
-                if (collection.TryGetRow(keys[index], out object? row)) Check(table, collection, keys[index], row);
+                if (collection.TryGetRow(keys[index], out object? row))
+                    Check(table, collection, keys[index], row);
             _auditCursor[table] = end >= keys.Length ? 0 : end;
         }
         AuditRepairs += repaired;
@@ -889,8 +1236,14 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
     /// </summary>
     public void CopyTo(string destination)
     {
-        using var copy = new SqliteConnection(new SqliteConnectionStringBuilder
-            { DataSource = _path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+        using var copy = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = _path,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString()
+        );
         copy.Open();
         using SqliteCommand command = copy.CreateCommand();
         command.CommandText = "VACUUM INTO $destination";
@@ -901,20 +1254,26 @@ internal sealed class RegistryStore : IRegistryChangeSink, IDisposable
     public long DatabaseBytes => File.Exists(_path) ? new FileInfo(_path).Length : 0;
     public long WalBytes => File.Exists(_path + "-wal") ? new FileInfo(_path + "-wal").Length : 0;
 
-    internal static string FormatKey(object key) => key switch
-    {
-        string text => text,
-        IFormattable number => number.ToString(null, CultureInfo.InvariantCulture),
-        _ => key.ToString()!,
-    };
+    internal static string FormatKey(object key) =>
+        key switch
+        {
+            string text => text,
+            IFormattable number => number.ToString(null, CultureInfo.InvariantCulture),
+            _ => key.ToString()!,
+        };
 
     internal static object ParseKey<TKey>(string key)
     {
-        if (typeof(TKey) == typeof(string)) return key;
-        if (typeof(TKey) == typeof(ulong)) return ulong.Parse(key, CultureInfo.InvariantCulture);
-        if (typeof(TKey) == typeof(long)) return long.Parse(key, CultureInfo.InvariantCulture);
-        if (typeof(TKey) == typeof(int)) return int.Parse(key, CultureInfo.InvariantCulture);
-        if (typeof(TKey) == typeof(Guid)) return Guid.Parse(key);
+        if (typeof(TKey) == typeof(string))
+            return key;
+        if (typeof(TKey) == typeof(ulong))
+            return ulong.Parse(key, CultureInfo.InvariantCulture);
+        if (typeof(TKey) == typeof(long))
+            return long.Parse(key, CultureInfo.InvariantCulture);
+        if (typeof(TKey) == typeof(int))
+            return int.Parse(key, CultureInfo.InvariantCulture);
+        if (typeof(TKey) == typeof(Guid))
+            return Guid.Parse(key);
         throw new NotSupportedException($"Registry table key type {typeof(TKey)}");
     }
 

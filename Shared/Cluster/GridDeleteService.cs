@@ -31,60 +31,154 @@ namespace ClusterPlugin;
 /// </summary>
 internal static class GridDeleteService
 {
-	public static object Delete(long entityId, string name, PartitionManager partitions, PartitionPersistence persistence)
-	{
-		if (!MyEntities.TryGetEntityById(entityId, out MyEntity entity) || entity is not MyCubeGrid grid)
-			return new { deleted = false, entityId, reason = "not a grid on this node" };
-		if (grid.Closed || grid.MarkedForClose)
-			return new { deleted = false, entityId, reason = "grid is closing" };
-		if (grid.DisplayName != name)
-			return new { deleted = false, entityId, reason = "name does not match", gridName = grid.DisplayName };
-		if (grid.GetTopMostParent() != grid)
-			return new { deleted = false, entityId, reason = "not a top-level grid" };
-		if (ClusterRuntime.IsFrozen(grid.EntityId))
-			return new { deleted = false, entityId, reason = "frozen for a handover in progress" };
-		if (MySessionComponentTrashPatch.LinksSettling(grid.EntityId))
-			return new { deleted = false, entityId, reason = "arrived recently (import grace)" };
-		long[] pilots = grid.GetFatBlocks<MyCockpit>()
-			.Where(cockpit => cockpit.Pilot != null)
-			.Select(cockpit => cockpit.Pilot.EntityId).ToArray();
-		if (pilots.Length > 0)
-			return new { deleted = false, entityId, reason = "a cockpit holds a pilot", pilots };
-		long[] controllers = MySession.Static.Players.GetOnlinePlayers()
-			.Where(player => player.Controller?.ControlledEntity?.Entity?.GetTopMostParent() == grid)
-			.Select(player => player.Identity.IdentityId).ToArray();
-		if (controllers.Length > 0)
-			return new { deleted = false, entityId, reason = "a player controls it", controllers };
-		var group = MyCubeGridGroups.Static.Physical.GetGroup(grid);
-		if (group != null && group.Nodes.Count > 1)
-			return new { deleted = false, entityId, reason = "mechanically attached to other grids",
-				attached = group.Nodes.Select(node => node.NodeData.EntityId).Where(id => id != entityId).ToArray() };
-		ulong partition = partitions.Holder(entityId);
-		bool alone = partition != 0 && AloneIn(partitions.Peek(partition), entityId);
-		if (alone && (persistence == null ? "the node has no partition persistence yet" : persistence.EmptyReleaseBlocker(partition)) is { } blocker)
-			return new { deleted = false, entityId, reason = "alone in partition " + partition + " and " + blocker };
-		var position = grid.PositionComp.GetPosition();
-		int blocks = grid.BlocksCount;
-		MyLog.Default?.WriteLineAndConsole($"[ClusterPlugin] grid-delete removed grid '{name}' with entity id '{entityId}'"
-			+ $" ({blocks} blocks at {position.X:F0},{position.Y:F0},{position.Z:F0})");
-		grid.Close();
-		string release = alone ? persistence.ReleaseEmptied(partition) ?? "queued" : "not emptied";
-		return new { deleted = true, entityId, name, blocks, position = new[] { position.X, position.Y, position.Z }, partition, emptyRelease = release };
-	}
+    public static object Delete(
+        long entityId,
+        string name,
+        PartitionManager partitions,
+        PartitionPersistence persistence
+    )
+    {
+        if (
+            !MyEntities.TryGetEntityById(entityId, out MyEntity entity)
+            || entity is not MyCubeGrid grid
+        )
+            return new
+            {
+                deleted = false,
+                entityId,
+                reason = "not a grid on this node",
+            };
+        if (grid.Closed || grid.MarkedForClose)
+            return new
+            {
+                deleted = false,
+                entityId,
+                reason = "grid is closing",
+            };
+        if (grid.DisplayName != name)
+            return new
+            {
+                deleted = false,
+                entityId,
+                reason = "name does not match",
+                gridName = grid.DisplayName,
+            };
+        if (grid.GetTopMostParent() != grid)
+            return new
+            {
+                deleted = false,
+                entityId,
+                reason = "not a top-level grid",
+            };
+        if (ClusterRuntime.IsFrozen(grid.EntityId))
+            return new
+            {
+                deleted = false,
+                entityId,
+                reason = "frozen for a handover in progress",
+            };
+        if (MySessionComponentTrashPatch.LinksSettling(grid.EntityId))
+            return new
+            {
+                deleted = false,
+                entityId,
+                reason = "arrived recently (import grace)",
+            };
+        long[] pilots = grid.GetFatBlocks<MyCockpit>()
+            .Where(cockpit => cockpit.Pilot != null)
+            .Select(cockpit => cockpit.Pilot.EntityId)
+            .ToArray();
+        if (pilots.Length > 0)
+            return new
+            {
+                deleted = false,
+                entityId,
+                reason = "a cockpit holds a pilot",
+                pilots,
+            };
+        long[] controllers = MySession
+            .Static.Players.GetOnlinePlayers()
+            .Where(player =>
+                player.Controller?.ControlledEntity?.Entity?.GetTopMostParent() == grid
+            )
+            .Select(player => player.Identity.IdentityId)
+            .ToArray();
+        if (controllers.Length > 0)
+            return new
+            {
+                deleted = false,
+                entityId,
+                reason = "a player controls it",
+                controllers,
+            };
+        var group = MyCubeGridGroups.Static.Physical.GetGroup(grid);
+        if (group != null && group.Nodes.Count > 1)
+            return new
+            {
+                deleted = false,
+                entityId,
+                reason = "mechanically attached to other grids",
+                attached = group
+                    .Nodes.Select(node => node.NodeData.EntityId)
+                    .Where(id => id != entityId)
+                    .ToArray(),
+            };
+        ulong partition = partitions.Holder(entityId);
+        bool alone = partition != 0 && AloneIn(partitions.Peek(partition), entityId);
+        if (
+            alone
+            && (
+                persistence == null
+                    ? "the node has no partition persistence yet"
+                    : persistence.EmptyReleaseBlocker(partition)
+            )
+                is { } blocker
+        )
+            return new
+            {
+                deleted = false,
+                entityId,
+                reason = "alone in partition " + partition + " and " + blocker,
+            };
+        var position = grid.PositionComp.GetPosition();
+        int blocks = grid.BlocksCount;
+        MyLog.Default?.WriteLineAndConsole(
+            $"[ClusterPlugin] grid-delete removed grid '{name}' with entity id '{entityId}'"
+                + $" ({blocks} blocks at {position.X:F0},{position.Y:F0},{position.Z:F0})"
+        );
+        grid.Close();
+        string release = alone ? persistence.ReleaseEmptied(partition) ?? "queued" : "not emptied";
+        return new
+        {
+            deleted = true,
+            entityId,
+            name,
+            blocks,
+            position = new[] { position.X, position.Y, position.Z },
+            partition,
+            emptyRelease = release,
+        };
+    }
 
-	/// <summary>
-	/// SE-1317: no other member of <paramref name="partition"/> is still live. The member set is the standing layout,
-	/// which drops a closed grid only at the next topology sweep, so a grid an earlier delete closed a moment ago still
-	/// counts there. Deleting a partition's 3 ships in a row answered "not emptied" for each: none queued the empty
-	/// Final, the partition went offline with its older save and the next wake loaded all three back (4426 and 4976 on
-	/// octahedron-test, 2026-11-09). A member the census cannot see yet (a load in progress) counts as live.
-	/// </summary>
-	internal static bool AloneIn(PartitionManager.Partition partition, long entityId)
-	{
-		if (partition.HasPending) return partition.Members.Count == 1 && partition.Members.Contains(entityId);
-		foreach (long member in partition.Members)
-			if (member != entityId && MyEntities.TryGetEntityById(member, out MyEntity other) && !other.Closed && !other.MarkedForClose)
-				return false;
-		return true;
-	}
+    /// <summary>
+    /// SE-1317: no other member of <paramref name="partition"/> is still live. The member set is the standing layout,
+    /// which drops a closed grid only at the next topology sweep, so a grid an earlier delete closed a moment ago still
+    /// counts there. Deleting a partition's 3 ships in a row answered "not emptied" for each: none queued the empty
+    /// Final, the partition went offline with its older save and the next wake loaded all three back (4426 and 4976 on
+    /// octahedron-test, 2026-11-09). A member the census cannot see yet (a load in progress) counts as live.
+    /// </summary>
+    internal static bool AloneIn(PartitionManager.Partition partition, long entityId)
+    {
+        if (partition.HasPending)
+            return partition.Members.Count == 1 && partition.Members.Contains(entityId);
+        foreach (long member in partition.Members)
+            if (
+                member != entityId
+                && MyEntities.TryGetEntityById(member, out MyEntity other)
+                && !other.Closed
+                && !other.MarkedForClose
+            )
+                return false;
+        return true;
+    }
 }

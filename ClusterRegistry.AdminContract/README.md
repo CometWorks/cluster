@@ -20,3 +20,10 @@ of wire protocol v1: existing health, status, and plan consumers remain valid.
 
 This branch also adds capability-gated offline partition, compensation cost,
 prediction and cache DTOs while retaining wire protocol v1.
+
+Contract 0.12.0 adds `PlayerAccessPolicy`, `PlayerAccessGrant` and
+`PlayerAccessStatus` for `PUT /admin/v1/players/access`. Wire v1 is unchanged;
+consumers must check the operation capability before enabling the feature.
+Policies carry short-lived Discord decisions, never OAuth or bot credentials.
+
+Package `0.13.0` adds `LobbyContract.cs` and capability `lobbyAnchor=v1` for reading the lobby and adopting or creating its station.

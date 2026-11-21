@@ -12,30 +12,50 @@ internal sealed class BalancePace
     private const double WindowSeconds = 3600;
     private readonly object _lock = new();
     private bool _active;
+
     // Paced pins per TARGET node, oldest first. Recorded whether or not a budget is configured, so a budget
     // switched on live starts from the real last hour.
     private readonly Dictionary<string, Queue<DateTime>> _targetPins = new();
-    private readonly Queue<(DateTime At, int Pins, int MinGain, int Budget, int Deadband, int Residence)> _events = new();
+    private readonly Queue<(
+        DateTime At,
+        int Pins,
+        int MinGain,
+        int Budget,
+        int Deadband,
+        int Residence
+    )> _events = new();
 
     /// <summary>Whether balancing is active: the high water was crossed and not every node is back within the low water.</summary>
-    public bool Active { get { lock (_lock) return _active; } }
+    public bool Active
+    {
+        get
+        {
+            lock (_lock)
+                return _active;
+        }
+    }
 
     /// <summary>The threshold both tolerance gates use this pass: the tolerance while idle, the low water while active.
     /// With the default low water (the tolerance) this is always the tolerance.</summary>
     public double Gate(CostModel model)
     {
-        lock (_lock) return _active ? model.EffectiveLowWater() : model.BalanceRiskTolerance;
+        lock (_lock)
+            return _active ? model.EffectiveLowWater() : model.BalanceRiskTolerance;
     }
 
     /// <summary>The nodes that were the target of at least BudgetMovesPerNodeHour paced pins in the last hour;
     /// null while the budget is off. The planner applies it only below BudgetUnderDeviation.</summary>
     public IReadOnlySet<string>? OverBudget(CostModel model, DateTime now)
     {
-        if (model.BudgetMovesPerNodeHour <= 0) return null;
+        if (model.BudgetMovesPerNodeHour <= 0)
+            return null;
         lock (_lock)
         {
             Prune(now);
-            return _targetPins.Where(pair => pair.Value.Count >= model.BudgetMovesPerNodeHour).Select(pair => pair.Key).ToHashSet();
+            return _targetPins
+                .Where(pair => pair.Value.Count >= model.BudgetMovesPerNodeHour)
+                .Select(pair => pair.Key)
+                .ToHashSet();
         }
     }
 
@@ -44,7 +64,8 @@ internal sealed class BalancePace
     {
         lock (_lock)
         {
-            if (!_targetPins.TryGetValue(target, out Queue<DateTime>? pins)) _targetPins[target] = pins = new();
+            if (!_targetPins.TryGetValue(target, out Queue<DateTime>? pins))
+                _targetPins[target] = pins = new();
             pins.Enqueue(now);
         }
     }
@@ -57,30 +78,63 @@ internal sealed class BalancePace
     /// A deadband hold is an idle pass whose worst deviation lies in (low water, tolerance]: the low water would
     /// have moved, the high water does not.
     /// </summary>
-    public void Passed(CostModel model, double gate, double worstDeviation, double worstClientDeviation,
-        int pins, int minGainSkipped, int budgetSkipped, int residenceHeld, DateTime now)
+    public void Passed(
+        CostModel model,
+        double gate,
+        double worstDeviation,
+        double worstClientDeviation,
+        int pins,
+        int minGainSkipped,
+        int budgetSkipped,
+        int residenceHeld,
+        DateTime now
+    )
     {
         double worst = Math.Max(worstDeviation, worstClientDeviation);
         lock (_lock)
         {
             bool wasActive = _active;
             _active = worst > gate;
-            int deadband = !wasActive && worst > model.EffectiveLowWater() && worst <= model.BalanceRiskTolerance ? 1 : 0;
-            if (pins != 0 || minGainSkipped != 0 || budgetSkipped != 0 || deadband != 0 || residenceHeld != 0)
-                _events.Enqueue((now, pins, minGainSkipped, budgetSkipped, deadband, residenceHeld));
+            int deadband =
+                !wasActive
+                && worst > model.EffectiveLowWater()
+                && worst <= model.BalanceRiskTolerance
+                    ? 1
+                    : 0;
+            if (
+                pins != 0
+                || minGainSkipped != 0
+                || budgetSkipped != 0
+                || deadband != 0
+                || residenceHeld != 0
+            )
+                _events.Enqueue(
+                    (now, pins, minGainSkipped, budgetSkipped, deadband, residenceHeld)
+                );
             Prune(now);
         }
     }
 
     /// <summary>Last-hour counters: pins (paced and idle-plan components), candidates skipped by the minimum gain and by
     /// the budget (one per candidate per pass), idle passes held by the deadband, partitions held by residence (per pass).</summary>
-    public (int Pins, int MinGainSkips, int BudgetSkips, int DeadbandHolds, int ResidenceHolds) LastHour(DateTime now)
+    public (
+        int Pins,
+        int MinGainSkips,
+        int BudgetSkips,
+        int DeadbandHolds,
+        int ResidenceHolds
+    ) LastHour(DateTime now)
     {
         lock (_lock)
         {
             Prune(now);
-            return (_events.Sum(e => e.Pins), _events.Sum(e => e.MinGain), _events.Sum(e => e.Budget),
-                _events.Sum(e => e.Deadband), _events.Sum(e => e.Residence));
+            return (
+                _events.Sum(e => e.Pins),
+                _events.Sum(e => e.MinGain),
+                _events.Sum(e => e.Budget),
+                _events.Sum(e => e.Deadband),
+                _events.Sum(e => e.Residence)
+            );
         }
     }
 
@@ -99,9 +153,12 @@ internal sealed class BalancePace
         DateTime cutoff = now.AddSeconds(-WindowSeconds);
         foreach ((string node, Queue<DateTime> pins) in _targetPins.ToArray())
         {
-            while (pins.Count != 0 && pins.Peek() <= cutoff) pins.Dequeue();
-            if (pins.Count == 0) _targetPins.Remove(node);
+            while (pins.Count != 0 && pins.Peek() <= cutoff)
+                pins.Dequeue();
+            if (pins.Count == 0)
+                _targetPins.Remove(node);
         }
-        while (_events.Count != 0 && _events.Peek().At <= cutoff) _events.Dequeue();
+        while (_events.Count != 0 && _events.Peek().At <= cutoff)
+            _events.Dequeue();
     }
 }

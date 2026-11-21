@@ -25,7 +25,10 @@ internal static class GameThreadLoadRoutes
             "/test-game-thread-load",
             context =>
             {
-                int ms = int.Parse(TestRoutes.Query(context, "ms"), System.Globalization.CultureInfo.InvariantCulture);
+                int ms = int.Parse(
+                    TestRoutes.Query(context, "ms"),
+                    System.Globalization.CultureInfo.InvariantCulture
+                );
                 if (ms is < 0 or > 1000)
                     throw new ArgumentOutOfRangeException("ms");
                 Interlocked.Exchange(ref m_perFrameMs, ms);
@@ -40,8 +43,14 @@ internal static class GameThreadLoadRoutes
             "/test-worker-load",
             context =>
             {
-                int ms = int.Parse(TestRoutes.Query(context, "ms"), System.Globalization.CultureInfo.InvariantCulture);
-                int items = int.Parse(TestRoutes.Query(context, "items"), System.Globalization.CultureInfo.InvariantCulture);
+                int ms = int.Parse(
+                    TestRoutes.Query(context, "ms"),
+                    System.Globalization.CultureInfo.InvariantCulture
+                );
+                int items = int.Parse(
+                    TestRoutes.Query(context, "items"),
+                    System.Globalization.CultureInfo.InvariantCulture
+                );
                 if (ms is < 0 or > 1000 || items is < 0 or > 64)
                     throw new ArgumentOutOfRangeException(ms is < 0 or > 1000 ? "ms" : "items");
                 Interlocked.Exchange(ref m_workerMs, ms);
@@ -68,7 +77,8 @@ internal static class GameThreadLoadRoutes
 
     public static void Update()
     {
-        int workerMs = Volatile.Read(ref m_workerMs), items = Volatile.Read(ref m_workerItems);
+        int workerMs = Volatile.Read(ref m_workerMs),
+            items = Volatile.Read(ref m_workerItems);
         if (workerMs > 0 && items > 0)
             ParallelTasks.Parallel.For(0, items, _ => Thread.Sleep(workerMs));
         int ms = Volatile.Read(ref m_perFrameMs) + Interlocked.Exchange(ref m_hitchMs, 0);

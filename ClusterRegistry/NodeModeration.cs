@@ -23,17 +23,32 @@ internal sealed partial class DirectGateway
     /// join token was presented (or <paramref name="loopback"/> needs none) on one of the two routes but the named
     /// admin does not qualify (403, not 401: the credential is fine, the act is not).
     /// </summary>
-    private AdminActor? NodeModerator(HttpListenerContext context, string path, bool loopback, out string? refusal)
+    private AdminActor? NodeModerator(
+        HttpListenerContext context,
+        string path,
+        bool loopback,
+        out string? refusal
+    )
     {
         refusal = null;
-        if (!IsNodeModerationRoute(context.Request.HttpMethod, path) || !loopback && !JoinTokenPresented(context))
+        if (
+            !IsNodeModerationRoute(context.Request.HttpMethod, path)
+            || !loopback && !JoinTokenPresented(context)
+        )
             return null;
         string? node = context.Request.Headers[ClusterNet.NodeHeader];
-        if (!ulong.TryParse(context.Request.Headers[ClusterNet.ModeratorHeader], out ulong admin) || admin == 0)
-            refusal = $"A node's kick or ban must name the admin it acts for in {ClusterNet.ModeratorHeader}.";
+        if (
+            !ulong.TryParse(context.Request.Headers[ClusterNet.ModeratorHeader], out ulong admin)
+            || admin == 0
+        )
+            refusal =
+                $"A node's kick or ban must name the admin it acts for in {ClusterNet.ModeratorHeader}.";
         else if (!_admission.IsAdmin(admin))
             refusal = $"{admin} is not on the cluster's administrator list.";
-        else if (!_clients.TryGetValue(admin, out ClientSession? session) || AttachedNode(session) is not { } attached)
+        else if (
+            !_clients.TryGetValue(admin, out ClientSession? session)
+            || AttachedNode(session) is not { } attached
+        )
             refusal = $"Admin {admin} is not connected to the cluster.";
         else if (!string.Equals(attached, node, StringComparison.Ordinal))
             refusal = $"Admin {admin} is attached to {attached}, not to {node ?? "(no node)"}.";
@@ -47,13 +62,21 @@ internal sealed partial class DirectGateway
 
     /// <summary>The node serving the session's backend now (the registry route is not set for every arrival).</summary>
     private string? AttachedNode(ClientSession session) =>
-        GatewayRegistry.LiveFirst((_registry?.Nodes() ?? []).Where(node => node.Endpoint == session.BackendEndpoint.ToString()))?.Node;
+        GatewayRegistry
+            .LiveFirst(
+                (_registry?.Nodes() ?? []).Where(node =>
+                    node.Endpoint == session.BackendEndpoint.ToString()
+                )
+            )
+            ?.Node;
 
     private static bool IsNodeModerationRoute(string method, string path)
     {
-        if (method != "POST") return false;
+        if (method != "POST")
+            return false;
         string prefix = Admin.AdminProtocol.RoutePrefix;
-        if (path.Equals(prefix + "/admission/bans", StringComparison.OrdinalIgnoreCase)) return true;
+        if (path.Equals(prefix + "/admission/bans", StringComparison.OrdinalIgnoreCase))
+            return true;
         return path.StartsWith(prefix + "/clients/", StringComparison.OrdinalIgnoreCase)
             && path.EndsWith("/kick", StringComparison.OrdinalIgnoreCase)
             && ulong.TryParse(path[(prefix + "/clients/").Length..^"/kick".Length], out _);

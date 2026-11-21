@@ -1,7 +1,7 @@
 using ClusterPlugin;
 using HarmonyLib;
-using Sandbox.Game.Entities;
 using Sandbox.Common.ObjectBuilders;
+using Sandbox.Game.Entities;
 using VRage.Game.Entity;
 
 namespace Shared.Patches;
@@ -12,24 +12,45 @@ namespace Shared.Patches;
 /// </summary>
 public static class MySessionComponentSafeZonesPatch
 {
-	[HarmonyPatch(typeof(MySessionComponentSafeZones), nameof(MySessionComponentSafeZones.CrateSafeZone))]
-	private static class Create
-	{
-		[HarmonyPostfix]
-		private static void Postfix(MyEntity __result) => AdminSafeZones.Created(__result);
-	}
+    [HarmonyPatch(typeof(MySafeZone), "IsSafe", typeof(MyEntity))]
+    private static class LobbyEntry
+    {
+        [HarmonyPostfix]
+        private static void Postfix(MySafeZone __instance, MyEntity entity, ref bool __result)
+        {
+            if (__result && AdminSafeZones.DeniesEntry(__instance.EntityId, entity.EntityId))
+                __result = false;
+        }
+    }
 
-	[HarmonyPatch(typeof(MySessionComponentSafeZones), nameof(MySessionComponentSafeZones.UpdateSafeZone))]
-	private static class Update
-	{
-		[HarmonyPostfix]
-		private static void Postfix(MyObjectBuilder_SafeZone ob) => AdminSafeZones.Updated(ob.EntityId);
-	}
+    [HarmonyPatch(
+        typeof(MySessionComponentSafeZones),
+        nameof(MySessionComponentSafeZones.CrateSafeZone)
+    )]
+    private static class Create
+    {
+        [HarmonyPostfix]
+        private static void Postfix(MyEntity __result) => AdminSafeZones.Created(__result);
+    }
 
-	[HarmonyPatch(typeof(MySessionComponentSafeZones), nameof(MySessionComponentSafeZones.DeleteSafeZone_Implementation))]
-	private static class Delete
-	{
-		[HarmonyPrefix]
-		private static void Prefix(long entityId) => AdminSafeZones.Deleting(entityId);
-	}
+    [HarmonyPatch(
+        typeof(MySessionComponentSafeZones),
+        nameof(MySessionComponentSafeZones.UpdateSafeZone)
+    )]
+    private static class Update
+    {
+        [HarmonyPostfix]
+        private static void Postfix(MyObjectBuilder_SafeZone ob) =>
+            AdminSafeZones.Updated(ob.EntityId);
+    }
+
+    [HarmonyPatch(
+        typeof(MySessionComponentSafeZones),
+        nameof(MySessionComponentSafeZones.DeleteSafeZone_Implementation)
+    )]
+    private static class Delete
+    {
+        [HarmonyPrefix]
+        private static void Prefix(long entityId) => AdminSafeZones.Deleting(entityId);
+    }
 }

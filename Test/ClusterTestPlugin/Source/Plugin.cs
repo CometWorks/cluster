@@ -25,21 +25,21 @@ public class Plugin : IPlugin
         // MyAPIUtilities.Static, which does not exist yet. ClusterRuntime raises this seam at the end
         // of its service installs and never sets it itself.
         ClusterSeams.OnServicesInstalled(ModChannelTestHarness.Install);
-        Log($"registered {TestRoutes.Count} test routes on the {typeof(ClusterControlServer).Assembly.GetName().Name} control server");
+        Log(
+            $"registered {TestRoutes.Count} test routes on the {typeof(ClusterControlServer).Assembly.GetName().Name} control server"
+        );
     }
 
     public void Update()
     {
-        FastTestHarness.Update();   // T-0292 speed drives
+        FastTestHarness.Update(); // T-0292 speed drives
         OfflineTestRoutes.ObserveZoneRestore();
         OfflineTestRoutes.ObserveGasCycle();
-        GameThreadLoadRoutes.Update();   // SE-1134
-        WaCommandBurstRoutes.Update();   // SE-1228
+        GameThreadLoadRoutes.Update(); // SE-1134
+        WaCommandBurstRoutes.Update(); // SE-1228
     }
 
-    public void Dispose()
-    {
-    }
+    public void Dispose() { }
 
     internal static void Log(string message)
     {

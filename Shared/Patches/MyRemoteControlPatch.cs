@@ -19,7 +19,11 @@ namespace Shared.Patches;
 public static class MyRemoteControlPatch
 {
     [HarmonyPrefix]
-    private static bool RequestUseMessagePrefix(MyRemoteControl __instance, UseActionEnum useAction, long usedById)
+    private static bool RequestUseMessagePrefix(
+        MyRemoteControl __instance,
+        UseActionEnum useAction,
+        long usedById
+    )
     {
         var gate = MyRemoteControlSeams.ClusterUseGate;
         if (gate == null)
@@ -30,7 +34,14 @@ public static class MyRemoteControlPatch
         if (MyEventContext.Current.IsLocallyInvoked)
             __instance.UseFailureCallback(useAction, usedById, denial.Value);
         else
-            MyMultiplayer.RaiseEvent(__instance, (MyRemoteControl x) => x.UseFailureCallback, useAction, usedById, denial.Value, MyEventContext.Current.Sender);
+            MyMultiplayer.RaiseEvent(
+                __instance,
+                (MyRemoteControl x) => x.UseFailureCallback,
+                useAction,
+                usedById,
+                denial.Value,
+                MyEventContext.Current.Sender
+            );
         return false;
     }
 }

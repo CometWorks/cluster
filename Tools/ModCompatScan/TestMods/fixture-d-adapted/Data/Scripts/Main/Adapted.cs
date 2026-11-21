@@ -21,11 +21,12 @@ namespace Fixture
         {
             m_found.Clear();
             MyAPIGateway.Entities.GetEntities(m_found);
-            MyAPIGateway.Utilities.SendModMessage(0x434C55534D4F4453, new object[] { "broadcast", "fixture", m_found.Count.ToString() });
+            MyAPIGateway.Utilities.SendModMessage(
+                0x434C55534D4F4453,
+                new object[] { "broadcast", "fixture", m_found.Count.ToString() }
+            );
         }
 
-        private void Receive(object message)
-        {
-        }
+        private void Receive(object message) { }
     }
 }

@@ -27,8 +27,13 @@ public static class HostSaveStore
 
     /// <summary>The store directory of <paramref name="host"/>. The host name is one path component, or this throws.</summary>
     public static string Root(string runRoot, string host) =>
-        host.Length == 0 || host == "." || host == ".." || host.IndexOfAny(new[] { '/', '\\', ':' }) >= 0
-            ? throw new InvalidDataException("Host name '" + host + "' cannot name a save store directory")
+        host.Length == 0
+        || host == "."
+        || host == ".."
+        || host.IndexOfAny(new[] { '/', '\\', ':' }) >= 0
+            ? throw new InvalidDataException(
+                "Host name '" + host + "' cannot name a save store directory"
+            )
             : Path.Combine(runRoot, "saves", host);
 
     /// <summary>
@@ -39,29 +44,45 @@ public static class HostSaveStore
     public static string NodeSaves(string dataRoot, string host, bool store)
     {
         string data = Path.GetFullPath(dataRoot);
-        if (!store) return Path.Combine(data, "cluster", "saves");
+        if (!store)
+            return Path.Combine(data, "cluster", "saves");
         string trimmed = data.TrimEnd(Path.DirectorySeparatorChar);
-        return Root(Path.GetDirectoryName(trimmed) ?? throw new InvalidDataException("Data root '" + dataRoot + "' has no parent run root"), host);
+        return Root(
+            Path.GetDirectoryName(trimmed)
+                ?? throw new InvalidDataException(
+                    "Data root '" + dataRoot + "' has no parent run root"
+                ),
+            host
+        );
     }
 
-    public static string PartitionSave(string saves, ulong partition, long generation, long sequence) =>
-        Path.Combine(saves, "P-" + partition.ToString("X16"), FileName(generation, sequence));
+    public static string PartitionSave(
+        string saves,
+        ulong partition,
+        long generation,
+        long sequence
+    ) => Path.Combine(saves, "P-" + partition.ToString("X16"), FileName(generation, sequence));
 
-    public static string GlobalSave(string saves, long generation, long sequence) => Path.Combine(saves, "GLOBAL", FileName(generation, sequence));
+    public static string GlobalSave(string saves, long generation, long sequence) =>
+        Path.Combine(saves, "GLOBAL", FileName(generation, sequence));
 
     /// <summary>
     /// The file a store-mode node reads for a save it is asked for: the store's, or the one in its own data dir
     /// (<paramref name="legacy"/>) when only that exists. The catalogue names both kinds while files are unmoved - the
     /// registry re-keys a location only once it sees the file in the store - so a node must still serve its old path.
     /// </summary>
-    public static string Held(string store, string legacy) => !File.Exists(store) && File.Exists(legacy) ? legacy : store;
+    public static string Held(string store, string legacy) =>
+        !File.Exists(store) && File.Exists(legacy) ? legacy : store;
 
     private static string FileName(long generation, long sequence) =>
         string.Format(CultureInfo.InvariantCulture, "g{0:X8}-s{1:X8}.mps", generation, sequence);
 
     /// <summary>A temporary name beside <paramref name="final"/> that no other writer uses: the node id and a fresh guid.</summary>
     public static string Temporary(string final, string node) =>
-        Path.Combine(Path.GetDirectoryName(final) ?? string.Empty, "." + Path.GetFileName(final) + "." + node + "." + Guid.NewGuid().ToString("N") + ".tmp");
+        Path.Combine(
+            Path.GetDirectoryName(final) ?? string.Empty,
+            "." + Path.GetFileName(final) + "." + node + "." + Guid.NewGuid().ToString("N") + ".tmp"
+        );
 
     /// <summary>The resumable partial download of <paramref name="final"/> by <paramref name="node"/>: two nodes of one host
     /// fetching the same save (split siblings recovering their parent's cover save) must not append to one file.</summary>
@@ -85,12 +106,20 @@ public static class HostSaveStore
                 File.Move(temporary, final);
                 return true;
             }
-            catch (IOException) when (File.Exists(final)) { return false; }
+            catch (IOException) when (File.Exists(final))
+            {
+                return false;
+            }
         }
-        if (link(temporary, final) == 0) return true;
+        if (link(temporary, final) == 0)
+            return true;
         const int Exists = 17;
         int error = Marshal.GetLastWin32Error();
-        return error == Exists ? false : throw new IOException("link " + temporary + " -> " + final + " failed with errno " + error);
+        return error == Exists
+            ? false
+            : throw new IOException(
+                "link " + temporary + " -> " + final + " failed with errno " + error
+            );
     }
 
     /// <summary>
@@ -101,18 +130,30 @@ public static class HostSaveStore
     /// copy, verified against the catalogue, is the right one), else refused with an <see cref="IOException"/>.
     /// The temporary file is gone afterwards in every case. Returns whether this call put the file there.
     /// </summary>
-    public static bool Install(string temporary, string final, Func<string, bool?> existing, bool replaceOther)
+    public static bool Install(
+        string temporary,
+        string final,
+        Func<string, bool?> existing,
+        bool replaceOther
+    )
     {
         try
         {
-            if (LinkNew(temporary, final)) return true;
+            if (LinkNew(temporary, final))
+                return true;
             bool? verdict = existing(final);
-            if (verdict == true) return false;
+            if (verdict == true)
+                return false;
             if (verdict == false && !replaceOther)
-                throw new IOException("Save store file " + final + " exists with other content; not replaced");
+                throw new IOException(
+                    "Save store file " + final + " exists with other content; not replaced"
+                );
             File.Move(temporary, final, true);
             return true;
         }
-        finally { File.Delete(temporary); }
+        finally
+        {
+            File.Delete(temporary);
+        }
     }
 }

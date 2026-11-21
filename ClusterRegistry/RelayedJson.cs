@@ -29,7 +29,8 @@ internal sealed class RelayedJson
         _lastLength = lastLength;
     }
 
-    public long Length => _chunks.Count == 0 ? 0 : (long)(_chunks.Count - 1) * ChunkSize + _lastLength;
+    public long Length =>
+        _chunks.Count == 0 ? 0 : (long)(_chunks.Count - 1) * ChunkSize + _lastLength;
 
     /// <summary>Reads the whole stream into chunks and validates it as one JSON value; throws JsonException if it is not.</summary>
     public static RelayedJson Read(Stream stream)
@@ -44,7 +45,8 @@ internal sealed class RelayedJson
                 last = 0;
             }
             int read = stream.Read(chunks[^1], last, ChunkSize - last);
-            if (read == 0) break;
+            if (read == 0)
+                break;
             last += read;
         }
         if (last == 0 && chunks.Count > 0)
@@ -53,17 +55,24 @@ internal sealed class RelayedJson
             last = chunks.Count == 0 ? 0 : ChunkSize;
         }
         var relayed = new RelayedJson(chunks, last);
-        var reader = new Utf8JsonReader(relayed.Sequence(), new JsonReaderOptions { CommentHandling = JsonCommentHandling.Skip });
-        if (!reader.Read()) throw new JsonException("empty JSON body");
+        var reader = new Utf8JsonReader(
+            relayed.Sequence(),
+            new JsonReaderOptions { CommentHandling = JsonCommentHandling.Skip }
+        );
+        if (!reader.Read())
+            throw new JsonException("empty JSON body");
         reader.Skip();
-        if (reader.Read()) throw new JsonException("trailing data after the JSON value");
+        if (reader.Read())
+            throw new JsonException("trailing data after the JSON value");
         return relayed;
     }
 
     internal ReadOnlySequence<byte> Sequence()
     {
-        if (_chunks.Count == 0) return ReadOnlySequence<byte>.Empty;
-        if (_chunks.Count == 1) return new ReadOnlySequence<byte>(_chunks[0], 0, _lastLength);
+        if (_chunks.Count == 0)
+            return ReadOnlySequence<byte>.Empty;
+        if (_chunks.Count == 1)
+            return new ReadOnlySequence<byte>(_chunks[0], 0, _lastLength);
         var first = new Segment(_chunks[0], ChunkSize, 0);
         Segment tail = first;
         for (int i = 1; i < _chunks.Count; i++)
@@ -90,15 +99,26 @@ internal sealed class RelayedJson
     /// <summary>Copies the document token by token; strings and property names go through the redactor when <paramref name="redact"/>.</summary>
     internal void WriteTo(Utf8JsonWriter writer, bool redact)
     {
-        var reader = new Utf8JsonReader(Sequence(), new JsonReaderOptions { CommentHandling = JsonCommentHandling.Skip });
+        var reader = new Utf8JsonReader(
+            Sequence(),
+            new JsonReaderOptions { CommentHandling = JsonCommentHandling.Skip }
+        );
         while (reader.Read())
         {
             switch (reader.TokenType)
             {
-                case JsonTokenType.StartObject: writer.WriteStartObject(); break;
-                case JsonTokenType.EndObject: writer.WriteEndObject(); break;
-                case JsonTokenType.StartArray: writer.WriteStartArray(); break;
-                case JsonTokenType.EndArray: writer.WriteEndArray(); break;
+                case JsonTokenType.StartObject:
+                    writer.WriteStartObject();
+                    break;
+                case JsonTokenType.EndObject:
+                    writer.WriteEndObject();
+                    break;
+                case JsonTokenType.StartArray:
+                    writer.WriteStartArray();
+                    break;
+                case JsonTokenType.EndArray:
+                    writer.WriteEndArray();
+                    break;
                 case JsonTokenType.PropertyName:
                     string name = reader.GetString()!;
                     writer.WritePropertyName(redact ? SecretRedactor.Redact(name) : name);
@@ -108,12 +128,20 @@ internal sealed class RelayedJson
                     writer.WriteStringValue(redact ? SecretRedactor.Redact(value) : value);
                     break;
                 case JsonTokenType.Number:
-                    if (reader.HasValueSequence) writer.WriteRawValue(reader.ValueSequence, skipInputValidation: true);
-                    else writer.WriteRawValue(reader.ValueSpan, skipInputValidation: true);
+                    if (reader.HasValueSequence)
+                        writer.WriteRawValue(reader.ValueSequence, skipInputValidation: true);
+                    else
+                        writer.WriteRawValue(reader.ValueSpan, skipInputValidation: true);
                     break;
-                case JsonTokenType.True: writer.WriteBooleanValue(true); break;
-                case JsonTokenType.False: writer.WriteBooleanValue(false); break;
-                case JsonTokenType.Null: writer.WriteNullValue(); break;
+                case JsonTokenType.True:
+                    writer.WriteBooleanValue(true);
+                    break;
+                case JsonTokenType.False:
+                    writer.WriteBooleanValue(false);
+                    break;
+                case JsonTokenType.Null:
+                    writer.WriteNullValue();
+                    break;
             }
         }
     }
@@ -122,11 +150,17 @@ internal sealed class RelayedJson
 /// <summary>Writes a <see cref="RelayedJson"/>, redacting only when the options carry the registry's redacting string converter.</summary>
 internal sealed class RelayedJsonConverter : JsonConverter<RelayedJson>
 {
-    public override RelayedJson Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
-        throw new NotSupportedException("RelayedJson is write-only");
+    public override RelayedJson Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options
+    ) => throw new NotSupportedException("RelayedJson is write-only");
 
-    public override void Write(Utf8JsonWriter writer, RelayedJson value, JsonSerializerOptions options) =>
-        value.WriteTo(writer, redact: ReferenceEquals(options, DirectGateway.RedactingJson));
+    public override void Write(
+        Utf8JsonWriter writer,
+        RelayedJson value,
+        JsonSerializerOptions options
+    ) => value.WriteTo(writer, redact: ReferenceEquals(options, DirectGateway.RedactingJson));
 }
 
 /// <summary>
@@ -135,10 +169,17 @@ internal sealed class RelayedJsonConverter : JsonConverter<RelayedJson>
 /// </summary>
 internal sealed class RedactingElementConverter : JsonConverter<JsonElement>
 {
-    public override JsonElement Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
-        JsonElement.ParseValue(ref reader);
+    public override JsonElement Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options
+    ) => JsonElement.ParseValue(ref reader);
 
-    public override void Write(Utf8JsonWriter writer, JsonElement value, JsonSerializerOptions options)
+    public override void Write(
+        Utf8JsonWriter writer,
+        JsonElement value,
+        JsonSerializerOptions options
+    )
     {
         switch (value.ValueKind)
         {
@@ -153,7 +194,8 @@ internal sealed class RedactingElementConverter : JsonConverter<JsonElement>
                 break;
             case JsonValueKind.Array:
                 writer.WriteStartArray();
-                foreach (JsonElement item in value.EnumerateArray()) Write(writer, item, options);
+                foreach (JsonElement item in value.EnumerateArray())
+                    Write(writer, item, options);
                 writer.WriteEndArray();
                 break;
             case JsonValueKind.String:

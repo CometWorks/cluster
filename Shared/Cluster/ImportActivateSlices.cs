@@ -41,134 +41,176 @@ namespace ClusterPlugin;
 /// </summary>
 internal static class ImportActivateSlices
 {
-	/// <summary>Slices as ascending index lists into <paramref name="builders"/>; empty input = no slices.</summary>
-	internal static List<List<int>> Plan(IReadOnlyList<MyObjectBuilder_EntityBase> builders, int perFrame)
-		=> Plan(builders, perFrame, 0, 0, out _);
+    /// <summary>Slices as ascending index lists into <paramref name="builders"/>; empty input = no slices.</summary>
+    internal static List<List<int>> Plan(
+        IReadOnlyList<MyObjectBuilder_EntityBase> builders,
+        int perFrame
+    ) => Plan(builders, perFrame, 0, 0, out _);
 
-	/// <summary>
-	/// The plan at a constant cost estimate (the self-test's view of the budget; the live import
-	/// re-estimates between slices). <paramref name="overBudget"/>: slices that are a single group
-	/// whose estimate alone exceeds the budget.
-	/// </summary>
-	internal static List<List<int>> Plan(IReadOnlyList<MyObjectBuilder_EntityBase> builders, int perFrame, double budgetMs, double msPerEntity, out int overBudget)
-	{
-		if (perFrame <= 0) throw new ArgumentOutOfRangeException(nameof(perFrame), "perFrame must be positive");
-		List<List<int>> groups = Groups(builders);
-		int[] sizes = groups.Select(x => x.Count).ToArray();
-		List<List<int>> slices = new List<List<int>>();
-		overBudget = 0;
-		for (int next = 0; next < groups.Count;)
-		{
-			int take = Take(sizes, next, perFrame, budgetMs, msPerEntity, out bool over);
-			if (over) overBudget++;
-			slices.Add(Slice(groups, next, take));
-			next += take;
-		}
-		return slices;
-	}
+    /// <summary>
+    /// The plan at a constant cost estimate (the self-test's view of the budget; the live import
+    /// re-estimates between slices). <paramref name="overBudget"/>: slices that are a single group
+    /// whose estimate alone exceeds the budget.
+    /// </summary>
+    internal static List<List<int>> Plan(
+        IReadOnlyList<MyObjectBuilder_EntityBase> builders,
+        int perFrame,
+        double budgetMs,
+        double msPerEntity,
+        out int overBudget
+    )
+    {
+        if (perFrame <= 0)
+            throw new ArgumentOutOfRangeException(nameof(perFrame), "perFrame must be positive");
+        List<List<int>> groups = Groups(builders);
+        int[] sizes = groups.Select(x => x.Count).ToArray();
+        List<List<int>> slices = new List<List<int>>();
+        overBudget = 0;
+        for (int next = 0; next < groups.Count; )
+        {
+            int take = Take(sizes, next, perFrame, budgetMs, msPerEntity, out bool over);
+            if (over)
+                overBudget++;
+            slices.Add(Slice(groups, next, take));
+            next += take;
+        }
+        return slices;
+    }
 
-	/// <summary>The members of groups [start, start + take) as one ascending index list.</summary>
-	internal static List<int> Slice(List<List<int>> groups, int start, int take)
-	{
-		List<int> slice = new List<int>();
-		for (int g = start; g < start + take; g++) slice.AddRange(groups[g]);
-		slice.Sort();
-		return slice;
-	}
+    /// <summary>The members of groups [start, start + take) as one ascending index list.</summary>
+    internal static List<int> Slice(List<List<int>> groups, int start, int take)
+    {
+        List<int> slice = new List<int>();
+        for (int g = start; g < start + take; g++)
+            slice.AddRange(groups[g]);
+        slice.Sort();
+        return slice;
+    }
 
-	/// <summary>
-	/// How many whole groups, from <paramref name="start"/> on, the next slice takes: at least one
-	/// (0 only when none is left), then each next group while the slice stays within
-	/// <paramref name="perFrame"/> entities and, when <paramref name="budgetMs"/> and
-	/// <paramref name="msPerEntity"/> are both positive, within budgetMs at msPerEntity per entity.
-	/// <paramref name="overBudget"/>: the budget applies and the first group alone exceeds it.
-	/// </summary>
-	internal static int Take(IReadOnlyList<int> groupSizes, int start, int perFrame, double budgetMs, double msPerEntity, out bool overBudget)
-	{
-		if (perFrame <= 0) throw new ArgumentOutOfRangeException(nameof(perFrame), "perFrame must be positive");
-		overBudget = false;
-		if (start >= groupSizes.Count) return 0;
-		bool budgeted = budgetMs > 0 && msPerEntity > 0 && !double.IsInfinity(msPerEntity);
-		int entities = groupSizes[start];
-		overBudget = budgeted && entities * msPerEntity > budgetMs;
-		int take = 1;
-		while (start + take < groupSizes.Count)
-		{
-			int grown = entities + groupSizes[start + take];
-			if (grown > perFrame || (budgeted && grown * msPerEntity > budgetMs)) break;
-			entities = grown;
-			take++;
-		}
-		return take;
-	}
+    /// <summary>
+    /// How many whole groups, from <paramref name="start"/> on, the next slice takes: at least one
+    /// (0 only when none is left), then each next group while the slice stays within
+    /// <paramref name="perFrame"/> entities and, when <paramref name="budgetMs"/> and
+    /// <paramref name="msPerEntity"/> are both positive, within budgetMs at msPerEntity per entity.
+    /// <paramref name="overBudget"/>: the budget applies and the first group alone exceeds it.
+    /// </summary>
+    internal static int Take(
+        IReadOnlyList<int> groupSizes,
+        int start,
+        int perFrame,
+        double budgetMs,
+        double msPerEntity,
+        out bool overBudget
+    )
+    {
+        if (perFrame <= 0)
+            throw new ArgumentOutOfRangeException(nameof(perFrame), "perFrame must be positive");
+        overBudget = false;
+        if (start >= groupSizes.Count)
+            return 0;
+        bool budgeted = budgetMs > 0 && msPerEntity > 0 && !double.IsInfinity(msPerEntity);
+        int entities = groupSizes[start];
+        overBudget = budgeted && entities * msPerEntity > budgetMs;
+        int take = 1;
+        while (start + take < groupSizes.Count)
+        {
+            int grown = entities + groupSizes[start + take];
+            if (grown > perFrame || (budgeted && grown * msPerEntity > budgetMs))
+                break;
+            entities = grown;
+            take++;
+        }
+        return take;
+    }
 
-	/// <summary>
-	/// The physical groups as ascending index lists into <paramref name="builders"/>, in the order of
-	/// their first member; every index exactly once.
-	/// </summary>
-	internal static List<List<int>> Groups(IReadOnlyList<MyObjectBuilder_EntityBase> builders)
-	{
-		int count = builders.Count;
-		int[] parent = new int[count];
-		for (int i = 0; i < count; i++) parent[i] = i;
-		int Find(int x)
-		{
-			while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
-			return x;
-		}
-		void Union(int a, int b)
-		{
-			if (a < 0 || b < 0) return;
-			a = Find(a); b = Find(b);
-			if (a == b) return;
-			// The smaller index is the root, so a group's root is its first member.
-			if (a < b) parent[b] = a; else parent[a] = b;
-		}
+    /// <summary>
+    /// The physical groups as ascending index lists into <paramref name="builders"/>, in the order of
+    /// their first member; every index exactly once.
+    /// </summary>
+    internal static List<List<int>> Groups(IReadOnlyList<MyObjectBuilder_EntityBase> builders)
+    {
+        int count = builders.Count;
+        int[] parent = new int[count];
+        for (int i = 0; i < count; i++)
+            parent[i] = i;
+        int Find(int x)
+        {
+            while (parent[x] != x)
+            {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+            return x;
+        }
+        void Union(int a, int b)
+        {
+            if (a < 0 || b < 0)
+                return;
+            a = Find(a);
+            b = Find(b);
+            if (a == b)
+                return;
+            // The smaller index is the root, so a group's root is its first member.
+            if (a < b)
+                parent[b] = a;
+            else
+                parent[a] = b;
+        }
 
-		Dictionary<long, int> owner = new Dictionary<long, int>();
-		for (int i = 0; i < count; i++)
-		{
-			MyObjectBuilder_EntityBase builder = builders[i];
-			if (builder == null) continue;
-			if (builder.EntityId != 0) owner.TryAdd(builder.EntityId, i);
-			if (builder is MyObjectBuilder_CubeGrid grid && grid.CubeBlocks != null)
-				foreach (MyObjectBuilder_CubeBlock block in grid.CubeBlocks)
-					if (block != null && block.EntityId != 0) owner.TryAdd(block.EntityId, i);
-		}
-		int Resolve(long id) => id != 0 && owner.TryGetValue(id, out int index) ? index : -1;
+        Dictionary<long, int> owner = new Dictionary<long, int>();
+        for (int i = 0; i < count; i++)
+        {
+            MyObjectBuilder_EntityBase builder = builders[i];
+            if (builder == null)
+                continue;
+            if (builder.EntityId != 0)
+                owner.TryAdd(builder.EntityId, i);
+            if (builder is MyObjectBuilder_CubeGrid grid && grid.CubeBlocks != null)
+                foreach (MyObjectBuilder_CubeBlock block in grid.CubeBlocks)
+                    if (block != null && block.EntityId != 0)
+                        owner.TryAdd(block.EntityId, i);
+        }
+        int Resolve(long id) => id != 0 && owner.TryGetValue(id, out int index) ? index : -1;
 
-		for (int i = 0; i < count; i++)
-		{
-			if (builders[i] is not MyObjectBuilder_CubeGrid grid || grid.CubeBlocks == null) continue;
-			foreach (MyObjectBuilder_CubeBlock block in grid.CubeBlocks)
-			{
-				switch (block)
-				{
-					case MyObjectBuilder_MechanicalConnectionBlock mechanical when mechanical.TopBlockId is long top:
-						Union(i, Resolve(top));
-						break;
-					case MyObjectBuilder_AttachableTopBlockBase head:
-						Union(i, Resolve(head.ParentEntityId));
-						break;
-					case MyObjectBuilder_ShipConnector connector:
-						Union(i, Resolve(connector.ConnectedEntityId));
-						break;
-					case MyObjectBuilder_LandingGear gear when gear.AttachedEntityId is long attached:
-						Union(i, Resolve(attached));
-						break;
-				}
-			}
-		}
+        for (int i = 0; i < count; i++)
+        {
+            if (builders[i] is not MyObjectBuilder_CubeGrid grid || grid.CubeBlocks == null)
+                continue;
+            foreach (MyObjectBuilder_CubeBlock block in grid.CubeBlocks)
+            {
+                switch (block)
+                {
+                    case MyObjectBuilder_MechanicalConnectionBlock mechanical
+                        when mechanical.TopBlockId is long top:
+                        Union(i, Resolve(top));
+                        break;
+                    case MyObjectBuilder_AttachableTopBlockBase head:
+                        Union(i, Resolve(head.ParentEntityId));
+                        break;
+                    case MyObjectBuilder_ShipConnector connector:
+                        Union(i, Resolve(connector.ConnectedEntityId));
+                        break;
+                    case MyObjectBuilder_LandingGear gear
+                        when gear.AttachedEntityId is long attached:
+                        Union(i, Resolve(attached));
+                        break;
+                }
+            }
+        }
 
-		Dictionary<int, List<int>> groups = new Dictionary<int, List<int>>();
-		List<int> roots = new List<int>();
-		for (int i = 0; i < count; i++)
-		{
-			int root = Find(i);
-			if (!groups.TryGetValue(root, out List<int> members)) { groups[root] = members = new List<int>(); roots.Add(root); }
-			members.Add(i);
-		}
+        Dictionary<int, List<int>> groups = new Dictionary<int, List<int>>();
+        List<int> roots = new List<int>();
+        for (int i = 0; i < count; i++)
+        {
+            int root = Find(i);
+            if (!groups.TryGetValue(root, out List<int> members))
+            {
+                groups[root] = members = new List<int>();
+                roots.Add(root);
+            }
+            members.Add(i);
+        }
 
-		return roots.Select(root => groups[root]).ToList();
-	}
+        return roots.Select(root => groups[root]).ToList();
+    }
 }

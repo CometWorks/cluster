@@ -9,14 +9,14 @@ namespace Sandbox.Game.Entities.Cube;
 // install time. Null (no delegate, or no record) means "no such remote peer".
 public static class ClusterLaserLink
 {
-	public struct PeerInfo
-	{
-		public long TargetId;
-		public byte State;
-		public bool Powered;
-		public bool RotationFinished;
-		public Vector3D HeadPos;
-	}
+    public struct PeerInfo
+    {
+        public long TargetId;
+        public byte State;
+        public bool Powered;
+        public bool RotationFinished;
+        public Vector3D HeadPos;
+    }
 
-	public static Func<long, PeerInfo?> Peer;
+    public static Func<long, PeerInfo?> Peer;
 }

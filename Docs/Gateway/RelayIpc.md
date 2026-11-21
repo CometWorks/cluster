@@ -144,6 +144,7 @@ correlation.
 | 20 | `SteamAuth` | `{op:"begin", clientId, ticket:base64}` (BeginAuthSession with the ticket from CLIENT_CONNECTED), `{op:"end", clientId}`, `{op:"group", clientId, groupId}` (RequestUserGroupStatus) |
 | 21 | `SteamEvent` (Rust→C#) | `{kind:"ticket", clientId, response, owner, missingDlcs?}`: ValidateAuthTicketResponse, `response` the raw EAuthSessionResponse (C# maps it with `SteamFrontend.Verdict`); also a later revocation. On an OK verdict `missingDlcs` lists the DLC app ids the player has no licence for (SE-1158). `{kind:"ticketRejected", clientId, response}`: BeginAuthSession failed (EBeginAuthSessionResult), C# treats it as TicketInvalid. `{kind:"group", clientId, member}`: GSClientGroupStatus (member or officer) |
 | 22 | `SteamPublish` | `{serverName, mapName, maxPlayers, passwordProtected, tags, players:[{userId,name}]}`: the browser row. C# sends it on connect, every 5 s and after an admission; gateway-rs re-applies the last one every 5 s (BUpdateUserData per player, the players Steam will not name counted as bots) |
+| 23 | `SteamSkins` | C#→Rust `{clientId, session, data:base64}`: verify a signed inventory blob for the current Steam relay session. Rust→C# with the same correlation: `{skins:[assetModifierId,...]}` for verified Armor/Block items, `{skins:null}` on refusal, invalid ownership, timeout or session loss. One pending check per client, at most 5 seconds; waits for item definitions, rejects expired blobs and destroys every result handle. IPC loss discards outstanding correlations. |
 
 gateway-rs is then the whole Steam frontend of `SteamFrontend.cs`; C# keeps admission:
 
@@ -166,6 +167,8 @@ gateway-rs is then the whole Steam frontend of `SteamFrontend.cs`; C# keeps admi
   no CLIENT_CONNECTED within 5 s is a client still playing an ended session: C# force-reconnects it
   again until 15 s after the first forced reconnect, then refuses it with a synthesized
   `JOIN_RESULT{UserNotConnected}` (fatal to a vanilla client: back to the main menu).
+- SE-1553: the in-process Steam frontend follows the same two rules (the GameServer id in a forced reconnect, a
+  session without a login ended after 5 s); before, its clients ignored forced reconnects.
   `/transport/status` lists such clients under `reconnectStreaks` until they are admitted again.
 
 ### Node links

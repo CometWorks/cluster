@@ -17,38 +17,65 @@ namespace ClusterPlugin;
 /// </summary>
 internal static class UnknownOwnerGuard
 {
-	private const double WalkSeconds = 60;
-	private const double RepeatSeconds = 600;
-	private const int Examples = 5;
-	private static Dictionary<long, long> m_previous = new Dictionary<long, long>();
-	private static double m_nextWalk, m_nextRepeat;
-	private static int m_reported;
+    private const double WalkSeconds = 60;
+    private const double RepeatSeconds = 600;
+    private const int Examples = 5;
+    private static Dictionary<long, long> m_previous = new Dictionary<long, long>();
+    private static double m_nextWalk,
+        m_nextRepeat;
+    private static int m_reported;
 
-	internal static void Update()
-	{
-		if (!ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority || MySession.Static?.Ready != true) return;
-		double now = ClusterRuntime.LocalMilliseconds;
-		if (now < m_nextWalk) return;
-		m_nextWalk = now + WalkSeconds * 1000;
-		var current = new Dictionary<long, long>();
-		foreach (MyEntity entity in MyEntities.GetEntities())
-		{
-			if (entity is not MyCubeGrid grid || grid.MarkedForClose) continue;
-			foreach (long owner in grid.BigOwners)
-				if (owner != 0 && MySession.Static.Players.TryGetIdentity(owner) == null)
-				{
-					current[grid.EntityId] = owner;
-					break;
-				}
-		}
-		var persistent = current.Where(entry => m_previous.TryGetValue(entry.Key, out long owner) && owner == entry.Value).ToList();
-		m_previous = current;
-		if (persistent.Count == m_reported && (persistent.Count == 0 || now < m_nextRepeat)) return;
-		m_reported = persistent.Count;
-		m_nextRepeat = now + RepeatSeconds * 1000;
-		Console.WriteLine("[ClusterPlugin] " + (persistent.Count == 0 ? "" : "WARNING: ") + "grids_unknown_owner count=" + persistent.Count
-			+ " owners=" + persistent.Select(entry => entry.Value).Distinct().Count()
-			+ " examples=" + string.Join(",", persistent.Take(Examples).Select(entry => entry.Key + ":" + entry.Value))
-			+ (persistent.Count == 0 ? "" : " (grids owned by an identity this node does not know, #1365)"));
-	}
+    internal static void Update()
+    {
+        if (
+            !ClusterRuntime.IsClustered
+            || ClusterRuntime.IsWorldAuthority
+            || MySession.Static?.Ready != true
+        )
+            return;
+        double now = ClusterRuntime.LocalMilliseconds;
+        if (now < m_nextWalk)
+            return;
+        m_nextWalk = now + WalkSeconds * 1000;
+        var current = new Dictionary<long, long>();
+        foreach (MyEntity entity in MyEntities.GetEntities())
+        {
+            if (entity is not MyCubeGrid grid || grid.MarkedForClose)
+                continue;
+            foreach (long owner in grid.BigOwners)
+                if (owner != 0 && MySession.Static.Players.TryGetIdentity(owner) == null)
+                {
+                    current[grid.EntityId] = owner;
+                    break;
+                }
+        }
+        var persistent = current
+            .Where(entry =>
+                m_previous.TryGetValue(entry.Key, out long owner) && owner == entry.Value
+            )
+            .ToList();
+        m_previous = current;
+        if (persistent.Count == m_reported && (persistent.Count == 0 || now < m_nextRepeat))
+            return;
+        m_reported = persistent.Count;
+        m_nextRepeat = now + RepeatSeconds * 1000;
+        Console.WriteLine(
+            "[ClusterPlugin] "
+                + (persistent.Count == 0 ? "" : "WARNING: ")
+                + "grids_unknown_owner count="
+                + persistent.Count
+                + " owners="
+                + persistent.Select(entry => entry.Value).Distinct().Count()
+                + " examples="
+                + string.Join(
+                    ",",
+                    persistent.Take(Examples).Select(entry => entry.Key + ":" + entry.Value)
+                )
+                + (
+                    persistent.Count == 0
+                        ? ""
+                        : " (grids owned by an identity this node does not know, #1365)"
+                )
+        );
+    }
 }

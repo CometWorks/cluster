@@ -28,6 +28,9 @@ internal static partial class SelfTest
         string path = Path.Combine(directory, "gateway-relay.sock");
         Environment.SetEnvironmentVariable("CLUSTER_ALLOW_TEST_ACCEPT_ALL", "true");
         TimeSpan grace = DirectGateway.DeadClientGrace;
+        // SE-1450: these joins never send CLIENT_READY; the "silent" reports below must end them at once.
+        TimeSpan loading = DirectGateway.LoadingSilenceLimit;
+        DirectGateway.LoadingSilenceLimit = TimeSpan.Zero;
         var options = new GatewayOptions(
             new(IPAddress.Loopback, FreeUdpPort()),
             new(IPAddress.Loopback, FreeUdpPort()),
@@ -164,6 +167,7 @@ internal static partial class SelfTest
         finally
         {
             DirectGateway.DeadClientGrace = grace;
+            DirectGateway.LoadingSilenceLimit = loading;
             gateway.Stop();
             Environment.SetEnvironmentVariable("CLUSTER_ALLOW_TEST_ACCEPT_ALL", null);
             try

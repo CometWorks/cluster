@@ -17,20 +17,29 @@ namespace Shared.Patches;
 /// and covers every TData. Unicast messages also pass through EnqueueMessage and are skipped -
 /// their remote path is the unicast prefix in <c>MyIntergridCommunicationContextPatch</c>.
 /// </summary>
-[HarmonyPatch(typeof(MyIGCSystemSessionComponent), nameof(MyIGCSystemSessionComponent.EnqueueMessage))]
+[HarmonyPatch(
+    typeof(MyIGCSystemSessionComponent),
+    nameof(MyIGCSystemSessionComponent.EnqueueMessage)
+)]
 public static class MyIGCSystemSessionComponentPatch
 {
-	[HarmonyPostfix]
-	private static void EnqueueMessagePostfix(MyIGCSystemSessionComponent.Message message)
-	{
-		Action<MyProgrammableBlock, string, object, int> hook = MyIntergridCommunicationContextSeams.ClusterSendRemoteBroadcast;
-		if (hook == null || message.IsUnicast || message.Source == null)
-		{
-			return;
-		}
-		// ClusterPlugin patch point: MyIntergridCommunicationContextPatch.SendRemoteBroadcast
-		// Listeners on other nodes are invisible to the local dispatch loop, so without this a broadcast stops at
-		// the partition boundary. The hook only reaches nodes that report a listener for this tag.
-		hook(message.Source.ProgrammableBlock, message.Tag, message.Data, (int)message.TransmissionDistance);
-	}
+    [HarmonyPostfix]
+    private static void EnqueueMessagePostfix(MyIGCSystemSessionComponent.Message message)
+    {
+        Action<MyProgrammableBlock, string, object, int> hook =
+            MyIntergridCommunicationContextSeams.ClusterSendRemoteBroadcast;
+        if (hook == null || message.IsUnicast || message.Source == null)
+        {
+            return;
+        }
+        // ClusterPlugin patch point: MyIntergridCommunicationContextPatch.SendRemoteBroadcast
+        // Listeners on other nodes are invisible to the local dispatch loop, so without this a broadcast stops at
+        // the partition boundary. The hook only reaches nodes that report a listener for this tag.
+        hook(
+            message.Source.ProgrammableBlock,
+            message.Tag,
+            message.Data,
+            (int)message.TransmissionDistance
+        );
+    }
 }

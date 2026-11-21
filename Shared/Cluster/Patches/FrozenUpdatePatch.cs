@@ -25,22 +25,23 @@ namespace ClusterPlugin;
 /// </summary>
 public static class FrozenUpdatePatch
 {
-	public static Func<long, bool> IsFrozen { get; set; }
+    public static Func<long, bool> IsFrozen { get; set; }
 
-	public static void Install()
-	{
-		MyParallelEntityUpdateOrchestratorSeams.ClusterDeferOnceBeforeFrame = Defer;
-	}
+    public static void Install()
+    {
+        MyParallelEntityUpdateOrchestratorSeams.ClusterDeferOnceBeforeFrame = Defer;
+    }
 
-	/// <summary>
-	/// True when this entity belongs to a frozen partition and its once-before-frame work must wait. Blocks
-	/// resolve to their grid: the freeze is recorded against the top-level entity, which is the partition
-	/// member, and a block is only ever frozen by way of its parent.
-	/// </summary>
-	public static bool Defer(MyEntity entity)
-	{
-		if (IsFrozen == null || entity == null || entity.MarkedForClose) return false;
-		MyEntity root = entity.GetTopMostParent() ?? entity;
-		return IsFrozen(root.EntityId);
-	}
+    /// <summary>
+    /// True when this entity belongs to a frozen partition and its once-before-frame work must wait. Blocks
+    /// resolve to their grid: the freeze is recorded against the top-level entity, which is the partition
+    /// member, and a block is only ever frozen by way of its parent.
+    /// </summary>
+    public static bool Defer(MyEntity entity)
+    {
+        if (IsFrozen == null || entity == null || entity.MarkedForClose)
+            return false;
+        MyEntity root = entity.GetTopMostParent() ?? entity;
+        return IsFrozen(root.EntityId);
+    }
 }

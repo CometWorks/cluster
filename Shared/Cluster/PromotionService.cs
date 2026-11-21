@@ -20,309 +20,500 @@ namespace ClusterPlugin;
 /// re-broadcasts to its own attached clients). A reentrancy guard keeps the seam from reporting the
 /// cluster's own applications back.
 /// </summary>
-public static class PromotionService
+public static partial class PromotionService
 {
-	private const string Subsystem = "promotions";
-	private const int MaxEntries = 4096;
-	private const double SeedGraceMilliseconds = 15_000;
+    private const string Subsystem = "promotions";
+    private const int MaxEntries = 4096;
+    private const double SeedGraceMilliseconds = 15_000;
 
-	private static readonly object SyncRoot = new object();
-	private static readonly Dictionary<ulong, PromotionEntry> Levels = new();
-	private static readonly string Node = Environment.GetEnvironmentVariable("CLUSTER_NODE_ID") ?? string.Empty;
+    private static readonly object SyncRoot = new object();
+    private static readonly Dictionary<ulong, PromotionEntry> Levels = new();
+    private static readonly string Node =
+        Environment.GetEnvironmentVariable("CLUSTER_NODE_ID") ?? string.Empty;
 
-	private static string m_snapshot = JsonSerializer.Serialize(new PromotionSnapshot(Array.Empty<PromotionEntry>()));
-	private static string m_pending;
-	private static string m_applied;
-	private static Dictionary<ulong, int> m_appliedLevels;
-	private static bool m_applying;
-	private static volatile bool m_seeded;
-	private static double m_readySince;
-	private static double m_nextDefaultRole;
+    private static string m_snapshot = JsonSerializer.Serialize(
+        new PromotionSnapshot(Array.Empty<PromotionEntry>())
+    );
+    private static string m_pending;
+    private static string m_applied;
+    private static Dictionary<ulong, int> m_appliedLevels;
+    private static AccessPromotionLease[] m_appliedAccess = Array.Empty<AccessPromotionLease>();
+    private static bool m_applying;
+    private static volatile bool m_seeded;
+    private static double m_readySince;
+    private static double m_nextDefaultRole;
 
-	public sealed record PromotionEntry(ulong SteamId, int Level, long Revision = 0);
-	public sealed record PromotionChange(ulong SteamId, int Level, long ExpectedRevision);
-	public sealed record PromotionReport(string Origin, PromotionEntry[] Entries, bool Seed = false);
-	public sealed record PromotionSnapshot(PromotionEntry[] Entries);
+    public sealed record PromotionEntry(ulong SteamId, int Level, long Revision = 0);
 
-	/// <summary>Cluster backend sessions may use OFFLINE mode, where vanilla reports every
-	/// nonzero id as Owner. Only the replicated promotion map grants a cluster bypass.</summary>
-	internal static bool IsModerator(ulong userId)
-	{
-		MySession session = MySession.Static;
-		if (session == null) return false;
-		return (ClusterRuntime.IsClustered ? session.PromotedUsers.GetValueOrDefault(userId)
-			: session.GetUserPromoteLevel(userId)) >= MyPromoteLevel.Moderator;
-	}
+    public sealed record PromotionChange(ulong SteamId, int Level, long ExpectedRevision);
 
-	internal static void Install()
-	{
-		MySessionSeams.ClusterPromotionChanged = OnPromotionChanged;
-		GlobalStateChannel.RegisterAuthorityHandler(Subsystem, ReceiveReport);
-		GlobalStateChannel.RegisterReplicaHandler(Subsystem, ReceiveSnapshot);
-		GlobalStateChannel.RegisterSnapshot(Subsystem, Snapshot, ReceiveSnapshot);
-		GlobalStateChannel.RegisterCommandHandler("promotion-set", SetFromGateway, journaled: true);
-		GlobalStateChannel.RegisterQueryHandler("promotion-query", QueryFromGateway);
-	}
+    public sealed record PromotionReport(
+        string Origin,
+        PromotionEntry[] Entries,
+        bool Seed = false
+    );
 
-	private static string QueryFromGateway(string origin, string payload)
-	{
-		if (origin != "$gateway") throw new InvalidOperationException("Promotion administration must originate at the Gateway");
-		lock (SyncRoot)
-		{
-			if (!m_seeded) throw new InvalidOperationException("World Authority promotions are not ready");
-			return m_snapshot;
-		}
-	}
+    public sealed record PromotionSnapshot(
+        PromotionEntry[] Entries,
+        AccessPromotionLease[] Access = null
+    );
 
-	private static string SetFromGateway(string origin, string payload)
-	{
-		if (origin != "$gateway") throw new InvalidOperationException("Promotion administration must originate at the Gateway");
-		PromotionChange entry = JsonSerializer.Deserialize<PromotionChange>(payload);
-		if (entry == null || entry.SteamId == 0 || entry.Level is < 0 or > 4 || entry.ExpectedRevision < 0 || entry.ExpectedRevision == long.MaxValue)
-			throw new ArgumentException("Invalid player promotion");
-		MySandboxGame game = MySandboxGame.Static ?? throw new InvalidOperationException("The World Authority game is unavailable");
-		var completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-		void Apply()
-		{
-			try
-			{
-				if (!ClusterRuntime.IsWorldAuthority || ClusterRuntime.IsAuthorityFenced || MySession.Static?.Ready != true)
-					throw new InvalidOperationException("The World Authority is unavailable");
-				SeedFromSession(MySession.Static);
-				if (!m_seeded) throw new InvalidOperationException("promotion_not_ready");
-				lock (SyncRoot)
-				{
-					if ((Levels.TryGetValue(entry.SteamId, out var current) ? current.Revision : 0) != entry.ExpectedRevision)
-						throw new InvalidOperationException("promotion_revision_mismatch");
-					ReceiveReport(origin, JsonSerializer.Serialize(new PromotionReport(origin, new[] { new PromotionEntry(entry.SteamId, entry.Level) })));
-					// The acknowledgement and the next checkpoint must see the game-thread effect.
-					Update();
-					completion.SetResult(JsonSerializer.Serialize(Levels[entry.SteamId]));
-				}
-			}
-			catch (Exception e) { completion.SetException(e); }
-		}
-		if (game.UpdateThread == Thread.CurrentThread) Apply();
-		else game.Invoke(Apply, "ClusterPlugin promotion administration");
-		return completion.Task.GetAwaiter().GetResult();
-	}
+    /// <summary>Cluster backend sessions may use OFFLINE mode, where vanilla reports every
+    /// nonzero id as Owner. Only the replicated promotion map grants a cluster bypass.</summary>
+    internal static bool IsModerator(ulong userId) => HasLevel(userId, MyPromoteLevel.Moderator);
 
-	internal static bool Ready => m_seeded;
-	internal static string PersistedRecord() => Snapshot();
+    internal static bool HasLevel(ulong userId, MyPromoteLevel minimum)
+    {
+        MySession session = MySession.Static;
+        if (session == null)
+            return false;
+        return (
+                ClusterRuntime.IsClustered
+                    ? session.PromotedUsers.GetValueOrDefault(userId)
+                    : session.GetUserPromoteLevel(userId)
+            ) >= minimum;
+    }
 
-	internal static void RestoreRecord(string payload)
-	{
-		if (string.IsNullOrEmpty(payload)) return; // Older saves seed from their checkpoint.
-		PromotionSnapshot snapshot = ReadSnapshot(payload);
-		lock (SyncRoot)
-		{
-			Levels.Clear();
-			foreach (PromotionEntry entry in snapshot.Entries) Levels.Add(entry.SteamId, entry);
-			m_snapshot = m_pending = payload;
-			m_seeded = true;
-		}
-	}
+    internal static void Install()
+    {
+        MySessionSeams.ClusterPromotionChanged = OnPromotionChanged;
+        GlobalStateChannel.RegisterAuthorityHandler(Subsystem, ReceiveReport);
+        GlobalStateChannel.RegisterReplicaHandler(Subsystem, ReceiveSnapshot);
+        GlobalStateChannel.RegisterSnapshot(Subsystem, Snapshot, ReceiveSnapshot);
+        GlobalStateChannel.RegisterCommandHandler("promotion-set", SetFromGateway, journaled: true);
+        GlobalStateChannel.RegisterCommandHandler(
+            "promotion-access",
+            AccessFromGateway,
+            journaled: true
+        );
+        GlobalStateChannel.RegisterQueryHandler("promotion-query", QueryFromGateway);
+    }
 
-	private static void OnPromotionChanged(ulong steamId, MyPromoteLevel level)
-	{
-		if (!ClusterRuntime.IsClustered || m_applying) return;
-		string payload = JsonSerializer.Serialize(new PromotionReport(Node,
-			new[] { new PromotionEntry(steamId, (int)level) }));
-		Console.WriteLine($"[ClusterPlugin] promotion report client={steamId} level={(int)level}");
-		if (ClusterRuntime.IsWorldAuthority) ReceiveReport(Node, payload);
-		else GlobalStateChannel.SendRequest(Subsystem, payload);
-	}
+    private static string QueryFromGateway(string origin, string payload)
+    {
+        if (origin != "$gateway")
+            throw new InvalidOperationException(
+                "Promotion administration must originate at the Gateway"
+            );
+        lock (SyncRoot)
+        {
+            if (!m_seeded)
+                throw new InvalidOperationException("World Authority promotions are not ready");
+            return m_snapshot;
+        }
+    }
 
-	/// <summary>
-	/// Reports this node's whole local promotion map once, as soon as the session is ready. A level that
-	/// arrives in the world checkpoint (or from ConfigDedicated.Administrators) is not a change, so nothing
-	/// would ever report it: the authoritative map would start empty and the demotion pass below would then
-	/// wipe the seeded admins on every node, clients included.
-	/// </summary>
-	private static void SeedFromSession(MySession session)
-	{
-		if (m_seeded || !ClusterRuntime.IsClustered) return;
-		if (m_readySince == 0) m_readySince = ClusterRuntime.LocalMilliseconds;
-		PromotionEntry[] entries = session.PromotedUsers
-			.Where(entry => (int)entry.Value > 0)
-			.Select(entry => new PromotionEntry(entry.Key, Math.Min((int)entry.Value, (int)MyPromoteLevel.Admin)))
-			.ToArray();
-		if (entries.Length == 0)
-		{
-			// The checkpoint's levels do not all land with MySession.Ready: player data carries its own
-			// PromoteLevel (MyPlayerCollection.LoadPlayers) and arrives later, so an empty map right after
-			// load is no proof there is nothing to seed - a live flight lost its admin exactly there.
-			// ponytail: fixed grace, swap for a session-loaded signal if one ever gets exposed.
-			if (ClusterRuntime.LocalMilliseconds - m_readySince < SeedGraceMilliseconds) return;
-			m_seeded = true;
-			return;
-		}
-		string payload = JsonSerializer.Serialize(new PromotionReport(Node, entries, Seed: true));
-		Console.WriteLine($"[ClusterPlugin] promotion seed entries={entries.Length}");
-		if (ClusterRuntime.IsWorldAuthority)
-		{
-			ReceiveReport(Node, payload);
-			m_seeded = true;
-		}
-		// Retried on the next frame while the World Authority is still unreachable: losing the seed would
-		// cost the promotions the demotion pass is about to compare against.
-		else if (GlobalStateChannel.SendRequest(Subsystem, payload)) m_seeded = true;
-	}
+    private static string SetFromGateway(string origin, string payload)
+    {
+        if (origin != "$gateway")
+            throw new InvalidOperationException(
+                "Promotion administration must originate at the Gateway"
+            );
+        PromotionChange entry = JsonSerializer.Deserialize<PromotionChange>(payload);
+        if (
+            entry == null
+            || entry.SteamId == 0
+            || entry.Level is < 0 or > 4
+            || entry.ExpectedRevision < 0
+            || entry.ExpectedRevision == long.MaxValue
+        )
+            throw new ArgumentException("Invalid player promotion");
+        MySandboxGame game =
+            MySandboxGame.Static
+            ?? throw new InvalidOperationException("The World Authority game is unavailable");
+        var completion = new TaskCompletionSource<string>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        void Apply()
+        {
+            try
+            {
+                if (
+                    !ClusterRuntime.IsWorldAuthority
+                    || ClusterRuntime.IsAuthorityFenced
+                    || MySession.Static?.Ready != true
+                )
+                    throw new InvalidOperationException("The World Authority is unavailable");
+                SeedFromSession(MySession.Static);
+                if (!m_seeded)
+                    throw new InvalidOperationException("promotion_not_ready");
+                lock (SyncRoot)
+                {
+                    if (
+                        (Levels.TryGetValue(entry.SteamId, out var current) ? current.Revision : 0)
+                        != entry.ExpectedRevision
+                    )
+                        throw new InvalidOperationException("promotion_revision_mismatch");
+                    if (
+                        Access.TryGetValue(entry.SteamId, out var lease)
+                        && lease.ExpiresAt > DateTimeOffset.UtcNow
+                        && entry.Level < lease.Level
+                    )
+                        throw new InvalidOperationException("promotion_managed_by_discord");
+                    ReceiveReport(
+                        origin,
+                        JsonSerializer.Serialize(
+                            new PromotionReport(
+                                origin,
+                                new[] { new PromotionEntry(entry.SteamId, entry.Level) }
+                            )
+                        )
+                    );
+                    // The acknowledgement and the next checkpoint must see the game-thread effect.
+                    Update();
+                    completion.SetResult(JsonSerializer.Serialize(Levels[entry.SteamId]));
+                }
+            }
+            catch (Exception e)
+            {
+                completion.SetException(e);
+            }
+        }
+        if (game.UpdateThread == Thread.CurrentThread)
+            Apply();
+        else
+            game.Invoke(Apply, "ClusterPlugin promotion administration");
+        return completion.Task.GetAwaiter().GetResult();
+    }
 
-	private static void ReceiveReport(string origin, string payload)
-	{
-		PromotionReport report = Read(payload);
-		lock (SyncRoot)
-		{
-			foreach (PromotionEntry entry in report.Entries)
-			{
-				// Startup/transfer checkpoint data cannot undo a later explicit role, including None.
-				if (report.Seed && Levels.ContainsKey(entry.SteamId)) continue;
-				if (!Levels.ContainsKey(entry.SteamId) && Levels.Count >= MaxEntries)
-					throw new InvalidOperationException("Promotion map is full");
-				Levels.TryGetValue(entry.SteamId, out var current);
-				Levels[entry.SteamId] = current?.Level == entry.Level ? current
-					: entry with { Revision = checked((current?.Revision ?? 0) + 1) };
-			}
-			PublishMerged();
-		}
-	}
+    /// <summary>SE-1487 forget player, World Authority: drops the player's entry, so the nodes demote them and admin
+    /// lists stop naming them. True if there was one.</summary>
+    internal static bool Forget(ulong steamId)
+    {
+        lock (SyncRoot)
+        {
+            Access.Remove(steamId);
+            if (!Levels.Remove(steamId))
+                return false;
+            PublishMerged();
+        }
+        Update();
+        return true;
+    }
 
-	private static void PublishMerged()
-	{
-		string payload;
-		lock (SyncRoot)
-			payload = m_snapshot = JsonSerializer.Serialize(new PromotionSnapshot(Levels
-				.OrderBy(entry => entry.Key)
-				.Select(entry => entry.Value)
-				.ToArray()));
-		GlobalStateChannel.Publish(Subsystem, payload);
-		// The WA never receives its own replica broadcasts - park the merged map so its Update()
-		// applies it into the local session the same way every replica does.
-		lock (SyncRoot) m_pending = payload;
-	}
+    internal static bool Ready => m_seeded;
 
-	private static void ReceiveSnapshot(string payload)
-	{
-		ReadSnapshot(payload);
-		lock (SyncRoot) m_pending = payload;
-	}
+    internal static string PersistedRecord() => Snapshot();
 
-	/// <summary>
-	/// Applies the latest replicated snapshot on the game thread by re-raising the vanilla event for
-	/// every difference - PromotedUsers and the client broadcast are game-thread machinery.
-	/// </summary>
-	public static void Update()
-	{
-		MySession session = MySession.Static;
-		if (session?.Ready != true) return;
-		SeedFromSession(session);
-		// Until the seed is in, an authoritative map that has never heard of this node's promotions would
-		// demote them.
-		if (!m_seeded) return;
-		GrantDefaultRole();
-		string payload;
-		Dictionary<ulong, int> replicated;
-		lock (SyncRoot)
-		{
-			// Player loading can restore stale checkpoint roles without a promotion event.
-			// Reconcile even an unchanged snapshot after a reconnect or node move.
-			payload = m_pending ?? m_applied;
-			if (payload == null) return;
-			replicated = payload == m_applied ? m_appliedLevels
-				: ReadSnapshot(payload).Entries.ToDictionary(entry => entry.SteamId, entry => entry.Level);
-		}
-		// Demotions first: local entries the authoritative map no longer contains.
-		ulong[] demoted = session.PromotedUsers.Keys.Where(steamId => !replicated.ContainsKey(steamId)).ToArray();
-		m_applying = true;
-		try
-		{
-			foreach (ulong steamId in demoted)
-				MySessionSeams.ClusterRaisePromoteLevel(steamId, MyPromoteLevel.None);
-			foreach ((ulong steamId, int level) in replicated)
-			{
-				session.PromotedUsers.TryGetValue(steamId, out MyPromoteLevel current);
-				if ((int)current != level) MySessionSeams.ClusterRaisePromoteLevel(steamId, (MyPromoteLevel)level);
-			}
-		}
-		finally { m_applying = false; }
-		lock (SyncRoot)
-		{
-			m_applied = payload;
-			m_appliedLevels = replicated;
-			if (string.Equals(m_pending, payload, StringComparison.Ordinal)) m_pending = null;
-		}
-	}
+    internal static void RestoreRecord(string payload)
+    {
+        if (string.IsNullOrEmpty(payload))
+            return; // Older saves seed from their checkpoint.
+        PromotionSnapshot snapshot = ReadSnapshot(payload);
+        lock (SyncRoot)
+        {
+            Levels.Clear();
+            foreach (PromotionEntry entry in snapshot.Entries)
+                Levels.Add(entry.SteamId, entry);
+            RestoreAccess(snapshot);
+            m_snapshot = m_pending = payload;
+            m_seeded = true;
+        }
+    }
 
-	/// <summary>
-	/// players.defaultRole, World Authority only: once a second, every online player the authoritative map has no
-	/// entry for gets the configured role. It goes in as a seed, so an entry that is already there (an explicit
-	/// None too) always wins, and replicates like any other change.
-	/// </summary>
-	private static void GrantDefaultRole()
-	{
-		if (!ClusterRuntime.IsWorldAuthority) return;
-		double now = ClusterRuntime.LocalMilliseconds;
-		if (now < m_nextDefaultRole) return;
-		m_nextDefaultRole = now + 1000;
-		var level = Enum.Parse<MyPromoteLevel>(ClusterConfig.Get("players.defaultRole"));
-		if (level == MyPromoteLevel.None) return;
-		PromotionEntry[] entries;
-		lock (SyncRoot)
-			entries = OnlinePlayersService.Cluster
-				.Where(player => player.SteamId != 0 && player.SerialId == 0 && !Levels.ContainsKey(player.SteamId))
-				.Select(player => player.SteamId)
-				.Distinct()
-				.Select(steamId => new PromotionEntry(steamId, (int)level))
-				.ToArray();
-		if (entries.Length == 0) return;
-		Console.WriteLine($"[ClusterPlugin] promotion default role={level} clients={string.Join(",", entries.Select(entry => entry.SteamId))}");
-		ReceiveReport(Node, JsonSerializer.Serialize(new PromotionReport(Node, entries, Seed: true)));
-	}
+    private static void OnPromotionChanged(ulong steamId, MyPromoteLevel level)
+    {
+        if (!ClusterRuntime.IsClustered || m_applying)
+            return;
+        string payload = JsonSerializer.Serialize(
+            new PromotionReport(Node, new[] { new PromotionEntry(steamId, (int)level) })
+        );
+        Console.WriteLine($"[ClusterPlugin] promotion report client={steamId} level={(int)level}");
+        if (ClusterRuntime.IsWorldAuthority)
+            ReceiveReport(Node, payload);
+        else
+            GlobalStateChannel.SendRequest(Subsystem, payload);
+    }
 
-	/// <summary>
-	/// Reports the effective level AND the raw PromotedUsers entry. The lane asserts the raw entry:
-	/// with OnlineMode=OFFLINE (the headless test cluster) vanilla short-circuits every steamId to
-	/// Owner before ever consulting the map the cluster replicates.
-	/// </summary>
-	public static object Status(ulong userId)
-	{
-		MySession session = MySession.Static;
-		int promoted = 0;
-		if (session != null && session.PromotedUsers.TryGetValue(userId, out MyPromoteLevel entry))
-			promoted = (int)entry;
-		return new
-		{
-			node = Node,
-			userId,
-			level = session == null ? 0 : (int)session.GetUserPromoteLevel(userId),
-			promoted
-		};
-	}
+    /// <summary>
+    /// Reports this node's whole local promotion map once, as soon as the session is ready. A level that
+    /// arrives in the world checkpoint (or from ConfigDedicated.Administrators) is not a change, so nothing
+    /// would ever report it: the authoritative map would start empty and the demotion pass below would then
+    /// wipe the seeded admins on every node, clients included.
+    /// </summary>
+    private static void SeedFromSession(MySession session)
+    {
+        if (m_seeded || !ClusterRuntime.IsClustered)
+            return;
+        if (m_readySince == 0)
+            m_readySince = ClusterRuntime.LocalMilliseconds;
+        PromotionEntry[] entries = session
+            .PromotedUsers.Where(entry => (int)entry.Value > 0)
+            .Select(entry => new PromotionEntry(
+                entry.Key,
+                Math.Min((int)entry.Value, (int)MyPromoteLevel.Admin)
+            ))
+            .ToArray();
+        if (entries.Length == 0)
+        {
+            // The checkpoint's levels do not all land with MySession.Ready: player data carries its own
+            // PromoteLevel (MyPlayerCollection.LoadPlayers) and arrives later, so an empty map right after
+            // load is no proof there is nothing to seed - a live flight lost its admin exactly there.
+            // ponytail: fixed grace, swap for a session-loaded signal if one ever gets exposed.
+            if (ClusterRuntime.LocalMilliseconds - m_readySince < SeedGraceMilliseconds)
+                return;
+            m_seeded = true;
+            return;
+        }
+        string payload = JsonSerializer.Serialize(new PromotionReport(Node, entries, Seed: true));
+        Console.WriteLine($"[ClusterPlugin] promotion seed entries={entries.Length}");
+        if (ClusterRuntime.IsWorldAuthority)
+        {
+            ReceiveReport(Node, payload);
+            m_seeded = true;
+        }
+        // Retried on the next frame while the World Authority is still unreachable: losing the seed would
+        // cost the promotions the demotion pass is about to compare against.
+        else if (GlobalStateChannel.SendRequest(Subsystem, payload))
+            m_seeded = true;
+    }
 
-	private static PromotionReport Read(string payload)
-	{
-		if (payload == null || payload.Length > 4 * 1024 * 1024)
-			throw new InvalidOperationException("Invalid promotion report");
-		PromotionReport report = JsonSerializer.Deserialize<PromotionReport>(payload)
-			?? throw new InvalidOperationException("Invalid promotion report");
-		if (report.Entries == null || report.Entries.Length > MaxEntries
-			|| report.Entries.Any(entry => entry == null || entry.SteamId == 0 || entry.Level < 0 || entry.Level > (int)MyPromoteLevel.Admin))
-			throw new InvalidOperationException("Invalid promotion report");
-		return report;
-	}
+    private static void ReceiveReport(string origin, string payload)
+    {
+        MergeReport(Read(payload));
+    }
 
-	private static PromotionSnapshot ReadSnapshot(string payload)
-	{
-		if (payload == null || payload.Length > 4 * 1024 * 1024)
-			throw new InvalidOperationException("Invalid promotion snapshot");
-		PromotionSnapshot snapshot = JsonSerializer.Deserialize<PromotionSnapshot>(payload);
-		if (snapshot?.Entries == null || snapshot.Entries.Length > MaxEntries
-			|| snapshot.Entries.Any(entry => entry == null || entry.SteamId == 0 || entry.Level is < 0 or > 4 || entry.Revision < 0)
-			|| snapshot.Entries.Select(entry => entry.SteamId).Distinct().Count() != snapshot.Entries.Length)
-			throw new InvalidOperationException("Invalid promotion snapshot");
-		return snapshot;
-	}
+    private static void MergeReport(PromotionReport report, bool defaultRole = false)
+    {
+        lock (SyncRoot)
+        {
+            foreach (PromotionEntry entry in report.Entries)
+            {
+                // Startup/transfer checkpoint data cannot undo a later explicit role, including None.
+                Access.TryGetValue(entry.SteamId, out var lease);
+                if (
+                    report.Seed
+                    && Levels.ContainsKey(entry.SteamId)
+                    && !(defaultRole && lease is { Baseline: null })
+                )
+                    continue;
+                if (!Levels.ContainsKey(entry.SteamId) && Levels.Count >= MaxEntries)
+                    throw new InvalidOperationException("Promotion map is full");
 
-	private static string Snapshot() { lock (SyncRoot) return m_snapshot; }
+                int effective = entry.Level;
+                if (lease != null)
+                {
+                    Access[entry.SteamId] = lease with { Baseline = entry.Level };
+                    if (lease.ExpiresAt > DateTimeOffset.UtcNow)
+                        effective = Math.Max(effective, lease.Level);
+                }
+                SetAccessLevel(entry.SteamId, effective);
+            }
+            PublishMerged();
+        }
+    }
+
+    private static void PublishMerged()
+    {
+        string payload;
+        lock (SyncRoot)
+            payload = m_snapshot = JsonSerializer.Serialize(
+                new PromotionSnapshot(
+                    Levels.OrderBy(entry => entry.Key).Select(entry => entry.Value).ToArray(),
+                    Access.Count == 0
+                        ? null
+                        : Access.Values.OrderBy(lease => lease.SteamId).ToArray()
+                )
+            );
+        GlobalStateChannel.Publish(Subsystem, payload);
+        // The WA never receives its own replica broadcasts - park the merged map so its Update()
+        // applies it into the local session the same way every replica does.
+        lock (SyncRoot)
+            m_pending = payload;
+    }
+
+    private static void ReceiveSnapshot(string payload)
+    {
+        ReadSnapshot(payload);
+        lock (SyncRoot)
+            m_pending = payload;
+    }
+
+    /// <summary>
+    /// Applies the latest replicated snapshot on the game thread by re-raising the vanilla event for
+    /// every difference - PromotedUsers and the client broadcast are game-thread machinery.
+    /// </summary>
+    public static void Update()
+    {
+        MySession session = MySession.Static;
+        if (session?.Ready != true)
+            return;
+        SeedFromSession(session);
+        // Until the seed is in, an authoritative map that has never heard of this node's promotions would
+        // demote them.
+        if (!m_seeded)
+            return;
+        GrantDefaultRole();
+        var now = DateTimeOffset.UtcNow;
+        if (ClusterRuntime.IsWorldAuthority && !ClusterRuntime.IsAuthorityFenced)
+            ExpireAccess(now);
+        string payload;
+        Dictionary<ulong, int> replicated;
+        lock (SyncRoot)
+        {
+            // Player loading can restore stale checkpoint roles without a promotion event.
+            // Reconcile even an unchanged snapshot after a reconnect or node move.
+            payload = m_pending ?? m_applied;
+            if (payload == null)
+                return;
+            if (payload != m_applied)
+            {
+                var snapshot = ReadSnapshot(payload);
+                m_appliedLevels = snapshot.Entries.ToDictionary(
+                    entry => entry.SteamId,
+                    entry => entry.Level
+                );
+                m_appliedAccess = snapshot.Access ?? Array.Empty<AccessPromotionLease>();
+            }
+            // Project the baseline locally even during an authority outage. Only the authority
+            // changes the durable map. Handle each expiry once per applied snapshot.
+            if (m_appliedAccess.Any(lease => lease.ExpiresAt <= now))
+            {
+                foreach (var lease in m_appliedAccess.Where(lease => lease.ExpiresAt <= now))
+                {
+                    if (lease.Baseline is int baseline)
+                        m_appliedLevels[lease.SteamId] = baseline;
+                    else
+                        m_appliedLevels.Remove(lease.SteamId);
+                }
+                m_appliedAccess = m_appliedAccess.Where(lease => lease.ExpiresAt > now).ToArray();
+            }
+            replicated = m_appliedLevels;
+        }
+        // Demotions first: local entries the authoritative map no longer contains.
+        ulong[] demoted = session
+            .PromotedUsers.Keys.Where(steamId => !replicated.ContainsKey(steamId))
+            .ToArray();
+        m_applying = true;
+        try
+        {
+            foreach (ulong steamId in demoted)
+                MySessionSeams.ClusterRaisePromoteLevel(steamId, MyPromoteLevel.None);
+            foreach ((ulong steamId, int level) in replicated)
+            {
+                session.PromotedUsers.TryGetValue(steamId, out MyPromoteLevel current);
+                if ((int)current != level)
+                    MySessionSeams.ClusterRaisePromoteLevel(steamId, (MyPromoteLevel)level);
+            }
+        }
+        finally
+        {
+            m_applying = false;
+        }
+        lock (SyncRoot)
+        {
+            m_applied = payload;
+            if (string.Equals(m_pending, payload, StringComparison.Ordinal))
+                m_pending = null;
+        }
+    }
+
+    /// <summary>
+    /// players.defaultRole, World Authority only: once a second, every online player the authoritative map has no
+    /// entry for gets the configured role. It goes in as a seed, so an entry that is already there (an explicit
+    /// None too) always wins, and replicates like any other change.
+    /// </summary>
+    private static void GrantDefaultRole()
+    {
+        if (!ClusterRuntime.IsWorldAuthority)
+            return;
+        double now = ClusterRuntime.LocalMilliseconds;
+        if (now < m_nextDefaultRole)
+            return;
+        m_nextDefaultRole = now + 1000;
+        var level = Enum.Parse<MyPromoteLevel>(ClusterConfig.Get("players.defaultRole"));
+        if (level == MyPromoteLevel.None)
+            return;
+        PromotionEntry[] entries;
+        lock (SyncRoot)
+            entries = OnlinePlayersService
+                .Cluster.Where(player =>
+                    player.SteamId != 0
+                    && player.SerialId == 0
+                    && (
+                        !Levels.ContainsKey(player.SteamId)
+                        || Access.TryGetValue(player.SteamId, out var lease)
+                            && lease.Baseline == null
+                    )
+                )
+                .Select(player => player.SteamId)
+                .Distinct()
+                .Select(steamId => new PromotionEntry(steamId, (int)level))
+                .ToArray();
+        if (entries.Length == 0)
+            return;
+        Console.WriteLine(
+            $"[ClusterPlugin] promotion default role={level} clients={string.Join(",", entries.Select(entry => entry.SteamId))}"
+        );
+        MergeReport(new PromotionReport(Node, entries, Seed: true), defaultRole: true);
+    }
+
+    /// <summary>
+    /// Reports the effective level AND the raw PromotedUsers entry. The lane asserts the raw entry:
+    /// with OnlineMode=OFFLINE (the headless test cluster) vanilla short-circuits every steamId to
+    /// Owner before ever consulting the map the cluster replicates.
+    /// </summary>
+    public static object Status(ulong userId)
+    {
+        MySession session = MySession.Static;
+        int promoted = 0;
+        if (session != null && session.PromotedUsers.TryGetValue(userId, out MyPromoteLevel entry))
+            promoted = (int)entry;
+        return new
+        {
+            node = Node,
+            userId,
+            level = session == null ? 0 : (int)session.GetUserPromoteLevel(userId),
+            promoted,
+        };
+    }
+
+    private static PromotionReport Read(string payload)
+    {
+        if (payload == null || payload.Length > 4 * 1024 * 1024)
+            throw new InvalidOperationException("Invalid promotion report");
+        PromotionReport report =
+            JsonSerializer.Deserialize<PromotionReport>(payload)
+            ?? throw new InvalidOperationException("Invalid promotion report");
+        if (
+            report.Entries == null
+            || report.Entries.Length > MaxEntries
+            || report.Entries.Any(entry =>
+                entry == null
+                || entry.SteamId == 0
+                || entry.Level < 0
+                || entry.Level > (int)MyPromoteLevel.Admin
+            )
+        )
+            throw new InvalidOperationException("Invalid promotion report");
+        return report;
+    }
+
+    private static PromotionSnapshot ReadSnapshot(string payload)
+    {
+        if (payload == null || payload.Length > 4 * 1024 * 1024)
+            throw new InvalidOperationException("Invalid promotion snapshot");
+        PromotionSnapshot snapshot = JsonSerializer.Deserialize<PromotionSnapshot>(payload);
+        if (
+            snapshot?.Entries == null
+            || snapshot.Entries.Length > MaxEntries
+            || snapshot.Entries.Any(entry =>
+                entry == null
+                || entry.SteamId == 0
+                || entry.Level is < 0 or > 4
+                || entry.Revision < 0
+            )
+            || snapshot.Entries.Select(entry => entry.SteamId).Distinct().Count()
+                != snapshot.Entries.Length
+        )
+            throw new InvalidOperationException("Invalid promotion snapshot");
+        ValidateAccess(snapshot.Access, snapshot.Entries);
+        return snapshot;
+    }
+
+    private static string Snapshot()
+    {
+        lock (SyncRoot)
+            return m_snapshot;
+    }
 }

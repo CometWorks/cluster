@@ -23,18 +23,22 @@ namespace ClusterRegistry;
 internal sealed class OfflinePartition
 {
     public ulong Partition { get; set; }
+
     /// <summary>The Final save the partition went offline with - its whole state.</summary>
     public SaveId Save { get; set; }
     public double X { get; set; }
     public double Y { get; set; }
     public double Z { get; set; }
     public double Radius { get; set; }
+
     /// <summary>Per-member bounding spheres, [x,y,z,r] rows in <see cref="Members"/> order: static by construction.</summary>
     public double[][] MemberSpheres { get; set; } = [];
     public long[] Members { get; set; } = [];
     public long EstimatedSnapshotBytes { get; set; }
+
     /// <summary>AntennaGraphEntry[] JSON as the owner captured it at the freeze - requirement 6.</summary>
     public string? Antennas { get; set; }
+
     /// <summary>ClusterRespawnPoint[] JSON as the owner captured it at the freeze - the spawn trigger.</summary>
     public string? RespawnPoints { get; set; }
     public string OfflineBy { get; set; } = string.Empty;
@@ -44,19 +48,35 @@ internal sealed class OfflinePartition
     public string? LoadRequestedNode { get; set; }
     public DateTimeOffset? LoadRequestedAt { get; set; }
     public string? LoadReason { get; set; }
+
     /// <summary>How many times a directed load has claimed the row since it went offline.</summary>
     public int LoadClaims { get; set; }
+
     /// <summary>#1354: the NPC grids among the members at the freeze, for the NPC census (NpcCensus.cs).</summary>
     public NpcGrid[] Npc { get; set; } = [];
+
     /// <summary>SE-810: every grid among the members at the freeze (OfflineGrids.cs). Null while not known: the row came from a
     /// node that predates the field, and a node is to read it from the Final. Never in the table the nodes poll.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public OfflineGrid[]? Grids { get; set; }
 }
 
-internal sealed record OfflineRequest(ulong Partition, string Node, long Epoch, long Generation, long Sequence,
-    double X, double Y, double Z, double Radius, double[][]? MemberSpheres, long[]? Members, long EstimatedSnapshotBytes,
-    string? Antennas, string? RespawnPoints)
+internal sealed record OfflineRequest(
+    ulong Partition,
+    string Node,
+    long Epoch,
+    long Generation,
+    long Sequence,
+    double X,
+    double Y,
+    double Z,
+    double Radius,
+    double[][]? MemberSpheres,
+    long[]? Members,
+    long EstimatedSnapshotBytes,
+    string? Antennas,
+    string? RespawnPoints
+)
 {
     /// <summary>T-0237: the offer comes from a CLOSED node's drain (a cluster stop or a node rotation) in place
     /// of a release - the Final is already written and the entities already closed, so a refusal means the
@@ -116,7 +136,8 @@ internal sealed partial class GatewayRegistry
 
     public bool IsOffline(ulong partition)
     {
-        lock (_lock) return _state.OfflinePartitions.ContainsKey(partition);
+        lock (_lock)
+            return _state.OfflinePartitions.ContainsKey(partition);
     }
 
     /// <summary>Whether a client's character home lies in an offline partition (or one still loading out of it).</summary>
@@ -129,7 +150,11 @@ internal sealed partial class GatewayRegistry
 
     public bool HasOffline
     {
-        get { lock (_lock) return _state.OfflinePartitions.Count != 0; }
+        get
+        {
+            lock (_lock)
+                return _state.OfflinePartitions.Count != 0;
+        }
     }
 
     /// <summary>
@@ -144,34 +169,78 @@ internal sealed partial class GatewayRegistry
         lock (_lock)
         {
             EnsurePersistenceHealthy();
-            if (_state.OfflinePartitions.TryGetValue(request.Partition, out OfflinePartition? existing))
+            if (
+                _state.OfflinePartitions.TryGetValue(
+                    request.Partition,
+                    out OfflinePartition? existing
+                )
+            )
             {
-                if (existing.Save == new SaveId(request.Partition, request.Generation, request.Sequence)
-                    && existing.OfflineBy == request.Node)
+                if (
+                    existing.Save
+                        == new SaveId(request.Partition, request.Generation, request.Sequence)
+                    && existing.OfflineBy == request.Node
+                )
                     return existing;
-                throw new RegistryConflictException($"Partition {request.Partition} is already offline with save {Key(existing.Save)}");
+                throw new RegistryConflictException(
+                    $"Partition {request.Partition} is already offline with save {Key(existing.Save)}"
+                );
             }
             if (request.Drain)
             {
                 NodeRegistration drainer = RequireNode(request.Node, request.Epoch);
-                if (drainer.Role != NodeRole.Regular || drainer.State is not (NodeState.Closed or NodeState.Active))
-                    throw new RegistryConflictException($"Node '{request.Node}' epoch {request.Epoch} is {drainer.State}; refusing a drain offline");
+                if (
+                    drainer.Role != NodeRole.Regular
+                    || drainer.State is not (NodeState.Closed or NodeState.Active)
+                )
+                    throw new RegistryConflictException(
+                        $"Node '{request.Node}' epoch {request.Epoch} is {drainer.State}; refusing a drain offline"
+                    );
             }
-            else RequireRegularActiveNode(request.Node, request.Epoch);
-            PartitionOwnership owner = RequireOwner(request.Partition, request.Node, request.Epoch, request.Generation);
+            else
+                RequireRegularActiveNode(request.Node, request.Epoch);
+            PartitionOwnership owner = RequireOwner(
+                request.Partition,
+                request.Node,
+                request.Epoch,
+                request.Generation
+            );
             if (IsRetired(request.Partition))
                 throw new RegistryConflictException($"Partition {request.Partition} is retired");
-            if (_state.Handovers.Values.Any(x => x.Partition == request.Partition && x.State is HandoverState.Begun or HandoverState.Active))
-                throw new RegistryConflictException($"Partition {request.Partition} has a handover in flight; refusing offline");
+            if (
+                _state.Handovers.Values.Any(x =>
+                    x.Partition == request.Partition
+                    && x.State is HandoverState.Begun or HandoverState.Active
+                )
+            )
+                throw new RegistryConflictException(
+                    $"Partition {request.Partition} has a handover in flight; refusing offline"
+                );
             if (!(request.Drain && ShuttingDown) && HasRemoteUse(request.Partition))
-                throw new RegistryConflictException($"Partition {request.Partition} has remote-use; refusing offline");
+                throw new RegistryConflictException(
+                    $"Partition {request.Partition} has remote-use; refusing offline"
+                );
             var saveId = new SaveId(request.Partition, request.Generation, request.Sequence);
-            if (!_state.Saves.TryGetValue(Key(saveId), out SaveRegistration? save) || save.PendingDelete || !Reachable(save))
-                throw new RegistryConflictException($"Partition {request.Partition} save {Key(saveId)} is not catalogued with a usable holder; refusing offline");
+            if (
+                !_state.Saves.TryGetValue(Key(saveId), out SaveRegistration? save)
+                || save.PendingDelete
+                || !Reachable(save)
+            )
+                throw new RegistryConflictException(
+                    $"Partition {request.Partition} save {Key(saveId)} is not catalogued with a usable holder; refusing offline"
+                );
             if (NewestCatalogued(request.Partition)?.SaveId != saveId)
-                throw new RegistryConflictException($"Partition {request.Partition} save {Key(saveId)} is not its newest catalogued save; refusing offline");
-            if (request.Members is not { Length: > 0 } || !double.IsFinite(request.Radius) || request.Radius < 0)
-                throw new ArgumentException("An offline partition needs its members and a finite sphere");
+                throw new RegistryConflictException(
+                    $"Partition {request.Partition} save {Key(saveId)} is not its newest catalogued save; refusing offline"
+                );
+            if (
+                request.Members is not { Length: > 0 }
+                || !double.IsFinite(request.Radius)
+                || request.Radius < 0
+            )
+                throw new ArgumentException(
+                    "An offline partition needs its members and a finite sphere"
+                );
             DateTimeOffset now = _clock();
             owner.Node = null;
             owner.Epoch = 0;
@@ -183,8 +252,14 @@ internal sealed partial class GatewayRegistry
             {
                 Partition = request.Partition,
                 Save = saveId,
-                X = request.X, Y = request.Y, Z = request.Z, Radius = request.Radius,
-                MemberSpheres = (request.MemberSpheres ?? []).Where(x => x is { Length: >= 4 }).Select(x => x[..4]).ToArray(),
+                X = request.X,
+                Y = request.Y,
+                Z = request.Z,
+                Radius = request.Radius,
+                MemberSpheres = (request.MemberSpheres ?? [])
+                    .Where(x => x is { Length: >= 4 })
+                    .Select(x => x[..4])
+                    .ToArray(),
                 Members = request.Members,
                 EstimatedSnapshotBytes = Math.Max(0, request.EstimatedSnapshotBytes),
                 Antennas = request.Antennas,
@@ -200,8 +275,10 @@ internal sealed partial class GatewayRegistry
             _state.OfflineRevision++;
             _state.PartitionWeights[request.Partition] = request.Members.Length;
             EmitPartition("offline", request.Partition, null, 0, owner.Generation, "offline");
-            Console.WriteLine($"partition {request.Partition} went OFFLINE from {request.Node}: save {Key(saveId)}, "
-                + $"{request.Members.Length} members, radius {request.Radius:F0}m, row generation {owner.Generation}");
+            Console.WriteLine(
+                $"partition {request.Partition} went OFFLINE from {request.Node}: save {Key(saveId)}, "
+                    + $"{request.Members.Length} members, radius {request.Radius:F0}m, row generation {owner.Generation}"
+            );
             // Durable before the owner closes the entities - but through the group commit
             // (FlushOfflineCommit), not a full-registry write per transition: the caller flushes.
             Persist();
@@ -225,13 +302,19 @@ internal sealed partial class GatewayRegistry
     public void FlushOfflineCommit(TimeSpan minGap)
     {
         long wanted;
-        lock (_lock) wanted = _state.StateSequence;
+        lock (_lock)
+            wanted = _state.StateSequence;
         lock (_offlineCommitLock)
         {
-            lock (_lock) if (!_dirty || _durableSequence >= wanted) return;
+            lock (_lock)
+                if (!_dirty || _durableSequence >= wanted)
+                    return;
             TimeSpan wait = _lastOfflineCommit + minGap - _clock();
-            if (wait > TimeSpan.Zero) Thread.Sleep(wait);
-            lock (_lock) if (!_dirty || _durableSequence >= wanted) return;
+            if (wait > TimeSpan.Zero)
+                Thread.Sleep(wait);
+            lock (_lock)
+                if (!_dirty || _durableSequence >= wanted)
+                    return;
             Flush();
             _lastOfflineCommit = _clock();
         }
@@ -248,8 +331,12 @@ internal sealed partial class GatewayRegistry
     {
         lock (_lock)
         {
-            if (!_state.OfflinePartitions.TryGetValue(partition, out OfflinePartition? row)) return "not-offline";
-            if (_state.Partitions.TryGetValue(partition, out PartitionOwnership? owner) && owner.Node != null)
+            if (!_state.OfflinePartitions.TryGetValue(partition, out OfflinePartition? row))
+                return "not-offline";
+            if (
+                _state.Partitions.TryGetValue(partition, out PartitionOwnership? owner)
+                && owner.Node != null
+            )
                 return "loading:" + owner.Node;
             DateTimeOffset now = _clock();
             // w32 2026-09-25 21:21:38: a join's home partition 253350 was loaded onto node-2 mid-drain; the gateway
@@ -257,23 +344,41 @@ internal sealed partial class GatewayRegistry
             // forced reconnect (node-2 parked, then relaunched).
             IReadOnlyCollection<string> draining = DrainingNodes?.Invoke() ?? [];
             bool callUp = reason is "remote" or "laser";
-            string? target = node != null && CanTakeOfflineLoad(node, now, draining) ? node
-                : callUp ? null : FreeOfflineTarget(row, node, now, draining);
-            if (target == null) return "no-target";
+            string? target =
+                node != null && CanTakeOfflineLoad(node, now, draining) ? node
+                : callUp ? null
+                : FreeOfflineTarget(row, node, now, draining);
+            if (target == null)
+                return "no-target";
             // Deliberate call-ups race for one unsplittable partition. Keep the first live target
             // until its demand expires; a second requester must use ordinary conflict-checked pull.
-            bool reserved = row.LoadReason is "remote" or "laser" && row.LoadRequestedNode is { } reservedNode && row.LoadRequestedAt is { } reservedAt
-                && now - reservedAt < OfflineLoadRequestTtl && CanTakeOfflineLoad(reservedNode, now, draining);
-            if (reserved && row.LoadRequestedNode != target) return "requested:" + row.LoadRequestedNode;
-            bool changed = row.LoadRequestedNode != target || row.LoadRequestedAt is not { } at || now - at >= TimeSpan.FromSeconds(10);
-            if (!changed) return "requested:" + target;
-            bool first = row.LoadRequestedNode == null || row.LoadRequestedAt is not { } last || now - last >= OfflineLoadRequestTtl;
+            bool reserved =
+                row.LoadReason is "remote" or "laser"
+                && row.LoadRequestedNode is { } reservedNode
+                && row.LoadRequestedAt is { } reservedAt
+                && now - reservedAt < OfflineLoadRequestTtl
+                && CanTakeOfflineLoad(reservedNode, now, draining);
+            if (reserved && row.LoadRequestedNode != target)
+                return "requested:" + row.LoadRequestedNode;
+            bool changed =
+                row.LoadRequestedNode != target
+                || row.LoadRequestedAt is not { } at
+                || now - at >= TimeSpan.FromSeconds(10);
+            if (!changed)
+                return "requested:" + target;
+            bool first =
+                row.LoadRequestedNode == null
+                || row.LoadRequestedAt is not { } last
+                || now - last >= OfflineLoadRequestTtl;
             row.LoadRequestedNode = target;
             row.LoadRequestedAt = now;
             // An approach on the same node can refresh the request, but cannot demote its call-up reservation.
-            if (!reserved) row.LoadReason = reason;
+            if (!reserved)
+                row.LoadReason = reason;
             if (first)
-                Console.WriteLine($"offline partition {partition} load requested onto {target}, reason {reason}");
+                Console.WriteLine(
+                    $"offline partition {partition} load requested onto {target}, reason {reason}"
+                );
             // Demand is volatile by nature and re-asserted by whoever still has it: the coalesced
             // schedule is fine here, unlike the offline transition itself.
             Persist();
@@ -281,20 +386,35 @@ internal sealed partial class GatewayRegistry
         }
     }
 
-    private bool CanTakeOfflineLoad(string node, DateTimeOffset now, IReadOnlyCollection<string> draining) =>
-        !draining.Contains(node) && !_state.Scale.Retiring.Contains(node)
+    private bool CanTakeOfflineLoad(
+        string node,
+        DateTimeOffset now,
+        IReadOnlyCollection<string> draining
+    ) =>
+        !draining.Contains(node)
+        && !_state.Scale.Retiring.Contains(node)
         && _state.Nodes.TryGetValue(node, out NodeRegistration? registration)
-        && registration.Role == NodeRole.Regular && registration.State == NodeState.Active && registration.Serving
-        && !registration.Spare && !_state.SpareNodes.Contains(node) && registration.LeaseExpires > now;
+        && registration.Role == NodeRole.Regular
+        && registration.State == NodeState.Active
+        && registration.Serving
+        && !registration.Spare
+        && !_state.SpareNodes.Contains(node)
+        && registration.LeaseExpires > now;
 
     /// <summary>
     /// T-0337: the pick among nodes when nothing dictates one - fewest partitions, then lowest load, then node id.
     /// A node promoted by a scale-out stayed Serving with 0 partitions for 20+ min: the balancer only moves load
     /// off an overloaded node, and arrivals went to co-located owners or to the lowest projected load.
     /// </summary>
-    internal static string? FewestPartitionsNode(IEnumerable<(string Node, int Partitions, long Load)> eligible) => eligible
-        .OrderBy(x => x.Partitions).ThenBy(x => x.Load).ThenBy(x => x.Node, StringComparer.Ordinal)
-        .Select(x => x.Node).FirstOrDefault();
+    internal static string? FewestPartitionsNode(
+        IEnumerable<(string Node, int Partitions, long Load)> eligible
+    ) =>
+        eligible
+            .OrderBy(x => x.Partitions)
+            .ThenBy(x => x.Load)
+            .ThenBy(x => x.Node, StringComparer.Ordinal)
+            .Select(x => x.Node)
+            .FirstOrDefault();
 
     /// <summary>
     /// T-0337: where an offline load goes when no node dictates it (a join whose home is offline, a request
@@ -303,32 +423,67 @@ internal sealed partial class GatewayRegistry
     /// the fewest partitions (directed loads on their way counted) on the host of the node that could not take
     /// it, else on a host holding the save (a same-host read, T-0323), else anywhere. Caller holds _lock.
     /// </summary>
-    private string? FreeOfflineTarget(OfflinePartition row, string? unable, DateTimeOffset now, IReadOnlyCollection<string> draining)
+    private string? FreeOfflineTarget(
+        OfflinePartition row,
+        string? unable,
+        DateTimeOffset now,
+        IReadOnlyCollection<string> draining
+    )
     {
-        if (row.LoadRequestedNode is { } asked && row.LoadRequestedAt is { } at && now - at < OfflineLoadRequestTtl
-            && CanTakeOfflineLoad(asked, now, draining))
+        if (
+            row.LoadRequestedNode is { } asked
+            && row.LoadRequestedAt is { } at
+            && now - at < OfflineLoadRequestTtl
+            && CanTakeOfflineLoad(asked, now, draining)
+        )
             return asked;
-        NodeRegistration[] eligible = _state.Nodes.Values.Where(x => CanTakeOfflineLoad(x.Node, now, draining)).ToArray();
+        NodeRegistration[] eligible = _state
+            .Nodes.Values.Where(x => CanTakeOfflineLoad(x.Node, now, draining))
+            .ToArray();
         // #1454: not onto a heavy component's node while another node can take it.
-        if (HeavyNodes?.Invoke() is { Count: > 0 } heavy && eligible.Where(x => !heavy.Contains(x.Node)).ToArray() is { Length: > 0 } light)
+        if (
+            HeavyNodes?.Invoke() is { Count: > 0 } heavy
+            && eligible.Where(x => !heavy.Contains(x.Node)).ToArray() is { Length: > 0 } light
+        )
             eligible = light;
-        if (eligible.Length < 2) return eligible.FirstOrDefault()?.Node;
+        if (eligible.Length < 2)
+            return eligible.FirstOrDefault()?.Node;
         HashSet<string> hosts = new(StringComparer.OrdinalIgnoreCase);
-        if (unable != null) { if (HostOfNode(unable) is { } host) hosts.Add(host); }
+        if (unable != null)
+        {
+            if (HostOfNode(unable) is { } host)
+                hosts.Add(host);
+        }
         else if (TryGetSave(Key(row.Save), out SaveRegistration? save))
             foreach (string holder in save.LocationHolders.Values.Distinct(StringComparer.Ordinal))
-                if (HostOfNode(holder) is { } host) hosts.Add(host);
-        NodeRegistration[] local = eligible.Where(x => HostOfNode(x.Node) is { } host && hosts.Contains(host)).ToArray();
-        if (local.Length != 0) eligible = local;
-        Dictionary<string, int> partitions = eligible.ToDictionary(x => x.Node, _ => 0, StringComparer.Ordinal);
+                if (HostOfNode(holder) is { } host)
+                    hosts.Add(host);
+        NodeRegistration[] local = eligible
+            .Where(x => HostOfNode(x.Node) is { } host && hosts.Contains(host))
+            .ToArray();
+        if (local.Length != 0)
+            eligible = local;
+        Dictionary<string, int> partitions = eligible.ToDictionary(
+            x => x.Node,
+            _ => 0,
+            StringComparer.Ordinal
+        );
         foreach (PartitionOwnership owner in _state.Partitions.Values)
-            if (owner.Node != null && partitions.ContainsKey(owner.Node)) partitions[owner.Node]++;
+            if (owner.Node != null && partitions.ContainsKey(owner.Node))
+                partitions[owner.Node]++;
         foreach (OfflinePartition other in _state.OfflinePartitions.Values)
-            if (other.LoadRequestedNode != null && partitions.ContainsKey(other.LoadRequestedNode)
-                && other.LoadRequestedAt is { } requested && now - requested < OfflineLoadRequestTtl
-                && _state.Partitions.TryGetValue(other.Partition, out PartitionOwnership? owner) && owner.Node == null)
+            if (
+                other.LoadRequestedNode != null
+                && partitions.ContainsKey(other.LoadRequestedNode)
+                && other.LoadRequestedAt is { } requested
+                && now - requested < OfflineLoadRequestTtl
+                && _state.Partitions.TryGetValue(other.Partition, out PartitionOwnership? owner)
+                && owner.Node == null
+            )
                 partitions[other.LoadRequestedNode]++;
-        return FewestPartitionsNode(eligible.Select(x => (x.Node, partitions[x.Node], x.ProjectedLoad)));
+        return FewestPartitionsNode(
+            eligible.Select(x => (x.Node, partitions[x.Node], x.ProjectedLoad))
+        );
     }
 
     /// <summary>How long a recovery claim waits for an emptier node of the same host to ask for it (T-0337).</summary>
@@ -339,66 +494,119 @@ internal sealed partial class GatewayRegistry
     /// asker has to wait for, or null when the asker may claim: a peer with fewer partitions that can take the
     /// claim and has not been waited for longer than <paramref name="patience"/> without being granted one.
     /// </summary>
-    internal static string? RecoveryClaimWaitsFor(int askerPartitions,
-        IEnumerable<(string Node, int Partitions, long Load, DateTimeOffset? WaitedSince)> peers, DateTimeOffset now, TimeSpan patience) =>
-        FewestPartitionsNode(peers.Where(x => x.Partitions < askerPartitions && (x.WaitedSince is not { } since || now - since < patience))
-            .Select(x => (x.Node, x.Partitions, x.Load)));
+    internal static string? RecoveryClaimWaitsFor(
+        int askerPartitions,
+        IEnumerable<(string Node, int Partitions, long Load, DateTimeOffset? WaitedSince)> peers,
+        DateTimeOffset now,
+        TimeSpan patience
+    ) =>
+        FewestPartitionsNode(
+            peers
+                .Where(x =>
+                    x.Partitions < askerPartitions
+                    && (x.WaitedSince is not { } since || now - since < patience)
+                )
+                .Select(x => (x.Node, x.Partitions, x.Load))
+        );
 
     /// <summary>T-0337: since when askers have been waiting for a node to claim a recovery; cleared by a grant to
     /// it. An entry older than the patience stops the waiting until then. Memory only.</summary>
-    private readonly Dictionary<string, (DateTimeOffset Since, bool GivenUp)> _recoveryWaitedFor = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (DateTimeOffset Since, bool GivenUp)> _recoveryWaitedFor =
+        new(StringComparer.Ordinal);
 
     /// <summary>
     /// T-0337: the generic recovery pick of <paramref name="claimant"/> waits when a serving node of its host
     /// (of any host when its host is unknown) holds fewer partitions and can take <paramref name="weight"/>:
     /// that node asks within a second. Caller holds _lock.
     /// </summary>
-    private string? RecoveryWaitsForEmptier(NodeRegistration claimant, Dictionary<string, int> owned, long weight, DateTimeOffset now)
+    private string? RecoveryWaitsForEmptier(
+        NodeRegistration claimant,
+        Dictionary<string, int> owned,
+        long weight,
+        DateTimeOffset now
+    )
     {
         int mine = owned.GetValueOrDefault(claimant.Node);
-        if (mine == 0) return null;
+        if (mine == 0)
+            return null;
         IReadOnlyCollection<string>? draining = null;
         string? host = HostOfNode(claimant.Node);
         List<(string Node, int Partitions, long Load, DateTimeOffset? WaitedSince)> peers = [];
         foreach (NodeRegistration peer in _state.Nodes.Values)
         {
             int theirs = owned.GetValueOrDefault(peer.Node);
-            if (peer.Node == claimant.Node || theirs >= mine) continue;
-            if (!CanTakeOfflineLoad(peer.Node, now, draining ??= DrainingNodes?.Invoke() ?? [])) continue;
-            if (host != null && !string.Equals(HostOfNode(peer.Node), host, StringComparison.OrdinalIgnoreCase)) continue;
-            if (peer.RecoveryCapacity > 0 && theirs >= peer.RecoveryCapacity) continue;
-            if (peer.LoadCapacity > 0 && weight > peer.LoadCapacity - peer.ProjectedLoad) continue;
-            peers.Add((peer.Node, theirs, peer.ProjectedLoad, _recoveryWaitedFor.TryGetValue(peer.Node, out var waited) ? waited.Since : null));
+            if (peer.Node == claimant.Node || theirs >= mine)
+                continue;
+            if (!CanTakeOfflineLoad(peer.Node, now, draining ??= DrainingNodes?.Invoke() ?? []))
+                continue;
+            if (
+                host != null
+                && !string.Equals(HostOfNode(peer.Node), host, StringComparison.OrdinalIgnoreCase)
+            )
+                continue;
+            if (peer.RecoveryCapacity > 0 && theirs >= peer.RecoveryCapacity)
+                continue;
+            if (peer.LoadCapacity > 0 && weight > peer.LoadCapacity - peer.ProjectedLoad)
+                continue;
+            peers.Add(
+                (
+                    peer.Node,
+                    theirs,
+                    peer.ProjectedLoad,
+                    _recoveryWaitedFor.TryGetValue(peer.Node, out var waited) ? waited.Since : null
+                )
+            );
         }
         string? emptier = RecoveryClaimWaitsFor(mine, peers, now, RecoveryClaimPatience);
         if (emptier != null && _recoveryWaitedFor.TryAdd(emptier, (now, false)))
-            Console.WriteLine($"recovery: {claimant.Node} ({mine} partitions) waits for {emptier} ({owned.GetValueOrDefault(emptier)}) to claim first");
+            Console.WriteLine(
+                $"recovery: {claimant.Node} ({mine} partitions) waits for {emptier} ({owned.GetValueOrDefault(emptier)}) to claim first"
+            );
         foreach ((string peer, _, _, DateTimeOffset? since) in peers)
-            if (since is { } at && now - at >= RecoveryClaimPatience && !_recoveryWaitedFor[peer].GivenUp)
+            if (
+                since is { } at
+                && now - at >= RecoveryClaimPatience
+                && !_recoveryWaitedFor[peer].GivenUp
+            )
             {
                 _recoveryWaitedFor[peer] = (at, true);
-                Console.WriteLine($"recovery: {peer} did not claim within {RecoveryClaimPatience.TotalSeconds:F0}s; nobody waits for it until it does");
+                Console.WriteLine(
+                    $"recovery: {peer} did not claim within {RecoveryClaimPatience.TotalSeconds:F0}s; nobody waits for it until it does"
+                );
             }
         return emptier;
     }
 
     /// <summary>The directed loads a claiming node should take first, before any generic pick. Caller holds _lock.</summary>
-    private ulong[] DirectedOfflineLoads(string node, DateTimeOffset now) => _state.OfflinePartitions.Values
-        .Where(row => row.LoadRequestedNode == node && row.LoadRequestedAt is { } at && now - at < OfflineLoadRequestTtl
-            && _state.Partitions.TryGetValue(row.Partition, out PartitionOwnership? owner) && owner.Node == null
-            && !IsRetired(row.Partition))
-        .OrderBy(row => row.LoadRequestedAt).Select(row => row.Partition).Take(4).ToArray();
+    private ulong[] DirectedOfflineLoads(string node, DateTimeOffset now) =>
+        _state
+            .OfflinePartitions.Values.Where(row =>
+                row.LoadRequestedNode == node
+                && row.LoadRequestedAt is { } at
+                && now - at < OfflineLoadRequestTtl
+                && _state.Partitions.TryGetValue(row.Partition, out PartitionOwnership? owner)
+                && owner.Node == null
+                && !IsRetired(row.Partition)
+            )
+            .OrderBy(row => row.LoadRequestedAt)
+            .Select(row => row.Partition)
+            .Take(4)
+            .ToArray();
 
     /// <summary>Caller holds _lock. The row stops being offline: loaded (members reported), merged away
     /// (lineage input) or settled as an ordinary partition.</summary>
     private bool DropOfflineRow(ulong partition, string why)
     {
-        if (!_state.OfflinePartitions.Remove(partition, out OfflinePartition? row)) return false;
+        if (!_state.OfflinePartitions.Remove(partition, out OfflinePartition? row))
+            return false;
         _state.OfflineRevision++;
-        if (why is not ("retired" or "row-removed")) NoteArrival(partition);
+        if (why is not ("retired" or "row-removed"))
+            NoteArrival(partition);
         EmitPartition("online", partition, null, 0, 0, why);
-        Console.WriteLine($"offline partition {partition} is back ONLINE ({why}); offline since {row.OfflineAt:O}, "
-            + $"save {Key(row.Save)}, {row.LoadClaims} load claim(s), last load reason {row.LoadReason ?? "none"}");
+        Console.WriteLine(
+            $"offline partition {partition} is back ONLINE ({why}); offline since {row.OfflineAt:O}, "
+                + $"save {Key(row.Save)}, {row.LoadClaims} load claim(s), last load reason {row.LoadReason ?? "none"}"
+        );
         return true;
     }
 
@@ -418,7 +626,11 @@ internal sealed partial class GatewayRegistry
                 DropOfflineRow(row.Partition, "row-removed");
                 continue;
             }
-            if (owner.Node != null && row.LoadRequestedAt is { } at && now - at >= OfflineClaimSettle)
+            if (
+                owner.Node != null
+                && row.LoadRequestedAt is { } at
+                && now - at >= OfflineClaimSettle
+            )
                 DropOfflineRow(row.Partition, "claimed-settled");
         }
     }
@@ -428,38 +640,72 @@ internal sealed partial class GatewayRegistry
         lock (_lock)
             return since == _state.OfflineRevision && since != 0
                 ? new OfflineTable(_state.OfflineRevision, true, [])
-                : new OfflineTable(_state.OfflineRevision, false,
-                    _state.OfflinePartitions.Values.OrderBy(x => x.Partition).Select(Copy).ToArray());
+                : new OfflineTable(
+                    _state.OfflineRevision,
+                    false,
+                    _state.OfflinePartitions.Values.OrderBy(x => x.Partition).Select(Copy).ToArray()
+                );
     }
 
     public OfflinePartition? OfflineRow(ulong partition)
     {
-        lock (_lock) return _state.OfflinePartitions.TryGetValue(partition, out OfflinePartition? row) ? Copy(row) : null;
+        lock (_lock)
+            return _state.OfflinePartitions.TryGetValue(partition, out OfflinePartition? row)
+                ? Copy(row)
+                : null;
     }
 
     /// <summary>Snapshot for the gateway's wake pass: geometry only, no antenna payloads.</summary>
     public OfflinePartition[] OfflineGeometry()
     {
         lock (_lock)
-            return _state.OfflinePartitions.Values
-                .Where(row => !_state.Partitions.TryGetValue(row.Partition, out PartitionOwnership? owner) || owner.Node == null)
+            return _state
+                .OfflinePartitions.Values.Where(row =>
+                    !_state.Partitions.TryGetValue(row.Partition, out PartitionOwnership? owner)
+                    || owner.Node == null
+                )
                 .Select(row => new OfflinePartition
                 {
-                    Partition = row.Partition, Save = row.Save, X = row.X, Y = row.Y, Z = row.Z, Radius = row.Radius,
-                    MemberSpheres = row.MemberSpheres, Members = row.Members, EstimatedSnapshotBytes = row.EstimatedSnapshotBytes,
-                    LoadRequestedNode = row.LoadRequestedNode, LoadRequestedAt = row.LoadRequestedAt, LoadReason = row.LoadReason,
-                }).ToArray();
+                    Partition = row.Partition,
+                    Save = row.Save,
+                    X = row.X,
+                    Y = row.Y,
+                    Z = row.Z,
+                    Radius = row.Radius,
+                    MemberSpheres = row.MemberSpheres,
+                    Members = row.Members,
+                    EstimatedSnapshotBytes = row.EstimatedSnapshotBytes,
+                    LoadRequestedNode = row.LoadRequestedNode,
+                    LoadRequestedAt = row.LoadRequestedAt,
+                    LoadReason = row.LoadReason,
+                })
+                .ToArray();
     }
 
-    private static OfflinePartition Copy(OfflinePartition row) => new()
-    {
-        Partition = row.Partition, Save = row.Save, X = row.X, Y = row.Y, Z = row.Z, Radius = row.Radius,
-        MemberSpheres = row.MemberSpheres, Members = row.Members, EstimatedSnapshotBytes = row.EstimatedSnapshotBytes,
-        Antennas = row.Antennas, RespawnPoints = row.RespawnPoints, OfflineBy = row.OfflineBy, OfflineAt = row.OfflineAt,
-        OfflineGameFrame = row.OfflineGameFrame, ProfileSummary = row.ProfileSummary,
-        LoadRequestedNode = row.LoadRequestedNode, LoadRequestedAt = row.LoadRequestedAt, LoadReason = row.LoadReason,
-        LoadClaims = row.LoadClaims, Npc = row.Npc,
-    };
+    private static OfflinePartition Copy(OfflinePartition row) =>
+        new()
+        {
+            Partition = row.Partition,
+            Save = row.Save,
+            X = row.X,
+            Y = row.Y,
+            Z = row.Z,
+            Radius = row.Radius,
+            MemberSpheres = row.MemberSpheres,
+            Members = row.Members,
+            EstimatedSnapshotBytes = row.EstimatedSnapshotBytes,
+            Antennas = row.Antennas,
+            RespawnPoints = row.RespawnPoints,
+            OfflineBy = row.OfflineBy,
+            OfflineAt = row.OfflineAt,
+            OfflineGameFrame = row.OfflineGameFrame,
+            ProfileSummary = row.ProfileSummary,
+            LoadRequestedNode = row.LoadRequestedNode,
+            LoadRequestedAt = row.LoadRequestedAt,
+            LoadReason = row.LoadReason,
+            LoadClaims = row.LoadClaims,
+            Npc = row.Npc,
+        };
 }
 
 internal sealed partial class DirectGateway
@@ -468,10 +714,21 @@ internal sealed partial class DirectGateway
     /// for the offline admission check on the HTTP threads.</summary>
     private (DateTime At, (string Node, PartitionReport Report)[] Reports)? _lastPartitionReports
     {
-        get { lock (_offlineWakeAsked) return _lastPartitionReportsValue; }
-        set { lock (_offlineWakeAsked) _lastPartitionReportsValue = value; }
+        get
+        {
+            lock (_offlineWakeAsked)
+                return _lastPartitionReportsValue;
+        }
+        set
+        {
+            lock (_offlineWakeAsked)
+                _lastPartitionReportsValue = value;
+        }
     }
-    private (DateTime At, (string Node, PartitionReport Report)[] Reports)? _lastPartitionReportsValue;
+    private (
+        DateTime At,
+        (string Node, PartitionReport Report)[] Reports
+    )? _lastPartitionReportsValue;
 
     /// <summary>Per offline partition: when the wake pass last asked for it, so one approach is one
     /// request every few seconds rather than one per pass.</summary>
@@ -479,9 +736,16 @@ internal sealed partial class DirectGateway
 
     // Gateway-side knobs, read from the same handover-config document the nodes read (Plan/Partitioning.md §3.6).
     private double OfflineConfig(string key, double fallback) =>
-        _registry != null && _registry.HandoverConfig().Values.TryGetValue(key, out string? value)
-            && double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double parsed)
-            ? parsed : fallback;
+        _registry != null
+        && _registry.HandoverConfig().Values.TryGetValue(key, out string? value)
+        && double.TryParse(
+            value,
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out double parsed
+        )
+            ? parsed
+            : fallback;
 
     private double OfflineWakeMeters => OfflineConfig("offline.wakeMeters", 5000);
     private double OfflineLeadSeconds => OfflineConfig("offline.leadSeconds", 15);
@@ -502,7 +766,11 @@ internal sealed partial class DirectGateway
     /// counting a parked neighbour would keep every co-located static group online forever - each member
     /// would refuse to go offline because of the other.
     /// </summary>
-    private double OfflineDemandThreshold(PartitionInfo live, bool player, PartitionReport report) =>
+    private double OfflineDemandThreshold(
+        PartitionInfo live,
+        bool player,
+        PartitionReport report
+    ) =>
         player ? Math.Max(OfflineWakeMeters, report.SyncDistance + report.Margin)
         : live.MaxMemberSpeed > OfflineMovingSpeed ? report.SyncDistance + report.Margin
         : report.SyncDistance;
@@ -523,17 +791,34 @@ internal sealed partial class DirectGateway
     /// least-loaded node; co-location still joins the two if the player really arrives. An overlap stays with
     /// the demander: the two already touch, and anywhere else is an immediate handover.
     /// </summary>
-    internal static string OfflineWakeTarget(string demander, string reason, IReadOnlyDictionary<string, double> nodeLoad, double ratio)
+    internal static string OfflineWakeTarget(
+        string demander,
+        string reason,
+        IReadOnlyDictionary<string, double> nodeLoad,
+        double ratio
+    )
     {
-        if (reason == "overlap" || ratio <= 0 || nodeLoad.Count < 2 || !nodeLoad.TryGetValue(demander, out double load)) return demander;
+        if (
+            reason == "overlap"
+            || ratio <= 0
+            || nodeLoad.Count < 2
+            || !nodeLoad.TryGetValue(demander, out double load)
+        )
+            return demander;
         double mean = nodeLoad.Values.Average();
-        if (load <= ratio * mean) return demander;
-        return nodeLoad.OrderBy(x => x.Value).ThenBy(x => x.Key, StringComparer.Ordinal).First().Key;
+        if (load <= ratio * mean)
+            return demander;
+        return nodeLoad
+            .OrderBy(x => x.Value)
+            .ThenBy(x => x.Key, StringComparer.Ordinal)
+            .First()
+            .Key;
     }
 
     /// <summary>Seconds a load of this row is expected to take on top of the lead: a station-sized
     /// partition sits in the parallel init pipeline for a minute or more (~5 MB/s of save is generous).</summary>
-    private static double OfflineLoadSeconds(OfflinePartition row) => Math.Min(120, row.EstimatedSnapshotBytes / 5_000_000.0);
+    private static double OfflineLoadSeconds(OfflinePartition row) =>
+        Math.Min(120, row.EstimatedSnapshotBytes / 5_000_000.0);
 
     /// <summary>
     /// Smallest velocity-adjusted gap between a reported partition and an offline one. The offline side is
@@ -541,27 +826,50 @@ internal sealed partial class DirectGateway
     /// <see cref="EnvelopeGap"/> reads. Sphere bound first, member scan only when the bound cannot settle it.
     /// Closing speed is capped at 2 x <paramref name="maxSpeed"/>, the same pair cap EnvelopeGap uses.
     /// </summary>
-    internal static double OfflineGap(PartitionInfo live, OfflinePartition row, double lead, double threshold, double maxSpeed)
+    internal static double OfflineGap(
+        PartitionInfo live,
+        OfflinePartition row,
+        double lead,
+        double threshold,
+        double maxSpeed
+    )
     {
         double cap = 2 * maxSpeed;
-        double dx = live.Sphere.X - row.X, dy = live.Sphere.Y - row.Y, dz = live.Sphere.Z - row.Z;
-        double bound = Math.Sqrt(dx * dx + dy * dy + dz * dz) - live.Sphere.Radius - row.Radius
+        double dx = live.Sphere.X - row.X,
+            dy = live.Sphere.Y - row.Y,
+            dz = live.Sphere.Z - row.Z;
+        double bound =
+            Math.Sqrt(dx * dx + dy * dy + dz * dz)
+            - live.Sphere.Radius
+            - row.Radius
             - Math.Min(live.MaxMemberSpeed, cap) * lead;
-        if (bound >= threshold) return bound;
-        if (live.MemberSpheres is not { Length: > 0 } ma || row.MemberSpheres is not { Length: > 0 } mb) return bound;
+        if (bound >= threshold)
+            return bound;
+        if (
+            live.MemberSpheres is not { Length: > 0 } ma
+            || row.MemberSpheres is not { Length: > 0 } mb
+        )
+            return bound;
         double min = double.MaxValue;
         foreach (double[] x in ma)
-            foreach (double[] y in mb)
-            {
-                double ex = x[0] - y[0], ey = x[1] - y[1], ez = x[2] - y[2];
-                double distance = Math.Sqrt(ex * ex + ey * ey + ez * ez);
-                double closing;
-                if (x.Length >= 8)
-                    closing = distance > 0 ? Math.Max(0, -(x[5] * ex + x[6] * ey + x[7] * ez) / distance) : Math.Sqrt(x[5] * x[5] + x[6] * x[6] + x[7] * x[7]);
-                else closing = x.Length > 4 ? x[4] : 0;
-                double gap = distance - x[3] - y[3] - Math.Min(closing, cap) * lead;
-                if (gap < min) min = gap;
-            }
+        foreach (double[] y in mb)
+        {
+            double ex = x[0] - y[0],
+                ey = x[1] - y[1],
+                ez = x[2] - y[2];
+            double distance = Math.Sqrt(ex * ex + ey * ey + ez * ez);
+            double closing;
+            if (x.Length >= 8)
+                closing =
+                    distance > 0
+                        ? Math.Max(0, -(x[5] * ex + x[6] * ey + x[7] * ez) / distance)
+                        : Math.Sqrt(x[5] * x[5] + x[6] * x[6] + x[7] * x[7]);
+            else
+                closing = x.Length > 4 ? x[4] : 0;
+            double gap = distance - x[3] - y[3] - Math.Min(closing, cap) * lead;
+            if (gap < min)
+                min = gap;
+        }
         return min;
     }
 
@@ -571,15 +879,24 @@ internal sealed partial class DirectGateway
     /// closing-speed lookahead of the lead plus the expected load time. The node of a client-bearing
     /// partition is preferred, then the nearest.
     /// </summary>
-    private void WakeOfflinePartitions((ServedNode Node, PartitionReport Report)[] reports, HashSet<ulong> routed)
+    private void WakeOfflinePartitions(
+        (ServedNode Node, PartitionReport Report)[] reports,
+        HashSet<ulong> routed
+    )
     {
-        if (_registry == null || reports.Length == 0) return;
+        if (_registry == null || reports.Length == 0)
+            return;
         OfflinePartition[] offline = _registry.OfflineGeometry();
         DateTime now = DateTime.UtcNow;
         lock (_offlineWakeAsked)
-            foreach (ulong stale in _offlineWakeAsked.Keys.Where(id => offline.All(row => row.Partition != id)).ToArray())
+            foreach (
+                ulong stale in _offlineWakeAsked
+                    .Keys.Where(id => offline.All(row => row.Partition != id))
+                    .ToArray()
+            )
                 _offlineWakeAsked.Remove(stale);
-        if (offline.Length == 0) return;
+        if (offline.Length == 0)
+            return;
         double leadBase = OfflineLeadSeconds;
         double maxSpeed = LookaheadMaxSpeed;
         // A report taken before the owner's close still lists the partition that just went offline (and a
@@ -590,16 +907,28 @@ internal sealed partial class DirectGateway
         // assigned seed saves fenced until its startup claim settles - stale copies by construction - and one
         // of them woke the Earth base on a start that was to load nothing (w32 2026-09-25 00:07:43: node-2's
         // fence-tainted seed partition 5, generation 1, "overlapped" offline 199400, whose own members it held).
-        var ownedBy = reports.Select(pair => pair.Node).DistinctBy(node => node.Node)
-            .ToDictionary(node => node.Node, node => _registry.PartitionsOwnedBy(node.Node, node.Epoch).Select(x => x.Partition).ToHashSet());
+        var ownedBy = reports
+            .Select(pair => pair.Node)
+            .DistinctBy(node => node.Node)
+            .ToDictionary(
+                node => node.Node,
+                node =>
+                    _registry
+                        .PartitionsOwnedBy(node.Node, node.Epoch)
+                        .Select(x => x.Partition)
+                        .ToHashSet()
+            );
         // T-0269: per-node load from the same reports, for the placement below.
         bool simLoad = reports.All(pair => pair.Report.SimLoadSupported);
         Dictionary<string, double> nodeLoad = [];
         Dictionary<string, int> nodePartitions = [];
         foreach ((ServedNode node, PartitionReport report) in reports)
         {
-            nodeLoad[node.Node] = nodeLoad.GetValueOrDefault(node.Node) + report.Partitions.Sum(p => (double)PartitionLoad(p, simLoad));
-            nodePartitions[node.Node] = nodePartitions.GetValueOrDefault(node.Node) + report.Partitions.Length;
+            nodeLoad[node.Node] =
+                nodeLoad.GetValueOrDefault(node.Node)
+                + report.Partitions.Sum(p => (double)PartitionLoad(p, simLoad));
+            nodePartitions[node.Node] =
+                nodePartitions.GetValueOrDefault(node.Node) + report.Partitions.Length;
         }
         foreach (OfflinePartition row in offline)
         {
@@ -609,37 +938,69 @@ internal sealed partial class DirectGateway
             {
                 foreach (PartitionInfo live in report.Partitions)
                 {
-                    if (offlineIds.Contains(live.Id)) continue;
-                    if (!ownedBy[node.Node].Contains(live.Id)) continue;
+                    if (offlineIds.Contains(live.Id))
+                        continue;
+                    if (!ownedBy[node.Node].Contains(live.Id))
+                        continue;
                     bool player = live.Clients.Length != 0 || routed.Contains(live.Id);
                     double threshold = OfflineDemandThreshold(live, player, report);
                     double gap = OfflineGap(live, row, lead, threshold, maxSpeed);
-                    if (gap >= threshold) continue;
+                    if (gap >= threshold)
+                        continue;
                     // T-0292: a fast partition flies past offline content without loading it.
-                    if (live.Fast) { FastPartitionCounters.Wake(); continue; }
-                    if (best is not { } current || player && !current.Player || player == current.Player && gap < current.Gap)
+                    if (live.Fast)
+                    {
+                        FastPartitionCounters.Wake();
+                        continue;
+                    }
+                    if (
+                        best is not { } current
+                        || player && !current.Player
+                        || player == current.Player && gap < current.Gap
+                    )
                         best = (node.Node, live.Id, gap, player);
                 }
             }
-            if (best is not { } demand) continue;
+            if (best is not { } demand)
+                continue;
             lock (_offlineWakeAsked)
             {
-                if (_offlineWakeAsked.TryGetValue(row.Partition, out DateTime asked) && now - asked < TimeSpan.FromSeconds(5)) continue;
+                if (
+                    _offlineWakeAsked.TryGetValue(row.Partition, out DateTime asked)
+                    && now - asked < TimeSpan.FromSeconds(5)
+                )
+                    continue;
                 _offlineWakeAsked[row.Partition] = now;
             }
-            string reason = demand.Player ? "approach" : demand.Gap < 0 ? "overlap" : "merge";
-            string target = OfflineWakeTarget(demand.Node, reason, nodeLoad, OfflineWakeOverloadRatio);
+            string reason =
+                demand.Player ? "approach"
+                : demand.Gap < 0 ? "overlap"
+                : "merge";
+            string target = OfflineWakeTarget(
+                demand.Node,
+                reason,
+                nodeLoad,
+                OfflineWakeOverloadRatio
+            );
             string outcome = _registry.RequestOfflineLoad(row.Partition, target, reason);
             if (target != demand.Node)
             {
                 // Count the diverted load where it went, so one pass does not send every wake to the same node.
-                double each = nodePartitions.GetValueOrDefault(demand.Node) is > 0 and var n ? nodeLoad[demand.Node] / n : 0;
+                double each = nodePartitions.GetValueOrDefault(demand.Node) is > 0 and var n
+                    ? nodeLoad[demand.Node] / n
+                    : 0;
                 nodeLoad[target] += each;
             }
             if (row.LoadRequestedNode == null)
-                Console.WriteLine($"Offline wake: partition {row.Partition} {reason} by partition {demand.Partition} on {demand.Node}, "
-                    + $"gap {demand.Gap:F0}m (lead {lead:F0}s): {outcome}"
-                    + (target != demand.Node ? $" (placed off {demand.Node}: load {nodeLoad[demand.Node]:F0} > {OfflineWakeOverloadRatio:0.0}x mean {nodeLoad.Values.Average():F0})" : ""));
+                Console.WriteLine(
+                    $"Offline wake: partition {row.Partition} {reason} by partition {demand.Partition} on {demand.Node}, "
+                        + $"gap {demand.Gap:F0}m (lead {lead:F0}s): {outcome}"
+                        + (
+                            target != demand.Node
+                                ? $" (placed off {demand.Node}: load {nodeLoad[demand.Node]:F0} > {OfflineWakeOverloadRatio:0.0}x mean {nodeLoad.Values.Average():F0})"
+                                : ""
+                        )
+                );
         }
     }
 
@@ -663,24 +1024,37 @@ internal sealed partial class DirectGateway
     private static readonly TimeSpan UnreportedRouteGrace = TimeSpan.FromSeconds(120);
     private readonly HashSet<(ulong Client, ulong Partition)> _staleRoutesLogged = [];
 
-    private string? OfflineGeometryRefusal(OfflineRequest request, Dictionary<ulong, ulong> routedPartitions)
+    private string? OfflineGeometryRefusal(
+        OfflineRequest request,
+        Dictionary<ulong, ulong> routedPartitions
+    )
     {
-        if (_lastPartitionReports is not { } snapshot || DateTime.UtcNow - snapshot.At > TimeSpan.FromSeconds(15))
+        if (
+            _lastPartitionReports is not { } snapshot
+            || DateTime.UtcNow - snapshot.At > TimeSpan.FromSeconds(15)
+        )
             return "no fresh partition reports";
         var candidate = new OfflinePartition
         {
-            Partition = request.Partition, X = request.X, Y = request.Y, Z = request.Z, Radius = request.Radius,
-            MemberSpheres = (request.MemberSpheres ?? []).Where(x => x is { Length: >= 4 }).ToArray(),
+            Partition = request.Partition,
+            X = request.X,
+            Y = request.Y,
+            Z = request.Z,
+            Radius = request.Radius,
+            MemberSpheres = (request.MemberSpheres ?? [])
+                .Where(x => x is { Length: >= 4 })
+                .ToArray(),
             EstimatedSnapshotBytes = request.EstimatedSnapshotBytes,
         };
         double lead = OfflineLeadSeconds + OfflineLoadSeconds(candidate);
         double maxSpeed = LookaheadMaxSpeed;
         // Hysteresis: refuse well outside where the wake pass would load it back.
         const double Hysteresis = 2000;
-        var reportedById = new Dictionary<ulong, (string Node, PartitionInfo Info, PartitionReport Report)>();
+        var reportedById =
+            new Dictionary<ulong, (string Node, PartitionInfo Info, PartitionReport Report)>();
         foreach ((string node, PartitionReport report) in snapshot.Reports)
-            foreach (PartitionInfo info in report.Partitions)
-                reportedById[info.Id] = (node, info, report);
+        foreach (PartitionInfo info in report.Partitions)
+            reportedById[info.Id] = (node, info, report);
         // A connected client's partition is client-bearing from the moment its route exists: the node report
         // re-associates a joining client only after the player binding settles, and the cluster position
         // registry has no position for it yet either (w32 2026-09-23 21:44:39: pilot 7's parked ship went
@@ -696,16 +1070,26 @@ internal sealed partial class DirectGateway
         // not hold every offer in the cluster.
         foreach ((ulong routedPartition, ulong client) in routedPartitions)
         {
-            if (reportedById.ContainsKey(routedPartition) || _registry!.IsOffline(routedPartition)) continue;
-            ulong[] relatives = _registry.PlacementRelatives(routedPartition, client).Where(reportedById.ContainsKey).ToArray();
+            if (reportedById.ContainsKey(routedPartition) || _registry!.IsOffline(routedPartition))
+                continue;
+            ulong[] relatives = _registry
+                .PlacementRelatives(routedPartition, client)
+                .Where(reportedById.ContainsKey)
+                .ToArray();
             if (relatives.Length == 0)
             {
-                if (_clients.TryGetValue(client, out ClientSession? session) && DateTimeOffset.UtcNow - session.ConnectedAt < UnreportedRouteGrace)
+                if (
+                    _clients.TryGetValue(client, out ClientSession? session)
+                    && DateTimeOffset.UtcNow - session.ConnectedAt < UnreportedRouteGrace
+                )
                     return $"connected client {client} is routed to partition {routedPartition}, which no report shows yet";
-                if (_staleRoutesLogged.Count > 4096) _staleRoutesLogged.Clear();
+                if (_staleRoutesLogged.Count > 4096)
+                    _staleRoutesLogged.Clear();
                 if (_staleRoutesLogged.Add((client, routedPartition)))
-                    Console.WriteLine($"Offline admission: client {client}'s route to partition {routedPartition} has no report and no "
-                        + $"reported relative {UnreportedRouteGrace.TotalSeconds:F0}s after join; no longer refusing offers for it");
+                    Console.WriteLine(
+                        $"Offline admission: client {client}'s route to partition {routedPartition} has no report and no "
+                            + $"reported relative {UnreportedRouteGrace.TotalSeconds:F0}s after join; no longer refusing offers for it"
+                    );
                 continue;
             }
             foreach (ulong relative in relatives)
@@ -725,13 +1109,20 @@ internal sealed partial class DirectGateway
         {
             foreach (PartitionInfo live in report.Partitions)
             {
-                if (live.Id == request.Partition) continue;
+                if (live.Id == request.Partition)
+                    continue;
                 bool player = live.Clients.Length != 0 || routedPartitions.ContainsKey(live.Id);
                 bool moving = live.MaxMemberSpeed > OfflineMovingSpeed;
-                double threshold = OfflineDemandThreshold(live, player, report) + (player || moving ? Hysteresis : 0);
+                double threshold =
+                    OfflineDemandThreshold(live, player, report)
+                    + (player || moving ? Hysteresis : 0);
                 double gap = OfflineGap(live, candidate, lead, threshold, maxSpeed);
                 // T-0292: a fast partition passing by does not hold content online (it will not wake it either).
-                if (gap < threshold && live.Fast) { FastPartitionCounters.OfflineRefusal(); continue; }
+                if (gap < threshold && live.Fast)
+                {
+                    FastPartitionCounters.OfflineRefusal();
+                    continue;
+                }
                 if (gap < threshold)
                     return $"partition {live.Id} on {node} is {gap:F0}m away (limit {threshold:F0}m{(player ? ", client-bearing" : moving ? ", moving" : ", static")})";
             }
@@ -741,15 +1132,26 @@ internal sealed partial class DirectGateway
 
     private void HandleOfflineRoutes(HttpListenerContext context, string path)
     {
-        if (path.StartsWith("/registry/partitions/offline/grids", StringComparison.OrdinalIgnoreCase))
+        if (
+            path.StartsWith(
+                "/registry/partitions/offline/grids",
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
         {
             HandleOfflineGridRoutes(context, path);
             return;
         }
-        if (context.Request.HttpMethod == "POST" && path.Equals("/registry/partitions/offline", StringComparison.OrdinalIgnoreCase))
+        if (
+            context.Request.HttpMethod == "POST"
+            && path.Equals("/registry/partitions/offline", StringComparison.OrdinalIgnoreCase)
+        )
         {
             OfflineRequest request = ReadJson<OfflineRequest>(context);
-            if (_registry!.OfflineRow(request.Partition) is { } done && done.Save == new SaveId(request.Partition, request.Generation, request.Sequence))
+            if (
+                _registry!.OfflineRow(request.Partition) is { } done
+                && done.Save == new SaveId(request.Partition, request.Generation, request.Sequence)
+            )
             {
                 // A retry of a commit whose answer was lost: still durable before the owner closes.
                 _registry.FlushOfflineCommit(OfflineCommitGap);
@@ -772,42 +1174,87 @@ internal sealed partial class DirectGateway
                 if (_registry.RoutedPartition(client) is ulong routedPartition)
                 {
                     if (routedPartition == request.Partition)
-                        throw new RegistryConflictException($"Partition {request.Partition} is routed to connected client {client}; refusing offline");
+                        throw new RegistryConflictException(
+                            $"Partition {request.Partition} is routed to connected client {client}; refusing offline"
+                        );
                     routedPartitions[routedPartition] = client;
                 }
-            NodeRegistration? offering = _registry.Nodes().FirstOrDefault(n => n.Node == request.Node);
-            if (offering?.ControlEndpoint == null || GetPartitions(StripScheme(offering.ControlEndpoint)).Partitions
-                .Any(p => p.Id == request.Partition && p.RemoteUsers is { Length: > 0 }) || _registry.HasRemoteUse(request.Partition))
-                throw new RegistryConflictException($"Partition {request.Partition} has remote-use; refusing offline");
+            NodeRegistration? offering = _registry
+                .Nodes()
+                .FirstOrDefault(n => n.Node == request.Node);
+            if (
+                offering?.ControlEndpoint == null
+                || GetPartitions(StripScheme(offering.ControlEndpoint))
+                    .Partitions.Any(p =>
+                        p.Id == request.Partition && p.RemoteUsers is { Length: > 0 }
+                    )
+                || _registry.HasRemoteUse(request.Partition)
+            )
+                throw new RegistryConflictException(
+                    $"Partition {request.Partition} has remote-use; refusing offline"
+                );
             if (MigrationTarget(request.Partition) is { } pinned)
-                throw new RegistryConflictException($"Partition {request.Partition} is pinned for migration to {pinned}; refusing offline");
+                throw new RegistryConflictException(
+                    $"Partition {request.Partition} is pinned for migration to {pinned}; refusing offline"
+                );
             if (OfflineGeometryRefusal(request, routedPartitions) is { } refusal)
-                throw new RegistryConflictException($"Partition {request.Partition} refused offline: {refusal}");
+                throw new RegistryConflictException(
+                    $"Partition {request.Partition} refused offline: {refusal}"
+                );
             OfflinePartition committed = _registry.TakeOffline(request);
             // A draining node's offers (rotation) take no gap: that node is leaving, its frames carry no player.
             _registry.FlushOfflineCommit(request.Drain ? TimeSpan.Zero : OfflineCommitGap);
             WriteJson(context, 200, committed);
             return;
         }
-        if (context.Request.HttpMethod == "GET" && path.Equals("/registry/partitions/offline", StringComparison.OrdinalIgnoreCase))
+        if (
+            context.Request.HttpMethod == "GET"
+            && path.Equals("/registry/partitions/offline", StringComparison.OrdinalIgnoreCase)
+        )
         {
             if (context.Request.QueryString["partition"] is { } single)
             {
                 OfflinePartition? row = _registry!.OfflineRow(ulong.Parse(single));
-                if (row == null) WriteJson(context, 404, new { error = "not offline" });
-                else WriteJson(context, 200, row);
+                if (row == null)
+                    WriteJson(context, 404, new { error = "not offline" });
+                else
+                    WriteJson(context, 200, row);
                 return;
             }
-            long since = long.TryParse(context.Request.QueryString["since"], out long parsed) ? parsed : 0;
-            WriteJson(context, 200, _registry!.OfflinePartitions(since) with { FastClients = FastClientsNow() });
+            long since = long.TryParse(context.Request.QueryString["since"], out long parsed)
+                ? parsed
+                : 0;
+            WriteJson(
+                context,
+                200,
+                _registry!.OfflinePartitions(since) with
+                {
+                    FastClients = FastClientsNow(),
+                }
+            );
             return;
         }
-        if (context.Request.HttpMethod == "POST" && path.Equals("/registry/partitions/offline/load", StringComparison.OrdinalIgnoreCase))
+        if (
+            context.Request.HttpMethod == "POST"
+            && path.Equals("/registry/partitions/offline/load", StringComparison.OrdinalIgnoreCase)
+        )
         {
             ulong partition = ulong.Parse(Required(context, "partition"));
             string? node = context.Request.QueryString["node"];
             string reason = context.Request.QueryString["reason"] ?? "request";
-            WriteJson(context, 200, new { partition, outcome = _registry!.RequestOfflineLoad(partition, string.IsNullOrWhiteSpace(node) ? null : node, reason) });
+            WriteJson(
+                context,
+                200,
+                new
+                {
+                    partition,
+                    outcome = _registry!.RequestOfflineLoad(
+                        partition,
+                        string.IsNullOrWhiteSpace(node) ? null : node,
+                        reason
+                    ),
+                }
+            );
             return;
         }
         throw new ArgumentException("Unknown offline partition route");

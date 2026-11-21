@@ -40,20 +40,22 @@ namespace Shared.Patches;
 /// </summary>
 public static class MyEntityCyclingPatch
 {
-	internal static readonly bool Enabled =
-		(Environment.GetEnvironmentVariable("CLUSTER_ADMIN_WIDEN") ?? "1") != "0";
+    internal static readonly bool Enabled =
+        (Environment.GetEnvironmentVariable("CLUSTER_ADMIN_WIDEN") ?? "1") != "0";
 
-	[HarmonyPatch(typeof(MyEntityCycling), nameof(MyEntityCycling.GetMetric))]
-	private static class GetMetric
-	{
-		[HarmonyPostfix]
-		private static void Postfix(MyEntityCyclingOrder order, MyEntity entity, ref float __result)
-		{
-			// Only ever RAISES a zero. An entity vanilla already scores keeps its own metric, so
-			// the ordering within the static population is untouched and this can never hide one.
-			if (!Enabled || __result != 0f || order != MyEntityCyclingOrder.StaticObjects) return;
-			if (entity == null) return;
-			__result = 1f;
-		}
-	}
+    [HarmonyPatch(typeof(MyEntityCycling), nameof(MyEntityCycling.GetMetric))]
+    private static class GetMetric
+    {
+        [HarmonyPostfix]
+        private static void Postfix(MyEntityCyclingOrder order, MyEntity entity, ref float __result)
+        {
+            // Only ever RAISES a zero. An entity vanilla already scores keeps its own metric, so
+            // the ordering within the static population is untouched and this can never hide one.
+            if (!Enabled || __result != 0f || order != MyEntityCyclingOrder.StaticObjects)
+                return;
+            if (entity == null)
+                return;
+            __result = 1f;
+        }
+    }
 }

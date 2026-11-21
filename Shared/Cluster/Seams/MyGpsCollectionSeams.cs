@@ -9,8 +9,8 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyGpsCollectionSeams
 {
-	// ClusterPlugin seam adapter: GpsAuthorityPatch.SeamPrefix/AcceptedPostfix
-	public static Func<string, object, object, object, object, bool> ClusterGpsRequestPrefix;
+    // ClusterPlugin seam adapter: GpsAuthorityPatch.SeamPrefix/AcceptedPostfix
+    public static Func<string, object, object, object, object, bool> ClusterGpsRequestPrefix;
 
-	public static Action ClusterGpsAcceptedPostfix;
+    public static Action ClusterGpsAcceptedPostfix;
 }

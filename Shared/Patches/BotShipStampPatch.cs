@@ -11,19 +11,21 @@ namespace Shared.Patches;
 /// </summary>
 public static class BotShipStampPatch
 {
-	[HarmonyPatch(typeof(MyCubeGrid), nameof(MyCubeGrid.Init), typeof(MyObjectBuilder_EntityBase))]
-	private static class Init
-	{
-		[HarmonyPostfix]
-		private static void Postfix(MyCubeGrid __instance, MyObjectBuilder_EntityBase objectBuilder)
-			=> BotShipCleaner.Initialized(__instance, objectBuilder);
-	}
+    [HarmonyPatch(typeof(MyCubeGrid), nameof(MyCubeGrid.Init), typeof(MyObjectBuilder_EntityBase))]
+    private static class Init
+    {
+        [HarmonyPostfix]
+        private static void Postfix(
+            MyCubeGrid __instance,
+            MyObjectBuilder_EntityBase objectBuilder
+        ) => BotShipCleaner.Initialized(__instance, objectBuilder);
+    }
 
-	[HarmonyPatch(typeof(MyCubeGrid), nameof(MyCubeGrid.GetObjectBuilder), typeof(bool))]
-	private static class GetObjectBuilder
-	{
-		[HarmonyPostfix]
-		private static void Postfix(MyCubeGrid __instance, MyObjectBuilder_EntityBase __result)
-			=> BotShipCleaner.Saving(__instance, __result);
-	}
+    [HarmonyPatch(typeof(MyCubeGrid), nameof(MyCubeGrid.GetObjectBuilder), typeof(bool))]
+    private static class GetObjectBuilder
+    {
+        [HarmonyPostfix]
+        private static void Postfix(MyCubeGrid __instance, MyObjectBuilder_EntityBase __result) =>
+            BotShipCleaner.Saving(__instance, __result);
+    }
 }

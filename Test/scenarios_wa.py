@@ -353,7 +353,7 @@ def _faction_button(bench, api, who: str, select: list[str], button: str) -> Non
 
 
 def start_second_client(bench, route_node: str = "node-2", partition: int | None = None, spawn: bool = False,
-                        client_id: int = CLIENT2_ID, remote_port: int = CLIENT2_PORT):
+                        client_id: int = CLIENT2_ID, remote_port: int = CLIENT2_PORT, name: str | None = None):
     """Client 2 (no-render), routed to ``route_node`` through /registry/client-routes before it
     connects. Without ``spawn`` it only has to become chat-ready: admitted, bound to an identity and
     serving its chat log (the WA lane never gives it a character).
@@ -379,7 +379,7 @@ def start_second_client(bench, route_node: str = "node-2", partition: int | None
     # cannot quietly rename what every earlier run recorded.
     tag = "client2" if client_id == CLIENT2_ID else f"client{client_id}"
     bench.record(f"{tag}-route", bench.cluster.post(f"/registry/client-routes?client={client_id}&partition={partition}"))
-    api2 = bench.start_client(client_id, remote_port, render=False)
+    api2 = bench.start_client(client_id, remote_port, render=False, name=name)
     _wait_line(bench, "gateway", rf"Resolved client {client_id} partition {partition} to {route_node} .* at {re.escape(backend)}",
                CLIENT_TIMEOUT)
     _wait_line(bench, route_node, rf"Accepted client {client_id} through cluster node link", CLIENT_TIMEOUT)
@@ -3192,7 +3192,86 @@ def p2_wa_gps(bench) -> None:
     bench.exercised(identities=identities, tag=tag, ops="add x4, modify x3, delete x2, burst x50, node-2 restart, add+modify after")
 
 
+def p1_wa_cmd_inflight(bench) -> None:
+    """SE-1561: on the live cluster a node retried a banking command while the restarted World Authority was loading.
+    The first copy was queued, the retry ran on the node-link thread and its handler waited for the game thread,
+    then the game thread drained the queued copy and waited for the running one: the World Authority hung until Host
+    killed it ten minutes later. The WA self-test `command-in-flight` runs a command whose handler waits on another
+    thread and handles a queued copy of it: the copy must not wait, stays queued, and is answered once the command is
+    done. The WA still answers afterwards."""
+    bench.start_cluster(nodes=["node-1", "wa-1"])
+    try:
+        result = _node(bench, "wa-1", "/self-test?section=command-in-flight")
+    except Exception as error:  # noqa: BLE001
+        result = {"ok": False, "error": str(error)[:400]}
+    bench.record("wa-self-test-command-in-flight", result)
+    bench.check("WA self-test command-in-flight: a queued copy of a running command does not wait for it",
+                result.get("ok") is True and "command-in-flight" in (result.get("ran") or []), json.dumps(result)[:400])
+    status = _try(bench, "wa-1", "/self-test?section=heap-watch") or {}
+    bench.check("the World Authority still answers its control requests", status.get("ok") is True, json.dumps(status)[:200])
+    bench.exercised(waSelfTestSections=["command-in-flight"])
+
+
+def p1_wa_resync_backlog(bench) -> None:
+    """SE-1577: replicas ask for a subsystem's snapshot again every second until it arrives. On the live cluster the
+    World Authority answered every request with a fresh 2-3 MB snapshot behind the ones still queued on its ordered
+    Gateway channel, so restarted nodes got their snapshot set queued up to 137 times and the heap grew to its limit.
+    The WA self-test `resync-backlog` sends 30 requests for a 2 MB snapshot while the first answer is queued (one
+    snapshot built) and one more once the queue drained (one more built)."""
+    bench.start_cluster(nodes=["node-1", "wa-1"])
+    try:
+        result = _node(bench, "wa-1", "/self-test?section=resync-backlog", timeout=180)
+    except Exception as error:  # noqa: BLE001
+        result = {"ok": False, "error": str(error)[:600]}
+    bench.record("wa-self-test-resync-backlog", result)
+    bench.check("WA self-test resync-backlog: one queued snapshot per node and subsystem, a new one once it left the queue",
+                result.get("ok") is True and "resync-backlog" in (result.get("ran") or []), json.dumps(result)[:600])
+    status = _try(bench, "wa-1", "/self-test?section=heap-watch") or {}
+    bench.check("the World Authority still answers its control requests", status.get("ok") is True, json.dumps(status)[:200])
+    bench.exercised(waSelfTestSections=["resync-backlog"])
+
+
+def p1_wa_heap_limit(bench) -> None:
+    """SE-1615: the World Authority's heap safety limit is 16 GB (wa.heapLimitMb 16384, 24576 before). The WA reports
+    the default, holds 15 GB of managed heap through the test plugin without exiting, then exits with code 6 once
+    the heap passes 16 GB. wa.heapDumpMb is set to 0 first so the only dump is the one at the exit."""
+    bench.start_cluster(nodes=["node-1", "wa-1"])
+    values = (_node(bench, "wa-1", "/config") or {}).get("values") or {}
+    bench.record("wa-config", values)
+    bench.check("the World Authority reports wa.heapLimitMb 16384", values.get("wa.heapLimitMb") == "16384",
+                f"wa.heapLimitMb={values.get('wa.heapLimitMb')} wa.heapDumpMb={values.get('wa.heapDumpMb')}")
+    values["wa.heapDumpMb"] = "0"
+    bench.cluster._request("PUT", "/cluster/config", _nodes(bench)["wa-1"].control, 30, values)
+    process = bench.cluster.processes["wa-1"]
+    below = _node(bench, "wa-1", "/test-heap-hold?mb=15360", method="POST", timeout=120)
+    time.sleep(6)  # three heap watch checks
+    alive = process.poll() is None and _try(bench, "wa-1", "/config") is not None
+    bench.check("at 15 GB of managed heap the World Authority keeps running", alive,
+                f"heapMb={below.get('heapMb')} exit={process.poll()}")
+    started = time.time()
+    above = _try(bench, "wa-1", "/test-heap-hold?mb=2048", method="POST", timeout=120) or {}
+    deadline = started + 600
+    while process.poll() is None and time.time() < deadline:
+        time.sleep(1)
+    line = next((line for log in bench.run_root.rglob("SpaceEngineersDedicated_*.log") if "wa-1" in str(log)
+                 for line in log.read_text(errors="replace").splitlines() if "passed wa.heapLimitMb" in line), "")
+    bench.record("wa-exit", {"heapMb": above.get("heapMb"), "exit": process.poll(),
+                             "seconds": round(time.time() - started, 1), "line": line[-300:]})
+    bench.check("past 16 GB the World Authority exits with code 6", process.poll() == 6,
+                f"exit={process.poll()} after {time.time() - started:.0f} s; {line[-200:]}")
+    for dump in bench.run_root.rglob("heap-*.dmp"):
+        bench.record("wa-heap-dump", {"path": str(dump), "mb": dump.stat().st_size >> 20})
+        dump.unlink()
+    bench.exercised(heldMb=[15360, 2048])
+
+
 SCENARIOS_WA = {
+    "P1-WA-CMD-INFLIGHT": (p1_wa_cmd_inflight, "SE-1561: the game thread does not wait for a command another thread "
+                           "is still running (the World Authority hang)", "1"),
+    "P1-WA-HEAP-LIMIT": (p1_wa_heap_limit, "SE-1615: the World Authority holds 15 GB of heap and exits 6 past its "
+                         "16 GB safety limit", "1"),
+    "P1-WA-RESYNC-BACKLOG": (p1_wa_resync_backlog, "SE-1577: repeated snapshot requests from a node queue one snapshot, "
+                             "not one per request (the World Authority heap runaway)", "1"),
     "P2-WA-00": (p2_wa_00, "World Authority role, clock and replacement", "3"),
     "P2-WA-GPS": (p2_wa_gps, "#1405: GPS add, modify and delete from any node on three identities converge on every node, "
                              "also after a modify burst and a node restart", "3"),

@@ -27,7 +27,11 @@ public static class MyNeutralShipSpawnerPatch
     private const string PcuExhaustedMessage = "NPC PCUs exhausted. Cargo ship will not spawn.";
 
     [HarmonyTranspiler]
-    private static IEnumerable<CodeInstruction> SpawnTranspiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator, MethodBase original)
+    private static IEnumerable<CodeInstruction> SpawnTranspiler(
+        IEnumerable<CodeInstruction> instructions,
+        ILGenerator generator,
+        MethodBase original
+    )
     {
         var il = instructions.ToList();
 
@@ -35,30 +39,64 @@ public static class MyNeutralShipSpawnerPatch
         // Anchor: the first of vanilla's two m_playersBuffer.RemoveAll calls (x.Character == null), whose int
         // result is popped; the pin filter goes right after the pop.
         var removeAlls = il.FindAllIndex(ci => ci.CallsNamed("RemoveAll", typeof(List<MyPlayer>)));
-        GateTranspilerHelpers.Require(removeAlls.Count == 2, original, "exactly two List<MyPlayer>.RemoveAll calls");
+        GateTranspilerHelpers.Require(
+            removeAlls.Count == 2,
+            original,
+            "exactly two List<MyPlayer>.RemoveAll calls"
+        );
         int pop = removeAlls[0] + 1;
-        GateTranspilerHelpers.Require(il[pop].opcode == OpCodes.Pop, original, "pop after the first RemoveAll");
-        var pin = new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(MyNeutralShipSpawnerSeams), nameof(MyNeutralShipSpawnerSeams.ApplyPinnedTarget)))
-            .MoveLabelsFrom(il[pop + 1]);
+        GateTranspilerHelpers.Require(
+            il[pop].opcode == OpCodes.Pop,
+            original,
+            "pop after the first RemoveAll"
+        );
+        var pin = new CodeInstruction(
+            OpCodes.Call,
+            AccessTools.Method(
+                typeof(MyNeutralShipSpawnerSeams),
+                nameof(MyNeutralShipSpawnerSeams.ApplyPinnedTarget)
+            )
+        ).MoveLabelsFrom(il[pop + 1]);
         il.Insert(pop + 1, pin);
 
         // Anchor: the PCU-exhausted log line, followed by vanilla's `return`; the handoff goes right after it,
         // taking over the label the PCU check jumps to when PCUs remain.
-        int message = il.IndexOfSingle(original, "ldstr PCU exhausted", ci => ci.LoadsString(PcuExhaustedMessage));
+        int message = il.IndexOfSingle(
+            original,
+            "ldstr PCU exhausted",
+            ci => ci.LoadsString(PcuExhaustedMessage)
+        );
         int ret = il.FindIndex(message, ci => ci.opcode == OpCodes.Ret);
-        GateTranspilerHelpers.Require(ret > message && ret - message <= 6, original, "ret shortly after the PCU-exhausted log");
+        GateTranspilerHelpers.Require(
+            ret > message && ret - message <= 6,
+            original,
+            "ret shortly after the PCU-exhausted log"
+        );
         var next = il[ret + 1];
-        GateTranspilerHelpers.Require(next.labels.Count > 0, original, "a label on the instruction after the PCU-exhausted return");
+        GateTranspilerHelpers.Require(
+            next.labels.Count > 0,
+            original,
+            "a label on the instruction after the PCU-exhausted return"
+        );
         var handoff = new CodeInstruction(OpCodes.Ldarg_0).MoveLabelsFrom(next);
         var resume = next.AddLabel(generator);
-        il.InsertRange(ret + 1, new[]
-        {
-            handoff,
-            new CodeInstruction(OpCodes.Ldarg_1),
-            new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(MyNeutralShipSpawnerSeams), nameof(MyNeutralShipSpawnerSeams.TryHandoff))),
-            new CodeInstruction(OpCodes.Brfalse, resume),
-            new CodeInstruction(OpCodes.Ret),
-        });
+        il.InsertRange(
+            ret + 1,
+            new[]
+            {
+                handoff,
+                new CodeInstruction(OpCodes.Ldarg_1),
+                new CodeInstruction(
+                    OpCodes.Call,
+                    AccessTools.Method(
+                        typeof(MyNeutralShipSpawnerSeams),
+                        nameof(MyNeutralShipSpawnerSeams.TryHandoff)
+                    )
+                ),
+                new CodeInstruction(OpCodes.Brfalse, resume),
+                new CodeInstruction(OpCodes.Ret),
+            }
+        );
 
         return il;
     }

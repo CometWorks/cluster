@@ -24,11 +24,14 @@
     <Compile Include="../Shared/Cluster/CharacterReapPermit.cs" Link="Protocol/CharacterReapPermit.cs" />
     <!-- T-0321: the node's addressing/credential rules, so the registry self-test covers them without a live node. -->
     <Compile Include="../Shared/Cluster/ClusterNet.cs" Link="Protocol/ClusterNet.cs" />
+    <Compile Include="../Shared/Cluster/KnownDlcs.cs" Link="Protocol/KnownDlcs.cs" />
     <Compile Include="../Shared/Cluster/ProxiedSavePath.cs" Link="Protocol/ProxiedSavePath.cs" />
     <!-- T-0347: the node's journal of Final saves the registry never catalogued, so the registry self-test reads what the node writes. -->
     <Compile Include="../Shared/Cluster/UnregisteredFinals.cs" Link="Protocol/UnregisteredFinals.cs" />
     <!-- T-0368: the node's voxel carry policy, so its rules run in the registry self-test (the plugin's sections need a live node). -->
     <Compile Include="../Shared/Cluster/VoxelCarryPolicy.cs" Link="Protocol/VoxelCarryPolicy.cs" />
+    <!-- SE-1595: the World Authority's voxel reset rules and edit ledger, run in the registry self-test. -->
+    <Compile Include="../Shared/Cluster/VoxelResetPolicy.cs" Link="Protocol/VoxelResetPolicy.cs" />
     <!-- T-0396: what a client-view adopt destroys before it re-delivers a replicable still on its way. -->
     <Compile Include="../Shared/Cluster/RedeliverPolicy.cs" Link="Protocol/RedeliverPolicy.cs" />
     <!-- T-0340: the per-host save store's paths and no-replace install, shared with both plugins. -->

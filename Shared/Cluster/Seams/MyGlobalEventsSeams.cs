@@ -8,6 +8,6 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyGlobalEventsSeams
 {
-	// ClusterPlugin seam adapter for MyGlobalEventsPatch.UpdateBeforeSimulationPrefix
-	public static Func<bool> ClusterUpdatePrefix;
+    // ClusterPlugin seam adapter for MyGlobalEventsPatch.UpdateBeforeSimulationPrefix
+    public static Func<bool> ClusterUpdatePrefix;
 }

@@ -98,7 +98,7 @@ class Bench:
     def __init__(self, scenario: str, title: str, tier: str, results_root: Path, keep_root: bool = False,
                  regular_nodes: int = 2, world_template: Path | None = None, split_step: str = "to-split",
                  directory: str | None = None, administrators: list[int] | None = None,
-                 node_control: bool = False, kick_timeout_seconds: int | None = None):
+                 node_control: bool = False, kick_timeout_seconds: int | None = None, spare_nodes: int = 0):
         self.scenario = scenario
         self.title = title
         self.tier = tier
@@ -124,7 +124,7 @@ class Bench:
         # which the registry refuses once node control is active (node_id_retired / node_not_planned).
         # Off, the registry never activates it (no hosts file, no runtime target) and accepts nodes
         # outside a plan exactly as before.
-        self.cluster = Cluster(Config(root=self.run_root, regular_nodes=regular_nodes,
+        self.cluster = Cluster(Config(root=self.run_root, regular_nodes=regular_nodes, spare_nodes=spare_nodes,
                                       world_template=world_template, split_step=split_step,
                                       steam_listen=None, administrators=list(administrators or []),
                                       node_control=node_control, kick_timeout_seconds=kick_timeout_seconds))
@@ -206,7 +206,12 @@ class Bench:
 
     def start_client(self, client_id: int, remote_port: int = LEGACY_REMOTE_PORT, timeout: float = 420,
                      label: str | None = None, render: bool | None = None, name: str | None = None) -> RemoteAPI:
-        client = self.launch_client(client_id, remote_port, label=label, render=render, name=name)
+        self.launch_client(client_id, remote_port, label=label, render=render, name=name)
+        return self.attach_api(client_id, timeout, label=label)
+
+    def attach_api(self, client_id: int, timeout: float = 420, label: str | None = None) -> RemoteAPI:
+        """Wait for a launched client's Remote API and register it for ``client_id``."""
+        client = self.clients[label or client_id]
         client.wait_api_listening(timeout)
         api = RemoteAPI(client.url, username=REMOTE_USER, password=REMOTE_PASSWORD, timeout=180)
         api.wait_for_api(max_wait=timeout)
@@ -662,7 +667,8 @@ def run_scenario(function, scenario: str, title: str, tier: str, results_root: P
                   split_step=getattr(function, "split_step", "to-split"), directory=directory,
                   administrators=getattr(function, "administrators", None),
                   node_control=getattr(function, "node_control", False),
-                  kick_timeout_seconds=getattr(function, "kick_timeout_seconds", None))
+                  kick_timeout_seconds=getattr(function, "kick_timeout_seconds", None),
+                  spare_nodes=getattr(function, "spare_nodes", 0))
     started = time.time()
     print(f"\n=== {scenario} - {title} ===")
     try:

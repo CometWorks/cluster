@@ -21,24 +21,46 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MySandboxGame), "InitQuickLaunch")]
 public static class MySandboxGamePatch
 {
-	[HarmonyTranspiler]
-	private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-	{
-		const string method = "MySandboxGame.InitQuickLaunch";
-		List<CodeInstruction> code = instructions.ToList();
-		FieldInfo settings = AccessTools.Field(typeof(MyObjectBuilder_Checkpoint), nameof(MyObjectBuilder_Checkpoint.Settings));
-		FieldInfo sessionName = AccessTools.Field(typeof(MyObjectBuilder_Checkpoint), nameof(MyObjectBuilder_Checkpoint.SessionName));
-		MethodInfo apply = AccessTools.Method(typeof(MySandboxGameSeams), nameof(MySandboxGameSeams.ApplyPremadeSessionSettings));
-		MethodInfo applyName = AccessTools.Method(typeof(MySandboxGameSeams), nameof(MySandboxGameSeams.ApplyPremadeSessionName));
-		int store = PlayersTranspilerHelpers.IndexOfSingle(code, c => c.opcode == OpCodes.Stfld && Equals(c.operand, settings),
-			"MyObjectBuilder_Checkpoint.Settings store", method);
-		// stack: [checkpoint, sessionSettings] -> apply(checkpoint, sessionSettings); labels/blocks stay on the instruction.
-		code[store].opcode = OpCodes.Call;
-		code[store].operand = apply;
-		int nameStore = PlayersTranspilerHelpers.IndexOfSingle(code, c => c.opcode == OpCodes.Stfld && Equals(c.operand, sessionName),
-			"MyObjectBuilder_Checkpoint.SessionName store", method);
-		code[nameStore].opcode = OpCodes.Call;
-		code[nameStore].operand = applyName;
-		return code;
-	}
+    [HarmonyTranspiler]
+    private static IEnumerable<CodeInstruction> Transpiler(
+        IEnumerable<CodeInstruction> instructions
+    )
+    {
+        const string method = "MySandboxGame.InitQuickLaunch";
+        List<CodeInstruction> code = instructions.ToList();
+        FieldInfo settings = AccessTools.Field(
+            typeof(MyObjectBuilder_Checkpoint),
+            nameof(MyObjectBuilder_Checkpoint.Settings)
+        );
+        FieldInfo sessionName = AccessTools.Field(
+            typeof(MyObjectBuilder_Checkpoint),
+            nameof(MyObjectBuilder_Checkpoint.SessionName)
+        );
+        MethodInfo apply = AccessTools.Method(
+            typeof(MySandboxGameSeams),
+            nameof(MySandboxGameSeams.ApplyPremadeSessionSettings)
+        );
+        MethodInfo applyName = AccessTools.Method(
+            typeof(MySandboxGameSeams),
+            nameof(MySandboxGameSeams.ApplyPremadeSessionName)
+        );
+        int store = PlayersTranspilerHelpers.IndexOfSingle(
+            code,
+            c => c.opcode == OpCodes.Stfld && Equals(c.operand, settings),
+            "MyObjectBuilder_Checkpoint.Settings store",
+            method
+        );
+        // stack: [checkpoint, sessionSettings] -> apply(checkpoint, sessionSettings); labels/blocks stay on the instruction.
+        code[store].opcode = OpCodes.Call;
+        code[store].operand = apply;
+        int nameStore = PlayersTranspilerHelpers.IndexOfSingle(
+            code,
+            c => c.opcode == OpCodes.Stfld && Equals(c.operand, sessionName),
+            "MyObjectBuilder_Checkpoint.SessionName store",
+            method
+        );
+        code[nameStore].opcode = OpCodes.Call;
+        code[nameStore].operand = applyName;
+        return code;
+    }
 }

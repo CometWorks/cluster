@@ -10,8 +10,8 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyRemoteControlSeams
 {
-	// ClusterPlugin seam adapter for RemoteControlGatePatch.
-	// Consulted before a server-side use request is honored; a non-null result denies the request through the
-	// vanilla failure path (client-visible HUD notification) instead of granting control.
-	public static Func<MyRemoteControl, UseActionEnum, long, UseActionResult?> ClusterUseGate;
+    // ClusterPlugin seam adapter for RemoteControlGatePatch.
+    // Consulted before a server-side use request is honored; a non-null result denies the request through the
+    // vanilla failure path (client-visible HUD notification) instead of granting control.
+    public static Func<MyRemoteControl, UseActionEnum, long, UseActionResult?> ClusterUseGate;
 }

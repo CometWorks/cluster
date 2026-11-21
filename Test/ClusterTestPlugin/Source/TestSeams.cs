@@ -23,9 +23,16 @@ internal static class TestSeams
     public static object SetPromoteLevel(ulong userId, int level)
     {
         MySession session = MySession.Static ?? throw new InvalidOperationException("No session");
-        if (level < 0 || level > (int)MyPromoteLevel.Admin) throw new ArgumentOutOfRangeException(nameof(level));
+        if (level < 0 || level > (int)MyPromoteLevel.Admin)
+            throw new ArgumentOutOfRangeException(nameof(level));
         session.SetUserPromoteLevel(userId, (MyPromoteLevel)level);
-        return new { node = PromotionService.Node, userId, requested = level, level = (int)session.GetUserPromoteLevel(userId) };
+        return new
+        {
+            node = PromotionService.Node,
+            userId,
+            requested = level,
+            level = (int)session.GetUserPromoteLevel(userId),
+        };
     }
 
     /// <summary>
@@ -35,21 +42,36 @@ internal static class TestSeams
     /// </summary>
     public static object OfferGridTransfer(long gridEntityId, long oldOwner, long newOwner)
     {
-        MyIdentity oldIdentity = MySession.Static.Players.TryGetIdentity(oldOwner)
+        MyIdentity oldIdentity =
+            MySession.Static.Players.TryGetIdentity(oldOwner)
             ?? throw new InvalidOperationException("Old owner identity is unknown here");
-        if (!oldIdentity.BlockLimits.BlocksBuiltByGrid.TryGetValue(gridEntityId, out MyBlockLimits.MyGridLimitData gridData))
+        if (
+            !oldIdentity.BlockLimits.BlocksBuiltByGrid.TryGetValue(
+                gridEntityId,
+                out MyBlockLimits.MyGridLimitData gridData
+            )
+        )
             throw new InvalidOperationException("Old owner built nothing on this grid");
         ulong oldOwnerSteamId = MySession.Static.Players.TryGetSteamId(oldOwner);
-        if (oldOwnerSteamId == 0) throw new InvalidOperationException("Old owner has no cluster binding");
+        if (oldOwnerSteamId == 0)
+            throw new InvalidOperationException("Old owner has no cluster binding");
         using (MyEventContext.Set(new EndpointId(oldOwnerSteamId), null, isInvokedLocally: false))
             MyBlockLimits.SendTransferRequestMessage(gridData, newOwner);
-        return new { requested = true, blocks = gridData.BlocksBuilt, pcu = gridData.PCUBuilt };
+        return new
+        {
+            requested = true,
+            blocks = gridData.BlocksBuilt,
+            pcu = gridData.PCUBuilt,
+        };
     }
 
     /// <summary>The grid's per-identity authorship counts, for asserting who owns what after a transfer.</summary>
     public static object GridTransferState(long gridEntityId)
     {
-        if (!MyEntities.TryGetEntityById(gridEntityId, out MyEntity entity) || entity is not MyCubeGrid grid)
+        if (
+            !MyEntities.TryGetEntityById(gridEntityId, out MyEntity entity)
+            || entity is not MyCubeGrid grid
+        )
             return new { exists = false };
         return new { exists = true, authorship = grid.IdentityAuthorshipBlockCount };
     }
@@ -81,10 +103,15 @@ internal static class TestSeams
     private static void Perturb(XDocument target, List<string> residuals)
     {
         string field = m_corruptImportField;
-        if (field == null) return;
-        XElement victim = target.Root?.Descendants(field).FirstOrDefault(element => !element.HasElements);
-        if (victim == null) residuals.Add("corrupt-import: field is absent: " + field);
-        else victim.Value += "~corrupt";
+        if (field == null)
+            return;
+        XElement victim = target
+            .Root?.Descendants(field)
+            .FirstOrDefault(element => !element.HasElements);
+        if (victim == null)
+            residuals.Add("corrupt-import: field is absent: " + field);
+        else
+            victim.Value += "~corrupt";
         HoldImport();
     }
 
@@ -105,10 +132,13 @@ internal static class TestSeams
     private static void HoldImport()
     {
         int ms = m_holdImportMs;
-        if (ms <= 0) return;
+        if (ms <= 0)
+            return;
         if (MySandboxGame.Static?.UpdateThread == Thread.CurrentThread)
         {
-            Plugin.Log("hold-import: not held, the gate runs on the game thread (import.mode=legacy)");
+            Plugin.Log(
+                "hold-import: not held, the gate runs on the game thread (import.mode=legacy)"
+            );
             return;
         }
         Interlocked.Increment(ref m_heldImports);
@@ -129,13 +159,15 @@ internal static class TestSeams
         m_breakClient = client;
         m_breakUntil = ClusterRuntime.LocalMilliseconds + seconds * 1000;
         ClusterSeams.SuppressControlRebind = IsRebindBroken;
-        if (MySession.Static?.Players != null
+        if (
+            MySession.Static?.Players != null
             && MySession.Static.Players.TryGetPlayerBySteamId(client, out MyPlayer player)
-            && player.Controller?.ControlledEntity?.Entity is MyEntity held)
+            && player.Controller?.ControlledEntity?.Entity is MyEntity held
+        )
             MySession.Static.Players.ClusterForgetControlledEntity(held);
         return new { client, brokenForSeconds = seconds };
     }
 
-    private static bool IsRebindBroken(ulong client)
-        => client == m_breakClient && ClusterRuntime.LocalMilliseconds < m_breakUntil;
+    private static bool IsRebindBroken(ulong client) =>
+        client == m_breakClient && ClusterRuntime.LocalMilliseconds < m_breakUntil;
 }

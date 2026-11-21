@@ -18,14 +18,16 @@ namespace ClusterPlugin;
 /// </remarks>
 public static class MyControlAssignmentTracePatch
 {
-	public static void Install()
-	{
-		MyPlayerCollectionSeams.ClusterControlAssignment = Trace;
-	}
+    public static void Install()
+    {
+        MyPlayerCollectionSeams.ClusterControlAssignment = Trace;
+    }
 
-	private static void Trace(string site, ulong steamId, int serialId, long entityId, bool flag)
-	{
-		MyLog.Default?.WriteLine($"control_assignment site={site} client={steamId} serial={serialId} "
-			+ $"entity={entityId} flag={flag}");
-	}
+    private static void Trace(string site, ulong steamId, int serialId, long entityId, bool flag)
+    {
+        MyLog.Default?.WriteLine(
+            $"control_assignment site={site} client={steamId} serial={serialId} "
+                + $"entity={entityId} flag={flag}"
+        );
+    }
 }

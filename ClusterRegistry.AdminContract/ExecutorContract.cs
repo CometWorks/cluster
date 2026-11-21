@@ -8,10 +8,23 @@ public static class ExecutorProtocol
     public const int LeaseSeconds = 60;
 }
 
-public sealed record ExecutorPollRequest(string Host, string Executor, Guid Session,
-    Guid? Lease, long Sequence, ExecutorNodeReport[] Reports, string? DeploymentRevision = null);
+public sealed record ExecutorPollRequest(
+    string Host,
+    string Executor,
+    Guid Session,
+    Guid? Lease,
+    long Sequence,
+    ExecutorNodeReport[] Reports,
+    string? DeploymentRevision = null
+);
 
-public sealed record ExecutorNodeReport(string SlotKey, string AttemptKey,
-    NodeObservation State, string? Node, long Epoch, string? Failure);
+public sealed record ExecutorNodeReport(
+    string SlotKey,
+    string AttemptKey,
+    NodeObservation State,
+    string? Node,
+    long Epoch,
+    string? Failure
+);
 
 public sealed record ExecutorPollResult(Guid Lease, DateTimeOffset ExpiresAt, NodePlan[] Plan);

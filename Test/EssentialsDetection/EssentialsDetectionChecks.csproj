@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- SE-1727: GridListCommand finds Essentials under a hub build's assembly name. No game assemblies. -->
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><LangVersion>14</LangVersion></PropertyGroup>
+  <ItemGroup><Compile Include="../../Shared/Cluster/EssentialsAssembly.cs" Link="EssentialsAssembly.cs" /></ItemGroup>
+</Project>

@@ -29,73 +29,121 @@ namespace Shared.Patches;
 /// (another block holds the slot, CanActivateComponent refused, or none that we can see), so a miss that
 /// is not this mechanism still says what it is. At most 10 lines per grid per minute.
 /// </summary>
-[HarmonyPatch(typeof(MyAiBlockSystem), nameof(MyAiBlockSystem.ActivateComponent), typeof(IMyAiBlockComponent))]
+[HarmonyPatch(
+    typeof(MyAiBlockSystem),
+    nameof(MyAiBlockSystem.ActivateComponent),
+    typeof(IMyAiBlockComponent)
+)]
 public static class AiActivationPatch
 {
-	private static readonly ConcurrentDictionary<long, (DateTime Window, int Count)> Lines = new();
+    private static readonly ConcurrentDictionary<long, (DateTime Window, int Count)> Lines = new();
 
-	private static bool Admit(long grid)
-	{
-		DateTime now = DateTime.UtcNow;
-		(DateTime window, int count) = Lines.TryGetValue(grid, out var seen) ? seen : (now, 0);
-		if (now - window > TimeSpan.FromMinutes(1)) (window, count) = (now, 0);
-		Lines[grid] = (window, ++count);
-		if (Lines.Count > 4096) Lines.Clear();
-		return count <= 10;
-	}
+    private static bool Admit(long grid)
+    {
+        DateTime now = DateTime.UtcNow;
+        (DateTime window, int count) = Lines.TryGetValue(grid, out var seen) ? seen : (now, 0);
+        if (now - window > TimeSpan.FromMinutes(1))
+            (window, count) = (now, 0);
+        Lines[grid] = (window, ++count);
+        if (Lines.Count > 4096)
+            Lines.Clear();
+        return count <= 10;
+    }
 
-	private static MyCubeGrid VisitorGrid(IMyAiBlockComponent component)
-	{
-		if (component?.AiBlockType != MyAiBlockType.Movement || component.Entity is not MyCubeBlock block)
-			return null;
-		MyCubeGrid grid = block.CubeGrid;
-		return grid?.DisplayName != null && grid.DisplayName.StartsWith("Visitor", StringComparison.Ordinal) ? grid : null;
-	}
+    private static MyCubeGrid VisitorGrid(IMyAiBlockComponent component)
+    {
+        if (
+            component?.AiBlockType != MyAiBlockType.Movement
+            || component.Entity is not MyCubeBlock block
+        )
+            return null;
+        MyCubeGrid grid = block.CubeGrid;
+        return
+            grid?.DisplayName != null
+            && grid.DisplayName.StartsWith("Visitor", StringComparison.Ordinal)
+            ? grid
+            : null;
+    }
 
-	[HarmonyPrefix]
-	private static void Prefix(MyAiBlockSystem __instance, IMyAiBlockComponent component, out string __state)
-	{
-		__state = null;
-		if (!ClusterPlugin.ClusterRuntime.IsClustered || !Sync.IsServer || component == null)
-			return;
-		if (__instance.CombatStateActive && component.AiBlockType == MyAiBlockType.Task)
-			return;
-		__instance.m_activeAiComponents.TryGetValue(component.AiBlockType, out IMyAiBlockComponent held);
-		if (held == null)
-		{
-			__state = "slot empty";
-			return;
-		}
-		if (held != component)
-		{
-			__state = "slot held by " + (held.Entity?.EntityId ?? 0) + (held.IsActivated ? " (activated)" : " (not activated)");
-			return;
-		}
-		if (component.Entity is IMyPathRecorderBlock)
-			return;
-		// The stale self-entry: vanilla would Deactivate() the component it is activating.
-		__instance.m_activeAiComponents.Remove(component.AiBlockType);
-		__state = "stale self-registration cleared";
-		MyCubeGrid grid = VisitorGrid(component) ?? (component.Entity as MyCubeBlock)?.CubeGrid;
-		if (grid != null && Admit(grid.EntityId))
-			VRage.Utils.MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] ai_activation stale self-registration cleared grid="
-				+ grid.EntityId + " name='" + grid.DisplayName + "' block=" + (component.Entity?.EntityId ?? 0)
-				+ " type=" + component.AiBlockType + " (T-0225)");
-	}
+    [HarmonyPrefix]
+    private static void Prefix(
+        MyAiBlockSystem __instance,
+        IMyAiBlockComponent component,
+        out string __state
+    )
+    {
+        __state = null;
+        if (!ClusterPlugin.ClusterRuntime.IsClustered || !Sync.IsServer || component == null)
+            return;
+        if (__instance.CombatStateActive && component.AiBlockType == MyAiBlockType.Task)
+            return;
+        __instance.m_activeAiComponents.TryGetValue(
+            component.AiBlockType,
+            out IMyAiBlockComponent held
+        );
+        if (held == null)
+        {
+            __state = "slot empty";
+            return;
+        }
+        if (held != component)
+        {
+            __state =
+                "slot held by "
+                + (held.Entity?.EntityId ?? 0)
+                + (held.IsActivated ? " (activated)" : " (not activated)");
+            return;
+        }
+        if (component.Entity is IMyPathRecorderBlock)
+            return;
+        // The stale self-entry: vanilla would Deactivate() the component it is activating.
+        __instance.m_activeAiComponents.Remove(component.AiBlockType);
+        __state = "stale self-registration cleared";
+        MyCubeGrid grid = VisitorGrid(component) ?? (component.Entity as MyCubeBlock)?.CubeGrid;
+        if (grid != null && Admit(grid.EntityId))
+            VRage.Utils.MyLog.Default?.WriteLineAndConsole(
+                "[ClusterPlugin] ai_activation stale self-registration cleared grid="
+                    + grid.EntityId
+                    + " name='"
+                    + grid.DisplayName
+                    + "' block="
+                    + (component.Entity?.EntityId ?? 0)
+                    + " type="
+                    + component.AiBlockType
+                    + " (T-0225)"
+            );
+    }
 
-	[HarmonyPostfix]
-	private static void Postfix(MyAiBlockSystem __instance, IMyAiBlockComponent component, string __state)
-	{
-		if (__state == null)
-			return;
-		MyCubeGrid grid = VisitorGrid(component);
-		if (grid == null || !Admit(grid.EntityId))
-			return;
-		bool registered = __instance.GetActiveAiComponent(component.AiBlockType) == component;
-		bool working = component.Entity is MyCubeBlock block && block.IsWorking;
-		VRage.Utils.MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] ai_activation grid=" + grid.EntityId
-			+ " name='" + grid.DisplayName + "' block=" + (component.Entity?.EntityId ?? 0)
-			+ " activated=" + component.IsActivated + " registered=" + registered + " working=" + working
-			+ " before=" + __state + " (T-0225)");
-	}
+    [HarmonyPostfix]
+    private static void Postfix(
+        MyAiBlockSystem __instance,
+        IMyAiBlockComponent component,
+        string __state
+    )
+    {
+        if (__state == null)
+            return;
+        MyCubeGrid grid = VisitorGrid(component);
+        if (grid == null || !Admit(grid.EntityId))
+            return;
+        bool registered = __instance.GetActiveAiComponent(component.AiBlockType) == component;
+        bool working = component.Entity is MyCubeBlock block && block.IsWorking;
+        VRage.Utils.MyLog.Default?.WriteLineAndConsole(
+            "[ClusterPlugin] ai_activation grid="
+                + grid.EntityId
+                + " name='"
+                + grid.DisplayName
+                + "' block="
+                + (component.Entity?.EntityId ?? 0)
+                + " activated="
+                + component.IsActivated
+                + " registered="
+                + registered
+                + " working="
+                + working
+                + " before="
+                + __state
+                + " (T-0225)"
+        );
+    }
 }

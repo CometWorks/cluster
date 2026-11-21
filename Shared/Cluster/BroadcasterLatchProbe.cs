@@ -38,65 +38,87 @@ namespace ClusterPlugin;
 /// </summary>
 public static class BroadcasterLatchProbe
 {
-	private const int ReportEveryFrames = 3600;   // ~60 s at 60 fps; a heartbeat even when zero
+    private const int ReportEveryFrames = 3600; // ~60 s at 60 fps; a heartbeat even when zero
 
-	private static long _frames;
-	private static long _observedClientFrames;
-	private static long _latchedClientFrames;
-	private static readonly Dictionary<ulong, int> Streaks = new();
-	// Reused, not allocated per frame: this runs on the game thread 60x/s, and the point of the
-	// probe is to measure a cost, not to add one. Copying the roster also avoids iterating a
-	// collection that a join or leave could mutate underneath us.
-	private static readonly List<MyPlayer> Roster = new();
-	private static int _worstStreak;
-	private static ulong _worstClient;
-	// Split by whether the latched character is SEATED. A bare latch count is uninterpretable
-	// against the hypothesis: the state is supposed to be a seated pilot whose GRID has no
-	// replicable, so a latch on an unseated character would mean something else entirely and
-	// would send us after the wrong thing. (factory-6c, 2026-08-22.)
-	private static long _latchedSeatedClientFrames;
+    private static long _frames;
+    private static long _observedClientFrames;
+    private static long _latchedClientFrames;
+    private static readonly Dictionary<ulong, int> Streaks = new();
 
-	public static void Update()
-	{
-		if (MySession.Static?.Ready != true) return;
-		_frames++;
+    // Reused, not allocated per frame: this runs on the game thread 60x/s, and the point of the
+    // probe is to measure a cost, not to add one. Copying the roster also avoids iterating a
+    // collection that a join or leave could mutate underneath us.
+    private static readonly List<MyPlayer> Roster = new();
+    private static int _worstStreak;
+    private static ulong _worstClient;
 
-		Roster.Clear();
-		Roster.AddRange(MySession.Static.Players.GetOnlinePlayers());
-		foreach (MyPlayer player in Roster)
-		{
-			ulong client = player.Id.SteamId;
-			MyClientState state = ReplicationServerPatch.StateFor(client);
-			if (state == null) continue;
-			_observedClientFrames++;
+    // Split by whether the latched character is SEATED. A bare latch count is uninterpretable
+    // against the hypothesis: the state is supposed to be a seated pilot whose GRID has no
+    // replicable, so a latch on an unseated character would mean something else entirely and
+    // would send us after the wrong thing. (factory-6c, 2026-08-22.)
+    private static long _latchedSeatedClientFrames;
 
-			// dirty == true already implies CharacterReplicable is a MyCharacterReplicable.
-			bool latched = state.AreCharacterReplicableDependenciesDirty() && state.ControlledReplicable == null;
-			if (!latched)
-			{
-				Streaks.Remove(client);
-				continue;
-			}
+    public static void Update()
+    {
+        if (MySession.Static?.Ready != true)
+            return;
+        _frames++;
 
-			_latchedClientFrames++;
-			MyCharacter character = player.Character;
-			if (character != null && !ReferenceEquals(character.GetTopMostParent(), character))
-				_latchedSeatedClientFrames++;
-			Streaks.TryGetValue(client, out int streak);
-			streak++;
-			Streaks[client] = streak;
-			if (streak > _worstStreak) { _worstStreak = streak; _worstClient = client; }
-		}
+        Roster.Clear();
+        Roster.AddRange(MySession.Static.Players.GetOnlinePlayers());
+        foreach (MyPlayer player in Roster)
+        {
+            ulong client = player.Id.SteamId;
+            MyClientState state = ReplicationServerPatch.StateFor(client);
+            if (state == null)
+                continue;
+            _observedClientFrames++;
 
-		if (_frames % ReportEveryFrames != 0) return;
-		// Emitted even when the count is zero: a silent probe is indistinguishable from one that
-		// never ran, and this measurement's whole value is in being able to report a clean zero.
-		MyLog.Default?.WriteLineAndConsole(string.Format(CultureInfo.InvariantCulture,
-			"[ClusterPlugin] broadcaster_latch frames={0} observedClientFrames={1} latchedClientFrames={2}"
-			+ " latchedSeatedClientFrames={3}"
-			+ " latchedSharePct={4:F3} worstStreakFrames={5} worstClient={6} currentlyLatched={7}",
-			_frames, _observedClientFrames, _latchedClientFrames, _latchedSeatedClientFrames,
-			_observedClientFrames == 0 ? 0.0 : 100.0 * _latchedClientFrames / _observedClientFrames,
-			_worstStreak, _worstClient, Streaks.Count));
-	}
+            // dirty == true already implies CharacterReplicable is a MyCharacterReplicable.
+            bool latched =
+                state.AreCharacterReplicableDependenciesDirty()
+                && state.ControlledReplicable == null;
+            if (!latched)
+            {
+                Streaks.Remove(client);
+                continue;
+            }
+
+            _latchedClientFrames++;
+            MyCharacter character = player.Character;
+            if (character != null && !ReferenceEquals(character.GetTopMostParent(), character))
+                _latchedSeatedClientFrames++;
+            Streaks.TryGetValue(client, out int streak);
+            streak++;
+            Streaks[client] = streak;
+            if (streak > _worstStreak)
+            {
+                _worstStreak = streak;
+                _worstClient = client;
+            }
+        }
+
+        if (_frames % ReportEveryFrames != 0)
+            return;
+        // Emitted even when the count is zero: a silent probe is indistinguishable from one that
+        // never ran, and this measurement's whole value is in being able to report a clean zero.
+        MyLog.Default?.WriteLineAndConsole(
+            string.Format(
+                CultureInfo.InvariantCulture,
+                "[ClusterPlugin] broadcaster_latch frames={0} observedClientFrames={1} latchedClientFrames={2}"
+                    + " latchedSeatedClientFrames={3}"
+                    + " latchedSharePct={4:F3} worstStreakFrames={5} worstClient={6} currentlyLatched={7}",
+                _frames,
+                _observedClientFrames,
+                _latchedClientFrames,
+                _latchedSeatedClientFrames,
+                _observedClientFrames == 0
+                    ? 0.0
+                    : 100.0 * _latchedClientFrames / _observedClientFrames,
+                _worstStreak,
+                _worstClient,
+                Streaks.Count
+            )
+        );
+    }
 }

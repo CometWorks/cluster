@@ -3,115 +3,336 @@ using ClusterPlugin;
 using Sandbox.Game.World;
 using VRage.Game.ModAPI;
 
-static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
+static void Check(bool condition, string message)
+{
+    if (!condition)
+        throw new Exception(message);
+}
 static void Refused(Action action)
 {
-    try { action(); } catch (Exception e) when (e is ArgumentException or InvalidOperationException or JsonException) { return; }
+    try
+    {
+        action();
+    }
+    catch (Exception e) when (e is ArgumentException or InvalidOperationException or JsonException)
+    {
+        return;
+    }
     throw new Exception("Expected refusal");
 }
-static PromotionService.PromotionEntry[] Entries() => JsonSerializer.Deserialize<PromotionService.PromotionSnapshot>(GlobalStateChannel.Query("$gateway", "{}"))!.Entries;
-static string Set(ulong user, int level, long revision) => GlobalStateChannel.Set("$gateway", JsonSerializer.Serialize(new PromotionService.PromotionChange(user, level, revision)));
+static PromotionService.PromotionEntry[] Entries() =>
+    JsonSerializer
+        .Deserialize<PromotionService.PromotionSnapshot>(
+            GlobalStateChannel.Query("$gateway", "{}")
+        )!
+        .Entries;
+static string Set(ulong user, int level, long revision) =>
+    GlobalStateChannel.Set(
+        "$gateway",
+        JsonSerializer.Serialize(new PromotionService.PromotionChange(user, level, revision))
+    );
 PromotionService.Install();
 Check(GlobalStateChannel.Journaled, "Admin changes must use the journaled command lane");
+
 // MySession.Ready can precede checkpoint promotion loading. Admin commands must
 // preserve the normal seed grace instead of establishing an incomplete map.
 Refused(() => Set(9, 2, 0));
-Check(!PromotionService.Ready && MySessionSeams.Broadcasts == 0,
-    "An early role command cannot bypass checkpoint promotion seeding");
+Check(
+    !PromotionService.Ready && MySessionSeams.Broadcasts == 0,
+    "An early role command cannot bypass checkpoint promotion seeding"
+);
 MySession.Static.PromotedUsers[7] = MyPromoteLevel.Admin;
 PromotionService.Update();
-Check(Entries().Single() is { SteamId: 7, Level: 4, Revision: 1 }, "Seed existing checkpoint roles");
+Check(
+    Entries().Single() is { SteamId: 7, Level: 4, Revision: 1 },
+    "Seed existing checkpoint roles"
+);
 Refused(() => GlobalStateChannel.Set("node-a", "{\"SteamId\":7,\"Level\":4}"));
 Refused(() => GlobalStateChannel.Query("node-a", "{}"));
-foreach (int level in new[] { -1, 5, 99 }) Refused(() => Set(7, level, 1));
+foreach (int level in new[] { -1, 5, 99 })
+    Refused(() => Set(7, level, 1));
 Refused(() => Set(0, 4, 1));
 Refused(() => Set(7, 4, -1));
 foreach (int level in Enumerable.Range(0, 5))
 {
     long revision = Entries().Single().Revision;
-    var applied = JsonSerializer.Deserialize<PromotionService.PromotionEntry>(Set(7, level, revision))!;
-    Check(applied.Level == level && applied.Revision == revision + 1, "Exact role and revision acknowledged");
-    Check((int)MySession.Static.PromotedUsers.GetValueOrDefault(7UL) == level, "Game-thread effect before acknowledgement");
+    var applied = JsonSerializer.Deserialize<PromotionService.PromotionEntry>(
+        Set(7, level, revision)
+    )!;
+    Check(
+        applied.Level == level && applied.Revision == revision + 1,
+        "Exact role and revision acknowledged"
+    );
+    Check(
+        (int)MySession.Static.PromotedUsers.GetValueOrDefault(7UL) == level,
+        "Game-thread effect before acknowledgement"
+    );
 }
 long current = Entries().Single().Revision;
 Refused(() => Set(7, 0, current - 1));
-Check((int)MySession.Static.PromotedUsers[7] == 4, "Stale request cannot override a later promotion");
+Check(
+    (int)MySession.Static.PromotedUsers[7] == 4,
+    "Stale request cannot override a later promotion"
+);
 Set(7, 0, current);
 long demotionRevision = Entries().Single().Revision;
-GlobalStateChannel.Report("old-node", JsonSerializer.Serialize(new PromotionService.PromotionReport("old-node", [new(7, 4)], Seed: true)));
+GlobalStateChannel.Report(
+    "old-node",
+    JsonSerializer.Serialize(
+        new PromotionService.PromotionReport("old-node", [new(7, 4)], Seed: true)
+    )
+);
 PromotionService.Update();
-Check(Entries().Single().Level == 0 && !MySession.Static.PromotedUsers.ContainsKey(7), "Stale node seed cannot resurrect a demotion");
+Check(
+    Entries().Single().Level == 0 && !MySession.Static.PromotedUsers.ContainsKey(7),
+    "Stale node seed cannot resurrect a demotion"
+);
 MySession.Static.PromotedUsers[7] = MyPromoteLevel.Admin; // Vanilla reconnect/transfer checkpoint.
 PromotionService.Update();
-Check(!MySession.Static.PromotedUsers.ContainsKey(7), "Reconnect is reconciled even when the snapshot is unchanged");
+Check(
+    !MySession.Static.PromotedUsers.ContainsKey(7),
+    "Reconnect is reconciled even when the snapshot is unchanged"
+);
 int broadcasts = MySessionSeams.Broadcasts;
 PromotionService.Update();
-Check(MySessionSeams.Broadcasts == broadcasts, "Unchanged roles cause no broadcast or feedback loop");
+Check(
+    MySessionSeams.Broadcasts == broadcasts,
+    "Unchanged roles cause no broadcast or feedback loop"
+);
 string saved = PromotionService.PersistedRecord();
 byte[] file = GlobalSaveFile.Write(new(), 1, 2, 0, 0, "{\"Entries\":[]}", promotionRecord: saved);
 var bundle = GlobalSaveFile.ReadBundle(file);
-Check(bundle.PromotionRecord == saved && bundle.OfflineRatesRecord == null, "New section round-trip including empty preceding section");
+Check(
+    bundle.PromotionRecord == saved && bundle.OfflineRatesRecord == null,
+    "New section round-trip including empty preceding section"
+);
 const string offlineRates = "{\"entries\":[]}";
-var combined = GlobalSaveFile.ReadBundle(GlobalSaveFile.Write(new(), 1, 3, 0, 0, "{\"Entries\":[]}",
-    offlineRatesRecord: offlineRates, promotionRecord: saved));
-Check(combined.OfflineRatesRecord == offlineRates && combined.PromotionRecord == saved,
-    "Offline rates and promotions retain their separate ordered save sections");
-var ratesOnly = GlobalSaveFile.ReadBundle(GlobalSaveFile.Write(new(), 1, 4, 0, 0, "{\"Entries\":[]}",
-    offlineRatesRecord: offlineRates));
-Check(ratesOnly.OfflineRatesRecord == offlineRates && ratesOnly.PromotionRecord == null,
-    "Older offline-rate saves remain readable without promotion records");
-Check(GlobalSaveFile.ReadBundle(GlobalSaveFile.Write(new(), 1, 1, 0, 0, "{\"Entries\":[]}")).PromotionRecord == null, "Older saves remain readable");
+var combined = GlobalSaveFile.ReadBundle(
+    GlobalSaveFile.Write(
+        new(),
+        1,
+        3,
+        0,
+        0,
+        "{\"Entries\":[]}",
+        offlineRatesRecord: offlineRates,
+        promotionRecord: saved
+    )
+);
+Check(
+    combined.OfflineRatesRecord == offlineRates && combined.PromotionRecord == saved,
+    "Offline rates and promotions retain their separate ordered save sections"
+);
+var ratesOnly = GlobalSaveFile.ReadBundle(
+    GlobalSaveFile.Write(new(), 1, 4, 0, 0, "{\"Entries\":[]}", offlineRatesRecord: offlineRates)
+);
+Check(
+    ratesOnly.OfflineRatesRecord == offlineRates && ratesOnly.PromotionRecord == null,
+    "Older offline-rate saves remain readable without promotion records"
+);
+Check(
+    GlobalSaveFile
+        .ReadBundle(GlobalSaveFile.Write(new(), 1, 1, 0, 0, "{\"Entries\":[]}"))
+        .PromotionRecord == null,
+    "Older saves remain readable"
+);
+
+// SE-1596: an admin's trash settings follow the promotion record, and only once an admin changed them.
+const string trashSettings = "{\"Generation\":0,\"Version\":3}";
+var withTrash = GlobalSaveFile.ReadBundle(
+    GlobalSaveFile.Write(
+        new(),
+        1,
+        5,
+        0,
+        0,
+        "{\"Entries\":[]}",
+        promotionRecord: saved,
+        trashSettingsRecord: trashSettings
+    )
+);
+Check(
+    withTrash.PromotionRecord == saved && withTrash.TrashSettingsRecord == trashSettings,
+    "Trash settings round-trip behind the promotion record"
+);
+Check(
+    bundle.TrashSettingsRecord == null,
+    "Saves without trash settings end at the promotion record as before"
+);
 Set(7, 4, demotionRevision);
 PromotionService.RestoreRecord(bundle.PromotionRecord);
 PromotionService.Update();
-Check(Entries().Single() is { Level: 0 } && Entries().Single().Revision == demotionRevision, "Saved None tombstone and revision restored");
-GlobalStateChannel.Report("stale-node", JsonSerializer.Serialize(new PromotionService.PromotionReport("stale-node", [new(7, 4)], Seed: true)));
+Check(
+    Entries().Single() is { Level: 0 } && Entries().Single().Revision == demotionRevision,
+    "Saved None tombstone and revision restored"
+);
+GlobalStateChannel.Report(
+    "stale-node",
+    JsonSerializer.Serialize(
+        new PromotionService.PromotionReport("stale-node", [new(7, 4)], Seed: true)
+    )
+);
 Check(Entries().Single().Level == 0, "Restored demotion survives reconnect seeds");
 GlobalCommandLedger.Restore(null);
 Guid id = Guid.NewGuid();
-string payload = JsonSerializer.Serialize(new PromotionService.PromotionChange(7, 3, demotionRevision));
+string payload = JsonSerializer.Serialize(
+    new PromotionService.PromotionChange(7, 3, demotionRevision)
+);
 GlobalCommandResult Run() => new(true, GlobalStateChannel.Set("$gateway", payload), "");
 var result = GlobalCommandLedger.Execute("promotion-set", id, payload, Run, out long order);
 Check(result.Success && Entries().Single().Level == 3, "Ledger executes actual owner");
 Set(7, 0, Entries().Single().Revision);
-Check(GlobalCommandLedger.Execute("promotion-set", id, payload, () => throw new Exception("duplicate effect")) == result, "Applied retry replays without undoing later demotion");
-Check(!GlobalCommandLedger.Execute("promotion-set", id, payload + " ", Run).Success, "Changed payload conflicts");
+Check(
+    GlobalCommandLedger.Execute(
+        "promotion-set",
+        id,
+        payload,
+        () => throw new Exception("duplicate effect")
+    ) == result,
+    "Applied retry replays without undoing later demotion"
+);
+Check(
+    !GlobalCommandLedger.Execute("promotion-set", id, payload + " ", Run).Success,
+    "Changed payload conflicts"
+);
+
 // A WA replacement restores the earlier save, then replays the command journal after it.
 PromotionService.RestoreRecord(saved);
 var replay = Run();
 GlobalCommandLedger.Restore(null);
 GlobalCommandLedger.Replay("promotion-set", id, payload, order, replay);
-Check(Entries().Single().Level == 3 && GlobalCommandLedger.Execute("promotion-set", id, payload, () => throw new Exception("replayed twice")) == replay,
-    "Journal replay restores role and ledger on a replacement WA");
+Check(
+    Entries().Single().Level == 3
+        && GlobalCommandLedger.Execute(
+            "promotion-set",
+            id,
+            payload,
+            () => throw new Exception("replayed twice")
+        ) == replay,
+    "Journal replay restores role and ledger on a replacement WA"
+);
 Refused(() => PromotionService.RestoreRecord("{\"Entries\":[{\"SteamId\":7,\"Level\":5}]}"));
-Refused(() => PromotionService.RestoreRecord("{\"Entries\":[{\"SteamId\":7,\"Level\":0},{\"SteamId\":7,\"Level\":4}]}"));
+Refused(() =>
+    PromotionService.RestoreRecord(
+        "{\"Entries\":[{\"SteamId\":7,\"Level\":0},{\"SteamId\":7,\"Level\":4}]}"
+    )
+);
+
+// Discord leases preserve manual roles across revocation, authority replacement and replica expiry.
+string Access(int level, DateTimeOffset expiry, ulong user = 7) =>
+    JsonSerializer.Serialize(
+        new PromotionService.AccessPromotionPolicy(
+            expiry,
+            level == 0 ? [] : [new(user, level, expiry)]
+        )
+    );
+var expires = DateTimeOffset.UtcNow.AddMinutes(1);
+GlobalStateChannel.SetAccess("$gateway", Access(4, expires));
+Check(Entries().Single().Level == 4, "Discord role overlays manual level");
+Refused(() => Set(7, 2, Entries().Single().Revision));
+var leasedSave = PromotionService.PersistedRecord();
+GlobalStateChannel.SetAccess("$gateway", Access(0, expires));
+Check(Entries().Single().Level == 3, "Removing entitlement restores manual level");
+PromotionService.RestoreRecord(leasedSave);
+PromotionService.ExpireAccess(expires);
+PromotionService.Update();
+Check(
+    Entries().Single().Level == 3 && (int)MySession.Static.PromotedUsers[7] == 3,
+    "Replacement WA expires saved entitlement and applies baseline"
+);
+var expiredReplica = new PromotionService.PromotionSnapshot(
+    [new(7, 4, Entries().Single().Revision)],
+    [new(7, 3, 4, DateTimeOffset.UtcNow.AddSeconds(-1))]
+);
+ClusterRuntime.IsWorldAuthority = false;
+GlobalStateChannel.Replica(JsonSerializer.Serialize(expiredReplica));
+PromotionService.Update();
+Check(
+    (int)MySession.Static.PromotedUsers[7] == 3,
+    "Replica expires role while authority is unavailable"
+);
+ClusterRuntime.IsWorldAuthority = true;
+GlobalStateChannel.SetAccess("$gateway", Access(4, expires));
+Set(7, 4, Entries().Single().Revision);
+GlobalStateChannel.SetAccess("$gateway", Access(0, expires));
+Check(Entries().Single().Level == 4, "Explicit manual baseline survives entitlement removal");
+Set(7, 3, Entries().Single().Revision);
+Refused(() => GlobalStateChannel.SetAccess("node-a", Access(4, expires)));
+Refused(() => GlobalStateChannel.SetAccess("$gateway", Access(5, expires)));
+GlobalStateChannel.SetAccess("$gateway", Access(4, expires, 99));
+Check(PromotionService.Forget(99), "Forget clears the Discord overlay");
+PromotionService.ExpireAccess(expires);
+Check(!Entries().Any(entry => entry.SteamId == 99), "Expiry cannot recreate a forgotten promotion");
+
 // players.defaultRole: online players with no entry get the role once; explicit roles, None included, win.
 ClusterRuntime.LocalMilliseconds += 1000;
-OnlinePlayersService.Cluster = [new("node-a", 7, 0), new("node-a", 8, 0), new("node-b", 8, 0), new("node-a", 9, 1)];
+OnlinePlayersService.Cluster =
+[
+    new("node-a", 7, 0),
+    new("node-a", 8, 0),
+    new("node-b", 8, 0),
+    new("node-a", 9, 1),
+];
 PromotionService.Update();
 Check(!Entries().Any(entry => entry.SteamId == 8), "Default role None grants nothing");
 ClusterConfig.DefaultRole = "Scripter";
 ClusterRuntime.LocalMilliseconds += 1000;
 PromotionService.Update();
-Check(Entries().Single(entry => entry.SteamId == 8) is { Level: 1, Revision: 1 }, "New player gets the default role");
-Check(MySession.Static.PromotedUsers.GetValueOrDefault(8UL) == MyPromoteLevel.Scripter, "Default role reaches the game");
+Check(
+    Entries().Single(entry => entry.SteamId == 8) is { Level: 1, Revision: 1 },
+    "New player gets the default role"
+);
+Check(
+    MySession.Static.PromotedUsers.GetValueOrDefault(8UL) == MyPromoteLevel.Scripter,
+    "Default role reaches the game"
+);
 Check(Entries().Single(entry => entry.SteamId == 7).Level == 3, "An existing role is kept");
-Check(!Entries().Any(entry => entry.SteamId == 9), "Only a player's own (serial 0) identity counts");
+Check(
+    !Entries().Any(entry => entry.SteamId == 9),
+    "Only a player's own (serial 0) identity counts"
+);
 Set(8, 0, 1);
 ClusterRuntime.LocalMilliseconds += 1000;
 PromotionService.Update();
-Check(Entries().Single(entry => entry.SteamId == 8) is { Level: 0, Revision: 2 }, "A demotion to None is not undone by the default role");
+Check(
+    Entries().Single(entry => entry.SteamId == 8) is { Level: 0, Revision: 2 },
+    "A demotion to None is not undone by the default role"
+);
 OnlinePlayersService.Cluster = [new("node-a", 10, 0)];
 ClusterRuntime.LocalMilliseconds += 500;
 PromotionService.Update();
-Check(!Entries().Any(entry => entry.SteamId == 10), "Default role is checked at most once a second");
+Check(
+    !Entries().Any(entry => entry.SteamId == 10),
+    "Default role is checked at most once a second"
+);
 ClusterRuntime.LocalMilliseconds += 500;
 ClusterRuntime.IsWorldAuthority = false;
 PromotionService.Update();
-Check(!Entries().Any(entry => entry.SteamId == 10), "Only the World Authority grants the default role");
+Check(
+    !Entries().Any(entry => entry.SteamId == 10),
+    "Only the World Authority grants the default role"
+);
 ClusterRuntime.IsWorldAuthority = true;
 PromotionService.Update();
 Check(Entries().Single(entry => entry.SteamId == 10).Level == 1, "Default role on the next check");
+
+// A temporary role on its own must not replace a new player's configured default.
+OnlinePlayersService.Cluster = [new("node-a", 11, 0)];
+GlobalStateChannel.SetAccess("$gateway", Access(4, expires, 11));
+ClusterRuntime.LocalMilliseconds += 1000;
+PromotionService.Update();
+Check(
+    Entries().Single(entry => entry.SteamId == 11).Level == 4,
+    "Discord overlays the default role"
+);
+GlobalStateChannel.SetAccess("$gateway", Access(0, expires));
+Check(
+    Entries().Single(entry => entry.SteamId == 11).Level == 1,
+    "Expiry or revocation restores the default role"
+);
 ClusterRuntime.IsAuthorityFenced = true;
-Refused(() => Set(7, 4, Entries().Single().Revision));
-Console.WriteLine("Promotion owner, game application, revisions, reconnect, snapshot codec, ledger replay and default role checks passed.");
+Refused(() => GlobalStateChannel.SetAccess("$gateway", Access(4, expires)));
+Refused(() => Set(7, 4, Entries().Single(entry => entry.SteamId == 7).Revision));
+Console.WriteLine(
+    "Promotion owner, game application, revisions, reconnect, snapshot codec, ledger replay and default role checks passed."
+);

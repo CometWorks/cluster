@@ -50,95 +50,118 @@ namespace Shared.Patches;
 /// </summary>
 public static class MyEntityListPatch
 {
-	/// <summary>Rows per list, so a world with thousands of markers cannot make the screen unusable.</summary>
-	private const int MaxGpsRows = 500;
+    /// <summary>Rows per list, so a world with thousands of markers cannot make the screen unusable.</summary>
+    private const int MaxGpsRows = 500;
 
-	[HarmonyPatch(typeof(MyEntityList), nameof(MyEntityList.GetEntityList),
-		new[] { typeof(MyEntityList.MyEntityTypeEnum), typeof(IEnumerable<MyEntity>) })]
-	private static class GetEntityList
-	{
-		[HarmonyPostfix]
-		private static void Postfix(MyEntityList.MyEntityTypeEnum selectedType,
-			IEnumerable<MyEntity> entities, List<MyEntityList.MyEntityListInfoItem> __result)
-		{
-			if (!MyEntityCyclingPatch.Enabled || __result == null) return;
-			if (selectedType != MyEntityList.MyEntityTypeEnum.NotReplicated) return;
-			try
-			{
-				AddDroppedEntities(entities, __result);
-				AddGpsMarkers(__result);
-			}
-			catch (Exception exception)
-			{
-				// This runs inside a [Server(SpaceMasterOnly)] event handler. A throw here would
-				// lose the admin's whole list, and an incomplete list beats no list at all.
-				Console.WriteLine("[ClusterPlugin] admin entity list widening failed: " + exception);
-			}
-		}
-	}
+    [HarmonyPatch(
+        typeof(MyEntityList),
+        nameof(MyEntityList.GetEntityList),
+        new[] { typeof(MyEntityList.MyEntityTypeEnum), typeof(IEnumerable<MyEntity>) }
+    )]
+    private static class GetEntityList
+    {
+        [HarmonyPostfix]
+        private static void Postfix(
+            MyEntityList.MyEntityTypeEnum selectedType,
+            IEnumerable<MyEntity> entities,
+            List<MyEntityList.MyEntityListInfoItem> __result
+        )
+        {
+            if (!MyEntityCyclingPatch.Enabled || __result == null)
+                return;
+            if (selectedType != MyEntityList.MyEntityTypeEnum.NotReplicated)
+                return;
+            try
+            {
+                AddDroppedEntities(entities, __result);
+                AddGpsMarkers(__result);
+            }
+            catch (Exception exception)
+            {
+                // This runs inside a [Server(SpaceMasterOnly)] event handler. A throw here would
+                // lose the admin's whole list, and an incomplete list beats no list at all.
+                Console.WriteLine(
+                    "[ClusterPlugin] admin entity list widening failed: " + exception
+                );
+            }
+        }
+    }
 
-	private static void AddDroppedEntities(IEnumerable<MyEntity> entities,
-		List<MyEntityList.MyEntityListInfoItem> rows)
-	{
-		if (entities == null) return;
-		var present = new HashSet<long>(rows.Select(row => row.EntityId));
-		foreach (MyEntity entity in entities)
-		{
-			if (entity == null || entity.IsReplicated || !present.Add(entity.EntityId)) continue;
-			rows.Add(new MyEntityList.MyEntityListInfoItem
-			{
-				DisplayName = Describe(entity),
-				EntityId = entity.EntityId,
-				Position = entity.PositionComp?.GetPosition() ?? default,
-				IsGrid = false,
-				IsReplicated = false,
-			});
-		}
-	}
+    private static void AddDroppedEntities(
+        IEnumerable<MyEntity> entities,
+        List<MyEntityList.MyEntityListInfoItem> rows
+    )
+    {
+        if (entities == null)
+            return;
+        var present = new HashSet<long>(rows.Select(row => row.EntityId));
+        foreach (MyEntity entity in entities)
+        {
+            if (entity == null || entity.IsReplicated || !present.Add(entity.EntityId))
+                continue;
+            rows.Add(
+                new MyEntityList.MyEntityListInfoItem
+                {
+                    DisplayName = Describe(entity),
+                    EntityId = entity.EntityId,
+                    Position = entity.PositionComp?.GetPosition() ?? default,
+                    IsGrid = false,
+                    IsReplicated = false,
+                }
+            );
+        }
+    }
 
-	/// <summary>Type name plus the entity's own name when it has one - "MyMeteor" alone is useless
-	/// in a list of forty of them, and DisplayName is the only column a synthetic row can speak
-	/// through.</summary>
-	private static string Describe(MyEntity entity)
-	{
-		string kind = entity.GetType().Name;
-		string name = entity.DisplayName;
-		return string.IsNullOrEmpty(name) || name == kind ? kind : kind + ": " + name;
-	}
+    /// <summary>Type name plus the entity's own name when it has one - "MyMeteor" alone is useless
+    /// in a list of forty of them, and DisplayName is the only column a synthetic row can speak
+    /// through.</summary>
+    private static string Describe(MyEntity entity)
+    {
+        string kind = entity.GetType().Name;
+        string name = entity.DisplayName;
+        return string.IsNullOrEmpty(name) || name == kind ? kind : kind + ": " + name;
+    }
 
-	private static void AddGpsMarkers(List<MyEntityList.MyEntityListInfoItem> rows)
-	{
-		MyGpsCollection gpss = MySession.Static?.Gpss;
-		if (gpss == null) return;
-		long synthetic = -1L;
-		int added = 0;
-		foreach (KeyValuePair<long, Dictionary<int, MyGps>> owner in gpss.m_playerGpss)
-		{
-			string who = MySession.Static.Players.TryGetIdentity(owner.Key)?.DisplayName
-				?? owner.Key.ToString();
-			foreach (MyGps gps in owner.Value.Values)
-			{
-				if (gps == null) continue;
-				if (added++ >= MaxGpsRows)
-				{
-					rows.Add(new MyEntityList.MyEntityListInfoItem
-					{
-						DisplayName = "GPS: ... list truncated at " + MaxGpsRows + " markers",
-						EntityId = synthetic,
-						IsGrid = false,
-						IsReplicated = false,
-					});
-					return;
-				}
-				rows.Add(new MyEntityList.MyEntityListInfoItem
-				{
-					DisplayName = "GPS " + who + ": " + gps.Name,
-					EntityId = synthetic--,
-					Position = gps.Coords,
-					IsGrid = false,
-					IsReplicated = false,
-				});
-			}
-		}
-	}
+    private static void AddGpsMarkers(List<MyEntityList.MyEntityListInfoItem> rows)
+    {
+        MyGpsCollection gpss = MySession.Static?.Gpss;
+        if (gpss == null)
+            return;
+        long synthetic = -1L;
+        int added = 0;
+        foreach (KeyValuePair<long, Dictionary<int, MyGps>> owner in gpss.m_playerGpss)
+        {
+            string who =
+                MySession.Static.Players.TryGetIdentity(owner.Key)?.DisplayName
+                ?? owner.Key.ToString();
+            foreach (MyGps gps in owner.Value.Values)
+            {
+                if (gps == null)
+                    continue;
+                if (added++ >= MaxGpsRows)
+                {
+                    rows.Add(
+                        new MyEntityList.MyEntityListInfoItem
+                        {
+                            DisplayName = "GPS: ... list truncated at " + MaxGpsRows + " markers",
+                            EntityId = synthetic,
+                            IsGrid = false,
+                            IsReplicated = false,
+                        }
+                    );
+                    return;
+                }
+                rows.Add(
+                    new MyEntityList.MyEntityListInfoItem
+                    {
+                        DisplayName = "GPS " + who + ": " + gps.Name,
+                        EntityId = synthetic--,
+                        Position = gps.Coords,
+                        IsGrid = false,
+                        IsReplicated = false,
+                    }
+                );
+            }
+        }
+    }
 }

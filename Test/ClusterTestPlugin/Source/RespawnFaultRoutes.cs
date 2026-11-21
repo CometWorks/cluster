@@ -14,7 +14,9 @@ namespace ClusterTestPlugin;
 /// the other members of the medbay's partition away together and waits for the split, so the partition the Gateway just
 /// resolved is renumbered on this node right before the target checks it holds the medbay (a trader shuttle leaving
 /// Alpha on octahedron-test, 2026-11-05). The movers are the larger group and keep the id, the medbay gets a new one.
-/// "refuse" makes the target answer the switch with an error.
+/// "refuse" makes the target answer the switch with an error. "stall" (SE-1590) answers nothing for S seconds and then
+/// refuses: a target that never adopts the client, so the Gateway's node call times out and it moves the client back,
+/// after ~10 s off every node's player list, as on octahedron-test 2026-11-15.
 /// </summary>
 internal static class RespawnFaultRoutes
 {
@@ -22,50 +24,87 @@ internal static class RespawnFaultRoutes
     private static string m_mode;
     private static long[] m_movers = Array.Empty<long>();
     private static double m_distance;
+    private static double m_stallSeconds;
     private static int m_remaining;
     private static readonly HashSet<Guid> Seen = new HashSet<Guid>();
     private static readonly List<object> Faulted = new List<object>();
 
     public static void Register()
     {
-        // POST /respawn-execute-fault?mode=split|refuse|off&count=N[&movers=ID,ID&distance=M] - fault the next N
-        // operations this node executes. {mode, remaining, faulted}.
-        TestRoutes.Add("POST", "/respawn-execute-fault", context =>
-        {
-            string mode = TestRoutes.Query(context, "mode");
-            if (mode is not ("split" or "refuse" or "off")) throw new ArgumentException("mode must be split, refuse or off");
-            lock (Sync)
+        // POST /respawn-execute-fault?mode=split|refuse|stall|off&count=N[&movers=ID,ID&distance=M][&seconds=S] - fault
+        // the next N operations this node executes; a stall lasts S seconds (default 12). {mode, remaining, faulted}.
+        TestRoutes.Add(
+            "POST",
+            "/respawn-execute-fault",
+            context =>
             {
-                m_mode = mode == "off" ? null : mode;
-                m_remaining = mode == "off" ? 0 : (int)TestRoutes.Long(context, "count");
-                m_movers = mode == "split"
-                    ? TestRoutes.Query(context, "movers").Split(',').Select(x => long.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToArray()
-                    : Array.Empty<long>();
-                m_distance = double.Parse(TestRoutes.Query(context, "distance", "30000"), System.Globalization.CultureInfo.InvariantCulture);
-                Faulted.Clear();
+                string mode = TestRoutes.Query(context, "mode");
+                if (mode is not ("split" or "refuse" or "stall" or "off"))
+                    throw new ArgumentException("mode must be split, refuse, stall or off");
+                lock (Sync)
+                {
+                    m_mode = mode == "off" ? null : mode;
+                    m_remaining = mode == "off" ? 0 : (int)TestRoutes.Long(context, "count");
+                    m_movers =
+                        mode == "split"
+                            ? TestRoutes
+                                .Query(context, "movers")
+                                .Split(',')
+                                .Select(x =>
+                                    long.Parse(x, System.Globalization.CultureInfo.InvariantCulture)
+                                )
+                                .ToArray()
+                            : Array.Empty<long>();
+                    m_distance = double.Parse(
+                        TestRoutes.Query(context, "distance", "30000"),
+                        System.Globalization.CultureInfo.InvariantCulture
+                    );
+                    m_stallSeconds = double.Parse(
+                        TestRoutes.Query(context, "seconds", "12"),
+                        System.Globalization.CultureInfo.InvariantCulture
+                    );
+                    Faulted.Clear();
+                }
+                ClusterSeams.BeforeRespawnExecute = mode == "off" ? null : Fault;
+                Plugin.Log($"respawn-execute-fault mode={mode} (SE-1124)");
+                TestRoutes.Json(context, 200, Status());
             }
-            ClusterSeams.BeforeRespawnExecute = mode == "off" ? null : Fault;
-            Plugin.Log($"respawn-execute-fault mode={mode} (SE-1124)");
-            TestRoutes.Json(context, 200, Status());
-        });
-        TestRoutes.Add("GET", "/respawn-execute-fault", context => TestRoutes.Json(context, 200, Status()));
+        );
+        TestRoutes.Add(
+            "GET",
+            "/respawn-execute-fault",
+            context => TestRoutes.Json(context, 200, Status())
+        );
 
         // POST /preview-switch-hold?clients=ID,ID - SE-1201: on a switch SOURCE, the listed clients' spawn previews never
         // switch them away (skipped=bench). An empty list releases them. {clients}.
-        TestRoutes.Add("POST", "/preview-switch-hold", context =>
-        {
-            ulong[] clients = TestRoutes.Query(context, "clients", "").Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(x => ulong.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
-            var held = new HashSet<ulong>(clients);
-            ClusterSeams.HoldPreviewSwitch = held.Count == 0 ? null : held.Contains;
-            Plugin.Log($"preview-switch-hold clients={string.Join(",", clients)} (SE-1201)");
-            TestRoutes.Json(context, 200, new { clients });
-        });
+        TestRoutes.Add(
+            "POST",
+            "/preview-switch-hold",
+            context =>
+            {
+                ulong[] clients = TestRoutes
+                    .Query(context, "clients", "")
+                    .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(x => ulong.Parse(x, System.Globalization.CultureInfo.InvariantCulture))
+                    .ToArray();
+                var held = new HashSet<ulong>(clients);
+                ClusterSeams.HoldPreviewSwitch = held.Count == 0 ? null : held.Contains;
+                Plugin.Log($"preview-switch-hold clients={string.Join(",", clients)} (SE-1201)");
+                TestRoutes.Json(context, 200, new { clients });
+            }
+        );
     }
 
     private static object Status()
     {
-        lock (Sync) return new { mode = m_mode, remaining = m_remaining, faulted = Faulted.ToArray() };
+        lock (Sync)
+            return new
+            {
+                mode = m_mode,
+                remaining = m_remaining,
+                faulted = Faulted.ToArray(),
+            };
     }
 
     private static void Fault(ClusterRespawnExecution request)
@@ -74,28 +113,63 @@ internal static class RespawnFaultRoutes
         lock (Sync)
         {
             // The Gateway asks again while the target answers not-ready; only an operation's first ask is faulted.
-            if (m_remaining <= 0 || !Seen.Add(request.OperationId)) return;
+            if (m_remaining <= 0 || !Seen.Add(request.OperationId))
+                return;
             m_remaining--;
             mode = m_mode;
         }
+        if (mode == "stall")
+        {
+            lock (Sync)
+                Faulted.Add(
+                    new
+                    {
+                        mode,
+                        operation = request.OperationId,
+                        preview = request.Preview,
+                    }
+                );
+            Plugin.Log(
+                $"respawn execute operation={request.OperationId:D} stalled {m_stallSeconds}s by the bench (SE-1590)"
+            );
+            Thread.Sleep(TimeSpan.FromSeconds(m_stallSeconds));
+            throw new InvalidOperationException("Respawn execution stalled by the SE-1590 bench");
+        }
         if (mode == "refuse")
         {
-            lock (Sync) Faulted.Add(new { mode, operation = request.OperationId, preview = request.Preview });
-            Plugin.Log($"respawn execute operation={request.OperationId:D} refused by the bench (SE-1124)");
+            lock (Sync)
+                Faulted.Add(
+                    new
+                    {
+                        mode,
+                        operation = request.OperationId,
+                        preview = request.Preview,
+                    }
+                );
+            Plugin.Log(
+                $"respawn execute operation={request.OperationId:D} refused by the bench (SE-1124)"
+            );
             throw new InvalidOperationException("Respawn execution refused by the SE-1124 bench");
         }
-        (ulong Partition, uint Generation) Holder() => TestRoutes.OnGameThread(() =>
-        {
-            RespawnRegistryService.m_partitions.EntityPartitions().TryGetValue(request.GridEntityId, out ulong partition);
-            return (partition, RespawnRegistryService.m_persistence.OwnedGeneration(partition));
-        });
+        (ulong Partition, uint Generation) Holder() =>
+            TestRoutes.OnGameThread(() =>
+            {
+                RespawnRegistryService
+                    .m_partitions.EntityPartitions()
+                    .TryGetValue(request.GridEntityId, out ulong partition);
+                return (partition, RespawnRegistryService.m_persistence.OwnedGeneration(partition));
+            });
         TestRoutes.OnGameThread(() =>
         {
-            if (!MyEntities.TryGetEntityById(request.GridEntityId, out MyEntity grid)) throw new InvalidOperationException("Unknown medbay grid");
+            if (!MyEntities.TryGetEntityById(request.GridEntityId, out MyEntity grid))
+                throw new InvalidOperationException("Unknown medbay grid");
             for (int i = 0; i < m_movers.Length; i++)
             {
-                if (!MyEntities.TryGetEntityById(m_movers[i], out MyEntity mover)) throw new InvalidOperationException("Unknown mover " + m_movers[i]);
-                mover.PositionComp.SetPosition(grid.PositionComp.GetPosition() + new Vector3D(m_distance, 30 * i, 0));
+                if (!MyEntities.TryGetEntityById(m_movers[i], out MyEntity mover))
+                    throw new InvalidOperationException("Unknown mover " + m_movers[i]);
+                mover.PositionComp.SetPosition(
+                    grid.PositionComp.GetPosition() + new Vector3D(m_distance, 30 * i, 0)
+                );
                 if (mover.Physics != null)
                 {
                     mover.Physics.LinearVelocity = Vector3.Zero;
@@ -108,18 +182,32 @@ internal static class RespawnFaultRoutes
         // The split needs partition ids from the Gateway, so it commits a few frames later; the target's check runs
         // right after it, as it did on octahedron-test.
         (ulong Partition, uint Generation) held = Holder();
-        for (int waited = 0; held.Partition == request.PartitionId && held.Generation == request.Generation && waited < 20000; waited += 50)
+        for (
+            int waited = 0;
+            held.Partition == request.PartitionId
+                && held.Generation == request.Generation
+                && waited < 20000;
+            waited += 50
+        )
         {
             Thread.Sleep(50);
             held = Holder();
         }
         object split = new
         {
-            mode, operation = request.OperationId, preview = request.Preview, movers = m_movers,
-            requested = request.PartitionId, requestedGeneration = request.Generation,
-            partition = held.Partition, generation = held.Generation,
+            mode,
+            operation = request.OperationId,
+            preview = request.Preview,
+            movers = m_movers,
+            requested = request.PartitionId,
+            requestedGeneration = request.Generation,
+            partition = held.Partition,
+            generation = held.Generation,
         };
-        lock (Sync) Faulted.Add(split);
-        Plugin.Log($"respawn execute operation={request.OperationId:D} split by the bench: {System.Text.Json.JsonSerializer.Serialize(split)} (SE-1124)");
+        lock (Sync)
+            Faulted.Add(split);
+        Plugin.Log(
+            $"respawn execute operation={request.OperationId:D} split by the bench: {System.Text.Json.JsonSerializer.Serialize(split)} (SE-1124)"
+        );
     }
 }

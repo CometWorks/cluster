@@ -345,3 +345,47 @@ Managed Host execution uses the separate authenticated [executor contract](Manag
 multi-host start (T-0321) uses the same contract: cluster-hostd on each host polls `POST /executor/v1/heartbeat`
 with an Executor-scope token named after its host, minted per start into `CLUSTER_ADMIN_TOKENS`
 (NodeControl.md "cluster-hostd").
+
+## Quasar player access
+
+Contract 0.12.0 adds `PUT /admin/v1/players/access`, advertised with
+`playerAccess: v1`. It requires manage scope; query/executor credentials cannot
+publish access decisions. The body is a complete version-1 `PlayerAccessPolicy`
+for `cluster:<registered-cluster-id>`, with a monotonic settings revision, issue
+and expiry times, whitelist flag and per-Steam decisions. Issue time may be at
+most 30 seconds ahead; policy life is at most two minutes and at most 4096 unique
+players are accepted. Promotions are limited to None through Admin.
+
+This is an idempotent expiring snapshot replacement, rather than a durable admin
+operation for every heartbeat. Equal refreshes are safe; older revisions/times
+are refused. Quasar renews unchanged active policy every 30 seconds and sends
+changes sooner. The CLI spelling is `player-access-set FILE` (`-` reads stdin).
+The response is `PlayerAccessStatus` in the normal v1 envelope.
+
+The Gateway persists the admission policy in Registry storage before publication
+and checks it both on ticket validation and final admission. Stale enabled
+whitelists refuse new joins. Priority bypasses only the player cap; bans,
+cooldowns and whitelist remain authoritative. Fresh confirmed removals force a
+non-punitive reconnect; an infrastructure outage alone does not eject sessions.
+
+The Gateway sends role grants to the World Authority through the fenced,
+journaled `promotion-access` command. Baselines, entitlements and expiry persist
+in the promotion snapshot, so a replacement authority expires grants without
+Quasar online. Manual assignments at least as high as the grant update the
+baseline. A new player's default role remains their baseline when it is assigned
+during a Discord grant. Forgetting a player clears their saved overlay as part
+of removing their promotion entry. Lower admin assignments fail with `promotion_managed_by_discord` until
+the mapping is lowered or removed. Owner is never assignable.
+
+A promotion publication failure returns 503 after admission has been persisted;
+Quasar retries on its next check. Operator UI must distinguish this partial
+application from complete readiness. Upgrade Gateway and role plugins together;
+older packages do not implement this capability.
+
+Release metadata declares `playerAuthentication: 1` in
+`cli/deployment-capabilities.json`. Quasar refuses deployment inputs from a
+package lacking that capability while this cluster has an enabled access policy.
+
+## Lobby anchor
+
+The [lobby anchor contract](Lobby.md) defines the versioned read and write used by Quasar's Partitions view.

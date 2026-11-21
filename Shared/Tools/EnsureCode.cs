@@ -45,7 +45,8 @@ public class EnsureCode : Attribute
 
     private static IEnumerable<CodeChange> Verify(Assembly pluginAssembly)
     {
-        LastVerifiedCount = AccessTools.GetTypesFromAssembly(pluginAssembly)
+        LastVerifiedCount = AccessTools
+            .GetTypesFromAssembly(pluginAssembly)
             .SelectMany(AccessTools.GetDeclaredMethods)
             .Count(m => m.GetCustomAttributes<EnsureCode>().Any());
         return AccessTools.GetTypesFromAssembly(pluginAssembly).SelectMany(Verify);
@@ -64,7 +65,6 @@ public class EnsureCode : Attribute
 
         return validateAttribute.VerifyMethod(patchMethod);
     }
-
 
     /// <summary>
     /// T-0122. The target info for a patch method, merging the CLASS-level [HarmonyPatch] with any
@@ -91,7 +91,9 @@ public class EnsureCode : Attribute
         var attributes = new List<HarmonyMethod>();
         var declaringType = patchMethod.DeclaringType;
         if (declaringType != null)
-            attributes.AddRange(declaringType.GetCustomAttributes<HarmonyPatch>(true).Select(x => x.info));
+            attributes.AddRange(
+                declaringType.GetCustomAttributes<HarmonyPatch>(true).Select(x => x.info)
+            );
         attributes.AddRange(patchMethod.GetCustomAttributes<HarmonyPatch>().Select(x => x.info));
         return attributes.Count == 0 ? null : HarmonyMethod.Merge(attributes);
     }
@@ -102,12 +104,12 @@ public class EnsureCode : Attribute
     /// no Harmony attribute at all. Without this predicate the class-level merge above would
     /// sweep every private helper in the class into the report.
     /// </summary>
-    private static bool IsPatchMethod(MethodInfo method)
-        => method.GetCustomAttributes<HarmonyPatch>().Any()
-           || method.GetCustomAttributes<HarmonyPrefix>().Any()
-           || method.GetCustomAttributes<HarmonyPostfix>().Any()
-           || method.GetCustomAttributes<HarmonyTranspiler>().Any()
-           || method.GetCustomAttributes<HarmonyFinalizer>().Any();
+    private static bool IsPatchMethod(MethodInfo method) =>
+        method.GetCustomAttributes<HarmonyPatch>().Any()
+        || method.GetCustomAttributes<HarmonyPrefix>().Any()
+        || method.GetCustomAttributes<HarmonyPostfix>().Any()
+        || method.GetCustomAttributes<HarmonyTranspiler>().Any()
+        || method.GetCustomAttributes<HarmonyFinalizer>().Any();
 
     /// <summary>
     /// Harmony's HashBody extension is declared separately for MethodInfo and ConstructorInfo with
@@ -115,12 +117,15 @@ public class EnsureCode : Attribute
     /// dispatch. An unexpected MemberInfo kind throws rather than hashing to 0: a guard that
     /// silently hashes nothing is the bug this whole ticket is about.
     /// </summary>
-    private static string HashOf(MethodBase target) => target switch
-    {
-        MethodInfo method => method.HashBody().ToString("x8"),
-        ConstructorInfo constructor => constructor.HashBody().ToString("x8"),
-        _ => throw new Exception($"Cannot hash target of type {target?.GetType().Name ?? "null"}")
-    };
+    private static string HashOf(MethodBase target) =>
+        target switch
+        {
+            MethodInfo method => method.HashBody().ToString("x8"),
+            ConstructorInfo constructor => constructor.HashBody().ToString("x8"),
+            _ => throw new Exception(
+                $"Cannot hash target of type {target?.GetType().Name ?? "null"}"
+            ),
+        };
 
     /// <summary>
     /// T-0122. The targets of a [HarmonyPatch] class that computes them at runtime with
@@ -143,14 +148,22 @@ public class EnsureCode : Attribute
             yield return target;
 
         var multiple = AccessTools.DeclaredMethod(patchType, "TargetMethods");
-        if (multiple != null && multiple.IsStatic && multiple.Invoke(null, null) is IEnumerable<MethodBase> targets)
+        if (
+            multiple != null
+            && multiple.IsStatic
+            && multiple.Invoke(null, null) is IEnumerable<MethodBase> targets
+        )
             foreach (var each in targets)
                 if (each != null)
                     yield return each;
     }
 
-    private static void ResolveTarget(Type patchedType, HarmonyMethod info,
-        out MethodInfo patchedMethod, out ConstructorInfo patchedConstructor)
+    private static void ResolveTarget(
+        Type patchedType,
+        HarmonyMethod info,
+        out MethodInfo patchedMethod,
+        out ConstructorInfo patchedConstructor
+    )
     {
         patchedMethod = null;
         patchedConstructor = null;
@@ -182,17 +195,33 @@ public class EnsureCode : Attribute
             // game build: the transpiler reported "expected exactly one Assembly.Load, found 0"
             // because it had been handed the wrong method.
             case MethodType.Async:
-                patchedMethod = AccessTools.DeclaredMethod(patchedType, info.methodName, info.argumentTypes) is { } asyncOuter
-                    ? AccessTools.AsyncMoveNext(asyncOuter) : null;
+                patchedMethod = AccessTools.DeclaredMethod(
+                    patchedType,
+                    info.methodName,
+                    info.argumentTypes
+                )
+                    is { } asyncOuter
+                    ? AccessTools.AsyncMoveNext(asyncOuter)
+                    : null;
                 break;
 
             case MethodType.Enumerator:
-                patchedMethod = AccessTools.DeclaredMethod(patchedType, info.methodName, info.argumentTypes) is { } iterOuter
-                    ? AccessTools.EnumeratorMoveNext(iterOuter) : null;
+                patchedMethod = AccessTools.DeclaredMethod(
+                    patchedType,
+                    info.methodName,
+                    info.argumentTypes
+                )
+                    is { } iterOuter
+                    ? AccessTools.EnumeratorMoveNext(iterOuter)
+                    : null;
                 break;
 
             default:
-                patchedMethod = AccessTools.DeclaredMethod(patchedType, info.methodName, info.argumentTypes);
+                patchedMethod = AccessTools.DeclaredMethod(
+                    patchedType,
+                    info.methodName,
+                    info.argumentTypes
+                );
                 break;
         }
     }
@@ -225,7 +254,9 @@ public class EnsureCode : Attribute
                     continue;
 
                 var info = EffectiveInfo(patchMethod);
-                var declared = patchMethod.GetCustomAttributes<EnsureCode>().FirstOrDefault()?.allowedHashes ?? "-";
+                var declared =
+                    patchMethod.GetCustomAttributes<EnsureCode>().FirstOrDefault()?.allowedHashes
+                    ?? "-";
                 var patchedType = info?.declaringType;
                 if (patchedType == null)
                 {
@@ -247,8 +278,17 @@ public class EnsureCode : Attribute
                             // share IL - MyIntergridCommunicationContextPatch has 15 targets and
                             // ONE hash - and emitting it 15 times produces an unreadable attribute
                             // that also hides how many distinct bodies are really being guarded.
-                            computed = string.Join("|", targets.Select(HashOf).Distinct().OrderBy(x => x, StringComparer.Ordinal));
-                            computedTarget = string.Join(" + ", targets.Select(x => x.FullDescription()));
+                            computed = string.Join(
+                                "|",
+                                targets
+                                    .Select(HashOf)
+                                    .Distinct()
+                                    .OrderBy(x => x, StringComparer.Ordinal)
+                            );
+                            computedTarget = string.Join(
+                                " + ",
+                                targets.Select(x => x.FullDescription())
+                            );
                         }
                     }
                     catch (Exception e)
@@ -266,13 +306,23 @@ public class EnsureCode : Attribute
                 string target;
                 try
                 {
-                    ResolveTarget(patchedType, info, out var targetMethod, out var targetConstructor);
+                    ResolveTarget(
+                        patchedType,
+                        info,
+                        out var targetMethod,
+                        out var targetConstructor
+                    );
                     if (targetMethod == null && targetConstructor == null)
                         target = $"UNRESOLVED ({patchedType.Name}.{info.methodName})";
                     else
                     {
-                        hash = (targetMethod != null ? targetMethod.HashBody() : targetConstructor.HashBody()).ToString("x8");
-                        target = targetMethod?.FullDescription() ?? targetConstructor.FullDescription();
+                        hash = (
+                            targetMethod != null
+                                ? targetMethod.HashBody()
+                                : targetConstructor.HashBody()
+                        ).ToString("x8");
+                        target =
+                            targetMethod?.FullDescription() ?? targetConstructor.FullDescription();
                     }
                 }
                 catch (Exception e)
@@ -311,7 +361,7 @@ public class EnsureCode : Attribute
                     continue;
                 var info = EffectiveInfo(patchMethod);
                 if (info?.declaringType == null)
-                    continue;                       // TargetMethod() classes: covered by the loop below
+                    continue; // TargetMethod() classes: covered by the loop below
                 string real;
                 try
                 {
@@ -322,7 +372,7 @@ public class EnsureCode : Attribute
                 }
                 catch (Exception)
                 {
-                    continue;                       // pick a different method rather than fail the test
+                    continue; // pick a different method rather than fail the test
                 }
 
                 var name = $"{patchType.Name}.{patchMethod.Name}";
@@ -332,7 +382,7 @@ public class EnsureCode : Attribute
                 // is matching too loosely (the substring form of IsAllowed is easy to break).
                 if (!new EnsureCode("deadbeef").VerifyMethod(patchMethod).Any())
                     return $"a WRONG hash was accepted for {name} - the guard cannot fail, so every "
-                           + "coverage number it reports is meaningless";
+                        + "coverage number it reports is meaningless";
                 return null;
             }
         }
@@ -345,7 +395,9 @@ public class EnsureCode : Attribute
         // now also driven from Tools/EnsureCodeHashes, where nothing initialises the plugin - and
         // a guard that throws NullReferenceException from its LOGGING line is a guard that cannot
         // be tested outside the thing it is guarding.
-        Plugin.Common.Logger?.Debug($"Verifying patch method: {patchMethod.DeclaringType.Name}.{patchMethod.Name}");
+        Plugin.Common.Logger?.Debug(
+            $"Verifying patch method: {patchMethod.DeclaringType.Name}.{patchMethod.Name}"
+        );
 
         var patchType = patchMethod.DeclaringType;
         if (patchType == null)
@@ -358,7 +410,9 @@ public class EnsureCode : Attribute
         // outright, this is also the line that says so instead of shrugging.
         var info = EffectiveInfo(patchMethod);
         if (info == null)
-            throw new Exception($"[EnsureCode] on {patchType.Name}.{patchMethod.Name}, but neither it nor its class carries [HarmonyPatch]");
+            throw new Exception(
+                $"[EnsureCode] on {patchType.Name}.{patchMethod.Name}, but neither it nor its class carries [HarmonyPatch]"
+            );
 
         var patchedType = info.declaringType;
         if (patchedType == null)
@@ -367,12 +421,19 @@ public class EnsureCode : Attribute
             // them to be declared. Reporting the first mismatch is enough to block the load.
             var computed = ResolveComputedTargets(patchType).ToList();
             if (computed.Count == 0)
-                throw new Exception($"Could not determine the patched type for patch method {patchType.Name}.{patchMethod.Name}");
+                throw new Exception(
+                    $"Could not determine the patched type for patch method {patchType.Name}.{patchMethod.Name}"
+                );
             foreach (var target in computed)
             {
                 var hash = HashOf(target);
                 if (!IsAllowed(hash))
-                    yield return new CodeChange(target as MethodInfo, target as ConstructorInfo, allowedHashes, hash);
+                    yield return new CodeChange(
+                        target as MethodInfo,
+                        target as ConstructorInfo,
+                        allowedHashes,
+                        hash
+                    );
             }
             yield break;
         }
@@ -380,12 +441,21 @@ public class EnsureCode : Attribute
         ResolveTarget(patchedType, info, out var patchedMethod, out var patchedConstructor);
 
         if (patchedMethod == null && patchedConstructor == null)
-            throw new Exception($"Could not get patched method information for {patchType.Name}.{patchMethod.Name}");
+            throw new Exception(
+                $"Could not get patched method information for {patchType.Name}.{patchMethod.Name}"
+            );
 
-        var methodBodyHash = (patchedMethod != null ? patchedMethod.HashBody() : patchedConstructor.HashBody()).ToString("x8");
+        var methodBodyHash = (
+            patchedMethod != null ? patchedMethod.HashBody() : patchedConstructor.HashBody()
+        ).ToString("x8");
         if (IsAllowed(methodBodyHash))
             yield break;
 
-        yield return new CodeChange(patchedMethod, patchedConstructor, allowedHashes, methodBodyHash);
+        yield return new CodeChange(
+            patchedMethod,
+            patchedConstructor,
+            allowedHashes,
+            methodBodyHash
+        );
     }
 }

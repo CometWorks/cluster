@@ -14,22 +14,31 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyGuiScreenMedicalsSeams
 {
-	public static Action<ulong, long, List<MySpaceRespawnComponent.MyRespawnPointInfo>> ClusterAppendRespawnPoints;
+    public static Action<
+        ulong,
+        long,
+        List<MySpaceRespawnComponent.MyRespawnPointInfo>
+    > ClusterAppendRespawnPoints;
 
-	/// <summary>Transpiler target: (sender, identity, local list).</summary>
-	public static void AppendRespawnPoints(long identityId, ClearToken<MySpaceRespawnComponent.MyRespawnPointInfo> availableRespawnPoints)
-	{
-		Action<ulong, long, List<MySpaceRespawnComponent.MyRespawnPointInfo>> seam = ClusterAppendRespawnPoints;
-		if (seam == null) return;
-		try
-		{
-			seam(MyEventContext.Current.Sender.Value, identityId, availableRespawnPoints.List);
-		}
-		catch (Exception exception)
-		{
-			// The call sits before vanilla's try/finally that recycles the list; never let a registry
-			// hiccup take the medical screen down with it.
-			MyLog.Default?.WriteLine("[ClusterPlugin] respawn-points append failed: " + exception);
-		}
-	}
+    /// <summary>Transpiler target: (sender, identity, local list).</summary>
+    public static void AppendRespawnPoints(
+        long identityId,
+        ClearToken<MySpaceRespawnComponent.MyRespawnPointInfo> availableRespawnPoints
+    )
+    {
+        Action<ulong, long, List<MySpaceRespawnComponent.MyRespawnPointInfo>> seam =
+            ClusterAppendRespawnPoints;
+        if (seam == null)
+            return;
+        try
+        {
+            seam(MyEventContext.Current.Sender.Value, identityId, availableRespawnPoints.List);
+        }
+        catch (Exception exception)
+        {
+            // The call sits before vanilla's try/finally that recycles the list; never let a registry
+            // hiccup take the medical screen down with it.
+            MyLog.Default?.WriteLine("[ClusterPlugin] respawn-points append failed: " + exception);
+        }
+    }
 }

@@ -698,6 +698,80 @@ def p1_fast_06(bench) -> None:
                     transitions=transitions, immediatePasses=passes, passRequests=requests)
 
 
+PIN_SLOW_MPS = 500.0     # below fast.enterMps: this member cannot leave a pinned layout
+PIN_SLOW_S = 24.0        # 12 km
+PIN_FAST_S = 20.0        # 60 km at SPEED
+COLOCATION = r"Automatic partition handover triggered for \d+, reason co-location"
+
+
+def p1_fast_07(bench) -> None:
+    """SE-1552: a partition with a pinned member (gone when its handover committed) is not stretched by a
+    member that leaves it, and the partitions around it stay on their node. Live (octahedron, 2026-11-14) a
+    bot ship took a trade lane out of such a partition, the node reported the missing member as a 103 km
+    cover row and co-location moved 94 partitions onto that node.
+    Slow leg: 500 m/s cannot leave the pinned layout; the cover row must stay where the partition was adopted.
+    Fast leg: 3 km/s leaves it at once, as from any other layout."""
+    bench.start_cluster()
+    bench.quiesce()
+    base = 2_000_000.0
+    anchor = _spawn(bench, "node-1", base)
+    ghost = _spawn(bench, "node-1", base + 300)
+    flyer = _spawn(bench, "node-1", base + 150, static=False)
+    # Bystanders on node-1, inside the sphere the flights stretch and never within 5 km of a member.
+    bystanders = [_spawn(bench, "node-1", base + 6_000, 5_000)]
+    bystanders += [_spawn(bench, "node-1", base + x, 10_000) for x in (30_000, 45_000, 60_000)]
+    bench.record("fixture", {"anchor": anchor, "ghost": ghost, "flyer": flyer, "bystanders": bystanders})
+    home = wait_until(lambda: (lambda row: row and {anchor, ghost, flyer} <= {m["id"] for m in row["members"]} and row)(
+        _where(bench, anchor)[2]), 60, "anchor, ghost and flyer in one partition")
+    bench.record("armed", bench.cluster.node("node-2", f"/pin-test-vanish?entity={ghost}", "POST"))
+    bench.record("handover", bench.cluster.post(_handover_url(bench, home["id"], clientless=True), timeout=120))
+
+    def pinned_row():
+        node, _, row = _where(bench, anchor)
+        return row if node == "node-2" and any(m["id"] == ghost and m["type"] == "missing" for m in row["members"]) else None
+
+    row = _poll(pinned_row, 30)
+    bench.check("the member gone at the commit is pinned in its partition on node-2", bool(row), str(_where(bench, anchor)[:2]))
+    moves0 = len(_lines(bench, "gateway", COLOCATION))
+
+    def cover(row) -> float:
+        """Radius of the cover row (5 wide) the node reports for the member it cannot see; 0 without one."""
+        return max((s[3] for s in row.get("memberSpheres") or [] if len(s) == 5), default=0.0)
+
+    def leg(speed: float, seconds: float) -> list[dict]:
+        node = _where(bench, flyer)[0]
+        bench.cluster.node(node, f"/fast-test-drive?entity={flyer}&vx={speed}&vy=0&vz=0&seconds={seconds}&mode=teleport", "POST")
+        samples, t0 = [], time.time()
+        while time.time() - t0 < seconds + 8:
+            _, pid, at = _where(bench, anchor)
+            _, fid, _ = _where(bench, flyer)
+            if at:
+                samples.append({"t": round(time.time() - t0, 1), "partition": pid, "flyerPartition": fid,
+                                "radius": round(at["sphere"]["radius"]), "cover": round(cover(at))})
+            time.sleep(1)
+        return samples
+
+    slow = leg(PIN_SLOW_MPS, PIN_SLOW_S)
+    bench.record("slow-leg", slow[-5:])
+    bench.check("slow leg: the flyer could not leave the pinned partition (the split is deferred, reason pending)",
+                bool(slow) and slow[-1]["flyerPartition"] == slow[-1]["partition"] and slow[-1]["radius"] > 5_000
+                and bool(_lines(bench, "node-2", r"topology split_deferred partition=\d+ reason=pending")), str(slow[-1:]))
+    bench.check("slow leg: the missing member is reported where the partition was adopted (cover row under 1 km)",
+                bool(slow) and 0 < max(s["cover"] for s in slow) < 1_000, f"max cover radius {max((s['cover'] for s in slow), default=0)} m")
+    fast = leg(SPEED, PIN_FAST_S)
+    bench.record("fast-leg", fast[-5:])
+    left = next((s["t"] for s in fast if s["flyerPartition"] != s["partition"]), None)
+    bench.check("fast leg: the flyer left the pinned partition within 5 s", left is not None and left <= 5, f"left at {left} s")
+    bench.check("fast leg: the pinned partition is not stretched (radius under 1 km at the end)",
+                bool(fast) and fast[-1]["radius"] < 1_000, str(fast[-1:]))
+    moves = _lines(bench, "gateway", COLOCATION)[moves0:]
+    bench.check("no co-location handover while the member was pinned", not moves, str([m[:200] for m in moves[:3]]))
+    stayed = [_where(bench, b)[0] for b in bystanders]
+    bench.check("every bystander is still on node-1", stayed == ["node-1"] * len(bystanders), str(stayed))
+    bench.exercised(coLocationMoves=len(moves), slowCover=max((s["cover"] for s in slow), default=0),
+                    flyerLeftAtS=left)
+
+
 SCENARIOS_FAST = {
     "P1-FAST-00": (p1_fast_00, "node self-test: fast-motion-tracker, fast-tick-detector, fast-flap-monitor, membership-fast and the membership sections", "1"),
     "P1-FAST-01": (p1_fast_01, "fast grid group: own partition, no merges while fast, merge after", "3"),
@@ -710,4 +784,5 @@ SCENARIOS_FAST = {
     "P1-FAST-05": (p1_fast_05, "SE1-0084 tick detector: fast within 0.5 s of a 3 km/s start, no merge or wake on the way, exit within 0.5 s", "3"),
     "P1-FAST-05-RED": (p1_fast_05_red, "P1-FAST-05 with fast.tickDetector=false: the flyer merges with or wakes an obstacle", "3"),
     "P1-FAST-06": (p1_fast_06, "SE1-0084 flapping member: at most one immediate pass and one Gateway request per 250 ms, logged as flapping", "3"),
+    "P1-FAST-07": (p1_fast_07, "SE-1552 pinned member: a leaving member does not stretch the partition's cover row, a fast one leaves at once, no co-location pile-up", "3"),
 }

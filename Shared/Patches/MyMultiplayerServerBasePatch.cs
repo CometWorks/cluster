@@ -13,11 +13,12 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyMultiplayerServerBase), nameof(MyMultiplayerServerBase.GetUpdateTime))]
 public static class MyMultiplayerServerBasePatch
 {
-	// ClusterPlugin patch point: ReplicationClockPatch.Postfix
-	[HarmonyPostfix]
-	private static void Postfix(ref MyTimeSpan __result)
-	{
-		var seam = MyMultiplayerServerBaseSeams.ClusterAdjustUpdateTime;
-		if (seam != null) __result = seam(__result);
-	}
+    // ClusterPlugin patch point: ReplicationClockPatch.Postfix
+    [HarmonyPostfix]
+    private static void Postfix(ref MyTimeSpan __result)
+    {
+        var seam = MyMultiplayerServerBaseSeams.ClusterAdjustUpdateTime;
+        if (seam != null)
+            __result = seam(__result);
+    }
 }

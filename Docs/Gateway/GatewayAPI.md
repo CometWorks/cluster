@@ -61,6 +61,12 @@ State: `GET /registry/status` (lifecycle phase, nodes, node plan, executors).
   whose grids aren't known yet: they went offline from a node that predates the field. The nodes fill those in from
   the Final, one row per node every `offline.gridBackfillSeconds`, with `GET .../grids/missing?after=&limit=` and `POST .../grids`.
   A row a load has claimed is listed until it drops, so prefer what the nodes report for the same id.
+- **Voxel reset occupancy** (SE-1595): `GET /registry/voxel-reset-occupancy` answers `{complete, reason, ageSeconds, spheres}`.
+  `spheres` are the `[x,y,z,r]` member spheres of every partition in the last complete report pass plus those of every
+  offline partition. `complete` is false, with the first few ids in `reason`, while a live partition is in neither
+  (unowned, recovering, or new since the pass): its members have no known position. The World Authority's
+  `VoxelResetService` polls it every `voxelReset.scanSeconds` and resets nothing while it is incomplete or the pass is
+  over 120 s old.
 - **NPC census** (#1354): `GET /registry/npc-census` answers `{ageSeconds, online, offline, grids: [{id, x, y, z, u}]}`:
   the NPC grids (a mechanical-hierarchy root grid whose big owners are all NPC identities) of the last complete
   report pass (each partition row's `npc`) plus those an offline partition's row kept from its offer (`OfflineRequest.Npc`),
@@ -125,7 +131,9 @@ pass; a scenario can cite exactly the section it owns.
   skins their inventory blob holds (`/registry/steam/skins`). Both go to the nodes in the attach binding
   (`PlayerReady.MissingDlcs`, `PlayerReady.Skins`); the DLCs also travel in the online list. A node's Direct
   Transport game server would say yes to every DLC and no to every skin. With the external relay, gateway-rs checks
-  the DLCs and sends them with the `ticket` SteamEvent (`missingDlcs`); it doesn't check skins yet (503).
+  the DLCs and sends them with the `ticket` SteamEvent (`missingDlcs`), and verifies signed skin inventories through
+  the correlated `SteamSkins` IPC request. Only a current Steam session and a valid blob for that player can grant
+  skins. A pending check waits for Steam and its item definitions for up to 5 seconds; refusal or timeout grants nothing.
 - `--eos` — EOS P2P frontend.
 
 See `Docs/EnvVars.md` for every `--flag` ⇔ `CLUSTER_*` equivalence.

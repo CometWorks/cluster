@@ -171,28 +171,37 @@ def pin_source_age(profile: Path) -> None:
         tree.write(path, encoding="utf-8", xml_declaration=True)
 
 
-def set_experimental_mode(cfg: Path) -> None:
-    """ExperimentalMode=True in a client SpaceEngineers.cfg, verified; the server runs with it on."""
-    text = cfg.read_text()
-    marker = "<Key>ExperimentalMode</Key>"
-    start = text.find(marker)
-    if start >= 0:
-        value_start = text.find('<Value xsi:type="xsd:string">', start)
-        value_end = text.find("</Value>", value_start)
-        if value_start < 0 or value_end < 0:
-            raise ClientError(f"malformed ExperimentalMode entry in {cfg}")
-        text = f'{text[:value_start]}<Value xsi:type="xsd:string">True{text[value_end:]}'
-    elif "</DictionaryEntries>" in text:
-        entry = ('  <DictionaryEntry>\n    <Key>ExperimentalMode</Key>\n'
-                 '    <Value xsi:type="xsd:string">True</Value>\n  </DictionaryEntry>\n')
-        text = text.replace("</DictionaryEntries>", entry + "</DictionaryEntries>", 1)
-    else:
-        raise ClientError(f"{cfg} has no ExperimentalMode key and no <DictionaryEntries> section")
-    cfg.write_text(text)
-    check = cfg.read_text()
-    position = check.find(marker)
-    if position < 0 or "True" not in check[position:position + 200]:
-        raise ClientError(f"ExperimentalMode did not stick in {cfg}")
+# What a client's SpaceEngineers.cfg must say: the server runs with experimental mode on, and the
+# rest skips the screens a game shows on its first run (MySandboxGame.ShowIntroMessages), which a
+# host whose game was never started by hand shows on every screenshot. GDPRConsent answers as a
+# player who declines data sharing.
+CLIENT_CFG = {
+    "ExperimentalMode": "True",
+    "FirstTimeRun": "False",
+    "WelcomeScreenCurrentStatus": "1",
+    "GDPRConsent": "False",
+    "GDPRConsentSentUpdated": "True",
+    "GoodBotHints": "False",
+}
+
+
+def set_client_cfg(cfg: Path) -> None:
+    """Sets CLIENT_CFG's keys in a client SpaceEngineers.cfg, adding the missing ones, verified."""
+    text = cfg.read_text(encoding="utf-8-sig")
+    if "</dictionary>" not in text:
+        raise ClientError(f"{cfg} has no <dictionary> section")
+    for key, value in CLIENT_CFG.items():
+        pattern = rf"(<Key>{key}</Key>\s*<Value>\s*<Value[^>]*>)[^<]*(</Value>)"
+        if re.search(pattern, text):
+            text = re.sub(pattern, lambda m: m.group(1) + value + m.group(2), text)
+        else:
+            item = f'<item><Key>{key}</Key><Value><Value xsi:type="xsd:string">{value}</Value></Value></item>\n'
+            text = text.replace("</dictionary>", item + "</dictionary>", 1)
+    cfg.write_text(text, encoding="utf-8")
+    check = cfg.read_text(encoding="utf-8")
+    for key, value in CLIENT_CFG.items():
+        if not re.search(rf"<Key>{key}</Key>\s*<Value>\s*<Value[^>]*>{value}</Value>", check):
+            raise ClientError(f"{key}={value} did not stick in {cfg}")
 
 
 class Client:
@@ -266,7 +275,7 @@ class Client:
                 shutil.copy2(live / "SpaceEngineers.cfg", cfg)
             else:
                 cfg.write_text(GAME_CFG)
-        set_experimental_mode(cfg)
+        set_client_cfg(cfg)
         (self.user_data / "Remote.cfg").write_text(REMOTE_CFG.format(port=self.remote_port, password=REMOTE_PASSWORD))
         # Seed the shader cache file by file: the runtime HLSL compiler is flaky, a cache miss can
         # kill a rendering client at load.

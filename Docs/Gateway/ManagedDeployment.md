@@ -86,6 +86,17 @@ node's log if the game thread made no update for 15 s, so the line `exit watchdo
 start of the evidence. Host's `hang-evidence.txt` only covers the registry's kill. The stacks come from the runtime's
 createdump and take under a second; the capture has a limit of 10 s.
 
+### World Authority memory
+
+The World Authority checks its managed heap every 2 s (SE-1382). When the heap first passes `wa.heapDumpMb` (8 GB) it
+writes one heap dump, `heap-<pid>-<MB>MB.dmp`, next to the crash dumps or in its data root, and logs
+`heap watch: ... heap dump <path> written in <s> s`. The process stands still while the dump is written. Read it with
+`dotnet-dump analyze` (`dumpheap -stat`, `gcroot`). Past `wa.heapLimitMb` (16 GB, 24 GB before SE-1615) it writes the dump if it has none yet and exits with code 6 and Host
+restarts it, before it can take the host's memory and every node on the host with it. Its heap is 1.2-1.7 GB in a
+100-trader soak. After the dump and before the exit it logs `heap watch: facts: ...`: the collector's heap, generation and
+large-object sizes, collection counts, the working set and the node link's send queue depths; before the exit also
+`live=`, the heap left after a full collection (SE-1561).
+
 ### Hot spares
 
 The approved `nodes` list is the whole inventory, so node ids cannot be allocated at runtime. Hot spares are
@@ -131,6 +142,9 @@ One recycle runs at a time:
    pins its components to the spare, clients last, as for a node-control recycle.
 2. Once the node owns nothing it is closed and reports Empty, which turns its slot's incumbent action from Draining
    into Kill. Past the drain timeout it is closed anyway, and its own close drain hands out or offlines the rest.
+   A player in a partition that is still there is disconnected and rejoins by itself: the Gateway accepts the
+   closed node's release although the player is routed to the partition, the spare recovers it, and the join,
+   held meanwhile, lands in the player's body (SE-1553).
 3. Empty (or Dead) designates the slot a spare. Host kills that incarnation and reports Gone; the slot is still
    wanted, so Host restarts it, and the new incarnation registers as the spare holding nothing.
 

@@ -49,6 +49,7 @@ pub enum WorkerCmd {
     Status(crossbeam_channel::Sender<Vec<serde_json::Value>>),
     /// Steam worker only: the auth-session primitives, the browser row and its status.
     SteamAuth(crate::ipc::SteamAuth),
+    SteamSkins { correlation: u32, request: crate::ipc::SteamSkins },
     SteamPublish(Box<crate::ipc::SteamPublish>),
     SteamStatus(crossbeam_channel::Sender<serde_json::Value>),
 }
@@ -554,7 +555,7 @@ impl Worker {
                 let sessions = self.clients.iter().map(|(&id, client)| self.status_of(id, client, now)).collect();
                 let _ = reply.send(sessions);
             }
-            WorkerCmd::SteamAuth(_) | WorkerCmd::SteamPublish(_) | WorkerCmd::SteamStatus(_) => {}
+            WorkerCmd::SteamAuth(_) | WorkerCmd::SteamSkins { .. } | WorkerCmd::SteamPublish(_) | WorkerCmd::SteamStatus(_) => {}
         }
     }
 

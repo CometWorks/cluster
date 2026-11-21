@@ -14,15 +14,17 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MySandboxGame), "Update", new Type[0])]
 public static class GameLoopExceptionPatch
 {
-	[HarmonyFinalizer]
-	private static Exception Finalizer(Exception __exception)
-	{
-		if (__exception != null)
-		{
-			MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] game loop exception, the server is stopping: "
-				+ ClusterPlugin.SecretRedactor.Redact(__exception.ToString()));
-			MyLog.Default?.Flush();
-		}
-		return __exception;
-	}
+    [HarmonyFinalizer]
+    private static Exception Finalizer(Exception __exception)
+    {
+        if (__exception != null)
+        {
+            MyLog.Default?.WriteLineAndConsole(
+                "[ClusterPlugin] game loop exception, the server is stopping: "
+                    + ClusterPlugin.SecretRedactor.Redact(__exception.ToString())
+            );
+            MyLog.Default?.Flush();
+        }
+        return __exception;
+    }
 }

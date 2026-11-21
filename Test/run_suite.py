@@ -65,30 +65,45 @@ from scenarios_ai import SCENARIOS_AI  # noqa: E402
 from scenarios_offline import SCENARIOS_OFFLINE  # noqa: E402
 from scenarios_rejoin import SCENARIOS_REJOIN  # noqa: E402
 from scenarios_stale_member import SCENARIOS_STALE_MEMBER  # noqa: E402
+from scenarios_retire_loading import SCENARIOS_RETIRE_LOADING  # noqa: E402
 from scenarios_member_limit import SCENARIOS_MEMBER_LIMIT  # noqa: E402
 from scenarios_chat_names import SCENARIOS_CHAT_NAMES  # noqa: E402
+from scenarios_admin_economy import SCENARIOS_ADMIN_ECONOMY  # noqa: E402
+from scenarios_admin_show_players import SCENARIOS_ADMIN_SHOW_PLAYERS  # noqa: E402
+from scenarios_client_balance import SCENARIOS_CLIENT_BALANCE  # noqa: E402
+from scenarios_rename import SCENARIOS_RENAME  # noqa: E402
 from scenarios_chat_event import SCENARIOS_CHAT_EVENT  # noqa: E402
 from scenarios_fast import SCENARIOS_FAST  # noqa: E402
+from scenarios_big_grid import SCENARIOS_BIG_GRID  # noqa: E402
 from scenarios_orphan import SCENARIOS_ORPHAN  # noqa: E402
+from scenarios_skins import SCENARIOS_SKINS  # noqa: E402
 from scenarios_panel import SCENARIOS_PANEL  # noqa: E402
 from scenarios_drift import SCENARIOS_DRIFT  # noqa: E402
 from scenarios_delete_fault import SCENARIOS_DELETE_FAULT  # noqa: E402
 from scenarios_grid_delete import SCENARIOS_GRID_DELETE  # noqa: E402
+from scenarios_voxel_reset import SCENARIOS_VOXEL_RESET  # noqa: E402
 from scenarios_stop_after_warm_start import SCENARIOS_STOP_AFTER_WARM_START  # noqa: E402
 from scenarios_npc import SCENARIOS_NPC  # noqa: E402
 from scenarios_bot_ships import SCENARIOS_BOT_SHIPS  # noqa: E402
+from scenarios_player_forget import SCENARIOS_PLAYER_FORGET  # noqa: E402
 from scenarios_mods import SCENARIOS_MODS  # noqa: E402
 from scenarios_spawn_preview import SCENARIOS_SPAWN_PREVIEW  # noqa: E402
 from scenarios_blocks import SCENARIOS_BLOCKS  # noqa: E402
 from scenarios_contracts import SCENARIOS_CONTRACTS  # noqa: E402
 from scenarios_asleep import SCENARIOS_ASLEEP  # noqa: E402
 from scenarios_staged_bags import SCENARIOS_STAGED_BAGS  # noqa: E402
+from scenarios_seed_id import SCENARIOS_SEED_ID  # noqa: E402
+from scenarios_seed_collide import SCENARIOS_SEED_COLLIDE  # noqa: E402
+from scenarios_stale_view import SCENARIOS_STALE_VIEW  # noqa: E402
+from scenarios_admin_menu import SCENARIOS_ADMIN_MENU  # noqa: E402
+from scenarios_admin_sync import SCENARIOS_ADMIN_SYNC  # noqa: E402
 
-SCENARIOS = {**SCENARIOS_CORE, **SCENARIOS_LIVE, **SCENARIOS_EXT, **SCENARIOS_ADMIN, **SCENARIOS_PLAYER, **SCENARIOS_RECOVERY, **SCENARIOS_RESTART,
-             **SCENARIOS_SAVES, **SCENARIOS_TOPOLOGY, **SCENARIOS_WA, **SCENARIOS_WA_OPS, **SCENARIOS_AI, **SCENARIOS_OFFLINE, **SCENARIOS_REJOIN, **SCENARIOS_PLANET, **SCENARIOS_PRESENCE, **SCENARIOS_SUITE, **SCENARIOS_FAST, **SCENARIOS_ORPHAN, **SCENARIOS_DELETE_FAULT, **SCENARIOS_GRID_DELETE, **SCENARIOS_STOP_AFTER_WARM_START, **SCENARIOS_NPC, **SCENARIOS_BOT_SHIPS, **SCENARIOS_MODS,
+SCENARIOS = {**SCENARIOS_CORE, **SCENARIOS_ADMIN_SYNC, **SCENARIOS_LIVE, **SCENARIOS_EXT, **SCENARIOS_ADMIN, **SCENARIOS_PLAYER, **SCENARIOS_RECOVERY, **SCENARIOS_RESTART,
+             **SCENARIOS_SAVES, **SCENARIOS_TOPOLOGY, **SCENARIOS_WA, **SCENARIOS_WA_OPS, **SCENARIOS_AI, **SCENARIOS_OFFLINE, **SCENARIOS_REJOIN, **SCENARIOS_PLANET, **SCENARIOS_PRESENCE, **SCENARIOS_SUITE, **SCENARIOS_FAST, **SCENARIOS_BIG_GRID, **SCENARIOS_ORPHAN, **SCENARIOS_DELETE_FAULT, **SCENARIOS_GRID_DELETE, **SCENARIOS_VOXEL_RESET, **SCENARIOS_STOP_AFTER_WARM_START, **SCENARIOS_NPC, **SCENARIOS_BOT_SHIPS, **SCENARIOS_PLAYER_FORGET, **SCENARIOS_MODS,
              **SCENARIOS_REDELIVER, **SCENARIOS_PROPERTY_SYNC, **SCENARIOS_PANEL, **SCENARIOS_DRIFT, **SCENARIOS_SPAWN_PREVIEW, **SCENARIOS_BLOCKS,
-             **SCENARIOS_CONTRACTS, **SCENARIOS_STALE_MEMBER, **SCENARIOS_MEMBER_LIMIT,
-             **SCENARIOS_CHAT_NAMES, **SCENARIOS_CHAT_EVENT, **SCENARIOS_ASLEEP, **SCENARIOS_STAGED_BAGS}
+             **SCENARIOS_CONTRACTS, **SCENARIOS_STALE_MEMBER, **SCENARIOS_RETIRE_LOADING, **SCENARIOS_MEMBER_LIMIT,
+             **SCENARIOS_CHAT_NAMES, **SCENARIOS_ADMIN_ECONOMY, **SCENARIOS_ADMIN_SHOW_PLAYERS, **SCENARIOS_RENAME, **SCENARIOS_CHAT_EVENT, **SCENARIOS_ASLEEP, **SCENARIOS_STAGED_BAGS,
+             **SCENARIOS_CLIENT_BALANCE, **SCENARIOS_SEED_ID, **SCENARIOS_SEED_COLLIDE, **SCENARIOS_STALE_VIEW, **SCENARIOS_SKINS, **SCENARIOS_ADMIN_MENU}
 #: The longest a single scenario may take; used for the network-window guard.
 SCENARIO_BUDGET = timedelta(minutes=float(os.environ.get("CLUSTER_TEST_SCENARIO_BUDGET_MINUTES", "30")))
 #: Longest the suite will sit waiting for a network window to pass before giving up instead. The

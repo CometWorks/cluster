@@ -33,7 +33,8 @@ public static class MyScriptWhitelistPatch
             (whitelist, nameof(MyScriptWhitelist.MyWhitelistBatch.AllowMembers)),
         };
         foreach (var (type, name) in targets)
-            yield return AccessTools.DeclaredMethod(type, name) ?? throw new MissingMethodException(type.FullName, name);
+            yield return AccessTools.DeclaredMethod(type, name)
+                ?? throw new MissingMethodException(type.FullName, name);
     }
 
     [HarmonyPrefix]

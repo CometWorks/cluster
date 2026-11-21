@@ -68,205 +68,260 @@ namespace ClusterPlugin;
 /// </remarks>
 internal sealed class FastMotionTracker
 {
-	internal const double MinSampleSeconds = 0.9;
-	internal const double StaleTickSeconds = 1.0;
+    internal const double MinSampleSeconds = 0.9;
+    internal const double StaleTickSeconds = 1.0;
 
-	private sealed class State
-	{
-		public bool Sampled;
-		public Vector3D Position;
-		public double Time;
-		public double Speed;
-		public int Above;
-		public int Below;
-		public bool Fast;
-		public double Since;
-		// The tick detector: the previous tick's position, and the run lengths of fast and slow steps.
-		public long TickFrame = -1;
-		public Vector3D TickPosition;
-		public double TickSpeed;
-		public int FastSteps;
-		public int SlowSteps;
-		public bool TickFast;
-		public bool IsFast => Fast || TickFast;
-	}
+    private sealed class State
+    {
+        public bool Sampled;
+        public Vector3D Position;
+        public double Time;
+        public double Speed;
+        public int Above;
+        public int Below;
+        public bool Fast;
+        public double Since;
 
-	private readonly Dictionary<long, State> m_states = new Dictionary<long, State>();
-	// The self-test pins the threshold; everything else derives it (null).
-	private readonly double? m_enterMps;
-	private static double s_logged;
+        // The tick detector: the previous tick's position, and the run lengths of fast and slow steps.
+        public long TickFrame = -1;
+        public Vector3D TickPosition;
+        public double TickSpeed;
+        public int FastSteps;
+        public int SlowSteps;
+        public bool TickFast;
+        public bool IsFast => Fast || TickFast;
+    }
 
-	public FastMotionTracker(double? enterMps = null) => m_enterMps = enterMps;
+    private readonly Dictionary<long, State> m_states = new Dictionary<long, State>();
 
-	/// <summary>Fired on the game thread for every member that entered (true) or left (false) the fast state,
-	/// with its speed and the detector that decided ("tick" or "samples").</summary>
-	public event Action<long, bool, double, string> Transition;
+    // The self-test pins the threshold; everything else derives it (null).
+    private readonly double? m_enterMps;
+    private static double s_logged;
 
-	public static double EnterMps => Threshold().Mps;
-	public static double EnterMarginMps => EnterMps * Fraction("fast.enterMarginFraction");
-	public static double ExitMps => EnterMps * Fraction("fast.exitFraction");
+    public FastMotionTracker(double? enterMps = null) => m_enterMps = enterMps;
 
-	/// <summary>The fast threshold in m/s and where it came from (see the remarks).</summary>
-	public static (double Mps, string Source) Threshold()
-	{
-		string configured = ClusterConfig.Get("fast.enterMps");
-		if (!string.Equals(configured, "auto", StringComparison.OrdinalIgnoreCase))
-			return (double.Parse(configured, CultureInfo.InvariantCulture), "fast.enterMps=" + configured);
-		double sync = MyLayersHelper.SyncDistance();
-		string source = "sync distance in use (MyLayers)";
-		if (sync <= 0 && MySession.Static?.Settings != null)
-		{
-			sync = MySession.Static.Settings.SyncDistance;
-			source = "world SyncDistance (session settings)";
-		}
-		if (sync <= 0)
-		{
-			sync = 3000;
-			source = "vanilla default SyncDistance (no session yet)";
-		}
-		return (sync / 3.0, string.Format(CultureInfo.InvariantCulture, "{0} {1:F0} m / 3", source, sync));
-	}
+    /// <summary>Fired on the game thread for every member that entered (true) or left (false) the fast state,
+    /// with its speed and the detector that decided ("tick" or "samples").</summary>
+    public event Action<long, bool, double, string> Transition;
 
-	private static double Fraction(string key) => double.Parse(ClusterConfig.Get(key), CultureInfo.InvariantCulture);
-	public static int EnterSamples => Math.Max(1, ClusterConfig.GetInt("fast.enterSamples"));
-	public static int ExitSamples => Math.Max(1, ClusterConfig.GetInt("fast.exitSamples"));
-	public static int TickSteps => Math.Max(1, ClusterConfig.GetInt("fast.tickSteps"));
-	public static bool TickDetector => ClusterConfig.GetBool("fast.tickDetector");
+    public static double EnterMps => Threshold().Mps;
+    public static double EnterMarginMps => EnterMps * Fraction("fast.enterMarginFraction");
+    public static double ExitMps => EnterMps * Fraction("fast.exitFraction");
 
-	/// <summary>Start ID in the fast state at POSITION/NOW (T-0292: it arrived fast from another node). It leaves
-	/// by the normal exit dwell, measured from here; no Transition fires for the seed itself.</summary>
-	public void Seed(long id, Vector3D position, double now, double speed) =>
-		m_states[id] = new State { Sampled = true, Position = position, Time = now, Speed = speed, Fast = true, Since = now };
+    /// <summary>The fast threshold in m/s and where it came from (see the remarks).</summary>
+    public static (double Mps, string Source) Threshold()
+    {
+        string configured = ClusterConfig.Get("fast.enterMps");
+        if (!string.Equals(configured, "auto", StringComparison.OrdinalIgnoreCase))
+            return (
+                double.Parse(configured, CultureInfo.InvariantCulture),
+                "fast.enterMps=" + configured
+            );
+        double sync = MyLayersHelper.SyncDistance();
+        string source = "sync distance in use (MyLayers)";
+        if (sync <= 0 && MySession.Static?.Settings != null)
+        {
+            sync = MySession.Static.Settings.SyncDistance;
+            source = "world SyncDistance (session settings)";
+        }
+        if (sync <= 0)
+        {
+            sync = 3000;
+            source = "vanilla default SyncDistance (no session yet)";
+        }
+        return (
+            sync / 3.0,
+            string.Format(CultureInfo.InvariantCulture, "{0} {1:F0} m / 3", source, sync)
+        );
+    }
 
-	public bool IsFast(long id) => m_states.TryGetValue(id, out State state) && state.IsFast;
-	/// <summary>The latest step's speed while the tick detector has the member fast, else the latest sample's.</summary>
-	public double SpeedOf(long id) => m_states.TryGetValue(id, out State state) ? state.TickFast ? state.TickSpeed : state.Speed : 0;
-	public int FastCount => m_states.Values.Count(state => state.IsFast);
+    private static double Fraction(string key) =>
+        double.Parse(ClusterConfig.Get(key), CultureInfo.InvariantCulture);
 
-	private static double LoggedThreshold()
-	{
-		(double mps, string source) = Threshold();
-		if (mps != s_logged)
-		{
-			s_logged = mps;
-			VRage.Utils.MyLog.Default?.WriteLineAndConsole(string.Format(CultureInfo.InvariantCulture,
-				"[ClusterPlugin] fast_threshold enterMps={0:F0} (+{1:F0} margin, x{2}) exitMps={3:F0} (x{4}) tickSteps={6}{7} source={5}",
-				mps, mps * Fraction("fast.enterMarginFraction"), EnterSamples, mps * Fraction("fast.exitFraction"), ExitSamples, source,
-				TickSteps, TickDetector ? "" : " (tick detector off)"));
-		}
-		return mps;
-	}
+    public static int EnterSamples => Math.Max(1, ClusterConfig.GetInt("fast.enterSamples"));
+    public static int ExitSamples => Math.Max(1, ClusterConfig.GetInt("fast.exitSamples"));
+    public static int TickSteps => Math.Max(1, ClusterConfig.GetInt("fast.tickSteps"));
+    public static bool TickDetector => ClusterConfig.GetBool("fast.tickDetector");
 
-	/// <summary>
-	/// Feed the current member positions. Members not seen again are forgotten (a member that
-	/// leaves this node - handover, close - starts from scratch wherever it lands).
-	/// </summary>
-	/// <param name="holdUnchangedSeconds">For positions that refresh slower than they are sampled (the
-	/// World Authority's position registry): a position identical to the last sample is "no new data"
-	/// rather than "stopped" until this many seconds have passed, so a refresh cadence of 2 s does not
-	/// alternate 0 and 2x the speed and defeat the dwell. 0 (the node's own entities) takes every sample.</param>
-	public void Sample(IEnumerable<KeyValuePair<long, Vector3D>> positions, double now, double holdUnchangedSeconds = 0)
-	{
-		double threshold = m_enterMps ?? LoggedThreshold();
-		double enter = threshold * (1 + Fraction("fast.enterMarginFraction")), exit = threshold * Fraction("fast.exitFraction");
-		int enterSamples = EnterSamples, exitSamples = ExitSamples;
-		HashSet<long> seen = new HashSet<long>();
-		foreach ((long id, Vector3D position) in positions)
-		{
-			seen.Add(id);
-			if (!m_states.TryGetValue(id, out State state)) m_states[id] = state = new State();
-			if (state.TickFast && now - state.TickFrame / 60.0 > StaleTickSeconds)
-			{
-				state.TickFast = false;
-				if (!state.Fast) Transition?.Invoke(id, false, state.Speed, "samples");
-			}
-			if (!state.Sampled)
-			{
-				state.Sampled = true;
-				state.Position = position;
-				state.Time = now;
-				continue;
-			}
-			double elapsed = now - state.Time;
-			if (elapsed < MinSampleSeconds) continue;
-			if (holdUnchangedSeconds > 0 && position == state.Position && elapsed < holdUnchangedSeconds) continue;
-			state.Speed = Vector3D.Distance(position, state.Position) / elapsed;
-			state.Position = position;
-			state.Time = now;
-			if (!state.Fast)
-			{
-				state.Above = state.Speed > enter ? state.Above + 1 : 0;
-				if (state.Above >= enterSamples)
-				{
-					state.Fast = true;
-					state.Since = now;
-					state.Below = 0;
-					if (!state.TickFast) Transition?.Invoke(id, true, state.Speed, "samples");
-				}
-			}
-			else
-			{
-				state.Below = state.Speed < exit ? state.Below + 1 : 0;
-				if (state.Below >= exitSamples)
-				{
-					state.Fast = false;
-					state.Since = now;
-					state.Above = 0;
-					if (!state.TickFast) Transition?.Invoke(id, false, state.Speed, "samples");
-				}
-			}
-		}
-		if (seen.Count != m_states.Count)
-			foreach (long gone in m_states.Keys.Where(id => !seen.Contains(id)).ToArray())
-				m_states.Remove(gone);
-	}
+    /// <summary>Start ID in the fast state at POSITION/NOW (T-0292: it arrived fast from another node). It leaves
+    /// by the normal exit dwell, measured from here; no Transition fires for the seed itself.</summary>
+    public void Seed(long id, Vector3D position, double now, double speed) =>
+        m_states[id] = new State
+        {
+            Sampled = true,
+            Position = position,
+            Time = now,
+            Speed = speed,
+            Fast = true,
+            Since = now,
+        };
 
-	/// <summary>
-	/// SE1-0084: one game tick of member positions (see the remarks, THE TICK DETECTOR). <paramref name="frame"/>
-	/// is the gameplay frame counter, the clock <see cref="Sample"/> gets in seconds; a step over more than one
-	/// frame counts as one step at its average speed. Members are forgotten by <see cref="Sample"/>, not here.
-	/// Returns true when a member entered or left the fast state.
-	/// </summary>
-	public bool Step(IEnumerable<KeyValuePair<long, Vector3D>> positions, long frame)
-	{
-		double threshold = m_enterMps ?? LoggedThreshold();
-		double enter = threshold * (1 + Fraction("fast.enterMarginFraction")), exit = threshold * Fraction("fast.exitFraction");
-		int steps = TickSteps;
-		bool changed = false;
-		foreach ((long id, Vector3D position) in positions)
-		{
-			if (!m_states.TryGetValue(id, out State state)) m_states[id] = state = new State();
-			long frames = state.TickFrame < 0 ? 0 : frame - state.TickFrame;   // 0: the first position
-			Vector3D previous = state.TickPosition;
-			state.TickFrame = frame;
-			state.TickPosition = position;
-			if (frames <= 0) continue;
-			double speed = Vector3D.Distance(position, previous) * 60.0 / frames;
-			state.TickSpeed = speed;
-			state.FastSteps = speed > enter ? state.FastSteps + 1 : 0;
-			state.SlowSteps = speed < exit ? state.SlowSteps + 1 : 0;
-			if (!state.TickFast && state.FastSteps >= steps)
-			{
-				state.TickFast = true;
-				if (state.Fast) continue;
-				Transition?.Invoke(id, true, speed, "tick");
-				changed = true;
-			}
-			else if (state.TickFast && state.SlowSteps >= steps)
-			{
-				state.TickFast = false;
-				// The samples restart from here: their window still spans the stop (see the remarks).
-				state.Fast = false;
-				state.Above = state.Below = 0;
-				state.Position = position;
-				state.Time = frame / 60.0;
-				state.Since = state.Time;
-				Transition?.Invoke(id, false, speed, "tick");
-				changed = true;
-			}
-		}
-		return changed;
-	}
+    public bool IsFast(long id) => m_states.TryGetValue(id, out State state) && state.IsFast;
+
+    /// <summary>The latest step's speed while the tick detector has the member fast, else the latest sample's.</summary>
+    public double SpeedOf(long id) =>
+        m_states.TryGetValue(id, out State state)
+            ? state.TickFast
+                ? state.TickSpeed
+                : state.Speed
+            : 0;
+
+    public int FastCount => m_states.Values.Count(state => state.IsFast);
+
+    private static double LoggedThreshold()
+    {
+        (double mps, string source) = Threshold();
+        if (mps != s_logged)
+        {
+            s_logged = mps;
+            VRage.Utils.MyLog.Default?.WriteLineAndConsole(
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "[ClusterPlugin] fast_threshold enterMps={0:F0} (+{1:F0} margin, x{2}) exitMps={3:F0} (x{4}) tickSteps={6}{7} source={5}",
+                    mps,
+                    mps * Fraction("fast.enterMarginFraction"),
+                    EnterSamples,
+                    mps * Fraction("fast.exitFraction"),
+                    ExitSamples,
+                    source,
+                    TickSteps,
+                    TickDetector ? "" : " (tick detector off)"
+                )
+            );
+        }
+        return mps;
+    }
+
+    /// <summary>
+    /// Feed the current member positions. Members not seen again are forgotten (a member that
+    /// leaves this node - handover, close - starts from scratch wherever it lands).
+    /// </summary>
+    /// <param name="holdUnchangedSeconds">For positions that refresh slower than they are sampled (the
+    /// World Authority's position registry): a position identical to the last sample is "no new data"
+    /// rather than "stopped" until this many seconds have passed, so a refresh cadence of 2 s does not
+    /// alternate 0 and 2x the speed and defeat the dwell. 0 (the node's own entities) takes every sample.</param>
+    public void Sample(
+        IEnumerable<KeyValuePair<long, Vector3D>> positions,
+        double now,
+        double holdUnchangedSeconds = 0
+    )
+    {
+        double threshold = m_enterMps ?? LoggedThreshold();
+        double enter = threshold * (1 + Fraction("fast.enterMarginFraction")),
+            exit = threshold * Fraction("fast.exitFraction");
+        int enterSamples = EnterSamples,
+            exitSamples = ExitSamples;
+        HashSet<long> seen = new HashSet<long>();
+        foreach ((long id, Vector3D position) in positions)
+        {
+            seen.Add(id);
+            if (!m_states.TryGetValue(id, out State state))
+                m_states[id] = state = new State();
+            if (state.TickFast && now - state.TickFrame / 60.0 > StaleTickSeconds)
+            {
+                state.TickFast = false;
+                if (!state.Fast)
+                    Transition?.Invoke(id, false, state.Speed, "samples");
+            }
+            if (!state.Sampled)
+            {
+                state.Sampled = true;
+                state.Position = position;
+                state.Time = now;
+                continue;
+            }
+            double elapsed = now - state.Time;
+            if (elapsed < MinSampleSeconds)
+                continue;
+            if (
+                holdUnchangedSeconds > 0
+                && position == state.Position
+                && elapsed < holdUnchangedSeconds
+            )
+                continue;
+            state.Speed = Vector3D.Distance(position, state.Position) / elapsed;
+            state.Position = position;
+            state.Time = now;
+            if (!state.Fast)
+            {
+                state.Above = state.Speed > enter ? state.Above + 1 : 0;
+                if (state.Above >= enterSamples)
+                {
+                    state.Fast = true;
+                    state.Since = now;
+                    state.Below = 0;
+                    if (!state.TickFast)
+                        Transition?.Invoke(id, true, state.Speed, "samples");
+                }
+            }
+            else
+            {
+                state.Below = state.Speed < exit ? state.Below + 1 : 0;
+                if (state.Below >= exitSamples)
+                {
+                    state.Fast = false;
+                    state.Since = now;
+                    state.Above = 0;
+                    if (!state.TickFast)
+                        Transition?.Invoke(id, false, state.Speed, "samples");
+                }
+            }
+        }
+        if (seen.Count != m_states.Count)
+            foreach (long gone in m_states.Keys.Where(id => !seen.Contains(id)).ToArray())
+                m_states.Remove(gone);
+    }
+
+    /// <summary>
+    /// SE1-0084: one game tick of member positions (see the remarks, THE TICK DETECTOR). <paramref name="frame"/>
+    /// is the gameplay frame counter, the clock <see cref="Sample"/> gets in seconds; a step over more than one
+    /// frame counts as one step at its average speed. Members are forgotten by <see cref="Sample"/>, not here.
+    /// Returns true when a member entered or left the fast state.
+    /// </summary>
+    public bool Step(IEnumerable<KeyValuePair<long, Vector3D>> positions, long frame)
+    {
+        double threshold = m_enterMps ?? LoggedThreshold();
+        double enter = threshold * (1 + Fraction("fast.enterMarginFraction")),
+            exit = threshold * Fraction("fast.exitFraction");
+        int steps = TickSteps;
+        bool changed = false;
+        foreach ((long id, Vector3D position) in positions)
+        {
+            if (!m_states.TryGetValue(id, out State state))
+                m_states[id] = state = new State();
+            long frames = state.TickFrame < 0 ? 0 : frame - state.TickFrame; // 0: the first position
+            Vector3D previous = state.TickPosition;
+            state.TickFrame = frame;
+            state.TickPosition = position;
+            if (frames <= 0)
+                continue;
+            double speed = Vector3D.Distance(position, previous) * 60.0 / frames;
+            state.TickSpeed = speed;
+            state.FastSteps = speed > enter ? state.FastSteps + 1 : 0;
+            state.SlowSteps = speed < exit ? state.SlowSteps + 1 : 0;
+            if (!state.TickFast && state.FastSteps >= steps)
+            {
+                state.TickFast = true;
+                if (state.Fast)
+                    continue;
+                Transition?.Invoke(id, true, speed, "tick");
+                changed = true;
+            }
+            else if (state.TickFast && state.SlowSteps >= steps)
+            {
+                state.TickFast = false;
+                // The samples restart from here: their window still spans the stop (see the remarks).
+                state.Fast = false;
+                state.Above = state.Below = 0;
+                state.Position = position;
+                state.Time = frame / 60.0;
+                state.Since = state.Time;
+                Transition?.Invoke(id, false, speed, "tick");
+                changed = true;
+            }
+        }
+        return changed;
+    }
 }
 
 /// <summary>
@@ -277,30 +332,42 @@ internal sealed class FastMotionTracker
 /// </summary>
 internal sealed class FastFlapMonitor
 {
-	internal const double WindowSeconds = 60;
-	internal const int Threshold = 10;
-	private readonly Dictionary<long, Queue<double>> m_transitions = new Dictionary<long, Queue<double>>();
-	private readonly Dictionary<long, double> m_reported = new Dictionary<long, double>();
+    internal const double WindowSeconds = 60;
+    internal const int Threshold = 10;
+    private readonly Dictionary<long, Queue<double>> m_transitions =
+        new Dictionary<long, Queue<double>>();
+    private readonly Dictionary<long, double> m_reported = new Dictionary<long, double>();
 
-	/// <summary>Members reported since the start (diag).</summary>
-	public long Reports { get; private set; }
+    /// <summary>Members reported since the start (diag).</summary>
+    public long Reports { get; private set; }
 
-	/// <summary>A transition of <paramref name="id"/> at <paramref name="now"/> (seconds). Returns the member's
-	/// transitions in the window when it is to be reported now, else 0.</summary>
-	public int Note(long id, double now)
-	{
-		if (!m_transitions.TryGetValue(id, out Queue<double> times)) m_transitions[id] = times = new Queue<double>();
-		times.Enqueue(now);
-		while (times.Peek() <= now - WindowSeconds) times.Dequeue();
-		if (m_transitions.Count > 64)
-			foreach (long quiet in m_transitions.Where(x => x.Value.Last() <= now - WindowSeconds).Select(x => x.Key).ToArray())
-			{
-				m_transitions.Remove(quiet);
-				m_reported.Remove(quiet);
-			}
-		if (times.Count < Threshold || m_reported.TryGetValue(id, out double reported) && now - reported < WindowSeconds) return 0;
-		m_reported[id] = now;
-		Reports++;
-		return times.Count;
-	}
+    /// <summary>A transition of <paramref name="id"/> at <paramref name="now"/> (seconds). Returns the member's
+    /// transitions in the window when it is to be reported now, else 0.</summary>
+    public int Note(long id, double now)
+    {
+        if (!m_transitions.TryGetValue(id, out Queue<double> times))
+            m_transitions[id] = times = new Queue<double>();
+        times.Enqueue(now);
+        while (times.Peek() <= now - WindowSeconds)
+            times.Dequeue();
+        if (m_transitions.Count > 64)
+            foreach (
+                long quiet in m_transitions
+                    .Where(x => x.Value.Last() <= now - WindowSeconds)
+                    .Select(x => x.Key)
+                    .ToArray()
+            )
+            {
+                m_transitions.Remove(quiet);
+                m_reported.Remove(quiet);
+            }
+        if (
+            times.Count < Threshold
+            || m_reported.TryGetValue(id, out double reported) && now - reported < WindowSeconds
+        )
+            return 0;
+        m_reported[id] = now;
+        Reports++;
+        return times.Count;
+    }
 }

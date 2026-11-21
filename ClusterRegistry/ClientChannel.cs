@@ -29,7 +29,11 @@ internal sealed class DirectClientChannel : ClientChannel
     public override string Frontend => "dt";
     public override string Remote => Peer.ToString();
     public override bool Connected => Peer.ConnectionState == ConnectionState.Connected;
-    public override int ReliableBacklogPackets => Peer.GetPacketsCountInReliableQueue(0, ordered: true);
-    public override void Send(GatewayPacket packet) => Peer.Send(DirectTransportCodec.EncodePacket(packet), packet.Delivery);
+    public override int ReliableBacklogPackets =>
+        Peer.GetPacketsCountInReliableQueue(0, ordered: true);
+
+    public override void Send(GatewayPacket packet) =>
+        Peer.Send(DirectTransportCodec.EncodePacket(packet), packet.Delivery);
+
     public override void Disconnect() => Peer.Disconnect();
 }

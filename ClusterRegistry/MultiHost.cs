@@ -17,11 +17,14 @@ internal sealed partial class DirectGateway
     /// prefix) is unaffected: this is false and its rules are unchanged.
     /// </summary>
     private bool LoopbackExempt(HttpListenerContext context) =>
-        _options.Control != null && !IPAddress.IsLoopback(_options.Control.Address)
-        && context.Request.LocalEndPoint is { } local && IPAddress.IsLoopback(local.Address);
+        _options.Control != null
+        && !IPAddress.IsLoopback(_options.Control.Address)
+        && context.Request.LocalEndPoint is { } local
+        && IPAddress.IsLoopback(local.Address);
 
     private bool JoinTokenPresented(HttpListenerContext context) =>
-        ClusterNet.Bearer(context.Request.Headers["Authorization"]) is { } token && _options.Admission?.AcceptsToken(token) == true;
+        ClusterNet.Bearer(context.Request.Headers["Authorization"]) is { } token
+        && _options.Admission?.AcceptsToken(token) == true;
 
     /// <summary>Recent credential refusals and peer-rejection reports, for /diag (newest last, bounded).</summary>
     private readonly ConcurrentQueue<object> _credentialRejections = new();
@@ -34,7 +37,12 @@ internal sealed partial class DirectGateway
         while (_credentialRejections.Count > 64 && _credentialRejections.TryDequeue(out _)) { }
     }
 
-    internal object CredentialRejectionsDiag() => new { count = Interlocked.Read(ref _credentialRejectionCount), recent = _credentialRejections.ToArray() };
+    internal object CredentialRejectionsDiag() =>
+        new
+        {
+            count = Interlocked.Read(ref _credentialRejectionCount),
+            recent = _credentialRejections.ToArray(),
+        };
 
     /// <summary>
     /// Refuses a legacy control request that presented no acceptable credential, with a code a node can act on:
@@ -50,29 +58,49 @@ internal sealed partial class DirectGateway
     private void RefuseControlCredential(HttpListenerContext context, string path)
     {
         string? token = ClusterNet.Bearer(context.Request.Headers["Authorization"]);
-        bool known = token != null && (_options.Admission?.AcceptsToken(token) == true || _adminTokens?.Match(token) != null);
-        string code = token == null ? ClusterNet.CredentialRequired : known ? "admin_scope_required" : ClusterNet.CredentialRejected;
+        bool known =
+            token != null
+            && (
+                _options.Admission?.AcceptsToken(token) == true
+                || _adminTokens?.Match(token) != null
+            );
+        string code =
+            token == null ? ClusterNet.CredentialRequired
+            : known ? "admin_scope_required"
+            : ClusterNet.CredentialRejected;
         var entry = new
         {
             at = DateTimeOffset.UtcNow,
             code,
             path,
             remote = context.Request.RemoteEndPoint?.ToString(),
-            node = context.Request.Headers[ClusterNet.NodeHeader] ?? context.Request.QueryString["node"],
-            epoch = context.Request.Headers[ClusterNet.EpochHeader] ?? context.Request.QueryString["epoch"],
+            node = context.Request.Headers[ClusterNet.NodeHeader]
+                ?? context.Request.QueryString["node"],
+            epoch = context.Request.Headers[ClusterNet.EpochHeader]
+                ?? context.Request.QueryString["epoch"],
             host = context.Request.Headers[ClusterNet.HostHeader],
             pid = context.Request.Headers[ClusterNet.PidHeader],
             tokenFingerprint = ClusterNet.Fingerprint(token),
         };
         RememberRejection(entry);
-        Console.WriteLine($"WARNING: control credential refused code={code} path={path} remote={entry.remote} node={entry.node ?? "?"} "
-            + $"epoch={entry.epoch ?? "?"} host={entry.host ?? "?"} pid={entry.pid ?? "?"} token_fp={entry.tokenFingerprint}");
+        Console.WriteLine(
+            $"WARNING: control credential refused code={code} path={path} remote={entry.remote} node={entry.node ?? "?"} "
+                + $"epoch={entry.epoch ?? "?"} host={entry.host ?? "?"} pid={entry.pid ?? "?"} token_fp={entry.tokenFingerprint}"
+        );
         context.Response.Headers["WWW-Authenticate"] = "Bearer";
         WriteJson(context, known ? 403 : 401, new { error = "bearer token required", code });
     }
 
-    internal sealed record PeerRejectionReport(string? Reporter, long ReporterEpoch, string? PeerEndpoint, string? Route, string? Code,
-        string? Peer, long PeerEpoch, string? TokenFingerprint);
+    internal sealed record PeerRejectionReport(
+        string? Reporter,
+        long ReporterEpoch,
+        string? PeerEndpoint,
+        string? Route,
+        string? Code,
+        string? Peer,
+        long PeerEpoch,
+        string? TokenFingerprint
+    );
 
     /// <summary>
     /// <c>POST /registry/peer-rejections</c>: a node reports that a PEER refused its credential. A stale reporter is
@@ -83,23 +111,41 @@ internal sealed partial class DirectGateway
         PeerRejectionReport report = ReadJson<PeerRejectionReport>(context);
         try
         {
-            string verdict = _registry!.JudgePeerRejection(report.Reporter, report.ReporterEpoch, report.Peer, report.PeerEpoch, report.PeerEndpoint);
+            string verdict = _registry!.JudgePeerRejection(
+                report.Reporter,
+                report.ReporterEpoch,
+                report.Peer,
+                report.PeerEpoch,
+                report.PeerEndpoint
+            );
             var entry = new
             {
-                at = DateTimeOffset.UtcNow, code = "peer:" + report.Code, verdict, reporter = report.Reporter, reporterEpoch = report.ReporterEpoch,
-                reporterHost = context.Request.Headers[ClusterNet.HostHeader], reporterPid = context.Request.Headers[ClusterNet.PidHeader],
-                peer = report.Peer, peerEpoch = report.PeerEpoch, peerEndpoint = report.PeerEndpoint, route = report.Route,
+                at = DateTimeOffset.UtcNow,
+                code = "peer:" + report.Code,
+                verdict,
+                reporter = report.Reporter,
+                reporterEpoch = report.ReporterEpoch,
+                reporterHost = context.Request.Headers[ClusterNet.HostHeader],
+                reporterPid = context.Request.Headers[ClusterNet.PidHeader],
+                peer = report.Peer,
+                peerEpoch = report.PeerEpoch,
+                peerEndpoint = report.PeerEndpoint,
+                route = report.Route,
                 tokenFingerprint = report.TokenFingerprint,
             };
             RememberRejection(entry);
-            Console.WriteLine($"WARNING: peer credential rejection verdict={verdict} reporter={report.Reporter}/{report.ReporterEpoch}"
-                + $"@{entry.reporterHost ?? "?"} pid={entry.reporterPid ?? "?"} peer={report.Peer ?? "?"}/{report.PeerEpoch} endpoint={report.PeerEndpoint} "
-                + $"route={report.Route} code={report.Code} token_fp={report.TokenFingerprint}");
+            Console.WriteLine(
+                $"WARNING: peer credential rejection verdict={verdict} reporter={report.Reporter}/{report.ReporterEpoch}"
+                    + $"@{entry.reporterHost ?? "?"} pid={entry.reporterPid ?? "?"} peer={report.Peer ?? "?"}/{report.PeerEpoch} endpoint={report.PeerEndpoint} "
+                    + $"route={report.Route} code={report.Code} token_fp={report.TokenFingerprint}"
+            );
             WriteJson(context, 200, new { verdict });
         }
         catch (StaleCredentialException stale)
         {
-            Console.WriteLine($"WARNING: peer credential rejection from a stale reporter {report.Reporter}/{report.ReporterEpoch}: {stale.Message}");
+            Console.WriteLine(
+                $"WARNING: peer credential rejection from a stale reporter {report.Reporter}/{report.ReporterEpoch}: {stale.Message}"
+            );
             WriteJson(context, 403, new { error = stale.Message, code = stale.Code });
         }
     }
@@ -107,36 +153,72 @@ internal sealed partial class DirectGateway
     /// <summary>The gateway's own calls to nodes: a node that refuses the gateway's credential is judged like a peer report.</summary>
     private sealed class NodeCallHandler(DirectGateway gateway) : DelegatingHandler
     {
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
-            HttpResponseMessage response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            HttpResponseMessage response = await base.SendAsync(request, cancellationToken)
+                .ConfigureAwait(false);
             if ((int)response.StatusCode is 401 or 403 && request.RequestUri != null)
             {
                 try
                 {
                     // Peer rejection envelopes are metadata too. This handler runs before
                     // the caller sees headers, so it must not bypass its deadline or cap.
-                    await response.Content.LoadIntoBufferAsync(OfflineMetadataLimit, cancellationToken)
-                        .WaitAsync(cancellationToken).ConfigureAwait(false);
-                    string body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-                    if (ClusterNet.RejectionCode((int)response.StatusCode, body) is { } code && gateway._registry is { } registry)
+                    await response
+                        .Content.LoadIntoBufferAsync(OfflineMetadataLimit, cancellationToken)
+                        .WaitAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    string body = await response
+                        .Content.ReadAsStringAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    if (
+                        ClusterNet.RejectionCode((int)response.StatusCode, body) is { } code
+                        && gateway._registry is { } registry
+                    )
                     {
                         (string? peer, long epoch) = ClusterNet.RejectingPeer(body);
                         string endpoint = request.RequestUri.GetLeftPart(UriPartial.Authority);
-                        string verdict = registry.JudgePeerRejection(null, 0, peer, epoch, endpoint);
-                        gateway.RememberRejection(new { at = DateTimeOffset.UtcNow, code = "node:" + code, verdict, reporter = "gateway", peer, peerEpoch = epoch,
-                            peerEndpoint = endpoint, route = request.RequestUri.AbsolutePath });
-                        Console.WriteLine($"WARNING: node {peer ?? "?"}/{epoch} at {endpoint} refused the gateway's credential ({code}) on "
-                            + $"{request.RequestUri.AbsolutePath}; verdict={verdict}");
+                        string verdict = registry.JudgePeerRejection(
+                            null,
+                            0,
+                            peer,
+                            epoch,
+                            endpoint
+                        );
+                        gateway.RememberRejection(
+                            new
+                            {
+                                at = DateTimeOffset.UtcNow,
+                                code = "node:" + code,
+                                verdict,
+                                reporter = "gateway",
+                                peer,
+                                peerEpoch = epoch,
+                                peerEndpoint = endpoint,
+                                route = request.RequestUri.AbsolutePath,
+                            }
+                        );
+                        Console.WriteLine(
+                            $"WARNING: node {peer ?? "?"}/{epoch} at {endpoint} refused the gateway's credential ({code}) on "
+                                + $"{request.RequestUri.AbsolutePath}; verdict={verdict}"
+                        );
                     }
                 }
-                catch { response.Dispose(); throw; }
+                catch
+                {
+                    response.Dispose();
+                    throw;
+                }
             }
             return response;
         }
 
-        protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken cancellationToken)
-            => SendAsync(request, cancellationToken).GetAwaiter().GetResult();
+        protected override HttpResponseMessage Send(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) => SendAsync(request, cancellationToken).GetAwaiter().GetResult();
     }
 
     private string[] _silencedHosts = [];
@@ -151,34 +233,50 @@ internal sealed partial class DirectGateway
     private bool FaultSilenced(HttpListenerContext context, string path)
     {
         string? file = Environment.GetEnvironmentVariable("CLUSTER_FAULT_SILENCE_HOSTS");
-        if (string.IsNullOrWhiteSpace(file)) return false;
+        if (string.IsNullOrWhiteSpace(file))
+            return false;
         long now = Environment.TickCount64;
         if (now - Interlocked.Read(ref _silencedHostsRead) >= 1000)
         {
             try
             {
-                _silencedHosts = File.Exists(file) ? File.ReadAllLines(file).Select(line => line.Trim())
-                    .Where(line => line.Length != 0 && !line.StartsWith('#')).ToArray() : [];
+                _silencedHosts = File.Exists(file)
+                    ? File.ReadAllLines(file)
+                        .Select(line => line.Trim())
+                        .Where(line => line.Length != 0 && !line.StartsWith('#'))
+                        .ToArray()
+                    : [];
             }
             catch (IOException) { }
             Interlocked.Exchange(ref _silencedHostsRead, now);
         }
         string[] silenced = _silencedHosts;
-        if (silenced.Length == 0) return false;
+        if (silenced.Length == 0)
+            return false;
         string? host = context.Request.Headers[ClusterNet.HostHeader];
-        if (host == null && path.Equals(CometWorks.ClusterGateway.AdminContract.V1.ExecutorProtocol.HeartbeatRoute, StringComparison.OrdinalIgnoreCase)
-            && ClusterNet.Bearer(context.Request.Headers["Authorization"]) is { } token)
+        if (
+            host == null
+            && path.Equals(
+                CometWorks.ClusterGateway.AdminContract.V1.ExecutorProtocol.HeartbeatRoute,
+                StringComparison.OrdinalIgnoreCase
+            )
+            && ClusterNet.Bearer(context.Request.Headers["Authorization"]) is { } token
+        )
             host = _adminTokens?.Match(token)?.Name;
-        if (host == null || !silenced.Contains(host, StringComparer.OrdinalIgnoreCase)) return false;
+        if (host == null || !silenced.Contains(host, StringComparer.OrdinalIgnoreCase))
+            return false;
         if (Interlocked.Increment(ref _faultSilenced) % 100 == 1)
-            Console.WriteLine($"fault injection: silenced a request from host {host} ({path}); {Interlocked.Read(ref _faultSilenced)} so far");
+            Console.WriteLine(
+                $"fault injection: silenced a request from host {host} ({path}); {Interlocked.Read(ref _faultSilenced)} so far"
+            );
         context.Response.Abort();
         return true;
     }
 }
 
 /// <summary>A registry answer that names the caller's own incarnation as stale; answered 403 with <see cref="Code"/>.</summary>
-internal sealed class StaleCredentialException(string code, string message) : InvalidOperationException(message)
+internal sealed class StaleCredentialException(string code, string message)
+    : InvalidOperationException(message)
 {
     public string Code { get; } = code;
 }
@@ -198,30 +296,54 @@ internal sealed partial class GatewayRegistry
     /// fenced; this is a token distribution error for the operator (logged as a warning by the caller).</item>
     /// </list>
     /// </summary>
-    public string JudgePeerRejection(string? reporter, long reporterEpoch, string? peer, long peerEpoch, string? peerEndpoint)
+    public string JudgePeerRejection(
+        string? reporter,
+        long reporterEpoch,
+        string? peer,
+        long peerEpoch,
+        string? peerEndpoint
+    )
     {
         lock (_lock)
         {
             if (reporter != null)
             {
                 if (!_state.Nodes.TryGetValue(reporter, out NodeRegistration? self))
-                    throw new StaleCredentialException(ClusterNet.NodeIdRetired, $"Node '{reporter}' is not registered");
+                    throw new StaleCredentialException(
+                        ClusterNet.NodeIdRetired,
+                        $"Node '{reporter}' is not registered"
+                    );
                 if (self.Epoch != reporterEpoch || self.State == NodeState.Dead)
-                    throw new StaleCredentialException(ClusterNet.StaleIncarnation, $"Node '{reporter}' epoch {reporterEpoch} is not current");
+                    throw new StaleCredentialException(
+                        ClusterNet.StaleIncarnation,
+                        $"Node '{reporter}' epoch {reporterEpoch} is not current"
+                    );
             }
             string? wanted = peerEndpoint == null ? null : StripScheme(peerEndpoint);
-            NodeRegistration? row = peer != null && _state.Nodes.TryGetValue(peer, out NodeRegistration? named) ? named
+            NodeRegistration? row =
+                peer != null && _state.Nodes.TryGetValue(peer, out NodeRegistration? named) ? named
                 : wanted == null ? null
-                : LiveFirst(_state.Nodes.Values.Where(x => x.ControlEndpoint != null && StripScheme(x.ControlEndpoint) == wanted));
-            string verdict = row == null ? "peer-unknown"
+                : LiveFirst(
+                    _state.Nodes.Values.Where(x =>
+                        x.ControlEndpoint != null && StripScheme(x.ControlEndpoint) == wanted
+                    )
+                );
+            string verdict =
+                row == null ? "peer-unknown"
                 : peerEpoch > 0 && peerEpoch != row.Epoch ? "peer-stale-incarnation"
                 : row.State is NodeState.Dead or NodeState.Empty ? "peer-dead"
                 : "both-current";
-            Emit("node.credential-rejection", row?.Node ?? peer, new Dictionary<string, string>
-            {
-                ["verdict"] = verdict, ["reporter"] = reporter ?? "gateway", ["peerEpoch"] = peerEpoch.ToString(),
-                ["endpoint"] = peerEndpoint ?? string.Empty,
-            });
+            Emit(
+                "node.credential-rejection",
+                row?.Node ?? peer,
+                new Dictionary<string, string>
+                {
+                    ["verdict"] = verdict,
+                    ["reporter"] = reporter ?? "gateway",
+                    ["peerEpoch"] = peerEpoch.ToString(),
+                    ["endpoint"] = peerEndpoint ?? string.Empty,
+                }
+            );
             return verdict;
         }
     }
@@ -237,24 +359,39 @@ internal sealed partial class GatewayRegistry
     /// </summary>
     private void RequireReachableFromGateway(NodeJoinRequest request)
     {
-        if (GatewayHost == null || request.Host == null || string.Equals(request.Host, GatewayHost, StringComparison.OrdinalIgnoreCase)) return;
+        if (
+            GatewayHost == null
+            || request.Host == null
+            || string.Equals(request.Host, GatewayHost, StringComparison.OrdinalIgnoreCase)
+        )
+            return;
         static bool Loopback(string? endpoint)
         {
-            if (string.IsNullOrWhiteSpace(endpoint)) return false;
+            if (string.IsNullOrWhiteSpace(endpoint))
+                return false;
             string host = StripScheme(endpoint);
             int colon = host.LastIndexOf(':');
-            if (colon > 0 && !host.EndsWith(']')) host = host[..colon];
+            if (colon > 0 && !host.EndsWith(']'))
+                host = host[..colon];
             host = host.Trim('[', ']');
-            return host.Equals("localhost", StringComparison.OrdinalIgnoreCase) || IPAddress.TryParse(host, out IPAddress? address) && IPAddress.IsLoopback(address);
+            return host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                || IPAddress.TryParse(host, out IPAddress? address)
+                    && IPAddress.IsLoopback(address);
         }
         if (Loopback(request.Endpoint) || Loopback(request.ControlEndpoint))
-            throw new RegistryConflictException($"Node '{request.Node}' on host '{request.Host}' advertises a loopback endpoint "
-                + $"(node link {request.Endpoint}, control {request.ControlEndpoint ?? "none"}) that the gateway on '{GatewayHost}' cannot reach; "
-                + "set CLUSTER_NODE_ENDPOINT and CLUSTER_NODE_CONTROL_ENDPOINT to the host's LAN address");
+            throw new RegistryConflictException(
+                $"Node '{request.Node}' on host '{request.Host}' advertises a loopback endpoint "
+                    + $"(node link {request.Endpoint}, control {request.ControlEndpoint ?? "none"}) that the gateway on '{GatewayHost}' cannot reach; "
+                    + "set CLUSTER_NODE_ENDPOINT and CLUSTER_NODE_CONTROL_ENDPOINT to the host's LAN address"
+            );
     }
 
     private static string StripScheme(string endpoint) =>
-        (endpoint.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ? endpoint[7..] : endpoint).TrimEnd('/');
+        (
+            endpoint.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                ? endpoint[7..]
+                : endpoint
+        ).TrimEnd('/');
 }
 
 /// <summary>
@@ -272,56 +409,106 @@ internal sealed partial class GatewayRegistry
 /// </remarks>
 internal static class StartCredentials
 {
-    internal sealed record Stored(int Version, string StartId, string JoinToken, string? JoinTokenPrevious, string? AdminToken, DateTimeOffset Written);
+    internal sealed record Stored(
+        int Version,
+        string StartId,
+        string JoinToken,
+        string? JoinTokenPrevious,
+        string? AdminToken,
+        DateTimeOffset Written
+    );
 
     public static string? PathFor(GatewayOptions options, Func<string, string?> environment) =>
         environment("CLUSTER_START_CREDENTIALS") is { Length: > 0 } explicitPath ? explicitPath
         : options.RegistryDirectory == null ? null
-        : Path.Combine(Path.GetDirectoryName(Path.GetFullPath(options.RegistryDirectory).TrimEnd(Path.DirectorySeparatorChar)) ?? ".", "secrets", "start-credentials.json");
+        : Path.Combine(
+            Path.GetDirectoryName(
+                Path.GetFullPath(options.RegistryDirectory).TrimEnd(Path.DirectorySeparatorChar)
+            ) ?? ".",
+            "secrets",
+            "start-credentials.json"
+        );
 
     /// <param name="persist">False only in the self-test's control arm (the variant that must fail the restart check).</param>
-    public static GatewayOptions Apply(GatewayOptions options, Func<string, string?>? environment = null, bool persist = true)
+    public static GatewayOptions Apply(
+        GatewayOptions options,
+        Func<string, string?>? environment = null,
+        bool persist = true
+    )
     {
         Func<string, string?> read = environment ?? Environment.GetEnvironmentVariable;
         string? startId = read("CLUSTER_START_ID");
         string? path = PathFor(options, read);
-        if (!persist || string.IsNullOrWhiteSpace(startId) || path == null || options.Admission == null || string.IsNullOrEmpty(options.JoinToken))
+        if (
+            !persist
+            || string.IsNullOrWhiteSpace(startId)
+            || path == null
+            || options.Admission == null
+            || string.IsNullOrEmpty(options.JoinToken)
+        )
             return options;
         Stored? stored = null;
         try
         {
-            if (File.Exists(path)) stored = JsonSerializer.Deserialize<Stored>(File.ReadAllText(path));
+            if (File.Exists(path))
+                stored = JsonSerializer.Deserialize<Stored>(File.ReadAllText(path));
         }
         catch (Exception error) when (error is JsonException or IOException)
         {
-            Console.WriteLine($"WARNING: start credentials at {path} are unreadable ({error.GetType().Name}); writing the environment's");
+            Console.WriteLine(
+                $"WARNING: start credentials at {path} are unreadable ({error.GetType().Name}); writing the environment's"
+            );
         }
         if (stored != null && stored.StartId == startId && !string.IsNullOrEmpty(stored.JoinToken))
         {
             SecretRedactor.Add([stored.JoinToken, stored.JoinTokenPrevious, stored.AdminToken]);
-            bool joinChanged = stored.JoinToken != options.JoinToken, adminChanged = stored.AdminToken != options.AdminToken;
-            Console.WriteLine($"Start {startId}: gateway restart keeps the start's credentials (join {ClusterNet.Fingerprint(stored.JoinToken)}, "
-                + $"admin {ClusterNet.Fingerprint(stored.AdminToken)})"
-                + (joinChanged || adminChanged ? $"; WARNING: the environment brought different tokens (join {ClusterNet.Fingerprint(options.JoinToken)}, "
-                    + $"admin {ClusterNet.Fingerprint(options.AdminToken)}), accepted as well - nodes launched from now on should get the start's tokens" : ""));
+            bool joinChanged = stored.JoinToken != options.JoinToken,
+                adminChanged = stored.AdminToken != options.AdminToken;
+            Console.WriteLine(
+                $"Start {startId}: gateway restart keeps the start's credentials (join {ClusterNet.Fingerprint(stored.JoinToken)}, "
+                    + $"admin {ClusterNet.Fingerprint(stored.AdminToken)})"
+                    + (
+                        joinChanged || adminChanged
+                            ? $"; WARNING: the environment brought different tokens (join {ClusterNet.Fingerprint(options.JoinToken)}, "
+                                + $"admin {ClusterNet.Fingerprint(options.AdminToken)}), accepted as well - nodes launched from now on should get the start's tokens"
+                            : ""
+                    )
+            );
             return options with
             {
                 JoinToken = stored.JoinToken,
                 AdminToken = stored.AdminToken ?? options.AdminToken,
                 Admission = options.Admission.Accepting(stored.JoinToken, stored.JoinTokenPrevious),
-                ExtraAdminTokens = adminChanged && options.AdminToken != null ? [options.AdminToken] : options.ExtraAdminTokens,
+                ExtraAdminTokens =
+                    adminChanged && options.AdminToken != null
+                        ? [options.AdminToken]
+                        : options.ExtraAdminTokens,
             };
         }
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         string temporary = path + ".tmp-" + Environment.ProcessId;
         var create = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write };
-        if (!OperatingSystem.IsWindows()) create.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        if (!OperatingSystem.IsWindows())
+            create.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
         using (var stream = new FileStream(temporary, create))
-            JsonSerializer.Serialize(stream, new Stored(1, startId!, options.JoinToken!, read("CLUSTER_JOIN_TOKEN_PREVIOUS") is { Length: > 0 } previous ? previous : null,
-                options.AdminToken, DateTimeOffset.UtcNow));
+            JsonSerializer.Serialize(
+                stream,
+                new Stored(
+                    1,
+                    startId!,
+                    options.JoinToken!,
+                    read("CLUSTER_JOIN_TOKEN_PREVIOUS") is { Length: > 0 } previous
+                        ? previous
+                        : null,
+                    options.AdminToken,
+                    DateTimeOffset.UtcNow
+                )
+            );
         File.Move(temporary, path, overwrite: true);
-        Console.WriteLine($"Start {startId}: credentials persisted for gateway restarts (join {ClusterNet.Fingerprint(options.JoinToken)}, "
-            + $"admin {ClusterNet.Fingerprint(options.AdminToken)})");
+        Console.WriteLine(
+            $"Start {startId}: credentials persisted for gateway restarts (join {ClusterNet.Fingerprint(options.JoinToken)}, "
+                + $"admin {ClusterNet.Fingerprint(options.AdminToken)})"
+        );
         return options;
     }
 }
@@ -333,7 +520,12 @@ internal static class StartCredentials
 /// partitions stay owned (no recovery claim) and balancing pauses. Outside the windows the normal TTL applies at once,
 /// so a host really lost at 04:00 is recovered right after the window. Off unless <c>CLUSTER_NETWORK_WINDOWS</c> is set.
 /// </summary>
-internal sealed class NetworkWindows(IReadOnlyList<(TimeSpan Start, TimeSpan End)> windows, TimeSpan grace, string gatewayHost, TimeZoneInfo? zone = null)
+internal sealed class NetworkWindows(
+    IReadOnlyList<(TimeSpan Start, TimeSpan End)> windows,
+    TimeSpan grace,
+    string gatewayHost,
+    TimeZoneInfo? zone = null
+)
 {
     public IReadOnlyList<(TimeSpan Start, TimeSpan End)> Windows { get; } = windows;
     public TimeSpan Grace { get; } = grace;
@@ -346,41 +538,74 @@ internal sealed class NetworkWindows(IReadOnlyList<(TimeSpan Start, TimeSpan End
     {
         Func<string, string?> read = environment ?? Environment.GetEnvironmentVariable;
         string? value = read("CLUSTER_NETWORK_WINDOWS");
-        if (string.IsNullOrWhiteSpace(value)) return null;
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
         var windows = new List<(TimeSpan, TimeSpan)>();
-        foreach (string item in value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (
+            string item in value.Split(
+                ',',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+            )
+        )
         {
             string[] parts = item.Split('-');
-            if (parts.Length != 2 || !TimeSpan.TryParseExact(parts[0].Trim(), @"hh\:mm", null, out TimeSpan start)
-                || !TimeSpan.TryParseExact(parts[1].Trim(), @"hh\:mm", null, out TimeSpan end) || start == end)
-                throw new ArgumentException($"CLUSTER_NETWORK_WINDOWS entry '{item}' is not HH:MM-HH:MM");
+            if (
+                parts.Length != 2
+                || !TimeSpan.TryParseExact(parts[0].Trim(), @"hh\:mm", null, out TimeSpan start)
+                || !TimeSpan.TryParseExact(parts[1].Trim(), @"hh\:mm", null, out TimeSpan end)
+                || start == end
+            )
+                throw new ArgumentException(
+                    $"CLUSTER_NETWORK_WINDOWS entry '{item}' is not HH:MM-HH:MM"
+                );
             windows.Add((start, end));
         }
         string? graceValue = read("CLUSTER_NETWORK_WINDOW_GRACE_SECONDS");
         double graceSeconds = 30;
-        if (!string.IsNullOrWhiteSpace(graceValue) && (!double.TryParse(graceValue, System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture, out graceSeconds) || graceSeconds < 0))
-            throw new ArgumentException("CLUSTER_NETWORK_WINDOW_GRACE_SECONDS must be a non-negative number");
-        string host = read("CLUSTER_GATEWAY_HOST") is { Length: > 0 } named ? named : Environment.MachineName;
+        if (
+            !string.IsNullOrWhiteSpace(graceValue)
+            && (
+                !double.TryParse(
+                    graceValue,
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out graceSeconds
+                )
+                || graceSeconds < 0
+            )
+        )
+            throw new ArgumentException(
+                "CLUSTER_NETWORK_WINDOW_GRACE_SECONDS must be a non-negative number"
+            );
+        string host = read("CLUSTER_GATEWAY_HOST") is { Length: > 0 } named
+            ? named
+            : Environment.MachineName;
         return new NetworkWindows(windows, TimeSpan.FromSeconds(graceSeconds), host);
     }
 
     /// <summary>Inside a window or its grace, in the gateway's local time.</summary>
     public bool Active(DateTimeOffset now)
     {
-        TimeSpan day = TimeSpan.FromDays(1), local = TimeZoneInfo.ConvertTime(now, _zone).TimeOfDay;
+        TimeSpan day = TimeSpan.FromDays(1),
+            local = TimeZoneInfo.ConvertTime(now, _zone).TimeOfDay;
         foreach ((TimeSpan start, TimeSpan end) in Windows)
         {
-            TimeSpan length = (end - start + day).Ticks % day.Ticks == 0 ? day : TimeSpan.FromTicks((end - start + day).Ticks % day.Ticks);
+            TimeSpan length =
+                (end - start + day).Ticks % day.Ticks == 0
+                    ? day
+                    : TimeSpan.FromTicks((end - start + day).Ticks % day.Ticks);
             TimeSpan into = TimeSpan.FromTicks((local - start + day).Ticks % day.Ticks);
-            if (into < length + Grace) return true;
+            if (into < length + Grace)
+                return true;
         }
         return false;
     }
 
-    public bool Remote(string? host) => host != null && !string.Equals(host, GatewayHost, StringComparison.OrdinalIgnoreCase);
+    public bool Remote(string? host) =>
+        host != null && !string.Equals(host, GatewayHost, StringComparison.OrdinalIgnoreCase);
 
-    public bool Holds(NodeRegistration node, DateTimeOffset now) => Remote(node.Host) && Active(now);
+    public bool Holds(NodeRegistration node, DateTimeOffset now) =>
+        Remote(node.Host) && Active(now);
 }
 
 internal sealed partial class GatewayRegistry
@@ -393,16 +618,25 @@ internal sealed partial class GatewayRegistry
     /// <see cref="LiveProcessHeld"/>), or it is inside a network window, on a remote host. Caller holds _lock.</summary>
     private bool LeaseHeld(NodeRegistration node, DateTimeOffset now)
     {
-        if (LiveProcessHeld(node, now)) return true;
-        if (LeaseHold?.Holds(node, now) != true) return false;
-        if (node.LeaseExpires <= now && Interlocked.Exchange(ref _leaseHoldLogged, now.ToUnixTimeSeconds() / 60) != now.ToUnixTimeSeconds() / 60)
-            Console.WriteLine($"network window: holding the lapsed lease of remote node {node.Node} epoch {node.Epoch} (host {node.Host}, "
-                + $"lease expired {node.LeaseExpires:O}); no recovery until the window and its grace end");
+        if (LiveProcessHeld(node, now))
+            return true;
+        if (LeaseHold?.Holds(node, now) != true)
+            return false;
+        if (
+            node.LeaseExpires <= now
+            && Interlocked.Exchange(ref _leaseHoldLogged, now.ToUnixTimeSeconds() / 60)
+                != now.ToUnixTimeSeconds() / 60
+        )
+            Console.WriteLine(
+                $"network window: holding the lapsed lease of remote node {node.Node} epoch {node.Epoch} (host {node.Host}, "
+                    + $"lease expired {node.LeaseExpires:O}); no recovery until the window and its grace end"
+            );
         return true;
     }
 
     /// <summary>An executor lease of a remote host is held inside a window as well (its host agent keeps its session).</summary>
-    private bool ExecutorLeaseHeld(string host, DateTimeOffset now) => LeaseHold is { } hold && hold.Remote(host) && hold.Active(now);
+    private bool ExecutorLeaseHeld(string host, DateTimeOffset now) =>
+        LeaseHold is { } hold && hold.Remote(host) && hold.Active(now);
 
     private readonly HashSet<ulong> _heldDeferredRecoveries = [];
 
@@ -415,20 +649,35 @@ internal sealed partial class GatewayRegistry
     /// </summary>
     private bool NewerSaveHeld(ulong partition, DateTimeOffset now)
     {
-        if (LeaseHold is null && LiveProcessGrace <= TimeSpan.Zero) return false;
+        if (LeaseHold is null && LiveProcessGrace <= TimeSpan.Zero)
+            return false;
         SaveRegistration? usable = Newest(partition, long.MaxValue);
-        bool held = SavesOf(partition).Any(save => !save.PendingDelete && (usable == null || save.SaveId.CompareTo(usable.SaveId) > 0)
-            && save.LocationHolders.Values.Any(holder => !save.CorruptHolders.Contains(holder)
-                // T-0340: a host holder is held when its store is (every node of the host lapsed, one of them held).
-                && (_hostStore && IsHostHolder(holder) ? StoreState(HostOfHolder(holder)!) == HostStoreState.Held
-                    // Step 6: a released holder's files lie on its host; they are held when that host's nodes are.
-                    : ReleasedHolderHost(holder) is { } released ? StoreState(released) == HostStoreState.Held
-                    : _state.Nodes.TryGetValue(holder, out NodeRegistration? row) && row.State is NodeState.Active or NodeState.Closed
-                        && LeaseHeld(row, now))));
-        if (!held) _heldDeferredRecoveries.Remove(partition);
+        bool held = SavesOf(partition)
+            .Any(save =>
+                !save.PendingDelete
+                && (usable == null || save.SaveId.CompareTo(usable.SaveId) > 0)
+                && save.LocationHolders.Values.Any(holder =>
+                    !save.CorruptHolders.Contains(holder)
+                    // T-0340: a host holder is held when its store is (every node of the host lapsed, one of them held).
+                    && (
+                        _hostStore && IsHostHolder(holder)
+                            ? StoreState(HostOfHolder(holder)!) == HostStoreState.Held
+                        // Step 6: a released holder's files lie on its host; they are held when that host's nodes are.
+                        : ReleasedHolderHost(holder) is { } released
+                            ? StoreState(released) == HostStoreState.Held
+                        : _state.Nodes.TryGetValue(holder, out NodeRegistration? row)
+                            && row.State is NodeState.Active or NodeState.Closed
+                            && LeaseHeld(row, now)
+                    )
+                )
+            );
+        if (!held)
+            _heldDeferredRecoveries.Remove(partition);
         else if (_heldDeferredRecoveries.Add(partition))
-            Console.WriteLine($"lease hold: recovery of partition {partition} waits - its newest save is held by a node whose lease is "
-                + $"held (network window or live process) (the newest usable save is {(usable == null ? "none" : usable.SaveId.ToString())})");
+            Console.WriteLine(
+                $"lease hold: recovery of partition {partition} waits - its newest save is held by a node whose lease is "
+                    + $"held (network window or live process) (the newest usable save is {(usable == null ? "none" : usable.SaveId.ToString())})"
+            );
         return held;
     }
 
@@ -442,14 +691,22 @@ internal sealed partial class GatewayRegistry
         lock (_lock)
         {
             DateTimeOffset now = _clock();
-            if (LeaseHold is not { } hold || !hold.Active(now)) return EmptyNodeSet;
-            return _state.Nodes.Values.Where(x => LapsedHeld(x, now)).Select(x => x.Node).ToHashSet();
+            if (LeaseHold is not { } hold || !hold.Active(now))
+                return EmptyNodeSet;
+            return _state
+                .Nodes.Values.Where(x => LapsedHeld(x, now))
+                .Select(x => x.Node)
+                .ToHashSet();
         }
     }
 
     /// <summary>#1277: one node of <see cref="LapsedHeldNodes"/>. Caller holds _lock.</summary>
-    private bool LapsedHeld(NodeRegistration node, DateTimeOffset now) => LeaseHold is { } hold && hold.Active(now)
-        && node.State is NodeState.Active or NodeState.Closed && hold.Remote(node.Host) && node.LeaseExpires <= now;
+    private bool LapsedHeld(NodeRegistration node, DateTimeOffset now) =>
+        LeaseHold is { } hold
+        && hold.Active(now)
+        && node.State is NodeState.Active or NodeState.Closed
+        && hold.Remote(node.Host)
+        && node.LeaseExpires <= now;
 
     private static readonly IReadOnlySet<string> EmptyNodeSet = new HashSet<string>();
 
@@ -459,8 +716,13 @@ internal sealed partial class GatewayRegistry
         lock (_lock)
         {
             DateTimeOffset now = _clock();
-            return LeaseHold is { } hold && hold.Active(now)
-                && _state.Nodes.Values.Any(x => x.State is NodeState.Active or NodeState.Closed && hold.Remote(x.Host) && x.LeaseExpires <= now);
+            return LeaseHold is { } hold
+                && hold.Active(now)
+                && _state.Nodes.Values.Any(x =>
+                    x.State is NodeState.Active or NodeState.Closed
+                    && hold.Remote(x.Host)
+                    && x.LeaseExpires <= now
+                );
         }
     }
 }

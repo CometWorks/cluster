@@ -26,43 +26,47 @@ namespace ClusterPlugin;
 /// </summary>
 internal static class ShutdownReturnToMenu
 {
-	private static readonly HashSet<ulong> Returned = new();
+    private static readonly HashSet<ulong> Returned = new();
 
-	/// <summary>True once the registry has run the return-to-menu pass on this node: the node is going
-	/// down and every login from now on is a reconnector retry (see <see cref="ShutdownLoginPatch"/>).</summary>
-	public static volatile bool Active;
+    /// <summary>True once the registry has run the return-to-menu pass on this node: the node is going
+    /// down and every login from now on is a reconnector retry (see <see cref="ShutdownLoginPatch"/>).</summary>
+    public static volatile bool Active;
 
-	/// <param name="frontServerId">The gateway's Steam GameServer id, 0 if it has none. A vanilla client acts
-	/// on the message only when Client is the id IT knows the server by (MyMultiplayerClient_ClientLeft:
-	/// <c>user == ServerId</c>, set from <c>server.SteamID</c> at join). A Direct Transport client knows the
-	/// node's own ServerId; a Steam client through gateway-rs knows the GameServer id. With any other id the
-	/// client logs "Disconnected" and treats it as some member leaving: that is what the CH's Steam client did
-	/// at the 22:16 stop (2026-09-27), staying in-world until the Steam session closed 30 s later. So a
-	/// client gets one message per id; the one naming its host sends it to the menu, the other is a no-op.</param>
-	/// <returns>The ids sent back to the menu by THIS call.</returns>
-	public static List<ulong> ReturnAttachedClients(ulong frontServerId = 0)
-	{
-		var sent = new List<ulong>();
-		Active = true;
-		MyClientCollection clients = Sync.Clients;
-		if (clients == null || MyMultiplayer.Static == null) return sent;
-		foreach (var client in clients.GetClients())
-		{
-			ulong userId = client.SteamUserId;
-			if (userId == 0 || userId == Sync.ServerId || !Returned.Add(userId)) continue;
-			var message = new MyControlDisconnectedMsg { Client = Sync.ServerId };
-			MyMultiplayer.Static.SendControlMessage(userId, ref message);
-			if (frontServerId != 0 && frontServerId != Sync.ServerId)
-			{
-				var front = new MyControlDisconnectedMsg { Client = frontServerId };
-				MyMultiplayer.Static.SendControlMessage(userId, ref front);
-			}
-			sent.Add(userId);
-		}
-		if (sent.Count > 0)
-			Console.WriteLine($"[ClusterPlugin] shutdown return_to_menu clients={sent.Count} total={Returned.Count} frontServerId={frontServerId} ids={string.Join(",", sent)}");
-		return sent;
-	}
+    /// <param name="frontServerId">The gateway's Steam GameServer id, 0 if it has none. A vanilla client acts
+    /// on the message only when Client is the id IT knows the server by (MyMultiplayerClient_ClientLeft:
+    /// <c>user == ServerId</c>, set from <c>server.SteamID</c> at join). A Direct Transport client knows the
+    /// node's own ServerId; a Steam client through gateway-rs knows the GameServer id. With any other id the
+    /// client logs "Disconnected" and treats it as some member leaving: that is what the CH's Steam client did
+    /// at the 22:16 stop (2026-09-27), staying in-world until the Steam session closed 30 s later. So a
+    /// client gets one message per id; the one naming its host sends it to the menu, the other is a no-op.</param>
+    /// <returns>The ids sent back to the menu by THIS call.</returns>
+    public static List<ulong> ReturnAttachedClients(ulong frontServerId = 0)
+    {
+        var sent = new List<ulong>();
+        Active = true;
+        MyClientCollection clients = Sync.Clients;
+        if (clients == null || MyMultiplayer.Static == null)
+            return sent;
+        foreach (var client in clients.GetClients())
+        {
+            ulong userId = client.SteamUserId;
+            if (userId == 0 || userId == Sync.ServerId || !Returned.Add(userId))
+                continue;
+            var message = new MyControlDisconnectedMsg { Client = Sync.ServerId };
+            MyMultiplayer.Static.SendControlMessage(userId, ref message);
+            if (frontServerId != 0 && frontServerId != Sync.ServerId)
+            {
+                var front = new MyControlDisconnectedMsg { Client = frontServerId };
+                MyMultiplayer.Static.SendControlMessage(userId, ref front);
+            }
+            sent.Add(userId);
+        }
+        if (sent.Count > 0)
+            Console.WriteLine(
+                $"[ClusterPlugin] shutdown return_to_menu clients={sent.Count} total={Returned.Count} frontServerId={frontServerId} ids={string.Join(",", sent)}"
+            );
+        return sent;
+    }
 }
 
 /// <summary>
@@ -82,11 +86,14 @@ internal static class ShutdownReturnToMenu
 [HarmonyLib.HarmonyPatch(typeof(MyDedicatedServerBase), "OnConnectedClient")]
 public static class ShutdownLoginPatch
 {
-	[HarmonyLib.HarmonyPrefix]
-	private static bool Prefix(ulong steamId)
-	{
-		if (!ShutdownReturnToMenu.Active) return true;
-		Console.WriteLine($"[ClusterPlugin] shutdown login_ignored client={steamId} (node returned its clients to the menu; no AlreadyJoined)");
-		return false;
-	}
+    [HarmonyLib.HarmonyPrefix]
+    private static bool Prefix(ulong steamId)
+    {
+        if (!ShutdownReturnToMenu.Active)
+            return true;
+        Console.WriteLine(
+            $"[ClusterPlugin] shutdown login_ignored client={steamId} (node returned its clients to the menu; no AlreadyJoined)"
+        );
+        return false;
+    }
 }

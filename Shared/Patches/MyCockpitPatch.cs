@@ -42,7 +42,9 @@ public static class MyCockpitPatch
 
     [HarmonyTranspiler]
     [HarmonyPatch(nameof(MyCockpit.GetObjectBuilderCubeBlock))]
-    private static IEnumerable<CodeInstruction> GetObjectBuilderCubeBlockTranspiler(IEnumerable<CodeInstruction> instructions)
+    private static IEnumerable<CodeInstruction> GetObjectBuilderCubeBlockTranspiler(
+        IEnumerable<CodeInstruction> instructions
+    )
     {
         MethodInfo getSave = AccessTools.PropertyGetter(typeof(MyEntity), nameof(MyEntity.Save));
         MethodInfo helper = AccessTools.Method(typeof(MyCockpitPatch), nameof(PilotSaveable));
@@ -50,8 +52,11 @@ public static class MyCockpitPatch
         int matches = 0;
         foreach (CodeInstruction instruction in code)
         {
-            if ((instruction.opcode == OpCodes.Callvirt || instruction.opcode == OpCodes.Call)
-                && instruction.operand is MethodInfo method && method == getSave)
+            if (
+                (instruction.opcode == OpCodes.Callvirt || instruction.opcode == OpCodes.Call)
+                && instruction.operand is MethodInfo method
+                && method == getSave
+            )
             {
                 // Same stack shape: the pilot reference in, a bool out. Labels and blocks stay on the instruction.
                 instruction.opcode = OpCodes.Call;
@@ -62,7 +67,8 @@ public static class MyCockpitPatch
         // One read for m_pilot, one for m_savedPilot - the pairing is the anchor.
         if (matches != 2)
             throw new InvalidOperationException(
-                $"MyCockpitPatch: expected exactly 2 MyEntity.Save reads in MyCockpit.GetObjectBuilderCubeBlock, found {matches}");
+                $"MyCockpitPatch: expected exactly 2 MyEntity.Save reads in MyCockpit.GetObjectBuilderCubeBlock, found {matches}"
+            );
         return code;
     }
 
@@ -78,7 +84,10 @@ public static class MyCockpitPatch
 
     // Name as a string: with the publicizer the event and its backing field share the name and
     // nameof() is ambiguous.
-    private static readonly FieldInfo IsOccupiedChangedField = AccessTools.Field(typeof(MyCockpit), "IsOccupiedChanged");
+    private static readonly FieldInfo IsOccupiedChangedField = AccessTools.Field(
+        typeof(MyCockpit),
+        "IsOccupiedChanged"
+    );
 
     public struct RemovePilotState
     {
@@ -91,14 +100,18 @@ public static class MyCockpitPatch
 
     [HarmonyPrefix]
     [HarmonyPatch(nameof(MyCockpit.RemovePilot))]
-    private static bool RemovePilotPrefix(MyCockpit __instance, out RemovePilotState __state, ref bool __result)
+    private static bool RemovePilotPrefix(
+        MyCockpit __instance,
+        out RemovePilotState __state,
+        ref bool __result
+    )
     {
         __state = default;
         if (!ClusterRuntime.IsClustered || !Sync.IsServer)
             return true;
         MyCharacter pilot = __instance.m_pilot;
         if (pilot == null)
-            return true;   // the method's own first early return; the entry line is logged after it
+            return true; // the method's own first early return; the entry line is logged after it
         // ---- 3. torn-down-pilot guard (T-0042) -----------------------------------------------------
         // The vanilla body takes the cheap path only when pilot.Physics == null. A pilot that is
         // closed, or whose suit/radio components are already gone, still has a physics body for a
@@ -108,12 +121,19 @@ public static class MyCockpitPatch
         // (findings/warm-resume-ghost-pilot-crashes-node-via-stock-trash.md). Same shape the save
         // path already guards against above; here it takes the physics-null path the vanilla code
         // itself uses for a pilot with nothing behind it.
-        if (pilot.Closed || pilot.MarkedForClose || pilot.SuitBattery == null
-            || pilot.RadioBroadcaster == null || pilot.RadioReceiver == null)
+        if (
+            pilot.Closed
+            || pilot.MarkedForClose
+            || pilot.SuitBattery == null
+            || pilot.RadioBroadcaster == null
+            || pilot.RadioReceiver == null
+        )
         {
             try
             {
-                MyLog.Default?.WriteLine($"cockpit_remove_pilot_torn_down entity={__instance.EntityId} pilot={pilot.EntityId} closed={pilot.Closed} markedForClose={pilot.MarkedForClose} suitBattery={pilot.SuitBattery != null} radio={pilot.RadioBroadcaster != null}");
+                MyLog.Default?.WriteLine(
+                    $"cockpit_remove_pilot_torn_down entity={__instance.EntityId} pilot={pilot.EntityId} closed={pilot.Closed} markedForClose={pilot.MarkedForClose} suitBattery={pilot.SuitBattery != null} radio={pilot.RadioBroadcaster != null}"
+                );
             }
             catch (Exception)
             {
@@ -121,7 +141,9 @@ public static class MyCockpitPatch
             }
             __instance.m_pilot = null;
             // The event can only be raised from inside MyCockpit; read the backing delegate.
-            (IsOccupiedChangedField?.GetValue(__instance) as Action<Sandbox.ModAPI.IMyCockpit>)?.Invoke(__instance);
+            (
+                IsOccupiedChangedField?.GetValue(__instance) as Action<Sandbox.ModAPI.IMyCockpit>
+            )?.Invoke(__instance);
             __result = true;
             return false;
         }
@@ -136,7 +158,9 @@ public static class MyCockpitPatch
                 ControllerWired = controller != null,
                 ControllerSteamId = controller?.Player?.Id.SteamId ?? 0,
             };
-            MyLog.Default?.WriteLine($"cockpit_remove_pilot_enter entity={__instance.EntityId} pilot={pilot.EntityId} pilotPhysics={__state.HadPhysics} pilotDead={__state.WasDead} transferInProgress={__instance.CubeGrid.IsBlockTrasferInProgress}");
+            MyLog.Default?.WriteLine(
+                $"cockpit_remove_pilot_enter entity={__instance.EntityId} pilot={pilot.EntityId} pilotPhysics={__state.HadPhysics} pilotDead={__state.WasDead} transferInProgress={__instance.CubeGrid.IsBlockTrasferInProgress}"
+            );
         }
         catch (Exception)
         {
@@ -151,8 +175,15 @@ public static class MyCockpitPatch
     {
         // The exit line covers the normal path only: pilot present, with physics, not dead, and
         // actually removed. The dead and physics-null paths null m_pilot too but were not traced there.
-        if (__state.Pilot == null || !__state.HadPhysics || __state.WasDead || __instance.m_pilot != null)
+        if (
+            __state.Pilot == null
+            || !__state.HadPhysics
+            || __state.WasDead
+            || __instance.m_pilot != null
+        )
             return;
-        MyLog.Default?.WriteLine($"cockpit_remove_pilot entity={__instance.EntityId} pilot={__state.Pilot.EntityId} controllerWired={__state.ControllerWired} controller={__state.ControllerSteamId}");
+        MyLog.Default?.WriteLine(
+            $"cockpit_remove_pilot entity={__instance.EntityId} pilot={__state.Pilot.EntityId} controllerWired={__state.ControllerWired} controller={__state.ControllerSteamId}"
+        );
     }
 }

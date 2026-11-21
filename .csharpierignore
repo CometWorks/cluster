@@ -1,0 +1,6 @@
+ClusterRegistry/PluginProtocol.cs
+**/*.xml
+**/*.csproj
+**/*.props
+**/*.targets
+**/*.config

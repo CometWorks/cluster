@@ -18,21 +18,37 @@ internal sealed class ScaleState
     public int? Target { get; set; }
     public long Revision { get; set; }
     public DateTimeOffset? RequestedAt { get; set; }
+
     /// <summary>Scale-in past the capacity check was requested explicitly.</summary>
     public bool Force { get; set; }
+
     /// <summary>Nodes draining for a scale-in: no new content, their partitions leave, then close.</summary>
     public List<string> Retiring { get; set; } = [];
+
     /// <summary>Nodes a scale-in finished with (Empty or Dead): the launcher stops and forgets them.</summary>
     public List<string> Retired { get; set; } = [];
+
     /// <summary>T-0312 only (unused since T-0320: node control names the nodes to stop).</summary>
     public List<string> PreferRetire { get; set; } = [];
+
     /// <summary>When the node count last reached the target, for the "settling" phase.</summary>
     public DateTimeOffset? ReachedAt { get; set; }
 }
 
-internal sealed record ScaleStatus(int? Target, long Revision, DateTimeOffset? RequestedAt, bool Force, string Phase,
-    string[] Serving, string[] Starting, string[] Retiring, string[] Retired, string[] Spares, string? Blocked,
-    DateTimeOffset? ReachedAt);
+internal sealed record ScaleStatus(
+    int? Target,
+    long Revision,
+    DateTimeOffset? RequestedAt,
+    bool Force,
+    string Phase,
+    string[] Serving,
+    string[] Starting,
+    string[] Retiring,
+    string[] Retired,
+    string[] Spares,
+    string? Blocked,
+    DateTimeOffset? ReachedAt
+);
 
 internal sealed partial class GatewayRegistry
 {
@@ -57,10 +73,17 @@ internal sealed partial class GatewayRegistry
             int excess = serving + scale.Retiring.Count - target;
             foreach (string node in scale.Retiring.ToArray().Reverse())
             {
-                if (excess >= scale.Retiring.Count) break;
-                if (_state.Nodes.TryGetValue(node, out NodeRegistration? row) && row.State != NodeState.Active) continue;
+                if (excess >= scale.Retiring.Count)
+                    break;
+                if (
+                    _state.Nodes.TryGetValue(node, out NodeRegistration? row)
+                    && row.State != NodeState.Active
+                )
+                    continue;
                 scale.Retiring.Remove(node);
-                Console.WriteLine($"Scale: node {node} is no longer retiring (target raised to {target})");
+                Console.WriteLine(
+                    $"Scale: node {node} is no longer retiring (target raised to {target})"
+                );
             }
             scale.Target = target;
             scale.Force = force;
@@ -68,41 +91,69 @@ internal sealed partial class GatewayRegistry
             scale.Revision++;
             scale.RequestedAt = _clock();
             scale.ReachedAt = null;
-            Emit("scale.target", null, new Dictionary<string, string> { ["target"] = target.ToString(), ["force"] = force.ToString() });
-            Console.WriteLine($"Scale: target {target} regular node(s) (revision {scale.Revision}{(force ? ", forced" : "")}); serving {serving}, retiring {scale.Retiring.Count}");
+            Emit(
+                "scale.target",
+                null,
+                new Dictionary<string, string>
+                {
+                    ["target"] = target.ToString(),
+                    ["force"] = force.ToString(),
+                }
+            );
+            Console.WriteLine(
+                $"Scale: target {target} regular node(s) (revision {scale.Revision}{(force ? ", forced" : "")}); serving {serving}, retiring {scale.Retiring.Count}"
+            );
             Persist();
             return scale.Revision;
         }
     }
 
     /// <summary>Regular, Active, serving, non-spare nodes. Caller holds _lock.</summary>
-    private IEnumerable<string> ServingRegulars() => _state.Nodes.Values
-        .Where(x => x.Role == NodeRole.Regular && x.State == NodeState.Active && x.Serving && !x.Spare && !_state.SpareNodes.Contains(x.Node))
-        .Select(x => x.Node);
+    private IEnumerable<string> ServingRegulars() =>
+        _state
+            .Nodes.Values.Where(x =>
+                x.Role == NodeRole.Regular
+                && x.State == NodeState.Active
+                && x.Serving
+                && !x.Spare
+                && !_state.SpareNodes.Contains(x.Node)
+            )
+            .Select(x => x.Node);
 
     public bool IsRetiring(string node)
     {
-        lock (_lock) return _state.Scale.Retiring.Contains(node);
+        lock (_lock)
+            return _state.Scale.Retiring.Contains(node);
     }
 
     public string[] RetiringNodes()
     {
-        lock (_lock) return [.. _state.Scale.Retiring];
+        lock (_lock)
+            return [.. _state.Scale.Retiring];
     }
 
     public int? ScaleTarget
     {
-        get { lock (_lock) return _state.Scale.Target; }
+        get
+        {
+            lock (_lock)
+                return _state.Scale.Target;
+        }
     }
 
     public bool ScaleForced
     {
-        get { lock (_lock) return _state.Scale.Force; }
+        get
+        {
+            lock (_lock)
+                return _state.Scale.Force;
+        }
     }
 
     public string[] PreferRetire()
     {
-        lock (_lock) return [.. _state.Scale.PreferRetire];
+        lock (_lock)
+            return [.. _state.Scale.PreferRetire];
     }
 
     /// <summary>Marks nodes retiring (scale-in). Only serving regulars qualify.</summary>
@@ -114,14 +165,16 @@ internal sealed partial class GatewayRegistry
             bool changed = false;
             foreach (string node in nodes)
             {
-                if (!serving.Contains(node) || _state.Scale.Retiring.Contains(node)) continue;
+                if (!serving.Contains(node) || _state.Scale.Retiring.Contains(node))
+                    continue;
                 _state.Scale.Retiring.Add(node);
                 _state.Scale.Retired.Remove(node);
                 changed = true;
                 Emit("scale.retiring", node, new Dictionary<string, string> { ["why"] = why });
                 Console.WriteLine($"Scale: retiring node {node}: {why}");
             }
-            if (changed) Persist();
+            if (changed)
+                Persist();
         }
     }
 
@@ -141,20 +194,34 @@ internal sealed partial class GatewayRegistry
                 if (row == null || row.State is NodeState.Empty or NodeState.Dead)
                 {
                     _state.Scale.Retiring.Remove(node);
-                    if (!_state.Scale.Retired.Contains(node)) _state.Scale.Retired.Add(node);
+                    if (!_state.Scale.Retired.Contains(node))
+                        _state.Scale.Retired.Add(node);
                     changed = true;
-                    Emit("scale.retired", node, new Dictionary<string, string> { ["state"] = row?.State.ToString() ?? "gone" });
-                    Console.WriteLine($"Scale: node {node} retired ({row?.State.ToString() ?? "gone"}); the launcher stops it");
+                    Emit(
+                        "scale.retired",
+                        node,
+                        new Dictionary<string, string>
+                        {
+                            ["state"] = row?.State.ToString() ?? "gone",
+                        }
+                    );
+                    Console.WriteLine(
+                        $"Scale: node {node} retired ({row?.State.ToString() ?? "gone"}); the launcher stops it"
+                    );
                 }
                 // The node's REPORT decides. A registry row the report does not list is memberless (its content
                 // left, r34 2026-09-30 node-4 / 286401) and only the close releases it - through the node's own
                 // drain, which releases memberless partitions. Waiting for the row blocked the scale-in forever.
                 // A Recovering row is a load in flight whose entities are not reported yet: that one waits.
-                else if (row.State == NodeState.Active && !owningSomething.Contains(node)
-                    && !_state.Partitions.Values.Any(p => p.Node == node && p.Recovering))
+                else if (
+                    row.State == NodeState.Active
+                    && !owningSomething.Contains(node)
+                    && !_state.Partitions.Values.Any(p => p.Node == node && p.Recovering)
+                )
                     toClose.Add(node);
             }
-            if (changed) Persist();
+            if (changed)
+                Persist();
             return [.. toClose];
         }
     }
@@ -164,7 +231,9 @@ internal sealed partial class GatewayRegistry
     private void ForgetRetiredOnRegistration(string node)
     {
         if (_state.Scale.Retired.Remove(node))
-            Console.WriteLine($"Scale: retired node {node} registered again; it counts as a regular node");
+            Console.WriteLine(
+                $"Scale: retired node {node} registered again; it counts as a regular node"
+            );
         _state.Scale.Retiring.Remove(node);
     }
 
@@ -174,24 +243,64 @@ internal sealed partial class GatewayRegistry
         {
             ScaleState scale = _state.Scale;
             DateTimeOffset now = _clock();
-            string[] serving = [.. ServingRegulars().Where(node => !scale.Retiring.Contains(node)).Order(StringComparer.Ordinal)];
-            string[] starting = [.. _state.Nodes.Values
-                .Where(x => x.Role == NodeRole.Regular && x.State == NodeState.Active && !x.Serving && !x.Spare
-                    && !_state.SpareNodes.Contains(x.Node) && !scale.Retiring.Contains(x.Node) && x.LeaseExpires > now)
-                .Select(x => x.Node).Order(StringComparer.Ordinal)];
+            string[] serving =
+            [
+                .. ServingRegulars()
+                    .Where(node => !scale.Retiring.Contains(node))
+                    .Order(StringComparer.Ordinal),
+            ];
+            string[] starting =
+            [
+                .. _state
+                    .Nodes.Values.Where(x =>
+                        x.Role == NodeRole.Regular
+                        && x.State == NodeState.Active
+                        && !x.Serving
+                        && !x.Spare
+                        && !_state.SpareNodes.Contains(x.Node)
+                        && !scale.Retiring.Contains(x.Node)
+                        && x.LeaseExpires > now
+                    )
+                    .Select(x => x.Node)
+                    .Order(StringComparer.Ordinal),
+            ];
             string[] spares = [.. _state.SpareNodes.Order(StringComparer.Ordinal)];
-            string? blocked = RecoveryPending() ? "partitions are still unowned or recovering" : null;
+            string? blocked = RecoveryPending()
+                ? "partitions are still unowned or recovering"
+                : null;
             string phase;
-            if (scale.Target is not int target) phase = "unset";
-            else if (serving.Length < target) phase = "scaling-out";
-            else if (serving.Length > target || scale.Retiring.Count != 0) phase = "scaling-in";
+            if (scale.Target is not int target)
+                phase = "unset";
+            else if (serving.Length < target)
+                phase = "scaling-out";
+            else if (serving.Length > target || scale.Retiring.Count != 0)
+                phase = "scaling-in";
             else
             {
-                if (scale.ReachedAt == null) { scale.ReachedAt = now; Persist(); }
-                phase = balancerIdle && now - scale.ReachedAt >= TimeSpan.FromSeconds(60) ? "settled" : "settling";
+                if (scale.ReachedAt == null)
+                {
+                    scale.ReachedAt = now;
+                    Persist();
+                }
+                phase =
+                    balancerIdle && now - scale.ReachedAt >= TimeSpan.FromSeconds(60)
+                        ? "settled"
+                        : "settling";
             }
-            return new ScaleStatus(scale.Target, scale.Revision, scale.RequestedAt, scale.Force, phase, serving, starting,
-                [.. scale.Retiring], [.. scale.Retired], spares, blocked, scale.ReachedAt);
+            return new ScaleStatus(
+                scale.Target,
+                scale.Revision,
+                scale.RequestedAt,
+                scale.Force,
+                phase,
+                serving,
+                starting,
+                [.. scale.Retiring],
+                [.. scale.Retired],
+                spares,
+                blocked,
+                scale.ReachedAt
+            );
         }
     }
 }
@@ -200,17 +309,23 @@ internal sealed partial class DirectGateway
 {
     /// <summary>Balance cooldown while a scale step has not settled (instead of <see cref="BalanceCooldownSeconds"/>).</summary>
     private const double ScaleBalanceCooldownSeconds = 15;
+
     /// <summary>A decrease warns (T-0312 refused; T-0320 obeys) when the remaining nodes would each carry more than this
     /// share of one game thread (sim-us/s over 1e6), measured from the nodes' partition loads.</summary>
-    private static readonly double ScaleInMaxThreadShare = EnvDouble("CLUSTER_SCALE_IN_MAX_THREAD_SHARE", 0.7);
+    private static readonly double ScaleInMaxThreadShare = EnvDouble(
+        "CLUSTER_SCALE_IN_MAX_THREAD_SHARE",
+        0.7
+    );
     private string? _scaleInWarning;
 
     /// <summary>T-0320: the projected partition work per remaining serving node when it exceeds the thread-share limit,
     /// else null. Only ever a warning: a decrease is obeyed regardless.</summary>
     internal static string? CapacityWarning(double work, int remaining, bool measured, double limit)
     {
-        if (remaining <= 0) return "no serving node would remain to carry the partitions";
-        if (!measured) return null;
+        if (remaining <= 0)
+            return "no serving node would remain to carry the partitions";
+        if (!measured)
+            return null;
         double perNode = work / remaining;
         return perNode > limit * 1_000_000
             ? $"projected load {perNode / 1e6:F2} game threads of partition work on each of the {remaining} remaining serving node(s) (limit {limit:F2}); obeyed anyway"
@@ -220,18 +335,30 @@ internal sealed partial class DirectGateway
     /// <summary>The capacity warning for a serving total, from the last partition reports (null before the first pass).</summary>
     private string? CapacityWarningFor(int servingTotal)
     {
-        if (_lastPartitionReports is not { } last || last.Reports.Length == 0) return null;
-        return CapacityWarning(last.Reports.Sum(x => (double)x.Report.Partitions.Sum(p => p.SimLoadUs)), servingTotal,
-            last.Reports.All(x => x.Report.SimLoadSupported), ScaleInMaxThreadShare);
+        if (_lastPartitionReports is not { } last || last.Reports.Length == 0)
+            return null;
+        return CapacityWarning(
+            last.Reports.Sum(x => (double)x.Report.Partitions.Sum(p => p.SimLoadUs)),
+            servingTotal,
+            last.Reports.All(x => x.Report.SimLoadSupported),
+            ScaleInMaxThreadShare
+        );
     }
 
     private static double EnvDouble(string name, double fallback) =>
-        double.TryParse(Environment.GetEnvironmentVariable(name), System.Globalization.NumberStyles.Float,
-            System.Globalization.CultureInfo.InvariantCulture, out double value) ? value : fallback;
+        double.TryParse(
+            Environment.GetEnvironmentVariable(name),
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out double value
+        )
+            ? value
+            : fallback;
 
     private bool ScaleUnsettled()
     {
-        if (_registry?.ScaleTarget == null) return false;
+        if (_registry?.ScaleTarget == null)
+            return false;
         return _registry.Scale(BalancerIdle()).Phase != "settled";
     }
 
@@ -243,11 +370,14 @@ internal sealed partial class DirectGateway
     private bool BalancerIdle()
     {
         lock (_balanceMigrations)
-            if (_balanceMigrations.Values.Any(pin => pin.Expires >= DateTime.UtcNow)) return false;
+            if (_balanceMigrations.Values.Any(pin => pin.Expires >= DateTime.UtcNow))
+                return false;
         // A recovery pause ("unowned or recovering") flickers with every offline wake and is not counted;
         // counting it would hold "settled", and the rotator with it, for as long as players roam.
-        if (_balancePauseReason is "node rotation in flight" or "scale-in drain in flight") return false;
-        DateTime quietSince = _lastBalanceMove > _balanceResumedAt ? _lastBalanceMove : _balanceResumedAt;
+        if (_balancePauseReason is "node rotation in flight" or "scale-in drain in flight")
+            return false;
+        DateTime quietSince =
+            _lastBalanceMove > _balanceResumedAt ? _lastBalanceMove : _balanceResumedAt;
         return DateTime.UtcNow - quietSince > TimeSpan.FromSeconds(60);
     }
 
@@ -258,22 +388,82 @@ internal sealed partial class DirectGateway
     /// path carries it over member by member with the usual one-transfer-per-pass budget, clients last and
     /// every join/settle deferral; then closes a retiring node that owns nothing. Returns the retiring set.
     /// </summary>
-    private HashSet<string> ScaleInPass((ServedNode Node, PartitionReport Report)[] reports, IReadOnlyDictionary<string, double> passLoad,
-        HashSet<ulong> routed, CostModel gapModel)
+    private HashSet<string> ScaleInPass(
+        (ServedNode Node, PartitionReport Report)[] reports,
+        IReadOnlyDictionary<string, double> passLoad,
+        HashSet<ulong> routed,
+        CostModel gapModel
+    )
     {
         GatewayRegistry registry = _registry!;
-        if (registry.RecoveryPending()) return [.. registry.RetiringNodes()];
+        if (registry.RecoveryPending())
+            return [.. registry.RetiringNodes()];
         HashSet<string> retiring = [.. registry.RetiringNodes()];
-        HashSet<string> owning = [.. reports.Where(x => x.Report.Partitions.Length != 0).Select(x => x.Node.Node)];
+        HashSet<string> owning =
+        [
+            .. reports.Where(x => x.Report.Partitions.Length != 0).Select(x => x.Node.Node),
+        ];
+        // SE-1448: a client still loading the world on a retiring node is in no partition its report lists (a first
+        // join has none until it spawns), so the node read as owning nothing, was closed and killed under the load:
+        // octahedron-test 2026-11-13 20:34Z, AetherAdept on local-node-3. The node waits until the client is world-ready
+        // and past the post-ready settle (T-0238), the same rule the drains apply to a client-bearing move.
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        foreach (
+            (string node, ulong[] clients) in LoadingClientsByNode(
+                _clients.Values.Select(x =>
+                    (
+                        x.ClientId,
+                        x.WorldReady && now - x.WorldReadyAt >= PostReadySettle,
+                        x.BackendEndpoint
+                    )
+                ),
+                RetiringBackends(registry, retiring)
+            )
+        )
+        {
+            owning.Add(node);
+            if (
+                PassLogDue(
+                    _passFailureLogged,
+                    "loading|" + node + "|" + string.Join(",", clients),
+                    DateTime.UtcNow
+                )
+            )
+                Console.WriteLine(
+                    $"Scale: retiring node {node} owns nothing but client(s) {string.Join(", ", clients)} are still loading the world on it; it closes once they are world-ready and settled"
+                );
+        }
         foreach (string node in registry.SettleRetiring(owning))
         {
             try
             {
                 NodeRegistration row = registry.Nodes().First(x => x.Node == node);
+                // SE-1448: a world-ready client in no partition (a new player on the respawn screen) has nothing to hand
+                // over; switch it to the node's receiver instead of letting the kill disconnect it.
+                if (
+                    registry.PreferredDrainReceiver(node) is { } receiver
+                    && registry.Nodes().FirstOrDefault(x => x.Node == receiver)
+                        is { Endpoint: not null } target
+                )
+                    SwitchUnpartitionedOff(
+                        row,
+                        [
+                            .. _clients.Values.Where(x =>
+                                x.WorldReady && x.BackendEndpoint.Equals(BackendOf(row))
+                            ),
+                        ],
+                        target.Node,
+                        BackendOf(target)
+                    );
                 registry.CloseNode(node, row.Epoch, TimeSpan.FromSeconds(60));
                 Console.WriteLine($"Scale: retiring node {node} owns nothing; closed");
             }
-            catch (Exception exception) { Console.Error.WriteLine($"Scale: closing retiring node {node} failed: {exception.Message}"); }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine(
+                    $"Scale: closing retiring node {node} failed: {exception.Message}"
+                );
+            }
         }
         retiring = [.. registry.RetiringNodes()];
         // T-0320: WHICH nodes retire is node control's decision (NodeControl.cs: the oldest serving node of the host
@@ -282,63 +472,175 @@ internal sealed partial class DirectGateway
         // MEASURED partition work (sim-us/s of game thread) spread over the nodes that stay. Not passLoad: the
         // effective load adds the time a slow node is missing (EffectiveNodeLoad), which reads as several threads on
         // a node still loading.
-        string? warning = retiring.Count == 0 ? null : CapacityWarning(reports.Sum(x => (double)x.Report.Partitions.Sum(p => p.SimLoadUs)),
-            reports.Count(x => !retiring.Contains(x.Node.Node)), reports.All(x => x.Report.SimLoadSupported), ScaleInMaxThreadShare);
-        if (warning != _scaleInWarning && warning != null) Console.WriteLine("Scale: " + warning);
+        string? warning =
+            retiring.Count == 0
+                ? null
+                : CapacityWarning(
+                    reports.Sum(x => (double)x.Report.Partitions.Sum(p => p.SimLoadUs)),
+                    reports.Count(x => !retiring.Contains(x.Node.Node)),
+                    reports.All(x => x.Report.SimLoadSupported),
+                    ScaleInMaxThreadShare
+                );
+        if (warning != _scaleInWarning && warning != null)
+            Console.WriteLine("Scale: " + warning);
         _scaleInWarning = warning;
-        if (retiring.Count == 0) return retiring;
-        (ServedNode Node, PartitionReport Report)[] receivers = [.. reports.Where(x => !retiring.Contains(x.Node.Node))];
-        if (receivers.Length == 0) return retiring;
-        Dictionary<string, double> projected = receivers.ToDictionary(x => x.Node.Node, x => passLoad.GetValueOrDefault(x.Node.Node));
+        if (retiring.Count == 0)
+            return retiring;
+        (ServedNode Node, PartitionReport Report)[] receivers =
+        [
+            .. reports.Where(x => !retiring.Contains(x.Node.Node)),
+        ];
+        if (receivers.Length == 0)
+            return retiring;
+        Dictionary<string, double> projected = receivers.ToDictionary(
+            x => x.Node.Node,
+            x => passLoad.GetValueOrDefault(x.Node.Node)
+        );
         // #1454 case 6: a heavy component drains once, to the emptiest node without one, and the light ones keep off it.
         IReadOnlySet<ulong> heavy = _heavy;
         HashSet<string> heavyNodes = [.. _heavyNodes];
-        foreach ((ServedNode node, PartitionReport report) in reports.Where(x => retiring.Contains(x.Node.Node)))
+        foreach (
+            (ServedNode node, PartitionReport report) in reports.Where(x =>
+                retiring.Contains(x.Node.Node)
+            )
+        )
         {
-            if (report.Partitions.Length == 0) continue;
+            if (report.Partitions.Length == 0)
+                continue;
             // T-0320: a recycled node drains whole into the spare activated in its place, like the rotator's only=spare.
             string? preferred = registry.PreferredDrainReceiver(node.Node);
             double envelope = report.SyncDistance + report.Margin;
-            (PartitionInfo Partition, bool OnSource)[] all = [.. report.Partitions.Select(p => (p, true))];
+            (PartitionInfo Partition, bool OnSource)[] all =
+            [
+                .. report.Partitions.Select(p => (p, true)),
+            ];
             int[] labels = Components(all, envelope, gapModel);
             // Heavy components first, so the light ones know which receivers took one.
-            foreach (IGrouping<int, int> group in Enumerable.Range(0, all.Length).GroupBy(i => labels[i])
-                         .OrderByDescending(g => g.Any(i => heavy.Contains(all[i].Partition.Id))))
+            foreach (
+                IGrouping<int, int> group in Enumerable
+                    .Range(0, all.Length)
+                    .GroupBy(i => labels[i])
+                    .OrderByDescending(g => g.Any(i => heavy.Contains(all[i].Partition.Id)))
+            )
             {
                 PartitionInfo[] members = [.. group.Select(i => all[i].Partition)];
                 bool isHeavy = members.Any(m => heavy.Contains(m.Id));
-                string? pinned = members.Select(m => MigrationTarget(m.Id)).FirstOrDefault(t => t != null && projected.ContainsKey(t));
-                string target = pinned
-                    ?? (isHeavy ? HeavyDrainTarget(projected.Select(x => (x.Key, x.Value)), heavyNodes, preferred) : null)
-                    ?? DrainTarget(members, [.. receivers.Select(x => (x.Node.Node, x.Report))], envelope, projected, preferred, heavyNodes);
+                string? pinned = members
+                    .Select(m => MigrationTarget(m.Id))
+                    .FirstOrDefault(t => t != null && projected.ContainsKey(t));
+                string target =
+                    pinned
+                    ?? (
+                        isHeavy
+                            ? HeavyDrainTarget(
+                                projected.Select(x => (x.Key, x.Value)),
+                                heavyNodes,
+                                preferred
+                            )
+                            : null
+                    )
+                    ?? DrainTarget(
+                        members,
+                        [.. receivers.Select(x => (x.Node.Node, x.Report))],
+                        envelope,
+                        projected,
+                        preferred,
+                        heavyNodes
+                    );
                 if (pinned == null || members.Any(m => MigrationTarget(m.Id) != target))
                     PinMigration(members, target);
-                if (isHeavy) heavyNodes.Add(target);
+                if (isHeavy)
+                    heavyNodes.Add(target);
                 if (pinned == null)
                 {
                     long load = members.Sum(m => PartitionLoad(m, true));
                     projected[target] += load;
-                    if (isHeavy) HeavyMoved(members.Select(m => m.Id), members.Sum(m => ClientCount(m, routed)));
-                    Console.WriteLine($"Scale: draining component [{string.Join(" ", members.Take(8).Select(m => m.Id))}{(members.Length > 8 ? " ..." : "")}]"
-                        + $" ({members.Length} partition(s), {load} sim-us/s, clients {members.Sum(m => ClientCount(m, routed))}{(isHeavy ? ", heavy" : "")}) {node.Node} -> {target}");
+                    if (isHeavy)
+                        HeavyMoved(
+                            members.Select(m => m.Id),
+                            members.Sum(m => ClientCount(m, routed))
+                        );
+                    Console.WriteLine(
+                        $"Scale: draining component [{string.Join(" ", members.Take(8).Select(m => m.Id))}{(members.Length > 8 ? " ..." : "")}]"
+                            + $" ({members.Length} partition(s), {load} sim-us/s, clients {members.Sum(m => ClientCount(m, routed))}{(isHeavy ? ", heavy" : "")}) {node.Node} -> {target}"
+                    );
                 }
             }
         }
         return retiring;
     }
 
+    private static IPEndPoint BackendOf(NodeRegistration row) =>
+        EndpointParser.Parse(row.Endpoint, DirectTransportConstants.DefaultPort);
+
+    private static IEnumerable<(string Node, IPEndPoint Backend)> RetiringBackends(
+        GatewayRegistry registry,
+        IReadOnlySet<string> retiring
+    ) =>
+        registry
+            .Nodes()
+            .Where(x =>
+                retiring.Contains(x.Node) && x.State == NodeState.Active && x.Endpoint != null
+            )
+            .Select(x => (x.Node, BackendOf(x)));
+
+    /// <summary>SE-1448: the nodes among <paramref name="nodes"/> a session is bound to that has not settled (not world-ready,
+    /// or ready under the post-ready settle), with those clients in id order.</summary>
+    internal static Dictionary<string, ulong[]> LoadingClientsByNode(
+        IEnumerable<(ulong Client, bool Settled, IPEndPoint Backend)> sessions,
+        IEnumerable<(string Node, IPEndPoint Backend)> nodes
+    )
+    {
+        (ulong Client, bool Settled, IPEndPoint Backend)[] loading =
+        [
+            .. sessions.Where(x => !x.Settled),
+        ];
+        Dictionary<string, ulong[]> result = new(StringComparer.Ordinal);
+        foreach ((string node, IPEndPoint backend) in nodes)
+            if (
+                loading
+                    .Where(x => x.Backend.Equals(backend))
+                    .Select(x => x.Client)
+                    .Order()
+                    .ToArray() is
+                { Length: > 0 } clients
+            )
+                result[node] = clients;
+        return result;
+    }
+
     /// <summary>The preferred receiver when it is one (a recycled node's replacement); else the receiver already holding an
     /// envelope neighbour of the component, else the least projected load. #1454: a receiver in <paramref name="heavyNodes"/>
     /// (it holds or takes a heavy component) is the target only for an envelope neighbour or when nothing else receives.</summary>
-    internal static string DrainTarget(PartitionInfo[] members, (string Node, PartitionReport Report)[] receivers, double envelope,
-        IReadOnlyDictionary<string, double> projected, string? preferred = null, IReadOnlySet<string>? heavyNodes = null)
+    internal static string DrainTarget(
+        PartitionInfo[] members,
+        (string Node, PartitionReport Report)[] receivers,
+        double envelope,
+        IReadOnlyDictionary<string, double> projected,
+        string? preferred = null,
+        IReadOnlySet<string>? heavyNodes = null
+    )
     {
         bool Open(string node) => heavyNodes?.Contains(node) != true;
-        if (preferred != null && receivers.Any(x => x.Node == preferred) && Open(preferred)) return preferred;
-        foreach ((string node, PartitionReport report) in receivers.OrderBy(x => projected[x.Node]).ThenBy(x => x.Node, StringComparer.Ordinal))
-            if (report.Partitions.Any(p => members.Any(m => SphereGap(m.Sphere, p.Sphere) < envelope)))
+        if (preferred != null && receivers.Any(x => x.Node == preferred) && Open(preferred))
+            return preferred;
+        foreach (
+            (string node, PartitionReport report) in receivers
+                .OrderBy(x => projected[x.Node])
+                .ThenBy(x => x.Node, StringComparer.Ordinal)
+        )
+            if (
+                report.Partitions.Any(p =>
+                    members.Any(m => SphereGap(m.Sphere, p.Sphere) < envelope)
+                )
+            )
                 return node;
-        return receivers.OrderBy(x => Open(x.Node) ? 0 : 1).ThenBy(x => projected[x.Node]).ThenBy(x => x.Node, StringComparer.Ordinal).First().Node;
+        return receivers
+            .OrderBy(x => Open(x.Node) ? 0 : 1)
+            .ThenBy(x => projected[x.Node])
+            .ThenBy(x => x.Node, StringComparer.Ordinal)
+            .First()
+            .Node;
     }
 }
 
@@ -363,23 +665,28 @@ internal sealed partial class DirectGateway
             spares = status.Spares,
             blocked = status.Blocked,
             warning = _scaleInWarning,
-            hosts = _registry.NodeControlView(null, null, "", 0).Hosts.Select(h => new
-            {
-                host = h.Host,
-                serving = h.Serving.Target,
-                spares = h.Spares.Target,
-                servingActual = h.Serving.Actual,
-                sparesActual = h.Spares.Actual,
-            }).ToArray(),
+            hosts = _registry
+                .NodeControlView(null, null, "", 0)
+                .Hosts.Select(h => new
+                {
+                    host = h.Host,
+                    serving = h.Serving.Target,
+                    spares = h.Spares.Target,
+                    servingActual = h.Serving.Actual,
+                    sparesActual = h.Spares.Actual,
+                })
+                .ToArray(),
             reachedAt = status.ReachedAt,
-            balance = balance == null ? null : new
-            {
-                evaluatedUtc = balance.EvaluatedUtc,
-                excess = balance.Excess,
-                achievableExcess = balance.AchievableExcess,
-                worstDeviation = balance.WorstDeviation,
-                pauseReason = balance.PauseReason,
-            },
+            balance = balance == null
+                ? null
+                : new
+                {
+                    evaluatedUtc = balance.EvaluatedUtc,
+                    excess = balance.Excess,
+                    achievableExcess = balance.AchievableExcess,
+                    worstDeviation = balance.WorstDeviation,
+                    pauseReason = balance.PauseReason,
+                },
         };
     }
 }

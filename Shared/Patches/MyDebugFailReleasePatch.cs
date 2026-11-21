@@ -41,33 +41,34 @@ namespace Shared.Patches;
 [HarmonyPatch(typeof(MyDebug))]
 public static class MyDebugFailReleasePatch
 {
-	private static readonly bool OnWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+    private static readonly bool OnWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
 
-	/// <summary>
-	/// Assertions can fire in a tight loop - the drain path that found this walks every block of
-	/// every grid. An unbounded log write per assertion would turn a node kill into a disk fill,
-	/// which is not an improvement. After this many, only every 1000th is written.
-	/// </summary>
-	private const int FullyLoggedCount = 50;
-	private static long m_count;
+    /// <summary>
+    /// Assertions can fire in a tight loop - the drain path that found this walks every block of
+    /// every grid. An unbounded log write per assertion would turn a node kill into a disk fill,
+    /// which is not an improvement. After this many, only every 1000th is written.
+    /// </summary>
+    private const int FullyLoggedCount = 50;
+    private static long m_count;
 
-	[HarmonyPrefix]
-	[HarmonyPatch(nameof(MyDebug.FailRelease))]
-	private static bool FailReleasePrefix(string message, string file, int line)
-	{
-		if (OnWindows)
-			return true;
+    [HarmonyPrefix]
+    [HarmonyPatch(nameof(MyDebug.FailRelease))]
+    private static bool FailReleasePrefix(string message, string file, int line)
+    {
+        if (OnWindows)
+            return true;
 
-		long seen = System.Threading.Interlocked.Increment(ref m_count);
-		if (seen <= FullyLoggedCount || seen % 1000 == 0)
-		{
-			// WriteLineAndConsole, not WriteLine: this was a process-killing event until now and
-			// it must not be quieter than the crash it replaces. The stack is what makes the
-			// entry actionable - the assert message alone does not say which subsystem asserted.
-			MyLog.Default?.WriteLineAndConsole(
-				$"[ClusterPlugin] T-0128 FailRelease suppressed (#{seen}): {message}" +
-				$"{(file != null ? $" at {file}:{line}" : string.Empty)}\n{new StackTrace(2, true)}");
-		}
-		return false;
-	}
+        long seen = System.Threading.Interlocked.Increment(ref m_count);
+        if (seen <= FullyLoggedCount || seen % 1000 == 0)
+        {
+            // WriteLineAndConsole, not WriteLine: this was a process-killing event until now and
+            // it must not be quieter than the crash it replaces. The stack is what makes the
+            // entry actionable - the assert message alone does not say which subsystem asserted.
+            MyLog.Default?.WriteLineAndConsole(
+                $"[ClusterPlugin] T-0128 FailRelease suppressed (#{seen}): {message}"
+                    + $"{(file != null ? $" at {file}:{line}" : string.Empty)}\n{new StackTrace(2, true)}"
+            );
+        }
+        return false;
+    }
 }
