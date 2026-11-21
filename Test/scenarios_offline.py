@@ -1177,6 +1177,263 @@ def p2_off_call_laser(bench):
     bench.exercised(idWake=True, gpsWake=True, establishedNoWake=True, offlineLaserRadioChain=True, brokenRadioNegativeControl=True)
 
 
+def _laser_state(bench, grid):
+    """The laser status from whichever node owns the grid now; {} while it has no single owner."""
+    owner = _owner_of(bench, grid)
+    return (
+        _try_node(bench, owner[0], f"/igc-test-laser-status?grid={grid}")
+        if owner
+        else {}
+    )
+
+
+def _try_node(bench, node, path):
+    try:
+        return bench.cluster.node(node, path)
+    except (ClusterError, ClusterHttpError):
+        return {}
+
+
+def p2_laser_far(bench):
+    """SE-1796: a player's laser link to a station 80 km out, past the 50 km radio limit, so only the laser
+    relays. One node first (vanilla pairing, the far grid outside sync distance), then the same station
+    offline: the established link holds without waking it, a GPS connect after an idle wakes it, and once it
+    is offline again the player's remote terminal over the link wakes it; then the terminal over the live link,
+    and an idle laser as the negative control. Each leg records its seconds.
+    """
+    api = _join(bench)
+    owner = _client_identity(bench)
+    for node in _nodes(bench):
+        if node != "wa-1":
+            _put_config(
+                bench,
+                node,
+                {
+                    "offline.enabled": "false",
+                    "offline.wakeMeters": "0",
+                    "offline.leadSeconds": "0",
+                    "offline.quietMeters": "0",
+                },
+            )
+    me = next(
+        (
+            r
+            for r in bench.cluster.node("node-1", "/characters").get("characters") or []
+            if owner in (r.get("controllingIdentity"), r.get("identityOwner"))
+        ),
+        None,
+    )
+    _require(bench, "node-1 holds the client's character", bool(me))
+    x, y, z = me["position"]
+    # No balancer move during the one-node leg: the far station must stay on the source's node.
+    bench.cluster.post("/automatic/pause")
+    source = bench.cluster.node(
+        "node-1",
+        f"/igc-test-ensure-laser-at?owner={owner}&name=far-laser-source"
+        f"&x={x + 120}&y={y}&z={z}&radio=2000&range=100000000",
+        "POST",
+    )
+    target = bench.cluster.node(
+        "node-1",
+        f"/igc-test-ensure-laser-at?owner={owner}&name=far-laser-target"
+        f"&x={x + 80120}&y={y}&z={z}&radio=500&range=100000000",
+        "POST",
+    )
+    bench.record(
+        "far-laser-stations",
+        {"source": source, "target": target, "character": me["position"]},
+    )
+    source_grid, target_grid = source["grid"], target["grid"]
+    partition = _poll(lambda: (_owner_of(bench, target_grid) or (None, None))[1], 90)
+    _require(
+        bench,
+        "the far station has its own partition on node-1",
+        bool(partition)
+        and _owner_of(bench, target_grid) == ("node-1", partition)
+        and _owner_of(bench, source_grid) != _owner_of(bench, target_grid),
+    )
+    bench.cluster.node(
+        "node-1", f"/offline-test-options?grid={source_grid}&mode=stay-online", "POST"
+    )
+    for _ in range(8):
+        characters = bench.cluster.node("node-1", "/characters").get("characters") or []
+        if any(
+            r.get("radioOn")
+            for r in characters
+            if owner in (r.get("controllingIdentity"), r.get("identityOwner"))
+        ):
+            break
+        api.key("O")
+        time.sleep(2)
+
+    def linked():
+        s, t = _laser_state(bench, source_grid), _laser_state(bench, target_grid)
+        return (
+            {"source": s, "target": t}
+            if s.get("state") == "connected" and t.get("state") == "connected"
+            else None
+        )
+
+    def relayed():
+        signals = api._get("/v1/character/hud-signals")
+        return (
+            signals
+            if any(
+                r.get("entityId") == target_grid
+                or r.get("name") == "far-laser-target-radio"
+                for r in signals.get("relayed", [])
+            )
+            else None
+        )
+
+    timing = {}
+    head = _laser_state(bench, target_grid)["head"]
+    started = time.monotonic()
+    bench.cluster.node(
+        "node-1",
+        f"/igc-test-laser-gps?grid={source_grid}&x={head[0]}&y={head[1]}&z={head[2]}",
+        "POST",
+    )
+    paired = _poll(linked, 120, 2)
+    timing["sameNodeGps"] = round(time.monotonic() - started, 1)
+    bench.record(
+        "far-laser-same-node",
+        paired
+        or {
+            "source": _laser_state(bench, source_grid),
+            "target": _laser_state(bench, target_grid),
+            "planets": bench.cluster.node("node-1", f"/partition-of?entity={target_grid}"),
+        },
+    )
+    _require(
+        bench,
+        "an 80 km GPS laser link connects on one node",
+        bool(paired),
+        json.dumps(timing),
+    )
+    hud = _poll(relayed, 60, 2)
+    bench.record("far-laser-hud", hud or api._get("/v1/character/hud-signals"))
+    bench.check(
+        "the far station's radio reaches the player's HUD over the laser", bool(hud)
+    )
+    # Offline leg: the far partition goes offline while linked; the player's call-up wakes it.
+    bench.cluster.post("/automatic/resume")
+    for node in _nodes(bench):
+        if node != "wa-1":
+            _put_config(
+                bench,
+                node,
+                {
+                    "offline.enabled": "true",
+                    "offline.minOnlineSeconds": "0",
+                    "offline.graceSeconds": "0",
+                    "offline.settleFrames": "0",
+                },
+            )
+    went = bool(_poll(lambda: _offline_row(bench, partition), 120))
+    if not went:
+        node = (_owner_of(bench, target_grid) or ("node-1", 0))[0]
+        bench.record(
+            "far-laser-not-offline",
+            {
+                "owner": _owner_of(bench, target_grid),
+                "offline": _try_node(bench, node, "/offline"),
+                "partitions": _try_node(bench, node, "/partitions"),
+            },
+        )
+    _require(bench, "the linked far station goes offline", went)
+    time.sleep(12)
+    held = _laser_state(bench, source_grid)
+    row = _offline_row(bench, partition)
+    bench.record("far-laser-offline-held", {"source": held, "row": row})
+    bench.check(
+        "the established link holds while the far station is offline, without waking it",
+        held.get("state") == "connected"
+        and bool(row)
+        and not row.get("LoadRequestedNode"),
+        json.dumps(held),
+    )
+    # GPS call-up: the source idles while the far station is offline, then connects to its GPS.
+    bench.cluster.node("node-1", f"/igc-test-laser-idle?grid={source_grid}", "POST")
+    _poll(lambda: _laser_state(bench, source_grid).get("state") == "idle", 20)
+    _require(
+        bench,
+        "the far station is still offline after the idle",
+        bool(_offline_row(bench, partition)),
+    )
+    started = time.monotonic()
+    bench.cluster.node(
+        "node-1",
+        f"/igc-test-laser-gps?grid={source_grid}&x={head[0]}&y={head[1]}&z={head[2]}",
+        "POST",
+    )
+    paired = _poll(linked, 180, 2)
+    timing["offlineGpsWake"] = round(time.monotonic() - started, 1)
+    bench.record(
+        "far-laser-offline-gps",
+        {"paired": paired, "owner": _owner_of(bench, target_grid), "timing": timing},
+    )
+    bench.check(
+        "a GPS connect wakes the offline far station and links",
+        bool(paired) and _offline_row(bench, partition) is None,
+        json.dumps(timing),
+    )
+    # Terminal call-up: the linked station goes offline again; the player's remote terminal over the link wakes it.
+    _require(
+        bench,
+        "the relinked far station goes offline again",
+        bool(_poll(lambda: _offline_row(bench, partition), 180)),
+    )
+    started = time.monotonic()
+    opened = _open_terminal(api, target_grid, timeout=150)
+    timing["offlineTerminalWake"] = round(time.monotonic() - started, 1)
+    bench.record(
+        "far-laser-offline-terminal",
+        {"answer": opened, "owner": _owner_of(bench, target_grid), "timing": timing},
+    )
+    bench.check(
+        "the player's remote terminal over the laser wakes the offline station and opens",
+        opened.get("screenOpen") is True and _offline_row(bench, partition) is None,
+        json.dumps(opened),
+    )
+    api.close_remote_terminal()
+    bench.check(
+        "the woken station's laser is linked again", bool(_poll(linked, 120, 2))
+    )
+    # Last, because Remote's open-terminal requests the far grid's replication without ever releasing it, so
+    # the client keeps it as remote presence and its partition stays online (SE-1796 follow-up).
+    time.sleep(3)
+    opened = _open_terminal(api, target_grid, timeout=60)
+    bench.record("far-laser-terminal", opened)
+    bench.check(
+        "the player opens the far station's terminal over the linked laser",
+        opened.get("screenOpen") is True and opened.get("connected") is True,
+        json.dumps(opened),
+    )
+    api.close_remote_terminal()
+    time.sleep(3)
+    bench.cluster.node("node-1", f"/igc-test-laser-idle?grid={source_grid}", "POST")
+    _poll(lambda: _laser_state(bench, source_grid).get("state") == "idle", 20)
+    denied = api.open_remote_terminal(target_grid, timeout=10)
+    bench.record("far-laser-terminal-idle", denied)
+    bench.check(
+        "with the laser idle the far terminal is out of reach (negative control)",
+        denied.get("screenOpen") is not True and denied.get("connected") is not True,
+        json.dumps(denied),
+    )
+    api.close_remote_terminal()
+    bench.exercised(
+        sameNodeGps=True,
+        hudRelay=bool(hud),
+        terminalOverLaser=opened.get("screenOpen") is True,
+        idleNegativeControl=True,
+        establishedNoWake=True,
+        terminalWake=opened.get("screenOpen") is True,
+        gpsWake=bool(paired),
+        seconds=timing,
+    )
+
+
 def t_oc_10(bench):
     """A real locally staged world mod changes on the waking node, with no live world migration."""
     from scenarios_mods import PROBE_NAME, _run as run_mod_world
@@ -2116,6 +2373,7 @@ SCENARIOS_OFFLINE.update({
     "P2-OFF-CALL-DENY": (p2_off_call_deny, "authenticated hostile-owner and missing-relay requests do not wake", "3"),
     "P2-OFF-CALL-RATE": (p2_off_call_rate, "twenty authenticated offline-grid requests enforce one pending call-up", "3"),
     "P2-OFF-CALL-LASER": (p2_off_call_laser, "native id/GPS laser wake and established-link no-wake", "3"),
+    "P2-LASER-FAR": (p2_laser_far, "SE-1796 a player's 80 km laser link: one node, HUD and terminal over it, offline hold, GPS and terminal wakes", "3"),
     "T-OC-10": (t_oc_10, "real changed-mod bytes skip compensation and leave the woken partition healthy", "3"),
     "T-OC-13": (t_oc_13, "parked large dynamic grid offlines and preserves its pose", "2"),
     "T-OC-08": (t_oc_08, "moving rotor subgrid leaves a quiet sibling profiled and reuses its rate when stopped", "2"),
