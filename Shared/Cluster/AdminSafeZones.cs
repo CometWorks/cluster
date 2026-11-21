@@ -34,7 +34,13 @@ internal static partial class AdminSafeZones
     private const string Subsystem = "admin-safezones";
     private const int CommandTimeoutMilliseconds = 10000;
 
-    internal sealed record Request(string Op, long Id, string Zone = null, ulong Player = 0, Passage Trip = null);
+    internal sealed record Request(
+        string Op,
+        long Id,
+        string Zone = null,
+        ulong Player = 0,
+        Passage Trip = null
+    );
 
     /// <summary>A change in the outbox and the operation id every attempt at it is sent under (#1273).</summary>
     internal sealed record Queued(Request Request, Guid OperationId);
@@ -344,9 +350,10 @@ internal static partial class AdminSafeZones
                 throw new InvalidOperationException(
                     "the World Authority has not loaded the admin safe zones yet"
                 );
-            changed = request.Op == "Travel"
-                ? ChangeLobbyAccess(ref s_lobby, request)
-                : Change(s_zones, request);
+            changed =
+                request.Op == "Travel"
+                    ? ChangeLobbyAccess(ref s_lobby, request)
+                    : Change(s_zones, request);
             if (changed)
             {
                 s_version++;
@@ -403,7 +410,12 @@ internal static partial class AdminSafeZones
             return s_zones == null
                 ? null
                 : JsonSerializer.Serialize(
-                    new Set(ClusterRuntime.AuthorityGeneration, s_version, s_zones.Values.ToArray(), s_lobby)
+                    new Set(
+                        ClusterRuntime.AuthorityGeneration,
+                        s_version,
+                        s_zones.Values.ToArray(),
+                        s_lobby
+                    )
                 );
     }
 
