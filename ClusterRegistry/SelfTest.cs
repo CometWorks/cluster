@@ -196,6 +196,7 @@ internal static partial class SelfTest
         ("diagnostic-reports", TestDiagnosticReports),
         ("handover-capture-deferral-reports", TestHandoverCaptureDeferralReports),
         ("handover-import-rejection-reports", TestHandoverImportRejectionReports),
+        ("import-timeout", TestImportTimeout),
         ("linux-limits", TestLinuxLimits),
         ("endpoints", TestEndpoints),
         ("option-environment", TestOptionEnvironment),

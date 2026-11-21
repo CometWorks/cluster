@@ -1803,14 +1803,30 @@ internal static class ImportRoundTrip
             return;
         }
         int shared = Math.Min(leftChildren.Length, rightChildren.Length);
+        HashSet<string> repeated = RepeatedNames(leftChildren);
         for (int index = 0; index < shared && found.Count < Cap; index++)
             Collect(
                 leftChildren[index],
                 rightChildren[index],
-                ChildPath(path, leftChildren, index),
+                ChildPath(path, leftChildren[index], index, repeated),
                 found,
                 Cap
             );
+    }
+
+    /// <summary>
+    /// SE-1759: the element names that occur more than once among the siblings, counted once per list. Counting
+    /// them per child made the walk quadratic in a list without keys: armor blocks carry no EntityId, so a
+    /// 60,000-block grid's CubeBlocks cost 3.6e9 name compares and 6.9 s of the target's import.
+    /// </summary>
+    private static HashSet<string> RepeatedNames(XElement[] siblings)
+    {
+        HashSet<string> seen = new HashSet<string>(),
+            repeated = new HashSet<string>();
+        foreach (XElement sibling in siblings)
+            if (!seen.Add(sibling.Name.LocalName))
+                repeated.Add(sibling.Name.LocalName);
+        return repeated;
     }
 
     /// <summary>
@@ -1933,15 +1949,18 @@ internal static class ImportRoundTrip
 
     // Path segments carry the child's EntityId when it has one - a dump reader finds the block by id,
     // not by ordinal - and fall back to a positional index only for repeated anonymous siblings.
-    private static string ChildPath(string path, XElement[] siblings, int index)
+    private static string ChildPath(
+        string path,
+        XElement child,
+        int index,
+        HashSet<string> repeatedNames
+    )
     {
-        XElement child = siblings[index];
         string name = child.Name.LocalName;
         string id = child.Element("EntityId")?.Value;
         if (id != null)
             return path + "/" + name + "#" + id;
-        bool repeated = siblings.Count(sibling => sibling.Name.LocalName == name) > 1;
-        return path + "/" + name + (repeated ? "[" + index + "]" : "");
+        return path + "/" + name + (repeatedNames.Contains(name) ? "[" + index + "]" : "");
     }
 
     private static string Clip(string value) =>

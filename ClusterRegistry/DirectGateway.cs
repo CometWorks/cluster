@@ -45,6 +45,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     private const double NodeLoadEmaAlpha = 0.25;
     private readonly ManualResetEventSlim _stop = new(false);
     private readonly HttpClient _http;
+    private readonly HttpClient _importHttp;
     private readonly SemaphoreSlim _rotation = new(1, 1);
 
     /// <summary>SE1-0084: set by POST /registry/report-now, a node whose member entered or left the fast state.
@@ -419,7 +420,14 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         _http = new HttpClient(
             new NodeCallHandler(this) { InnerHandler = new HttpClientHandler() }
         );
-        _http.Timeout = TimeSpan.FromSeconds(10);
+        _http.Timeout = NodeCallTimeout;
+        // SE-1759: the import call's deadline is sized per transfer (ImportTimeout), so its client has none.
+        _importHttp = new HttpClient(
+            new NodeCallHandler(this) { InnerHandler = new HttpClientHandler() }
+        )
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
         if (options.AdminToken != null)
             _http.DefaultRequestHeaders.Authorization =
                 new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", options.AdminToken);
@@ -677,6 +685,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         _steam?.Dispose();
         _stop.Dispose();
         _http.Dispose();
+        _importHttp.Dispose();
         _registry?.Dispose();
         _events.Dispose();
     }
@@ -10315,6 +10324,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 partition,
                 "captured",
                 $" sectorBytes={handover.Sector.Length} clients={sessions.Count} clientStateBytes={handover.ClientStateBytes}"
+                    + ImportSizing(handover.Sector)
             );
 
             if (pauseAfterCapture)
@@ -11063,7 +11073,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 transferId,
                 partition,
                 "captured",
-                $" sectorBytes={handover.Sector.Length}"
+                $" sectorBytes={handover.Sector.Length}" + ImportSizing(handover.Sector)
             );
 
             if (pauseAfterCapture)
@@ -11657,6 +11667,71 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         return await _http.SendAsync(request);
     }
 
+    /// <summary>
+    /// SE-1759: POST /cluster/import with a deadline sized to the sector (<see cref="ImportTimeout"/>) instead of
+    /// the node client's fixed <see cref="NodeCallTimeout"/>. The target answers only after staging, activating
+    /// and verifying every entity, which grows with the partition's content: a 60,000-block grid took 10.6 s and
+    /// was cancelled at 10 s, and the target then discarded the import, so the partition could never move.
+    /// </summary>
+    private async Task<HttpResponseMessage> PostImport(string url, byte[] sector, string token)
+    {
+        TimeSpan timeout = ImportTimeout(sector);
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new ByteArrayContent(sector),
+        };
+        request.Headers.Authorization = new("Bearer", token);
+        using CancellationTokenSource deadline = new(timeout);
+        try
+        {
+            return await _importHttp.SendAsync(request, deadline.Token);
+        }
+        catch (OperationCanceledException error) when (deadline.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"The target did not answer the import within {timeout.TotalSeconds:0.#} s (bodyBytes={SectorBodyBytes(sector)})",
+                error
+            );
+        }
+    }
+
+    /// <summary>The fixed deadline of every other node call (capture, prepare, commit, status).</summary>
+    internal static readonly TimeSpan NodeCallTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// SE-1759: the uncompressed entity bytes the target deserializes, activates and compares, per second of
+    /// import time allowed on top of <see cref="NodeCallTimeout"/>, so 4 s per MiB. The import's cost follows the
+    /// body, not the compressed sector: a 60,000-block armor grid is a 2.0 MB body in a 0.3 MB sector. Its import
+    /// took 9.9 s before the gate's walk was made linear and 3.5 s after; this allows it 17.9 s.
+    /// </summary>
+    internal const long ImportBodyBytesPerSecond = 256 * 1024;
+
+    /// <summary>A corrupt header must not hold a handover for hours; the import of 256 MiB fits well inside it.</summary>
+    internal static readonly TimeSpan ImportTimeoutCap = TimeSpan.FromMinutes(10);
+
+    internal static TimeSpan ImportTimeout(byte[] sector)
+    {
+        double seconds =
+            NodeCallTimeout.TotalSeconds
+            + (double)SectorBodyBytes(sector) / ImportBodyBytesPerSecond;
+        return TimeSpan.FromSeconds(Math.Min(seconds, ImportTimeoutCap.TotalSeconds));
+    }
+
+    /// <summary>
+    /// The entity body length a partition save file (PartitionSaveFile, "MPS1") declares in its 100-byte header,
+    /// at offset 84; the sector's own length for anything else (it is never less than that).
+    /// </summary>
+    internal static long SectorBodyBytes(byte[] sector)
+    {
+        if (sector.Length < 100 || !sector.AsSpan(0, 4).SequenceEqual("MPS1"u8))
+            return sector.Length;
+        long body = BinaryPrimitives.ReadInt64LittleEndian(sector.AsSpan(84, 8));
+        return Math.Max(sector.Length, body);
+    }
+
+    private static string ImportSizing(byte[] sector) =>
+        $" bodyBytes={SectorBodyBytes(sector)} importTimeoutS={ImportTimeout(sector).TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)}";
+
     internal enum ReconciliationAction
     {
         Wait,
@@ -12072,11 +12147,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         Func<TransferGrant> grant
     )
     {
-        using (ByteArrayContent content = new(handover.Sector))
         {
-            HttpResponseMessage import = await PostGranted(
+            HttpResponseMessage import = await PostImport(
                 ClusterUrl(target, "import") + fence,
-                content,
+                handover.Sector,
                 grant().Token
             );
             if (import.IsSuccessStatusCode)
@@ -12116,12 +12190,16 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             ClusterUrl(source, "capture") + fence + captureQuery + "&full=true"
         );
         HandoverCapture full = HandoverCapture.Parse(capture);
-        LogTransfer(transferId, partition, "recaptured-full", $" sectorBytes={full.Sector.Length}");
-        using (ByteArrayContent content = new(full.Sector))
+        LogTransfer(
+            transferId,
+            partition,
+            "recaptured-full",
+            $" sectorBytes={full.Sector.Length}" + ImportSizing(full.Sector)
+        );
         {
-            HttpResponseMessage import = await PostGranted(
+            HttpResponseMessage import = await PostImport(
                 ClusterUrl(target, "import") + fence,
-                content,
+                full.Sector,
                 grant().Token
             );
             if (!import.IsSuccessStatusCode)
