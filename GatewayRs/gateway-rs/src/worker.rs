@@ -37,6 +37,8 @@ const SERVER_ID: u64 = 0xFF00_0000_0000_0001;
 pub enum WorkerCmd {
     JoinAnswer { correlation: u32, answer: JoinAnswer },
     Disconnect { client_id: u64, session: u64, reason: String },
+    /// SE-1824: see `SteamWorker::boot`; Direct Transport just disconnects.
+    Boot { client_id: u64, session: u64, block: Duration },
     ForceReconnect { client_id: u64, session: u64, reason: String },
     Update { client_id: u64, session: u64, correlation: u32, update: relay::SessionUpdate },
     ReplayConnect { client_id: u64, session: u64 },
@@ -481,17 +483,20 @@ impl Worker {
 
     // ---------------------------------------------------------------- commands
 
+    fn disconnect(&mut self, client_id: u64, session: u64, reason: &str) {
+        if let Some(client) = self.clients.get(&client_id).filter(|c| c.session.session == session) {
+            let peer = client.peer;
+            eprintln!("Disconnecting client {client_id}: {reason}");
+            let mut out = Out { sockets: &mut self.sockets, events: &mut self.events };
+            self.endpoint.disconnect(peer, &[], &mut out);
+        }
+    }
+
     fn command(&mut self, command: WorkerCmd, now: Instant) {
         match command {
             WorkerCmd::JoinAnswer { correlation, answer } => self.join_answer(correlation, answer, now),
-            WorkerCmd::Disconnect { client_id, session, reason } => {
-                if let Some(client) = self.clients.get(&client_id).filter(|c| c.session.session == session) {
-                    let peer = client.peer;
-                    eprintln!("Disconnecting client {client_id}: {reason}");
-                    let mut out = Out { sockets: &mut self.sockets, events: &mut self.events };
-                    self.endpoint.disconnect(peer, &[], &mut out);
-                }
-            }
+            WorkerCmd::Disconnect { client_id, session, reason } => self.disconnect(client_id, session, &reason),
+            WorkerCmd::Boot { client_id, session, .. } => self.disconnect(client_id, session, "boot"),
             WorkerCmd::ForceReconnect { client_id, session, reason } => {
                 if self.session_matches(client_id, session) {
                     eprintln!("Force-reconnecting client {client_id}: {reason}");

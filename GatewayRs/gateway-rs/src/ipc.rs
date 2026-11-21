@@ -351,6 +351,9 @@ pub struct ClientRef {
     pub session: u64,
     #[serde(default)]
     pub reason: Option<String>,
+    /// SE-1824: a Disconnect with this is a boot: the Steam session closes and is refused this long.
+    #[serde(default)]
+    pub block_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]

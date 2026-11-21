@@ -124,6 +124,29 @@ internal sealed class ExternalClientChannel(
         catch (IOException) { }
     }
 
+    /// <summary>SE-1824: gateway-rs closes the Steam P2P session and refuses it for the block.</summary>
+    public override void Boot(TimeSpan block)
+    {
+        if (!_connected)
+            return;
+        _connected = false;
+        try
+        {
+            relay.Send(
+                RelayIpcType.Disconnect,
+                0,
+                new
+                {
+                    clientId,
+                    session,
+                    reason = "boot",
+                    blockMs = (ulong)block.TotalMilliseconds,
+                }
+            );
+        }
+        catch (IOException) { }
+    }
+
     /// <summary>gateway-rs reported the client gone.</summary>
     public void MarkDisconnected() => _connected = false;
 }
@@ -793,6 +816,15 @@ internal sealed partial class DirectGateway
     /// </summary>
     internal static TimeSpan SteamRefreshBound = TimeSpan.FromSeconds(15);
 
+    /// <summary>
+    /// SE-1824: how long a booted Steam client's session requests and packets are refused, so its
+    /// Steam reports the connection failed and the game takes vanilla's host-left path. A real
+    /// rejoin comes from the reconnector, which counts 10 s down after that, so it is not refused.
+    /// </summary>
+    internal static TimeSpan SteamBootBlock = TimeSpan.FromSeconds(
+        EnvSeconds("CLUSTER_STEAM_BOOT_BLOCK_SECONDS", 10)
+    );
+
     /// <summary>Forced session ends of one Steam client since its last admission.</summary>
     private sealed class ReconnectStreak(DateTimeOffset since)
     {
@@ -856,9 +888,8 @@ internal sealed partial class DirectGateway
     /// short time, then better to boot it to the main menu." Inside <see cref="SteamRefreshBound"/>
     /// the session is force-reconnected again: the host-left control message (now naming the right
     /// server) makes a vanilla client unload and run its own reconnector, which rejoins with a fresh
-    /// login. Past it the client gets a JOIN_RESULT refusal, which a vanilla client treats as fatal
-    /// even in game (MyMultiplayerClient.OnUserJoined: Dispose, UnloadAndExitToMenu, error box) and
-    /// does not retry. Either way the session ends here, and a later one with a login joins normally.
+    /// login. Past it the client is booted (<see cref="BootSteamClient"/>). Either way the session
+    /// ends here, and a later one with a login joins normally.
     /// </summary>
     private void EndSteamSessionWithoutLogin(ClientSession session)
     {
@@ -880,7 +911,36 @@ internal sealed partial class DirectGateway
             $"Booting client {session.ClientId} to the main menu: still no login {waited.TotalSeconds:0}s"
                 + $" after its session was ended{NoteSteamForcedEnd(session, boot: true)}"
         );
-        RejectClient(session, JoinResult.UserNotConnected);
+        BootSteamClient(session);
+    }
+
+    /// <summary>
+    /// SE-1824: the boot is the host-left message once more, then the Steam session closed and
+    /// refused for <see cref="SteamBootBlock"/>, never a JOIN_RESULT. A vanilla client in game
+    /// handles a JOIN_RESULT refusal by disposing its multiplayer session before it unloads the world
+    /// (MyMultiplayerClient.OnUserJoined); with the player in a cockpit that unload throws in
+    /// MyCharacterReplicable.OnParentChanged and stops halfway, the mods never unload, and the next
+    /// joins fail or crash. A failed connection is handled as the host leaving instead: a clean
+    /// unload and the reconnector.
+    /// </summary>
+    private void BootSteamClient(ClientSession session)
+    {
+        ClientChannel? channel = session.Client;
+        lock (session.RelayLock)
+            session.DisconnectReason ??= "steam-boot";
+        _disconnects.Enqueue(new(session.ClientId, DateTimeOffset.UtcNow, "steam-boot"));
+        while (_disconnects.Count > 100)
+            _disconnects.TryDequeue(out _);
+        if (channel?.Connected == true)
+            channel.Send(HostLeftPacket(session.ClientId, channel));
+        RemoveSession(session);
+        if (channel != null)
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                // Lets the host-left message go out before the P2P session closes.
+                Thread.Sleep(250);
+                channel.Boot(SteamBootBlock);
+            });
     }
 
     /// <summary>

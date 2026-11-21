@@ -10034,17 +10034,16 @@ internal static partial class SelfTest
             }
             // The ending of one session: its first message to the client, then the disconnect, then
             // gateway-rs reports the session closed.
+            // The disconnect of the last ended session: a boot carries blockMs (SE-1824).
+            System.Text.Json.JsonElement lastDisconnect = default;
             RelayIpcMessage Ended(ulong session)
             {
                 RelayIpcMessage first = Read(
                     RelayIpcType.ClientSend,
                     m => For(m) && Session(m) == session
                 );
-                Assert(
-                    Read(RelayIpcType.Disconnect, m => For(m))
-                        .Json.GetProperty("session")
-                        .GetUInt64() == session
-                );
+                lastDisconnect = Read(RelayIpcType.Disconnect, m => For(m)).Json;
+                Assert(lastDisconnect.GetProperty("session").GetUInt64() == session);
                 Send(
                     RelayIpcType.ClientEvent,
                     0,
@@ -10114,7 +10113,9 @@ internal static partial class SelfTest
             }
 
             // The client ignores it and keeps playing: each reopened session presents no login. It is
-            // refreshed (the host-left message again) until the bound, then booted to the main menu.
+            // refreshed (the host-left message again) until the bound, then booted to the main menu:
+            // the host-left message once more and the Steam session closed and refused for a while,
+            // never a JOIN_RESULT, which a vanilla client in a cockpit can't unload cleanly (SE-1824).
             int refreshes = 0;
             RelayIpcMessage ending;
             for (ulong session = 22; ; session++)
@@ -10122,9 +10123,9 @@ internal static partial class SelfTest
                 Assert(session < 30);
                 Open(session);
                 ending = Ended(session);
-                if (ending.Body.Span[16] != 0)
-                    break;
                 AssertHostLeft(ending, "reopened session " + session);
+                if (lastDisconnect.TryGetProperty("blockMs", out _))
+                    break;
                 refreshes++;
             }
             double bootedAfter = sinceForced.Elapsed.TotalSeconds;
@@ -10133,11 +10134,8 @@ internal static partial class SelfTest
             );
             Assert(refreshes >= 1 && bootedAfter >= 3 && bootedAfter < 3 + 2 * 1 + 2);
             Assert(
-                ending
-                    .Body.Span[18..]
-                    .SequenceEqual(
-                        VanillaJoinCodec.EncodeJoinResultFrame(JoinResult.UserNotConnected)
-                    )
+                lastDisconnect.GetProperty("blockMs").GetUInt64()
+                    == (ulong)DirectGateway.SteamBootBlock.TotalMilliseconds
             );
 
             using var http = new HttpClient();

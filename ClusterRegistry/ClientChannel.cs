@@ -18,6 +18,14 @@ internal abstract class ClientChannel
 
     public abstract void Send(GatewayPacket packet);
     public abstract void Disconnect();
+
+    /// <summary>
+    /// SE-1824: ends the session of a client that ignores the host-left message, so its own
+    /// transport reports the server gone and it takes vanilla's host-left path. Only Steam does
+    /// more than a disconnect: it closes the P2P session and refuses the client's session requests
+    /// for <paramref name="block"/>.
+    /// </summary>
+    public virtual void Boot(TimeSpan block) => Disconnect();
 }
 
 internal sealed class DirectClientChannel : ClientChannel

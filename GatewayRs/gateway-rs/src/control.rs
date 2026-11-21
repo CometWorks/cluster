@@ -58,8 +58,11 @@ pub fn run(shared: Arc<Shared>, inbound: Receiver<Inbound>, options: Options) {
                 }
             }
             Inbound::Disconnect(client) => {
-                let reason = client.reason.unwrap_or_default();
-                route(&shared, client.client_id, WorkerCmd::Disconnect { client_id: client.client_id, session: client.session, reason });
+                let command = match client.block_ms {
+                    Some(ms) => WorkerCmd::Boot { client_id: client.client_id, session: client.session, block: Duration::from_millis(ms) },
+                    None => WorkerCmd::Disconnect { client_id: client.client_id, session: client.session, reason: client.reason.unwrap_or_default() },
+                };
+                route(&shared, client.client_id, command);
             }
             Inbound::ForceReconnect(client) => {
                 let reason = client.reason.unwrap_or_default();
