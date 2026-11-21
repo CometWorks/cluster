@@ -15,6 +15,14 @@ from magnetar_config import CONCEALMENT_ID
 from test_packaged_plugins import PackagedPluginsTest
 
 
+def fake_magnetar(dll: Path, version: tuple[int, int, int, int]) -> None:
+    """A stand-in MagnetarInterim.dll: just the VS_FIXEDFILEINFO head of a version resource."""
+    major, minor, build, revision = version
+    dll.parent.mkdir(parents=True, exist_ok=True)
+    dll.write_bytes(b"MZ fixture" + bytes(6) + (0xFEEF04BD).to_bytes(4, "little") + (0x10000).to_bytes(4, "little")
+                    + ((major << 16) | minor).to_bytes(4, "little") + ((build << 16) | revision).to_bytes(4, "little"))
+
+
 class ManagedPreparationTest(unittest.TestCase):
     def test_cli_import_does_not_modify_verified_package(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -78,6 +86,16 @@ class ManagedPreparationTest(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 managed.plugin_configuration(invalid)
 
+    def test_log_retention_needs_magnetar_2_4_3_11(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher = Path(temporary) / "MagnetarInterim.bin"
+            self.assertEqual([], managed.magnetar_config.log_retention_args(launcher, None))  # no Magnetar build found
+            fake_magnetar(launcher.with_suffix(".dll"), (2, 4, 3, 10))
+            self.assertEqual((2, 4, 3, 10), managed.magnetar_config.magnetar_version(launcher))
+            self.assertEqual([], managed.magnetar_config.log_retention_args(launcher, None))
+            with self.assertRaisesRegex(ValueError, "2.4.3.11"):
+                managed.magnetar_config.log_retention_args(launcher, {"maxAgeDays": 14, "maxSizeMB": 1024})
+
     def test_shared_host_havok_workers(self):
         def config(mode):
             return {"configType": "ServerPlugin.Config.PerformanceConfig", "configuration": {
@@ -120,6 +138,7 @@ class ManagedPreparationTest(unittest.TestCase):
                 "configuration": {"schema": {}, "defaults": {"Enabled": True}, "values": {"Enabled": True}}}
             managed.write_json(package / "plugins/Concealment/canonical-configuration.json", concealment_default)
             (payload / "DirectTransport/LiteNetLib.dll").write_bytes(b"fixture")
+            fake_magnetar(payload / "Magnetar/MagnetarInterim.dll", (2, 4, 3, 11))
             ds = payload / "DedicatedServer/DedicatedServer64"
             ds.mkdir(parents=True)
             for file in ("Sandbox.Common.dll", "Sandbox.Game.dll", "SpaceEngineers.Game.dll",
@@ -352,6 +371,24 @@ class ManagedPreparationTest(unittest.TestCase):
                 self.assertTrue(nodes)
                 self.assertTrue(all({k: v for k, v in n["environment"].items() if k.startswith("DOTNET_")}
                     == {"DOTNET_gcServer": "0"} for n in nodes))
+                # SE-1830: every node (the WA on host-2 too) gets Magnetar's log limits by default, or the spec's.
+                for result in results:
+                    arguments = managed.read_json(Path(result["manifest"]))["nodes"][0]["arguments"]
+                    self.assertEqual(["-logMaxAgeDays", "14", "-logMaxSizeMB", "1024"], arguments[-4:])
+                log_spec = json.loads(json.dumps(spec))
+                log_spec["logRetention"] = {"maxAgeDays": 3, "maxSizeMB": 0}
+                managed.write_json(base / "logs.json", log_spec)
+                for host in ("host-1", "host-2"):
+                    logs = managed.prepare(root, base / "logs.json", managed.digest(base / "logs.json"), host, world, base / f"logs-{host}")
+                    arguments = managed.read_json(Path(logs["manifest"]))["nodes"][0]["arguments"]
+                    self.assertEqual(["-logMaxAgeDays", "3", "-logMaxSizeMB", "0"], arguments[-4:])
+                for i, bad in enumerate(({"maxAgeDays": -1}, {"maxSizeMB": 1.5}, {"maxSizeMB": "10"}, {"maxSizeMB": True},
+                                         {"maxDays": 3}, 14)):
+                    log_spec["logRetention"] = bad
+                    bad_path = base / f"logs-bad-{i}.json"
+                    managed.write_json(bad_path, log_spec)
+                    with self.assertRaisesRegex(ValueError, "logRetention"):
+                        managed.prepare(root, bad_path, managed.digest(bad_path), "host-1", world, base / f"logs-bad-{i}")
                 gc_spec["nodeGarbageCollector"] = "concurrent"
                 managed.write_json(base / "gc-invalid.json", gc_spec)
                 with self.assertRaisesRegex(ValueError, "nodeGarbageCollector"):

@@ -134,6 +134,7 @@ Environment-only:
 | `CLUSTER_GATEWAY_ARGS` | extra Gateway arguments, shell-split |
 | `CLUSTER_EXTRA_PLUGINS` | further precompiled local plugin folders, `[node:\|wa:]PATH`, comma-separated (the test utility plugin) |
 | `CLUSTER_LEASE_TTL_SECONDS` | registry lease TTL passed to the Gateway (default 15) |
+| `CLUSTER_LOG_MAX_AGE_DAYS`, `CLUSTER_LOG_MAX_SIZE_MB` | each node's dedicated server log limits, passed as Magnetar `-logMaxAgeDays` / `-logMaxSizeMB`: whole numbers, 0 or more, 0 turns a limit off. Unset: Magnetar's defaults (14 days, 1024 MB). Needs Magnetar 2.4.3.11 or newer; an older one gets no flags, and setting either variable with it stops the node start. |
 | `CLUSTER_HOSTS_FILE` | the hosts file `start`/`fresh` apply (same as `--hosts`); default `<root>/hosts.json`, else (on a non-gateway host of a multi-host start) `<root>/hostd/hosts.json`, else one built from `--nodes/--spares` for this host (NodeControl.md; version 2 = multi-host, T-0321) |
 | `CLUSTER_SPARES` | default for `--spares` |
 | `CLUSTER_NODE_CONTROL` | `0` keeps the positional start (node-1..N, no hosts file, no node control); default `1`. The scenario bench sets it per scenario (`node_control = True` opts in) |

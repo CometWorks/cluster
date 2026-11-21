@@ -341,6 +341,9 @@ def prepare(root: Path, spec_path: Path, expected_sha: str, host_id: str, world:
     node_gc = NODE_GC_ENVIRONMENT.get(spec.get("nodeGarbageCollector", "server"))
     if node_gc is None:
         raise ValueError("nodeGarbageCollector must be 'server' or 'workstation'")
+    # SE-1830: every node's dedicated server log limits, WA included; Magnetar's defaults when unset.
+    log_args = magnetar_config.log_retention_args(root / "Dependencies/payload/Magnetar/MagnetarInterim.bin",
+                                                  magnetar_config.log_retention(spec.get("logRetention")))
     # Shown to players only; worldId stays the identity. Specs without them keep the old cfg and admission.
     world_name = spec.get("worldName") or spec["worldId"]
     motd = {tag: spec.get(key) or "" for tag, key in
@@ -467,7 +470,7 @@ def prepare(root: Path, spec_path: Path, expected_sha: str, host_id: str, world:
                 "arguments": ["-config", str(slot_dir / "config"), "-ds64", str(ds),
                     "-profile", magnetar_config.PROFILES[role], "-noupdate", "-multiInstance", "-noconsent",
                     "-noconsole", "-ignorelastsession", "-port", str(endpoint(node["backend"])),
-                    "-path", str(slot_dir / "data")],
+                    "-path", str(slot_dir / "data"), *log_args],
                 "environment": {**environment, **node_gc, "SE_DIRECT_TRANSPORT": "1", "CLUSTER_NODE_ENDPOINT": node["backend"],
                     "CLUSTER_CONTROL_BIND": node["control"].rpartition(":")[0].strip("[]"),
                     "CLUSTER_CONTROL_PORT": str(endpoint(node["control"])), "CLUSTER_NODE_EPOCH": str(node["catalogSlot"]),
