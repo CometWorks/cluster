@@ -166,10 +166,17 @@ public static class IgcTestHarness
 
     /// <summary>
     /// SE1-0226: the same laser station at a fixed position, for clientless scenarios. Owner 0 leaves the
-    /// blocks unowned, which every player (and every other unowned laser) may use.
+    /// blocks unowned, which every player (and every other unowned laser) may use. SE-1796: a radio radius
+    /// above 0 adds a radio antenna, so a player near the station reaches the laser link through it; a laser range
+    /// above 0 sets the Range slider (1e8 is its maximum, unlimited).
     /// </summary>
-    public static object EnsureLaserGridAt(long ownerId, string name, Vector3D position) =>
-        FindLaserGrid(name) ?? SpawnLaserGrid(ownerId, name, position);
+    public static object EnsureLaserGridAt(
+        long ownerId,
+        string name,
+        Vector3D position,
+        float radioRadius = 0,
+        float laserRange = 0
+    ) => FindLaserGrid(name) ?? SpawnLaserGrid(ownerId, name, position, radioRadius, laserRange);
 
     private static object FindLaserGrid(string name)
     {
@@ -190,7 +197,13 @@ public static class IgcTestHarness
             };
     }
 
-    private static object SpawnLaserGrid(long ownerId, string name, Vector3D position)
+    private static object SpawnLaserGrid(
+        long ownerId,
+        string name,
+        Vector3D position,
+        float radioRadius = 0,
+        float laserRange = 0
+    )
     {
         var laser = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_LaserAntenna>(
             "LargeBlockLaserAntenna"
@@ -200,6 +213,9 @@ public static class IgcTestHarness
         laser.ShareMode = MyOwnershipShareModeEnum.Faction;
         laser.Enabled = true;
         laser.CustomName = name + "-laser";
+        // 0 keeps the builder default, 50 km: what a newly placed laser has until its Range slider is raised.
+        if (laserRange > 0)
+            laser.Range = laserRange;
         var battery = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_BatteryBlock>(
             "LargeBlockBatteryBlock"
         );
@@ -223,6 +239,20 @@ public static class IgcTestHarness
         builder.DisplayName = name;
         builder.CubeBlocks.Add(laser);
         builder.CubeBlocks.Add(battery);
+        if (radioRadius > 0)
+        {
+            var radio = MyObjectBuilderSerializerKeen.CreateNewObject<MyObjectBuilder_RadioAntenna>(
+                "LargeBlockRadioAntenna"
+            );
+            // 1x6x2, touching the battery.
+            radio.Min = new SerializableVector3I(2, 0, 0);
+            radio.Owner = ownerId;
+            radio.ShareMode = MyOwnershipShareModeEnum.Faction;
+            radio.Enabled = true;
+            radio.BroadcastRadius = radioRadius;
+            radio.CustomName = name + "-radio";
+            builder.CubeBlocks.Add(radio);
+        }
         MyEntity spawned =
             MyEntities.CreateFromObjectBuilderAndAdd(builder, fadeIn: false)
             ?? throw new InvalidOperationException("Could not spawn the laser host grid");

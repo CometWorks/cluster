@@ -1654,7 +1654,27 @@ internal static class MovedRoutes
                 VRageMath.Vector3D laserAt = QueryPosition(context);
                 string result = Invoke(() =>
                     JsonSerializer.Serialize(
-                        IgcTestHarness.EnsureLaserGridAt(laserAtOwner, laserAtName, laserAt)
+                        IgcTestHarness.EnsureLaserGridAt(
+                            laserAtOwner,
+                            laserAtName,
+                            laserAt,
+                            float.TryParse(
+                                context.Request.QueryString["radio"],
+                                NumberStyles.Float,
+                                CultureInfo.InvariantCulture,
+                                out float laserAtRadio
+                            )
+                                ? laserAtRadio
+                                : 0,
+                            float.TryParse(
+                                context.Request.QueryString["range"],
+                                NumberStyles.Float,
+                                CultureInfo.InvariantCulture,
+                                out float laserAtRange
+                            )
+                                ? laserAtRange
+                                : 0
+                        )
                     )
                 );
                 Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
