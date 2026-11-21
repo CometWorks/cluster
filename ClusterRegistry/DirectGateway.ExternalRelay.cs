@@ -818,11 +818,14 @@ internal sealed partial class DirectGateway
 
     /// <summary>
     /// SE-1824: how long a booted Steam client's session requests and packets are refused, so its
-    /// Steam reports the connection failed and the game takes vanilla's host-left path. A real
-    /// rejoin comes from the reconnector, which counts 10 s down after that, so it is not refused.
+    /// Steam reports the connection failed and the game takes vanilla's host-left path. Measured
+    /// with a real client: Steam reports it about 15 s after the boot, and the reconnector's first
+    /// join comes about 10 s after that. Shorter than ~16 s, the client's trailing traffic opens
+    /// a login-less session after the block and gets booted again; longer than ~25 s, the block
+    /// refuses the reconnector's join.
     /// </summary>
     internal static TimeSpan SteamBootBlock = TimeSpan.FromSeconds(
-        EnvSeconds("CLUSTER_STEAM_BOOT_BLOCK_SECONDS", 10)
+        EnvSeconds("CLUSTER_STEAM_BOOT_BLOCK_SECONDS", 20)
     );
 
     /// <summary>Forced session ends of one Steam client since its last admission.</summary>
