@@ -16,13 +16,24 @@ public sealed record BankingAuthorityRequest(
     int DelayMilliseconds = 0
 );
 
-public sealed record BankingAuthorityResult(bool Success);
+/// <summary>
+/// <paramref name="Version"/>: the World Authority's banking version after the command, which the snapshot that carries
+/// its effect also has, so a node knows when its replica shows it (SE-1525). <paramref name="Collected"/> and
+/// <paramref name="Debt"/>: what a "Collect" took from the account and what it booked as store debt.
+/// </summary>
+public sealed record BankingAuthorityResult(
+    bool Success,
+    long Version = 0,
+    long Collected = 0,
+    long Debt = 0
+);
 
 public sealed record BankingAuthorityEntry(long OwnerId, long Balance);
 
 public sealed record BankingAuthoritySnapshot(
     long OverallBalance,
-    BankingAuthorityEntry[] Accounts
+    BankingAuthorityEntry[] Accounts,
+    long Version = 0
 );
 
 public static class BankingAuthorityCodec
@@ -36,8 +47,12 @@ public static class BankingAuthorityCodec
                 ?? throw new InvalidOperationException("Invalid banking request")
         );
 
-    public static string WriteResult(bool success) =>
-        JsonSerializer.Serialize(new BankingAuthorityResult(success));
+    public static string WriteResult(
+        bool success,
+        long version = 0,
+        long collected = 0,
+        long debt = 0
+    ) => JsonSerializer.Serialize(new BankingAuthorityResult(success, version, collected, debt));
 
     public static BankingAuthorityResult ReadResult(string payload) =>
         JsonSerializer.Deserialize<BankingAuthorityResult>(payload)
@@ -45,10 +60,15 @@ public static class BankingAuthorityCodec
 
     public static string WriteSnapshot(
         long overallBalance,
-        IEnumerable<BankingAuthorityEntry> accounts
+        IEnumerable<BankingAuthorityEntry> accounts,
+        long version = 0
     ) =>
         JsonSerializer.Serialize(
-            new BankingAuthoritySnapshot(overallBalance, accounts.OrderBy(x => x.OwnerId).ToArray())
+            new BankingAuthoritySnapshot(
+                overallBalance,
+                accounts.OrderBy(x => x.OwnerId).ToArray(),
+                version
+            )
         );
 
     public static BankingAuthoritySnapshot ReadSnapshot(string payload)
@@ -71,10 +91,11 @@ public static class BankingAuthorityCodec
     private static BankingAuthorityRequest Validate(BankingAuthorityRequest request)
     {
         if (
-            request.Kind is not ("Create" or "Remove" or "Change" or "Transfer")
+            request.Kind is not ("Create" or "Remove" or "Change" or "Transfer" or "Collect")
             || request.OwnerId <= 0
             || request.Kind == "Create" && request.Amount < 0
             || request.Kind == "Remove" && request.Amount != 0
+            || request.Kind == "Collect" && request.Amount <= 0
             || request.Kind == "Transfer"
                 && (request.ToId <= 0 || request.Amount <= 0 || request.ToId == request.OwnerId)
             || request.Kind != "Transfer" && request.ToId != 0
