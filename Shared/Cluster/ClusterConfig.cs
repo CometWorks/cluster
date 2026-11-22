@@ -78,6 +78,9 @@ public static class ClusterConfig
         ["presync.ttlSeconds"] = "120",
         ["delta.appliers"] = "pose,component,scalar",
         ["release.closePerFrame"] = "0",
+        // SE-1525: a store trade finishes against the node's banking replica and settles with the World Authority in the
+        // background. false: every trade waits on the game thread for the WA to approve its debit, as before.
+        ["store.asyncPayments"] = "true",
         ["hitch.thresholdMs"] = "100",
         ["hitch.logThresholdMs"] = "250",
         // SE-1228: a game thread stuck this long in one frame logs every thread's stack once, while it is still stuck, so a

@@ -47,6 +47,14 @@ RECOVERY_TIMEOUT = 90
 SAVE_LINE = r"partition save registered: partition ([0-9]+) generation ([0-9]+) sequence ([0-9]+)"
 
 
+def _try_status(bench, node_id: str, owner: int):
+    """The node's answer for an account, or None while it is down."""
+    try:
+        return bench.cluster.node(node_id, f"/banking-test-status?ownerId={owner}")
+    except ClusterError:
+        return None
+
+
 def _world_tool(*args: str) -> dict:
     result = subprocess.run(["dotnet", str(HOST.package / "tools/MagnetarWorld/MagnetarWorld.dll"), *args],
                             capture_output=True, text=True, timeout=300)
@@ -332,13 +340,16 @@ def _crash_and_recover(bench, variant: str) -> None:
 
     payer = hold = None
     if variant == "recovery":
-        # WA-2: a store payment reservation held open on node-1's game thread when the SIGKILL lands.
-        # The WA debit is real; only node-1's durable payment journal can refund it, on restart.
+        # WA-2: a store payment held open on node-1's game thread when the SIGKILL lands. Since SE-1525 a trade reaches
+        # the WA only when it commits, so the uncommitted one must leave the WA untouched, before and after the restart.
         payer = 944000000000000000 + random.randrange(10 ** 6)
         bench.cluster.node("node-2", f"/banking-test-create?ownerId={payer}&balance=500", method="POST")
         wait_until(lambda: (lambda st: st.get("exists") and st.get("balance") == 500)(
             bench.cluster.node("wa-1", f"/banking-test-status?ownerId={payer}")), HANDOVER_TIMEOUT,
             "the payer account at the WA")
+        # SE-1525: node-1 approves against its replica; one that has not seen the account yet would ask the WA instead.
+        wait_until(lambda: (_try_status(bench, "node-1", payer) or {}).get("balance") == 500, HANDOVER_TIMEOUT,
+                   "the payer account in node-1's replica")
         # Re-catalogue right before the hold: node-1 cannot save again until the kill.
         before_sequence = newest["SaveId"]["Sequence"]
         bench.cluster.node("node-1", f"/save-capture?partition={partition}", method="POST")
@@ -359,8 +370,7 @@ def _crash_and_recover(bench, variant: str) -> None:
                f"&payeeId={payer + 1}&amount=100&holdMs=30000")
         hold = threading.Thread(target=_status, args=("POST", url), daemon=True)
         hold.start()
-        wait_until(lambda: bench.cluster.node("wa-1", f"/banking-test-status?ownerId={payer}").get("balance") == 400,
-                   20, "the held reservation to debit the payer at the WA")
+        time.sleep(3)
     bench.cluster.kill(slot="node-1")
     exposure = crash_time - save_time
     rollback = {"partition": partition, "generation": generation, "sequence": sequence, "saveClusterTime": save_time,
@@ -442,26 +452,15 @@ def _crash_and_recover(bench, variant: str) -> None:
     if variant == "recovery":
         hold.join(timeout=45)
         balance = bench.cluster.node("wa-1", f"/banking-test-status?ownerId={payer}").get("balance")
-        bench.check("the leaked reservation is visible before node-1 restarts", balance == 400, str(balance))
+        bench.check("the uncommitted store payment never reached the WA", balance == 500, str(balance))
         bench.cluster.restart_node("node-1")
-        pattern = rf"store payment reconciled reserve=.* payer={payer} amount=100 reserved=True refunded=True"
-        try:
-            reconciled = _wait_line(bench, "node-1", pattern, RECOVERY_TIMEOUT)
-        except ClusterError as error:
-            reconciled = None
-            bench.record("reconcile-timeout", str(error))
-        bench.check("the restarted node-1 reconciled the leaked reservation", reconciled is not None)
-        try:
-            wait_until(lambda: bench.cluster.node("wa-1", f"/banking-test-status?ownerId={payer}").get("balance") == 500,
-                       HANDOVER_TIMEOUT, "the refund at the WA")
-            restored = True
-        except ClusterError:
-            restored = False
-        bench.check("the refund restored the payer's balance", restored)
-        time.sleep(3)
+        wait_until(lambda: _try_status(bench, "node-1", payer), RECOVERY_TIMEOUT, "node-1 back after the restart")
+        time.sleep(10)  # the journal reconcile runs right after the session is ready
+        reconciled = _lines(bench, "node-1", rf"store payment reconciled reserve=.* payer={payer} ")
         final = bench.cluster.node("wa-1", f"/banking-test-status?ownerId={payer}")
-        bench.record("recovery-store-reconcile", {"final": final, "reconcileLine": reconciled})
-        bench.check("the reconciled balance holds (no second replay)", final.get("balance") == 500, json.dumps(final))
+        bench.record("recovery-store-reconcile", {"final": final, "reconcileLines": reconciled})
+        bench.check("the restarted node-1 had nothing of it to settle", not reconciled, str(reconciled)[:300])
+        bench.check("the payer's balance is untouched after the restart", final.get("balance") == 500, json.dumps(final))
     bench.screenshot(CLIENT_ID, "99-after")
     bench.exercised(partition=partition, generation=[generation, new_generation], members=source_count,
                     rollbackExposureMs=exposure, variant=variant)

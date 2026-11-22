@@ -9,6 +9,7 @@ using Sandbox.Engine.Multiplayer;
 using Sandbox.Game.GameSystems.BankingAndCurrency;
 using Sandbox.Game.World;
 using VRage.Game.ObjectBuilders.Components.BankingAndCurrency;
+using VRage.Utils;
 
 namespace ClusterPlugin;
 
@@ -41,6 +42,18 @@ public static class MyBankingSystemPatch
     [ThreadStatic]
     private static bool m_applying;
     private static double m_nextRefresh;
+
+    // SE-1525: the World Authority counts its banking mutations; a result and the snapshot that carries its effect name
+    // the same version, so a node can tell when its replica shows a settled store payment.
+    private static long m_mutations;
+    private static long m_appliedVersion;
+
+    /// <summary>On a regular node: the banking version of the last snapshot its replica applied.</summary>
+    internal static long AppliedVersion => Interlocked.Read(ref m_appliedVersion);
+
+    private static long Version =>
+        (ClusterRuntime.AuthorityGeneration << 32)
+        | (Interlocked.Read(ref m_mutations) & 0xFFFFFFFFL);
     private static long m_testDelayOwner;
     private static int m_testDelayMilliseconds;
 
@@ -161,6 +174,28 @@ public static class MyBankingSystemPatch
             .Success;
     }
 
+    /// <summary>
+    /// SE-1525: one banking command from a regular node, with the World Authority's whole answer. Throws when the WA
+    /// does not answer; the store payment journal then asks again with the same operation id.
+    /// </summary>
+    internal static BankingAuthorityResult Command(
+        BankingAuthorityRequest request,
+        Guid operationId
+    )
+    {
+        if (!ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority)
+            throw new InvalidOperationException(
+                "Explicit banking operations must originate on a regular cluster node"
+            );
+        return BankingAuthorityCodec.ReadResult(
+            GlobalStateChannel.SendCommand(
+                Subsystem,
+                BankingAuthorityCodec.WriteRequest(request),
+                operationId
+            )
+        );
+    }
+
     private static bool SeamCreateAccount(
         MyBankingSystem instance,
         long ownerIdentifier,
@@ -276,6 +311,8 @@ public static class MyBankingSystemPatch
                 if (delay > 0)
                     Thread.Sleep(delay);
                 bool success;
+                long collected = 0,
+                    debt = 0;
                 switch (request.Kind)
                 {
                     case "Create":
@@ -312,11 +349,40 @@ public static class MyBankingSystemPatch
                             && fromInfo.Balance >= request.Amount
                             && request.Amount <= long.MaxValue - toInfo.Balance;
                         if (success)
+                        {
                             MyBankingSystem.Static.Transfer_Server(
                                 request.OwnerId,
                                 request.ToId,
                                 request.Amount
                             );
+                            long repaid = StoreDebt.Repay(request.ToId, request.Amount);
+                            if (repaid > 0)
+                                MyBankingSystem.ChangeBalance(request.ToId, -repaid);
+                        }
+                        break;
+                    case "Collect":
+                        // SE-1525: a store payment the node already finished, whose reserve the WA refused. Takes what the
+                        // account has and books the rest as store debt, repaid from the account's next credits.
+                        if (
+                            !MyBankingSystem.Static.TryGetAccountInfo(
+                                request.OwnerId,
+                                out MyAccountInfo debtor
+                            )
+                        )
+                        {
+                            success = false;
+                            break;
+                        }
+                        collected = Math.Min(Math.Max(debtor.Balance, 0), request.Amount);
+                        if (collected > 0)
+                            MyBankingSystem.ChangeBalance(request.OwnerId, -collected);
+                        debt = request.Amount - collected;
+                        if (debt > 0)
+                            StoreDebt.Add(request.OwnerId, debt);
+                        MyLog.Default?.WriteLineAndConsole(
+                            $"[ClusterPlugin] store payment clawback owner={request.OwnerId} amount={request.Amount} collected={collected} debt={debt} origin={origin}"
+                        );
+                        success = true;
                         break;
                     default:
                         if (
@@ -333,14 +399,27 @@ public static class MyBankingSystemPatch
                         )
                             success = false;
                         else
-                            success = MyBankingSystem.ChangeBalance(
-                                request.OwnerId,
-                                request.Amount
-                            );
+                        {
+                            // SE-1525: a credit first pays off the account's store debt.
+                            long repaid =
+                                request.Amount > 0
+                                    ? StoreDebt.Repay(request.OwnerId, request.Amount)
+                                    : 0;
+                            success =
+                                request.Amount == repaid
+                                || MyBankingSystem.ChangeBalance(
+                                    request.OwnerId,
+                                    request.Amount - repaid
+                                );
+                        }
                         break;
                 }
+                if (success)
+                    Interlocked.Increment(ref m_mutations);
                 PublishSnapshot();
-                completion.SetResult(BankingAuthorityCodec.WriteResult(success));
+                completion.SetResult(
+                    BankingAuthorityCodec.WriteResult(success, Version, collected, debt)
+                );
             }
             catch (Exception exception)
             {
@@ -391,6 +470,7 @@ public static class MyBankingSystemPatch
                     MyBankingSystem.ChangeBalance(entry.OwnerId, entry.Balance - account.Balance);
             }
             OverallBalanceProperty.SetValue(banking, snapshot.OverallBalance);
+            Interlocked.Exchange(ref m_appliedVersion, snapshot.Version);
         }
         finally
         {
@@ -408,7 +488,8 @@ public static class MyBankingSystemPatch
             builder.Accounts?.Select(x => new BankingAuthorityEntry(
                 x.OwnerIdentifier,
                 x.Account.Balance
-            )) ?? Enumerable.Empty<BankingAuthorityEntry>()
+            )) ?? Enumerable.Empty<BankingAuthorityEntry>(),
+            Version
         );
         lock (SnapshotSync)
         {

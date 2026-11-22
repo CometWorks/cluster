@@ -1253,12 +1253,40 @@ def _store_payments(bench, ctx) -> None:
     _require(bench, "the store payment accounts converged",
              _poll(lambda: _wa_balance(bench, payer) == 100 and _wa_balance(bench, payee1) == 0 and _wa_balance(bench, payee2) == 0,
                    HANDOVER_TIMEOUT))
+    # SE-1525: each node approves a trade against its own replica and settles it afterwards. Both settle workers wait,
+    # so both nodes approve 60 of the payer's 100 before the WA hears of either: the WA takes the first, and the second
+    # is clawed back - 40 collected, 20 booked as store debt - while both payees are paid in full.
+    _require(bench, "both nodes' replicas show the payer's 100",
+             _poll(lambda: _balances(bench, payer, 100, ("node-1", "node-2")), HANDOVER_TIMEOUT))
+    for node_id in ("node-1", "node-2"):
+        _post(bench, node_id, "/test-store-settle-hold?ms=8000")
     results = _parallel(
         lambda: _post(bench, "node-1", f"/banking-test-store-payment?payerId={payer}&payeeId={payee1}&amount=60&commit=true"),
         lambda: _post(bench, "node-2", f"/banking-test-store-payment?payerId={payer}&payeeId={payee2}&amount=60&commit=true"))
-    bench.check("concurrent store payments produced exactly one committed purchase",
-                sum(1 for r in results if isinstance(r, dict) and r.get("approved") and r.get("debit") and r.get("credit")) == 1,
+    bench.check("concurrent store payments on two nodes both finished at once (SE-1525)",
+                sum(1 for r in results if isinstance(r, dict) and r.get("approved") and r.get("debit") and r.get("credit")) == 2,
                 str(results)[:300])
+    again = _post(bench, "node-1", f"/banking-test-store-payment?payerId={payer}&payeeId={payee1}&amount=60&commit=true")
+    bench.check("a node does not approve the same money twice while its first trade is unsettled",
+                again.get("approved") is False, json.dumps(again))
+
+    def debt():
+        return (_try(bench, "wa-1", f"/test-store-debt?ownerId={payer}") or {}).get("debt")
+    clawed = _poll(lambda: _wa_balance(bench, payer) == 0 and debt() == 20
+                   and (_wa_balance(bench, payee1) or 0) + (_wa_balance(bench, payee2) or 0) == 120, HANDOVER_TIMEOUT)
+    bench.check("the overdraw was clawed back: payer 0, 20 owed, both payees paid", bool(clawed),
+                json.dumps({"payer": _wa_balance(bench, payer), "debt": debt(), "payee1": _wa_balance(bench, payee1),
+                            "payee2": _wa_balance(bench, payee2)}))
+    bench.check("the clawback is in a node's game log",
+                any(_lines(bench, n, rf"store payment settled .* payer={payer} amount=60 reserved=False .*clawback=True collected=40 debt=20")
+                    for n in ("node-1", "node-2")))
+    _post(bench, "node-1", f"/banking-test-change?ownerId={payer}&amount=120")
+    _require(bench, "the payer's next credit repaid the store debt first",
+             _poll(lambda: _wa_balance(bench, payer) == 100 and debt() == 0, HANDOVER_TIMEOUT),
+             json.dumps({"payer": _wa_balance(bench, payer), "debt": debt()}))
+    _require(bench, "node-2 shows the repaid balance and holds nothing",
+             _poll(lambda: _balances(bench, payer, 100, ("node-2",))
+                   and (_try(bench, "node-2", f"/test-store-holds?payerId={payer}") or {}).get("held") == 0, HANDOVER_TIMEOUT))
     abort = _post(bench, "node-2", f"/banking-test-store-payment?payerId={payer}&payeeId={payee2}&amount=30&commit=false")
     _require(bench, "a failed store payment entered the compensation path",
              abort.get("approved") and abort.get("commit") is False and abort.get("debit") is False and abort.get("credit") is False,
@@ -1267,7 +1295,7 @@ def _store_payments(bench, ctx) -> None:
     def settled(payer_balance, payees):
         b1, b2 = _wa_balance(bench, payee1), _wa_balance(bench, payee2)
         return _wa_balance(bench, payer) == payer_balance and b1 is not None and b2 is not None and b1 + b2 == payees
-    _require(bench, "the store payment commit/refund converged without overdraw", _poll(lambda: settled(40, 60), HANDOVER_TIMEOUT))
+    _require(bench, "the store payment commit/refund converged", _poll(lambda: settled(100, 120), HANDOVER_TIMEOUT))
     # Asynchronous prefab purchase shape: the reservation is taken before the spawn and settled in its callback.
     deferred = _post(bench, "node-1", f"/banking-test-deferred-payment?payerId={payer}&payeeId={payee1}&amount=20&spawned=true")
     bench.check("a deferred store payment settled in the spawn callback",
@@ -1275,8 +1303,9 @@ def _store_payments(bench, ctx) -> None:
     failed = _post(bench, "node-2", f"/banking-test-deferred-payment?payerId={payer}&payeeId={payee2}&amount=20&spawned=false")
     bench.check("a failed prefab spawn entered the deferred refund path",
                 failed.get("approved") and failed.get("spawned") is False and failed.get("settled") is False, json.dumps(failed))
-    bench.check("the deferred store payment settle/refund converged", _poll(lambda: settled(20, 80), HANDOVER_TIMEOUT))
-    bench.record("world-authority-store", {"race": [str(r) if isinstance(r, Exception) else r for r in results], "abort": abort,
+    bench.check("the deferred store payment settle/refund converged", _poll(lambda: settled(80, 140), HANDOVER_TIMEOUT))
+    bench.record("world-authority-store", {"race": [str(r) if isinstance(r, Exception) else r for r in results], "again": again,
+                                           "abort": abort,
                                            "deferred": deferred, "deferredFailed": failed,
                                            "payer": _balance(bench, "wa-1", payer), "payee1": _balance(bench, "wa-1", payee1),
                                            "payee2": _balance(bench, "wa-1", payee2)})
@@ -2423,13 +2452,17 @@ def p2_wa_store_timeout(bench) -> None:
     selftest = _try(bench, "node-1", "/self-test?section=store-payment-settle") or {}
     bench.check("node self-test store-payment-settle (late credit, reserve and refund answers, refused legs)",
                 selftest.get("ok") is True and selftest.get("ran") == ["store-payment-settle"], json.dumps(selftest)[:300])
+    selftest = _try(bench, "node-1", "/self-test?section=store-payment-async") or {}
+    bench.check("node self-test store-payment-async (SE-1525: settle, clawback and debt, lost answer, replay, refused credit)",
+                selftest.get("ok") is True and selftest.get("ran") == ["store-payment-async"], json.dumps(selftest)[:300])
 
     def accounts(tag: int) -> tuple[int, int]:
         payer, payee = 912260000000000000 + tag * 1000 + random.randrange(1000), 922260000000000000 + tag * 1000 + random.randrange(1000)
         for owner, balance in ((payer, 1000), (payee, 0)):
             _post(bench, "node-1", f"/banking-test-create?ownerId={owner}&balance={balance}")
-        _require(bench, f"the leg {tag} accounts exist at the WA",
-                 _poll(lambda: _wa_balance(bench, payer) == 1000 and _wa_balance(bench, payee) == 0, HANDOVER_TIMEOUT))
+        _require(bench, f"the leg {tag} accounts exist at the WA and in node-1's replica",
+                 _poll(lambda: _wa_balance(bench, payer) == 1000 and _wa_balance(bench, payee) == 0
+                       and _balances(bench, payer, 1000, ("node-1",)), HANDOVER_TIMEOUT))
         return payer, payee
 
     def pay(payer: int, payee: int) -> tuple[dict | None, float]:
@@ -2459,7 +2492,9 @@ def p2_wa_store_timeout(bench) -> None:
                 bool(_lines(bench, "node-1", rf"store payment settled reserve=.* payer={payer} amount=300 "
                                              rf"reserved=True refunded=False credited=True")))
 
-    # Reserve leg: the node gives up on the reserve, which the WA applies later; it must come back to the payer.
+    # Reserve leg, as a trade waited for its reserve before SE-1525 (store.asyncPayments=false): the node gives up on
+    # the reserve, which the WA applies later; it must come back to the payer.
+    bench.record("config-sync", bench.cluster.handover_config({"store.asyncPayments": "false"}))
     payer, payee = accounts(2)
     _post(bench, "wa-1", f"/banking-test-delay?ownerId={payer}&ms={STORE_WA_DELAY_MS}")
     answer, seconds = pay(payer, payee)
@@ -2472,7 +2507,19 @@ def p2_wa_store_timeout(bench) -> None:
     bench.check("the node settled the reserve through its journal (reserved=True, refunded=True)",
                 bool(_lines(bench, "node-1", rf"store payment settled reserve=.* payer={payer} amount=300 "
                                              rf"reserved=True refunded=True credited=False")))
-    bench.exercised(credit=credit, reserve=reserve, delayMs=STORE_WA_DELAY_MS)
+    bench.record("config-async", bench.cluster.handover_config({"store.asyncPayments": "true"}))
+
+    # SE-1525: a trade no longer waits for its reserve. A late reserve settles in the background, the trade is paid once.
+    payer, payee = accounts(3)
+    _post(bench, "wa-1", f"/banking-test-delay?ownerId={payer}&ms={STORE_WA_DELAY_MS}")
+    answer, seconds = pay(payer, payee)
+    late = {"answer": answer, "seconds": round(seconds, 2), **settle(payer, payee, (700, 300))}
+    bench.record("store-timeout-async-reserve", late)
+    bench.check("a late reserve does not hold the node's game thread (trade approved within 2 s)",
+                answer is not None and answer.get("approved") and seconds < 2, json.dumps(late))
+    bench.check("a late reserve is settled once: payer 700, payee 300",
+                late["balances"] == (700, 300) and late["later"] == (700, 300), json.dumps(late))
+    bench.exercised(credit=credit, reserve=reserve, asyncReserve=late, delayMs=STORE_WA_DELAY_MS)
 
 
 def p2_wa_respawn_points(bench) -> None:

@@ -1607,6 +1607,7 @@ public static class ClusterRuntime
         GpsAuthorityPatch.Update();
         MyPlayerCollectionPatch.Update();
         MyBankingSystemPatch.Update();
+        StorePaymentHolds.Update(); // SE-1525
         ContractLedger.Update();
         StationContractOffers.Update();
         MyFactionCollectionPatch.Update();
@@ -1681,7 +1682,10 @@ public static class ClusterRuntime
                 m_storePaymentReconcileStarted = true;
                 // Reconciliation blocks on World Authority round trips - never on the update path.
                 new System.Threading.Thread(() =>
-                    StorePaymentJournal.Reconcile(MyBankingSystemPatch.ChangeBalanceWithOperation)
+                    StorePaymentJournal.Reconcile(
+                        MyBankingSystemPatch.ChangeBalanceWithOperation,
+                        MyBankingSystemPatch.Command
+                    )
                 )
                 {
                     IsBackground = true,

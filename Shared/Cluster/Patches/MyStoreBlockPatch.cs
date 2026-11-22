@@ -46,7 +46,19 @@ public static class MyStoreBlockPatch
             && amount != 0
         )
             throw new InvalidOperationException("Nested store payments are not supported");
-        StorePaymentScope payment = BeginDeferredPayment(payerId, amount);
+        // SE-1525: an inline trade finishes against the replica; the WA settles it after the commit.
+        StorePaymentScope payment;
+        StorePaymentHolds.Hold hold =
+            ClusterRuntime.IsClustered
+            && !ClusterRuntime.IsWorldAuthority
+            && amount > 0
+            && ClusterConfig.GetBool("store.asyncPayments")
+                ? StorePaymentHolds.TryHold(payerId, amount)
+                : StorePaymentHolds.Hold.AskAuthority;
+        payment =
+            hold == StorePaymentHolds.Hold.AskAuthority
+                ? BeginDeferredPayment(payerId, amount)
+                : new StorePaymentScope(payerId, amount, hold == StorePaymentHolds.Hold.Held);
         if (payment.Approved && payment.Deferrable)
             m_payment = payment;
         return payment;
@@ -90,6 +102,21 @@ public static class MyStoreBlockPatch
         private bool m_debitObserved;
         private bool m_committed;
         private bool m_disposed;
+        private readonly bool m_async;
+
+        /// <summary>SE-1525: approved (<paramref name="held"/>) against the node's replica; nothing reaches the WA before the
+        /// commit.</summary>
+        internal StorePaymentScope(long payerId, long amount, bool held)
+        {
+            if (payerId == 0)
+                throw new ArgumentOutOfRangeException(nameof(payerId));
+            if (amount < 0)
+                throw new ArgumentOutOfRangeException(nameof(amount));
+            m_async = true;
+            m_payerId = payerId;
+            m_amount = amount;
+            Approved = held;
+        }
 
         internal StorePaymentScope(Func<long, long, Guid, bool> change, long payerId, long amount)
         {
@@ -143,7 +170,7 @@ public static class MyStoreBlockPatch
         public bool Approved { get; }
 
         /// <summary>True when this scope arbitrates through the World Authority rather than passing vanilla through.</summary>
-        internal bool Deferrable => m_change != null;
+        internal bool Deferrable => m_change != null || m_async;
 
         /// <summary>
         /// Runs the vanilla settlement inside this scope so its balance calls are observed, then commits. Used by the
@@ -155,6 +182,10 @@ public static class MyStoreBlockPatch
                 throw new ArgumentNullException(nameof(settle));
             if (!Approved || m_change == null)
             {
+                if (m_async)
+                    throw new InvalidOperationException(
+                        "A store payment settled by the node is not deferred"
+                    );
                 settle();
                 return;
             }
@@ -195,6 +226,11 @@ public static class MyStoreBlockPatch
 
         public void Commit()
         {
+            if (m_async)
+            {
+                CommitAsync();
+                return;
+            }
             if (!Approved || m_committed || m_change == null)
                 return;
             if (!m_debitObserved)
@@ -219,6 +255,27 @@ public static class MyStoreBlockPatch
                 StorePaymentJournal.Close(m_reserveOperation);
         }
 
+        private void CommitAsync()
+        {
+            if (!Approved || m_committed)
+                return;
+            if (!m_debitObserved)
+                throw new InvalidOperationException(
+                    "Store payment did not apply its prepared debit"
+                );
+            m_committed = true;
+            StorePaymentJournal.CommitAsync(
+                MyBankingSystemPatch.Command,
+                m_reserveOperation,
+                m_refundOperation,
+                m_payerId,
+                m_amount,
+                m_creditOperation,
+                m_payeeId,
+                m_credit
+            );
+        }
+
         public void Dispose()
         {
             if (m_disposed)
@@ -226,6 +283,13 @@ public static class MyStoreBlockPatch
             m_disposed = true;
             if (ReferenceEquals(m_payment, this))
                 m_payment = null;
+            if (m_async)
+            {
+                // Never committed: the WA never heard of it, so only this node's hold ends.
+                if (Approved && !m_committed)
+                    StorePaymentHolds.End(m_payerId, m_amount, 0);
+                return;
+            }
             if (Approved && !m_committed && m_change != null)
                 StorePaymentJournal.Abandon(
                     m_change,
