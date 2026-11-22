@@ -1256,6 +1256,8 @@ def _store_payments(bench, ctx) -> None:
     # SE-1525: each node approves a trade against its own replica and settles it afterwards. Both settle workers wait,
     # so both nodes approve 60 of the payer's 100 before the WA hears of either: the WA takes the first, and the second
     # is clawed back - 40 collected, 20 booked as store debt - while both payees are paid in full.
+    _require(bench, "both nodes' replicas show the payer's 100",
+             _poll(lambda: _balances(bench, payer, 100, ("node-1", "node-2")), HANDOVER_TIMEOUT))
     for node_id in ("node-1", "node-2"):
         _post(bench, node_id, "/test-store-settle-hold?ms=8000")
     results = _parallel(
@@ -2458,8 +2460,9 @@ def p2_wa_store_timeout(bench) -> None:
         payer, payee = 912260000000000000 + tag * 1000 + random.randrange(1000), 922260000000000000 + tag * 1000 + random.randrange(1000)
         for owner, balance in ((payer, 1000), (payee, 0)):
             _post(bench, "node-1", f"/banking-test-create?ownerId={owner}&balance={balance}")
-        _require(bench, f"the leg {tag} accounts exist at the WA",
-                 _poll(lambda: _wa_balance(bench, payer) == 1000 and _wa_balance(bench, payee) == 0, HANDOVER_TIMEOUT))
+        _require(bench, f"the leg {tag} accounts exist at the WA and in node-1's replica",
+                 _poll(lambda: _wa_balance(bench, payer) == 1000 and _wa_balance(bench, payee) == 0
+                       and _balances(bench, payer, 1000, ("node-1",)), HANDOVER_TIMEOUT))
         return payer, payee
 
     def pay(payer: int, payee: int) -> tuple[dict | None, float]:

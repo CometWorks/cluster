@@ -23,19 +23,33 @@ internal static class StorePaymentHolds
     private static readonly ConcurrentQueue<Release> Settled = new ConcurrentQueue<Release>();
     private static readonly List<Release> Waiting = new List<Release>();
 
+    internal enum Hold
+    {
+        /// <summary>The replica covers it: approved and held.</summary>
+        Held,
+
+        /// <summary>The replica would cover it but for this node's unsettled trades of the same payer.</summary>
+        Refused,
+
+        /// <summary>The replica does not cover it and this node holds nothing of the payer, so the replica may just be
+        /// behind (an account the WA created or credited a moment ago): the World Authority decides, as before SE-1525.</summary>
+        AskAuthority,
+    }
+
     /// <summary>Game thread: approves and holds <paramref name="amount"/> when the payer's replica balance covers it.</summary>
-    public static bool TryHold(long payer, long amount)
+    public static Hold TryHold(long payer, long amount)
     {
         Update();
-        if (amount <= 0)
-            return true;
-        if (MyBankingSystem.Static?.TryGetAccountInfo(payer, out MyAccountInfo account) != true)
-            return false;
         Held.TryGetValue(payer, out long held);
+        if (
+            MyBankingSystem.Static?.TryGetAccountInfo(payer, out MyAccountInfo account) != true
+            || account.Balance < amount
+        )
+            return held == 0 ? Hold.AskAuthority : Hold.Refused;
         if (account.Balance - held < amount)
-            return false;
+            return Hold.Refused;
         Held[payer] = held + amount;
-        return true;
+        return Hold.Held;
     }
 
     /// <summary>

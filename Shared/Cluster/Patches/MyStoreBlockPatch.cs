@@ -47,13 +47,18 @@ public static class MyStoreBlockPatch
         )
             throw new InvalidOperationException("Nested store payments are not supported");
         // SE-1525: an inline trade finishes against the replica; the WA settles it after the commit.
-        StorePaymentScope payment =
+        StorePaymentScope payment;
+        StorePaymentHolds.Hold hold =
             ClusterRuntime.IsClustered
             && !ClusterRuntime.IsWorldAuthority
-            && amount != 0
+            && amount > 0
             && ClusterConfig.GetBool("store.asyncPayments")
-                ? new StorePaymentScope(payerId, amount)
-                : BeginDeferredPayment(payerId, amount);
+                ? StorePaymentHolds.TryHold(payerId, amount)
+                : StorePaymentHolds.Hold.AskAuthority;
+        payment =
+            hold == StorePaymentHolds.Hold.AskAuthority
+                ? BeginDeferredPayment(payerId, amount)
+                : new StorePaymentScope(payerId, amount, hold == StorePaymentHolds.Hold.Held);
         if (payment.Approved && payment.Deferrable)
             m_payment = payment;
         return payment;
@@ -99,8 +104,9 @@ public static class MyStoreBlockPatch
         private bool m_disposed;
         private readonly bool m_async;
 
-        /// <summary>SE-1525: approved against the node's replica; nothing reaches the WA before the commit.</summary>
-        internal StorePaymentScope(long payerId, long amount)
+        /// <summary>SE-1525: approved (<paramref name="held"/>) against the node's replica; nothing reaches the WA before the
+        /// commit.</summary>
+        internal StorePaymentScope(long payerId, long amount, bool held)
         {
             if (payerId == 0)
                 throw new ArgumentOutOfRangeException(nameof(payerId));
@@ -109,7 +115,7 @@ public static class MyStoreBlockPatch
             m_async = true;
             m_payerId = payerId;
             m_amount = amount;
-            Approved = StorePaymentHolds.TryHold(payerId, amount);
+            Approved = held;
         }
 
         internal StorePaymentScope(Func<long, long, Guid, bool> change, long payerId, long amount)
