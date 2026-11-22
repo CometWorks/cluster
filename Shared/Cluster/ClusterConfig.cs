@@ -323,6 +323,9 @@ public static class ClusterConfig
         // (Relative Top Speed at 360 m/s: 360), or a fast pair gets less warning than the relocation lead. Listed here so
         // the fan-out of the gateway's document is not refused by the nodes; they never read it.
         ["lookahead.maxSpeed"] = "100",
+        // WA only (SE-1867): a character registry change of only suit gauges (health, energy, oxygen) is published to the
+        // nodes at most every gaugePublishSeconds; body, owner, despawn and toggle changes go out at once. 0 = every change.
+        ["characters.gaugePublishSeconds"] = "10",
         // GATEWAY only, managed (Quasar) deployments (SE-1168): every lifetimeSeconds / n (n serving regular nodes) the
         // oldest serving node is recycled onto the hot spare, so each node serves about lifetimeSeconds; 0 = never.
         // A recycle still draining after drainTimeoutSeconds closes the node: its own drain hands out or offlines the rest.

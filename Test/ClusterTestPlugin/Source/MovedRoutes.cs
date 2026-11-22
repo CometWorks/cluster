@@ -128,6 +128,31 @@ internal static class MovedRoutes
                 return;
             }
         );
+        // SE-1867: this node's next reports carry `count` synthetic online characters from identity `base` on, with drifting
+        // oxygen and energy, for `seconds`; `helmet` sets their helmet toggle. count=0 clears them.
+        TestRoutes.Add(
+            "POST",
+            "/character-test-entries",
+            (context, path) =>
+            {
+                Write(
+                    context,
+                    200,
+                    "application/json",
+                    Encoding.UTF8.GetBytes(
+                        JsonSerializer.Serialize(
+                            CharacterRegistryService.ConfigureTestEntries(
+                                int.Parse(TestRoutes.Query(context, "count")),
+                                long.Parse(TestRoutes.Query(context, "base")),
+                                TestRoutes.Double(context, "seconds"),
+                                TestRoutes.Query(context, "helmet", "true") == "true"
+                            )
+                        )
+                    )
+                );
+                return;
+            }
+        );
         TestRoutes.Add(
             "GET",
             "/respawn-test-delay",
