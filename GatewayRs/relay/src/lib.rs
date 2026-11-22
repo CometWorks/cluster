@@ -113,7 +113,8 @@ impl Default for Limits {
         Self {
             client_backlog_bytes: 4 * 1024 * 1024,
             client_backlog_age: Duration::from_secs(10),
-            server_backlog_bytes: 1024 * 1024,
+            // SE-1887: three node-link credit windows (ClusterRegistry ServerBacklogBytes).
+            server_backlog_bytes: 3 * 4 * 1024 * 1024,
             withhold_above: 4096,
             release_below: 3072,
             ack_backlog_limit: Duration::from_secs(10),

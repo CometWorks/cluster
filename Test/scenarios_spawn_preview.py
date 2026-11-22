@@ -21,6 +21,11 @@
   "server left" message (a forced reconnect named spawn-switch-restore-failed), not just detach it: a Steam client
   never notices a detach, re-opens its session to the node and sits "Game paused" with an empty spawn list
   (octahedron-test 2026-11-06 19:07Z). The client must then rejoin on its own and respawn at the kit.
+* ``P2-WA-06i`` - SE-1887: the Gateway buffers what nodes send a client during a switch, and a node may send a whole
+  4 MiB credit window before the Gateway refills it. A buffer of 1 MiB overflowed when Viktor picked another spawn
+  point while South Station was still streaming to him (octahedron-test 2026-11-22 17:00:40Z), and the forced
+  reconnect broke the switch and sent him to the main menu. Here the kit's node holds its answer for a few seconds
+  and sends the client 3 MiB meanwhile: the switch must keep the session, and the preview and respawn must work.
 
 The Respawn button is checked through ``respawnButtonEnabled`` before it is clicked: the Remote API's click raises
 the button's event even when the button is disabled, which is how the older respawn scenarios passed while players
@@ -482,6 +487,48 @@ def p2_wa_06h(bench) -> None:
     bench.exercised(kit=entity, grid=grid, abandoned=abandoned[-1:], forced=forced[-1:] if forced else None)
 
 
+#: P2-WA-06i: what the kit's node sends the client while the switch buffers; above the old 1 MiB, within one window.
+FLOOD_BYTES = 3 * 1024 * 1024
+
+
+def p2_wa_06i(bench) -> None:
+    """A full credit window from a node during a spawn preview switch must not overflow the Gateway (SE-1887)."""
+    api, entity, grid, name = _kit_on_node1(bench)
+    _own_partition_on(bench, grid, "node-2")
+    _kill(bench, CLIENT_ID)
+    session_before = _session_of(bench, CLIENT_ID) or {}
+    forced = rf"Force reconnect client {CLIENT_ID}"
+    forced_before = len(_lines(bench, "gateway", forced))
+    bench.record("delay-armed", bench.cluster.node(
+        "node-1", f"/respawn-execute-fault?mode=delay&count=1&seconds=6&flood={FLOOD_BYTES}", "POST"))
+    _medical_click(bench, api, name)
+    peak = {"bytes": 0}
+
+    def drained():
+        session = _session_of(bench, CLIENT_ID) or {}
+        peak["bytes"] = max(peak["bytes"], session.get("serverBacklogBytes") or 0)
+        return _lines(bench, "node-1", r"spawn preview switch operation=\S+ (success|failed)") \
+            or _lines(bench, "node-2", r"spawn preview switch operation=\S+ (success|failed)")
+
+    switched = _poll(drained, 30) or []
+    bench.record("switch", {"peakServerBacklogBytes": peak["bytes"], "lines": switched[-3:]})
+    faulted = (_try(bench.cluster.node, "node-1", "/respawn-execute-fault") or {}).get("faulted") or []
+    bench.record("delay-fault", faulted)
+    flooded = max((f.get("flooded") or 0 for f in faulted), default=0)
+    _require(bench, "node-1 held the switch and sent the client the whole flood meanwhile", flooded == FLOOD_BYTES,
+             json.dumps(faulted))
+    overflow = _lines(bench, "gateway", rf"{forced}: server-backlog-overflow")
+    bench.check("no server-backlog-overflow for the client", not overflow, json.dumps(overflow[-2:]))
+    bench.check("the Gateway forced no reconnect during the switch",
+                len(_lines(bench, "gateway", forced)) == forced_before,
+                json.dumps(_lines(bench, "gateway", forced)[forced_before:][:3]))
+    bench.check("the preview switch succeeded", any("success=True" in line for line in switched), json.dumps(switched[-3:]))
+    bench.check("the backlog held more than the old 1 MiB cap", peak["bytes"] > 1024 * 1024, str(peak["bytes"]))
+    after = _preview_and_respawn(bench, api, "flood", name, grid, session_before=session_before)
+    bench.check("flood: the client respawned on node-1, where the kit is", after["node"] == "node-1", str(after["node"]))
+    bench.exercised(kit=entity, grid=grid, flood=flooded, peakServerBacklogBytes=peak["bytes"])
+
+
 SCENARIOS_SPAWN_PREVIEW = {
     "P2-WA-06d": (p2_wa_06d, "the respawn screen previews a spawn point on another node or offline (SE1-0122)", "3"),
     "P2-WA-06e": (p2_wa_06e, "a refused spawn preview switch keeps the client on its node, unpaused (SE-1124)", "3"),
@@ -490,4 +537,6 @@ SCENARIOS_SPAWN_PREVIEW = {
                   "partition was split away follows the kit (SE-1189)", "3"),
     "P2-WA-06h": (p2_wa_06h, "a node that cannot take back a client after a failed preview switch has the Gateway send "
                   "it to the main menu, and the client rejoins and respawns (SE-1199)", "3"),
+    "P2-WA-06i": (p2_wa_06i, "a node's full credit window during a spawn preview switch does not overflow the Gateway's "
+                  "buffer and force a reconnect (SE-1887)", "3"),
 }

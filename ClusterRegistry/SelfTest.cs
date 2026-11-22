@@ -1999,6 +1999,21 @@ internal static partial class SelfTest
         Assert(expiring.TryEnqueue(new GatewayPacket(1, 2, [1], DeliveryMethod.ReliableOrdered)));
         Thread.Sleep(1);
         Assert(expiring.IsExpired(Stopwatch.GetTimestamp()));
+
+        // SE-1887: while a switch buffers, nothing refills a node's credit, so each link the switch touches (source
+        // tail, target, source again after a rollback) can fill a whole credit window. All three must fit.
+        static int Windows(int capacity)
+        {
+            var backlog = new DirectGateway.BoundedPacketQueue(capacity, TimeSpan.MaxValue);
+            var packet = new GatewayPacket(1, 2, new byte[1200], DeliveryMethod.ReliableOrdered);
+            int perWindow = DirectGateway.NodeLinkCreditBytes / (packet.Payload.Length + 10);
+            for (int sent = 0; sent < 3 * perWindow; sent++)
+                if (!backlog.TryEnqueue(packet))
+                    return sent / perWindow;
+            return 3;
+        }
+        Assert(Windows(1024 * 1024) == 0); // the old cap: the source's tail alone overflowed it
+        Assert(Windows(DirectGateway.ServerBacklogBytes) == 3);
     }
 
     private static void TestHandoverCapture()

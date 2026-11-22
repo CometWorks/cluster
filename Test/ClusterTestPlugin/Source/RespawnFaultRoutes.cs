@@ -16,7 +16,8 @@ namespace ClusterTestPlugin;
 /// Alpha on octahedron-test, 2026-11-05). The movers are the larger group and keep the id, the medbay gets a new one.
 /// "refuse" makes the target answer the switch with an error. "stall" (SE-1590) answers nothing for S seconds and then
 /// refuses: a target that never adopts the client, so the Gateway's node call times out and it moves the client back,
-/// after ~10 s off every node's player list, as on octahedron-test 2026-11-15.
+/// after ~10 s off every node's player list, as on octahedron-test 2026-11-15. "delay" (SE-1887) holds the answer for S
+/// seconds and then executes normally, so the Gateway keeps the switch buffering that long.
 /// </summary>
 internal static class RespawnFaultRoutes
 {
@@ -25,22 +26,28 @@ internal static class RespawnFaultRoutes
     private static long[] m_movers = Array.Empty<long>();
     private static double m_distance;
     private static double m_stallSeconds;
+    private static long m_floodBytes;
     private static int m_remaining;
     private static readonly HashSet<Guid> Seen = new HashSet<Guid>();
     private static readonly List<object> Faulted = new List<object>();
 
+    /// <summary>A mod message channel no mod registers: the client drops what arrives on it.</summary>
+    private const ushort FloodChannel = 18870;
+
     public static void Register()
     {
-        // POST /respawn-execute-fault?mode=split|refuse|stall|off&count=N[&movers=ID,ID&distance=M][&seconds=S] - fault
-        // the next N operations this node executes; a stall lasts S seconds (default 12). {mode, remaining, faulted}.
+        // POST /respawn-execute-fault?mode=split|refuse|stall|delay|off&count=N[&movers=ID,ID&distance=M][&seconds=S]
+        // [&flood=B] - fault the next N operations this node executes; a stall or delay lasts S seconds (default 12).
+        // A delay with a flood sends the client B bytes as soon as it is connected here, while the Gateway buffers
+        // (the control server answers nothing else meanwhile). {mode, remaining, faulted}.
         TestRoutes.Add(
             "POST",
             "/respawn-execute-fault",
             context =>
             {
                 string mode = TestRoutes.Query(context, "mode");
-                if (mode is not ("split" or "refuse" or "stall" or "off"))
-                    throw new ArgumentException("mode must be split, refuse, stall or off");
+                if (mode is not ("split" or "refuse" or "stall" or "delay" or "off"))
+                    throw new ArgumentException("mode must be split, refuse, stall, delay or off");
                 lock (Sync)
                 {
                     m_mode = mode == "off" ? null : mode;
@@ -61,6 +68,10 @@ internal static class RespawnFaultRoutes
                     );
                     m_stallSeconds = double.Parse(
                         TestRoutes.Query(context, "seconds", "12"),
+                        System.Globalization.CultureInfo.InvariantCulture
+                    );
+                    m_floodBytes = long.Parse(
+                        TestRoutes.Query(context, "flood", "0"),
                         System.Globalization.CultureInfo.InvariantCulture
                     );
                     Faulted.Clear();
@@ -96,6 +107,25 @@ internal static class RespawnFaultRoutes
         );
     }
 
+    /// <summary>
+    /// SE-1887: BYTES of 16 KB mod messages to the client on a channel no mod listens to, like a station still
+    /// streaming to it. Vanilla drops a message nobody registered for.
+    /// </summary>
+    private static (long Sent, int Messages) Flood(ulong user, long bytes)
+    {
+        long sent = 0;
+        int messages = 0;
+        while (sent < bytes)
+        {
+            var payload = new byte[(int)Math.Min(16 * 1024, bytes - sent)];
+            if (!Sandbox.ModAPI.MyAPIGateway.Multiplayer.SendMessageTo(FloodChannel, payload, user))
+                break;
+            sent += payload.Length;
+            messages++;
+        }
+        return (sent, messages);
+    }
+
     private static object Status()
     {
         lock (Sync)
@@ -117,6 +147,40 @@ internal static class RespawnFaultRoutes
                 return;
             m_remaining--;
             mode = m_mode;
+        }
+        if (mode == "delay")
+        {
+            DateTime until = DateTime.UtcNow.AddSeconds(m_stallSeconds);
+            (long Sent, int Messages) flood = (0, 0);
+            if (m_floodBytes > 0)
+            {
+                while (
+                    DateTime.UtcNow < until
+                    && !TestRoutes.OnGameThread(() =>
+                        ReplicationServerPatch.HasClient(request.UserId)
+                    )
+                )
+                    Thread.Sleep(50);
+                flood = TestRoutes.OnGameThread(() => Flood(request.UserId, m_floodBytes));
+            }
+            lock (Sync)
+                Faulted.Add(
+                    new
+                    {
+                        mode,
+                        operation = request.OperationId,
+                        preview = request.Preview,
+                        flooded = flood.Sent,
+                        messages = flood.Messages,
+                    }
+                );
+            Plugin.Log(
+                $"respawn execute operation={request.OperationId:D} delayed {m_stallSeconds}s, flooded {flood.Sent} bytes by the bench (SE-1887)"
+            );
+            TimeSpan left = until - DateTime.UtcNow;
+            if (left > TimeSpan.Zero)
+                Thread.Sleep(left);
+            return;
         }
         if (mode == "stall")
         {

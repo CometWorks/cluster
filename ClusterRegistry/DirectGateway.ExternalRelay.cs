@@ -303,11 +303,11 @@ internal sealed partial class DirectGateway
                 {
                     clientBytes = 4 * 1024 * 1024,
                     clientAgeMs = 10000,
-                    serverBytes = 1024 * 1024,
+                    serverBytes = ServerBacklogBytes,
                 },
                 credit = new
                 {
-                    joinWindow = 4 * 1024 * 1024,
+                    joinWindow = NodeLinkCreditBytes,
                     withholdAbove = 4096,
                     releaseBelow = 3072,
                 },
