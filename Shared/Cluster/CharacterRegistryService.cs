@@ -32,8 +32,9 @@ namespace ClusterPlugin;
 /// state - <c>MySession.GetCheckpoint</c> fills <c>AllPlayersData[pid].Toolbar</c> from
 /// <c>MySession.Static.Toolbars</c> one line after <c>MyPlayer.GetObjectBuilder</c>.)
 ///
-/// ponytail: one report, one merge, one snapshot - the same shape as PlayerStateService and PcuLedgerService
-/// next door, rather than a new transport for a new subsystem.
+/// ponytail: one report, one merge, one replicated registry - the same shape as PlayerStateService and
+/// PcuLedgerService next door, rather than a new transport for a new subsystem. Since SE-1867 a publish carries
+/// only what changed (<see cref="Delta"/>); a resync still sends the whole <see cref="Snapshot"/>.
 /// </remarks>
 public static class CharacterRegistryService
 {
@@ -276,7 +277,7 @@ public static class CharacterRegistryService
         );
 
     /// <summary>
-    /// Applies the replicated snapshot: carry out despawn orders addressed here, and settle a body the first
+    /// Acts on this node's copy of the registry: carry out despawn orders addressed here, and settle a body the first
     /// time this node sees it - restoring the settings of record for a returning player, or applying the §5.5
     /// fresh-spawn defaults (helmet CLOSED, flashlight OFF, radio OFF) when the registry has no record.
     /// </summary>
