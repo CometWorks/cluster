@@ -415,6 +415,11 @@ jobs:
           test -f "dist/ClusterForLinux-${VERSION}.tar.gz"
           ls -l dist
 
+      - name: Check the mod API policy table against the game
+        env:
+          DEDICATED64: ${{ github.workspace }}/ds64
+        run: dotnet run --project Test/ModApiPolicy/ModApiPolicyChecks.csproj -c Release
+
       - name: Test client diagnostics contract and Manager publication bridge
         run: |
           dotnet run --project Test/ClientDiagnostics/ClientDiagnostics.csproj -c Release
