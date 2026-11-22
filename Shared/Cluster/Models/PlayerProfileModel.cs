@@ -64,6 +64,11 @@ public static class PlayerProfileCodec
 {
     public const int MaxEntries = 4096;
     public const int MaxToolbarBytes = 256 * 1024;
+
+    /// <summary>
+    /// The most cameras a report or snapshot may carry per player. How many the World Authority keeps is the
+    /// <c>profiles.maxCameras</c> config value, clamped to this.
+    /// </summary>
     public const int MaxCameras = 256;
     public const int ColorSlotCount = 14;
 

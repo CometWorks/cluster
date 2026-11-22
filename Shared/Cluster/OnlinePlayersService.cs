@@ -253,7 +253,7 @@ public static class OnlinePlayersService
 
     /// <summary>
     /// Whether the hosting node considers this player an admin, read straight out of PromotedUsers
-    /// for the same reason PlayerProfileService:436 does - GetUserPromoteLevel answers Owner for
+    /// for the same reason PlayerProfileService.AugmentSavedPlayers does - GetUserPromoteLevel answers Owner for
     /// ids that are not in the table at all, which would mark every player an admin.
     /// </summary>
     private static bool IsAdminOf(ulong steamId) => PromotionService.IsModerator(steamId);

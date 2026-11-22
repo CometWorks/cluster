@@ -5,7 +5,7 @@
   distance every 6 s, the rate the live record changed. Then:
 
   1. measures, at the default config, the ``player-profiles`` broadcasts on the WA's ``/global-state`` for ``MEASURE_SECONDS``: how many, and
-     how big (recorded; checked against the full record's size);
+     how big (recorded; the median must stay under 64 KB, the full record is ~1.4 MB);
   2. checks the other regular node holds the same record as the WA, player by player, which it only got by applying
      the broadcasts (it resynced before any of the synthetic players existed);
   3. marks a toolbar slot and checks the mark reaches the other node's copy;
