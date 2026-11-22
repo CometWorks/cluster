@@ -4,12 +4,12 @@
   (227 synthetic players with 2.4 KB toolbars, 19 cameras each, 5 of them with 200), one of which changes a camera
   distance every 6 s, the rate the live record changed. Then:
 
-  1. measures the ``player-profiles`` broadcasts on the WA's ``/global-state`` for ``MEASURE_SECONDS``: how many, and
+  1. measures, at the default config, the ``player-profiles`` broadcasts on the WA's ``/global-state`` for ``MEASURE_SECONDS``: how many, and
      how big (recorded; checked against the full record's size);
   2. checks the other regular node holds the same record as the WA, player by player, which it only got by applying
      the broadcasts (it resynced before any of the synthetic players existed);
   3. marks a toolbar slot and checks the mark reaches the other node's copy;
-  4. gives the client 50 cameras of entities that exist nowhere, relogs it (the node seeds them into its session on
+  4. sets the camera retention to 30 s, gives the client 50 cameras of entities that exist nowhere, relogs it (the node seeds them into its session on
      reconcile), and checks they expire after ``profiles.cameraRetentionSeconds`` (set to 30 s) instead of being
      reported back forever, and that the toolbar mark survived the relog;
   5. checks no player holds more than ``profiles.maxCameras`` (32) cameras.
@@ -92,12 +92,6 @@ def _measure(bench, seconds: float) -> dict:
 def p3_plr_03(bench) -> None:
     record: dict = {}
     try:
-        try:
-            record["config"] = bench.cluster.handover_config(
-                {"profiles.cameraRetentionSeconds": str(RETENTION_SECONDS), "profiles.maxCameras": str(MAX_CAMERAS)}
-            )
-        except Exception as error:  # noqa: BLE001 - a build from before SE-1870 has no such keys
-            record["config"] = {"error": str(error)[:300]}
         api = _join(bench)
         host = _host(bench)
         other = "node-2" if host == "node-1" else "node-1"
@@ -147,6 +141,13 @@ def p3_plr_03(bench) -> None:
         bench.check(f"a toolbar edit reaches {other}'s copy of the record", bool(reached))
 
         # 4. cameras of gone entities expire, also after a relog seeds them into the node's session
+        # Only now: a 30 s retention refreshes the stamps every 7 s, which the broadcasts above would have counted.
+        try:
+            record["config"] = bench.cluster.handover_config(
+                {"profiles.cameraRetentionSeconds": str(RETENTION_SECONDS), "profiles.maxCameras": str(MAX_CAMERAS)}
+            )
+        except Exception as error:  # noqa: BLE001 - a build from before SE-1870 has no such keys
+            record["config"] = {"error": str(error)[:300]}
         record["fakeCameras"] = bench.cluster.node(
             "wa-1", f"/player-profile-test-cameras?steamId={CLIENT_ID}&serialId=0&count={FAKE_CAMERAS}", "POST"
         )

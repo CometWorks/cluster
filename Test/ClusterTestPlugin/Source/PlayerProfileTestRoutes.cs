@@ -74,7 +74,7 @@ internal static class PlayerProfileTestRoutes
             context =>
             {
                 ulong steam = (ulong)TestRoutes.Long(context, "steamId");
-                int serial = (int)TestRoutes.Long(context, "serialId");
+                int serial = int.Parse(TestRoutes.Query(context, "serialId", "0")); // Long() refuses 0
                 int count = (int)TestRoutes.Long(context, "count");
                 TestRoutes.Json(
                     context,
