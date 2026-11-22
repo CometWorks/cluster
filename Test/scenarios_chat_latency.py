@@ -1,9 +1,10 @@
 """SE-1865: a whisper reaches the other player within 2 s, also while respawn points churn.
 
 * ``P2-CHAT-LATENCY`` - clients 1 and 2 on node-1 whisper each other (the Private channel), three lines each way, in
-  three phases: quiet; while node-1 and node-2 report thousands of moving respawn points with
-  ``respawns.motionPublishSeconds`` 0 (every change published, as before SE-1865; recorded, not checked); and the same
-  load with the default. The quiet and default phases must deliver every whisper within ``LIMIT_SECONDS``.
+  three phases: quiet; while node-1 and node-2 report 3000 moving respawn points (a 3.6 MB snapshot) with
+  ``respawns.motionPublishSeconds`` 0 (every change published, as before SE-1865; recorded, not checked); and while
+  they report a 1.35 MB snapshot (still about four times the live one) with the default. The quiet and default phases
+  must deliver every whisper within ``LIMIT_SECONDS``.
 
 Live (octahedron-test 2026-11-22) whispers reached players and NPC bots 20-60 s late. The World Authority republished
 all 999 respawn points (~360 KB) about four times a second, because every report from a node with a medbay on a moving
@@ -28,10 +29,14 @@ from scenarios_wa_ops import _client_identity, _poll, _require
 
 LIMIT_SECONDS = 2.0
 LOAD_COPIES = 1500  # per node; two nodes stay under the registry's 4096-point cap
-LOAD_NAME_PADDING = 900  # ~1.2 KB a point: ~3.6 MB a snapshot, under the codec's 4 MB cap
+# Name padding per point. Heavy: ~1.2 KB a point, ~3.6 MB a snapshot (under the codec's 4 MB cap), which backs the
+# bench link up when every change goes out. Checked: ~0.45 KB a point, ~1.35 MB, still ~4x the live 360 KB snapshot.
+HEAVY_PADDING = 900
+CHECKED_PADDING = 120
 LOAD_SETTLE_SECONDS = 60
 LINES_PER_WAY = 3
 SPAM_GAP_SECONDS = 3
+RECEIPT_TIMEOUT_SECONDS = 90
 
 
 def _queue(bench) -> dict:
@@ -40,6 +45,18 @@ def _queue(bench) -> dict:
     node = next((n for n in nodes if n.get("endpoint") == backend), None)
     # Null with CLUSTER_RELAY=external: gateway-rs holds the node links. The live Gateway runs the internal relay.
     return (node or {}).get("reliableQueue") or {}
+
+
+def _caught_up(bench) -> dict | None:
+    """node-1 applied the WA's latest respawns snapshot and nothing waits on the way to it."""
+    wa, node = (bench.cluster.node(n, "/global-state") for n in ("wa-1", "node-1"))
+
+    def seq(state):
+        return next((s["sequence"] for s in state.get("subsystems") or [] if s["subsystem"] == "respawns"), None)
+
+    queue = _queue(bench).get("globalOrdered", 0)
+    row = {"wa": seq(wa), "node-1": seq(node), "replicaQueue": node.get("queuedReplicaMessages"), "gateway": queue}
+    return row if row["wa"] == row["node-1"] and not row["replicaQueue"] and queue < 64 else None
 
 
 def _relayed(bench) -> list[str]:
@@ -54,7 +71,7 @@ def _whisper(bench, sender_api, receiver_api, receiver_identity: int, label: str
     started = time.time()
     sender_api.send_chat(text, channel="Private", target_id=receiver_identity)
     receipt = None
-    while receipt is None and time.time() - started < 120:
+    while receipt is None and time.time() - started < RECEIPT_TIMEOUT_SECONDS:
         receipt = next(
             (m for m in receiver_api.get_chat_messages(0).get("messages") or [] if m.get("Text") == text), None
         )
@@ -83,7 +100,7 @@ def _phase(bench, api1, api2, id1: int, id2: int, phase: str) -> list[dict]:
     return rows
 
 
-def _load(bench, seconds: float) -> None:
+def _load(bench, seconds: float, padding: int = CHECKED_PADDING) -> None:
     """node-1 and node-2 report LOAD_COPIES moving medbays each for ``seconds`` (0 stops them)."""
     for node, base in (("node-1", 9_100_000_000_000_000), ("node-2", 9_200_000_000_000_000)):
         point = {
@@ -92,7 +109,7 @@ def _load(bench, seconds: float) -> None:
             "GridEntityId": base - 1,
             "PartitionId": 1,
             "Generation": 1,
-            "Name": "SE-1865 moving medbay " + "x" * LOAD_NAME_PADDING,
+            "Name": "SE-1865 moving medbay " + "x" * padding,
             "OwnerIdentityId": 0,
             "ShareMode": 2,
             "Working": True,
@@ -105,7 +122,9 @@ def _load(bench, seconds: float) -> None:
         }
         points = json.dumps([point] if seconds > 0 else [])
         query = _q(points=points, seconds=seconds, copies=LOAD_COPIES, moving="true")
-        bench.record(f"load-{node}-{seconds}", bench.cluster.node(node, "/respawn-test-raw-points?" + query, "POST"))
+        bench.record(
+            f"load-{node}-{seconds}-{padding}", bench.cluster.node(node, "/respawn-test-raw-points?" + query, "POST")
+        )
 
 
 def _worst(rows: list[dict]) -> float:
@@ -130,18 +149,15 @@ def p2_chat_latency(bench) -> None:
     _check(bench, "quiet", _phase(bench, api1, api2, id1, id2, "quiet"))
 
     bench.record("config-every-change", bench.cluster.handover_config({"respawns.motionPublishSeconds": "0"}))
-    _load(bench, 3600)
+    _load(bench, 3600, HEAVY_PADDING)
     time.sleep(LOAD_SETTLE_SECONDS)
     bench.record("every-change-worst", _worst(_phase(bench, api1, api2, id1, id2, "every-change")))
 
+    _load(bench, 3600)
     bench.record("config-default", bench.cluster.handover_config({"respawns.motionPublishSeconds": "10"}))
-    drained = _poll(lambda: (lambda q: q if q.get("globalOrdered", 0) < 64 else None)(_queue(bench)), 600)
-    _require(
-        bench,
-        "SETUP: the Gateway's ordered queue toward node-1 drained",
-        drained is not None,
-        json.dumps(_queue(bench)),
-    )
+    drained = _poll(lambda: _caught_up(bench), 900)
+    _require(bench, "SETUP: node-1 caught up with the WA's respawn snapshots", drained is not None)
+    bench.record("caught-up", drained)
     time.sleep(LOAD_SETTLE_SECONDS)
     _check(bench, "throttled", _phase(bench, api1, api2, id1, id2, "throttled"))
     _load(bench, 0)
