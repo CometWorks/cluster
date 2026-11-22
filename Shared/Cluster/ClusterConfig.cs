@@ -339,6 +339,9 @@ public static class ClusterConfig
         // seen. Without this every respawn's character added one, up to 256 per player, all broadcast and saved.
         ["profiles.cameraRetentionSeconds"] = "604800",
         ["profiles.maxCameras"] = "32",
+        // WA only (SE-1867): a character registry change of only suit gauges (health, energy, oxygen) is published to the
+        // nodes at most every gaugePublishSeconds; body, owner, despawn and toggle changes go out at once. 0 = every change.
+        ["characters.gaugePublishSeconds"] = "10",
         // #1354 (UnvisitedNpcSweeper): an NPC grid (a top-level grid whose big owners are all NPC identities) that has
         // been online for unvisitedMinutes with no player or viewed camera within visitRadius ("auto" = the sync
         // distance) is removed; inside a gap band of the mod-mes spawn pattern after unvisitedMinutes / gapRemovalFactor.

@@ -60,6 +60,10 @@ public static class CharacterRegistryService
         Array.Empty<Settings>()
     );
     private static string m_snapshot = "";
+
+    // SE-1867: the last published snapshot with the suit gauges left out, and when a change of only those may go out.
+    private static string m_publishedShape;
+    private static double m_nextGaugePublish;
     private static string m_pending;
     private static double m_nextReport;
     private static readonly HashSet<long> Seeded = new();
@@ -469,9 +473,27 @@ public static class CharacterRegistryService
                     .ToArray()
             )
                 ReportsByOrigin.Remove(stale);
-            snapshot = Merge();
+            Snapshot merged = Merge();
+            snapshot = JsonSerializer.Serialize(merged);
             if (snapshot == m_snapshot)
                 return;
+            // SE-1867: oxygen and energy drift on nearly every report, and each change sent all 49 KB to every node
+            // about four times a second. Nothing on a node reads the gauges from here (the settle restores only
+            // the toggles, and handover carries the body itself), so a gauge-only change waits for
+            // characters.gaugePublishSeconds. Instances, despawn orders, toggles and model go out at once.
+            string shape = JsonSerializer.Serialize(
+                merged with
+                {
+                    Record = merged
+                        .Record.Select(x => x with { Health = 0, Energy = 0, Oxygen = 0 })
+                        .ToArray(),
+                }
+            );
+            if (shape == m_publishedShape && now < m_nextGaugePublish)
+                return;
+            m_publishedShape = shape;
+            m_nextGaugePublish =
+                now + ClusterConfig.GetInt("characters.gaugePublishSeconds") * 1000.0;
             m_snapshot = snapshot;
             m_pending = snapshot;
         }
@@ -484,7 +506,7 @@ public static class CharacterRegistryService
     /// body on neither node and then on the new one, re-elects the same entity id rather than treating the
     /// arrival as a duplicate of the departure.
     /// </summary>
-    private static string Merge()
+    private static Snapshot Merge()
     {
         var byIdentity = new Dictionary<long, List<(string Node, Entry Entry)>>();
         foreach (
@@ -554,12 +576,10 @@ public static class CharacterRegistryService
                 OwningNode = null,
                 CharacterEntityId = 0,
             };
-        return JsonSerializer.Serialize(
-            new Snapshot(
-                Live.Values.OrderBy(instance => instance.IdentityId).ToArray(),
-                despawn.ToArray(),
-                Record.Values.OrderBy(settings => settings.IdentityId).ToArray()
-            )
+        return new Snapshot(
+            Live.Values.OrderBy(instance => instance.IdentityId).ToArray(),
+            despawn.ToArray(),
+            Record.Values.OrderBy(settings => settings.IdentityId).ToArray()
         );
     }
 
