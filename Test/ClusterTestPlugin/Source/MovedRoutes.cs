@@ -73,7 +73,8 @@ internal static class MovedRoutes
             }
         );
         // SE-1150: this node's next reports carry these respawn points (a JSON array of ClusterRespawnPoint) as they are,
-        // past the capture's checks, for `seconds`; an empty array clears them.
+        // past the capture's checks, for `seconds`; an empty array clears them. SE-1865: `copies` repeats each point with
+        // consecutive respawn entity ids, `moving=true` drifts them along X.
         TestRoutes.Add(
             "POST",
             "/respawn-test-raw-points",
@@ -89,7 +90,12 @@ internal static class MovedRoutes
                     "application/json",
                     Encoding.UTF8.GetBytes(
                         JsonSerializer.Serialize(
-                            RespawnRegistryService.ConfigureTestRawPoints(points, seconds)
+                            RespawnRegistryService.ConfigureTestRawPoints(
+                                points,
+                                seconds,
+                                int.Parse(TestRoutes.Query(context, "copies", "1")),
+                                TestRoutes.Query(context, "moving", "false") == "true"
+                            )
                         )
                     )
                 );
