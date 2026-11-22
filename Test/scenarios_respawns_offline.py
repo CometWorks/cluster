@@ -32,7 +32,7 @@ ROLES = ("node-1", "node-2", "wa-1")
 
 
 def _point(origin: str, entity: int, name: str) -> dict:
-    # ~360 bytes of JSON a point, like the live ones.
+    # ~440 bytes of JSON a point, a little over the live ~360.
     return {"Origin": origin, "RespawnEntityId": entity, "GridEntityId": entity - 1, "PartitionId": 1869,
             "Generation": 1, "Name": f"SE-1869 {name} " + "x" * 150, "OwnerIdentityId": 0, "ShareMode": 2,
             "Working": True, "SpawnWithoutOxygen": True, "SetFactionToSpawnee": False, "OxygenLevel": 0.5,

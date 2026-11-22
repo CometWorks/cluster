@@ -1226,7 +1226,7 @@ public static class RespawnRegistryService
     /// <summary>
     /// SE-1869 test knob, World Authority: <paramref name="points"/> join the offline partitions' respawn points, each
     /// <paramref name="copies"/> times with consecutive respawn entity ids, until the next call; an empty array clears
-    /// them. A bench has few offline partitions, the live cluster about 900 offline points. Dies with the process.
+    /// them. A bench has few offline partitions, the live cluster about 935 offline points. Dies with the process.
     /// </summary>
     public static object ConfigureTestOfflinePoints(ClusterRespawnPoint[] points, int copies = 1)
     {
