@@ -23,7 +23,7 @@ import re
 import time
 
 from scenarios_core import _join, _lines, _nodes
-from scenarios_wa import CLIENT2_ID, start_second_client
+from scenarios_wa import CLIENT2_ID, _q, start_second_client
 from scenarios_wa_ops import _client_identity, _poll, _require
 
 LIMIT_SECONDS = 2.0
@@ -103,7 +103,7 @@ def _load(bench, seconds: float) -> None:
             "Z": 3000.0,
         }
         points = json.dumps([point] if seconds > 0 else [])
-        query = f"points={points}&seconds={seconds}&copies={LOAD_COPIES}&moving=true"
+        query = _q(points=points, seconds=seconds, copies=LOAD_COPIES, moving="true")
         bench.record(f"load-{node}-{seconds}", bench.cluster.node(node, "/respawn-test-raw-points?" + query, "POST"))
 
 
