@@ -851,7 +851,7 @@ mod tests {
     fn config_as_the_adapter_sends_it() {
         let body = br#"{"direct":{"enabled":true,"bind":"0.0.0.0","port":27116,"dualStack":true},
             "steam":{"enabled":false,"bind":null,"port":0,"version":"1.211.018"},
-            "backlog":{"clientBytes":4194304,"clientAgeMs":10000,"serverBytes":1048576},
+            "backlog":{"clientBytes":4194304,"clientAgeMs":10000,"serverBytes":12582912},
             "credit":{"joinWindow":4194304,"withholdAbove":4096,"releaseBelow":3072},
             "timeouts":{"clientDisconnectMs":120000,"nodeDisconnectMs":30000},
             "joinHoldSeconds":120,"joinToken":"t","acceptAll":true,"nodeLinkChannels":16}"#;

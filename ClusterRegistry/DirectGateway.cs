@@ -4811,7 +4811,10 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     if (target.BufferServerPackets)
                     {
                         if (!target.ServerBacklog.TryEnqueue(packet))
-                            ForceReconnect(target, "server-backlog-overflow");
+                            ForceReconnect(
+                                target,
+                                "server-backlog-overflow (" + target.ServerBacklog.Describe() + ")"
+                            );
                     }
                     else
                         SendToClient(target, packet);
@@ -4889,7 +4892,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         $"Player admission ready client {target.ClientId} identity {ready.Identity.IdentityId} generation {ready.AuthorityGeneration}"
                     );
                 }
-                SendCredit(link, target.ClientId, 4 * 1024 * 1024);
+                SendCredit(link, target.ClientId, NodeLinkCreditBytes);
                 if (!target.SwitchingBackend)
                     FlushClientBacklog(target);
             }
@@ -12986,7 +12989,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                     reliableBacklogPackets = session.Client?.ReliableBacklogPackets ?? 0,
                     reliableBacklogStarted = session.ReliableBacklogStarted,
                     withheldCreditBytes = session.WithheldCreditBytes,
-                    joiningWindowBytes = 4 * 1024 * 1024,
+                    joiningWindowBytes = NodeLinkCreditBytes,
                     typeTableSent = session.TypeTableSent,
                     worldReady = session.WorldReady,
                     duplicateServerData = session.DuplicateServerData,
@@ -13715,7 +13718,16 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             4 * 1024 * 1024,
             TimeSpan.FromSeconds(10)
         );
-        public readonly BoundedPacketQueue ServerBacklog = new(1024 * 1024, TimeSpan.MaxValue);
+
+        // SE-1887: a node may send a client up to NodeLinkCreditBytes it has credit for, and the Gateway refills that
+        // credit only as it forwards packets to the client, which it does not while a switch buffers them. So one link
+        // can put a whole window into this backlog: the source's tail before it detaches, then the target's window
+        // after its attach, and the source's again after a rollback re-attaches it. At 1 MiB a spawn preview switch
+        // away from a station still streaming to the client overflowed it, and the forced reconnect broke the switch.
+        public readonly BoundedPacketQueue ServerBacklog = new(
+            ServerBacklogBytes,
+            TimeSpan.MaxValue
+        );
         public IPEndPoint BackendEndpoint;
         public ClientChannel? Client;
 
@@ -13890,6 +13902,12 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
             RegistryRoute = registryRoute;
         }
     }
+
+    /// <summary>The credit a node gets for a client on each attach: how much it may send before the Gateway forwards any.</summary>
+    internal const int NodeLinkCreditBytes = 4 * 1024 * 1024;
+
+    /// <summary>What a switch may buffer for a client from its nodes; see ClientSession.ServerBacklog.</summary>
+    internal const int ServerBacklogBytes = 3 * NodeLinkCreditBytes;
 
     internal sealed class BoundedPacketQueue
     {
