@@ -515,10 +515,10 @@ internal static class StorePaymentJournal
             + entry.Amount
             + " reserved="
             + reserved
-            + " credited="
-            + credited
             + " refunded="
             + refunded
+            + " credited="
+            + credited
             + (
                 entry.Payee == 0
                     ? string.Empty

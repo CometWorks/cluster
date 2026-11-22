@@ -1745,13 +1745,15 @@ def p2_wa_rep_burst(bench) -> None:
     bench.exercised(identity=identity)
 
 
-# -- P2-STORE-BURST a store payment's game-thread cost, quiet and with the disk busy (SE-1883) ----------------------
+# -- P2-STORE-BURST a store payment's game-thread cost, quiet and with the disk busy (SE-1883, SE-1525) --------------
 
 
 STORE_BURST_MS = 10000  # each phase: the node spends 250 ms of every frame on store payments this long
-STORE_BURST_P90_MS = 150  # guard: a payment's game-thread time at the 90th percentile (about 60-75 ms on polaris)
-STORE_JOURNAL_MEAN_MS = 5  # guard: the payment journal's mean append, fsync included
+STORE_BURST_COUNT = 200  # at most this many payments a phase: the settle worker sends two legs for each
+STORE_BURST_P90_MS = 10  # a payment's game-thread time at the 90th percentile (59-74 ms when it waited on the WA)
+STORE_JOURNAL_MEAN_MS = 5  # the payment journal's mean append, fsync included
 STORE_DISK_CHUNK_MB = 64  # the load: write and fsync this much at a time, as node saves and replicas do
+STORE_SETTLE_TIMEOUT = 180  # every payment of both phases settled at the WA
 
 
 def _disk_load(directory, stop: threading.Event) -> None:
@@ -1770,24 +1772,35 @@ def _disk_load(directory, stop: threading.Event) -> None:
         path.unlink(missing_ok=True)
 
 
+def _store_accounts(bench, balance: int) -> tuple[int, int]:
+    payer = 918830000000000000 + random.randrange(1_000_000) * 2
+    for owner, start in ((payer, balance), (payer + 1, 0)):
+        bench.cluster.node("node-1", f"/banking-test-create?ownerId={owner}&balance={start}", "POST")
+        _require(bench, f"account {owner} exists at the WA and on node-1", bool(_poll(
+            lambda: all((_try(bench.cluster.node, n, f"/banking-test-status?ownerId={owner}") or {}).get("balance") == start
+                        for n in ("wa-1", "node-1")), 30)))
+    return payer, payer + 1
+
+
+def _wa_money(bench, owner: int):
+    return (_try(bench.cluster.node, "wa-1", f"/banking-test-status?ownerId={owner}") or {}).get("balance")
+
+
 def p2_store_burst(bench) -> None:
-    """SE-1883: what a store payment costs a node's game thread. On octahedron-test (2026-11-22) NPC traders made 17,288
-    store trades in a day; 4% of them sat in a game-thread frame of 250-960 ms, most of the day's hitch time, and three
-    traders dumping cargo at once dropped a node to half speed. A trade journals its payment legs (two fsyncs) and waits
-    for the World Authority's answer to the reserve, both on the game thread. Here node-1 spends 250 ms of every frame on
-    1 SC store payments for 10 s on a quiet disk and 10 s while another thread writes and fsyncs 64 MB chunks on the same
-    disk, and records each payment's game-thread time and the journal's share of it. Guards: p90 under 150 ms, the
-    journal's mean append under 5 ms. The rest of a payment is the WA round trip (SE-1525)."""
+    """SE-1883/SE-1525: what a store payment costs a node's game thread. On octahedron-test (2026-11-22) NPC traders made
+    17,288 store trades in a day; 4% of them sat in a game-thread frame of 250-960 ms, most of the day's hitch time, and
+    three traders dumping cargo at once dropped a node to half speed: each trade waited on the game thread for the World
+    Authority to approve its debit (59-74 ms at p90 on this bench). Now a trade finishes against the node's replica and
+    settles in the background. Here node-1 makes up to 200 store payments of 1 SC, 250 ms of every frame, once on a
+    quiet disk and once while another thread writes and fsyncs 64 MB chunks on the same disk. A payment must hold the
+    game thread under 10 ms at p90, the journal's mean append must stay under 5 ms, and every payment must settle at the
+    WA exactly once, with node-1 holding nothing afterwards."""
     bench.start_cluster()
-    payer = 918830000000000000 + random.randrange(1_000_000)
-    payee = payer + 1
-    for owner in (payer, payee):
-        bench.cluster.node("node-1", f"/banking-test-create?ownerId={owner}&balance=1000000", "POST")
-        _require(bench, f"account {owner} exists at the WA", bool(_poll(
-            lambda: _try(bench.cluster.node, "wa-1", f"/banking-test-status?ownerId={owner}").get("balance") == 1000000, 30)))
+    payer, payee = _store_accounts(bench, 1_000_000)
 
     def burst(label: str) -> dict:
-        bench.cluster.node("node-1", f"/test-store-payment-burst?payerId={payer}&payeeId={payee}&ms={STORE_BURST_MS}", "POST")
+        bench.cluster.node("node-1", f"/test-store-payment-burst?payerId={payer}&payeeId={payee}&ms={STORE_BURST_MS}"
+                                     f"&count={STORE_BURST_COUNT}", "POST")
         result = _poll(lambda: (lambda answer: answer if answer.get("done") else None)(
             _try(bench.cluster.node, "node-1", "/test-store-payment-burst")), STORE_BURST_MS / 1000 + 60)
         bench.record(f"burst-{label}", result or {})
@@ -1809,7 +1822,52 @@ def p2_store_burst(bench) -> None:
                     result["paymentP90Ms"] < STORE_BURST_P90_MS, json.dumps(result))
         bench.check(f"{label}: a payment journal append took under {STORE_JOURNAL_MEAN_MS} ms on average",
                     result["journalTotalMs"] < STORE_JOURNAL_MEAN_MS * max(1, result["journalAppends"]), json.dumps(result))
-    bench.exercised(quiet=quiet, busy=busy)
+    paid = quiet["payments"] + busy["payments"]
+    started = time.monotonic()
+    settled = _poll(lambda: _wa_money(bench, payer) == 1_000_000 - paid and _wa_money(bench, payee) == paid, STORE_SETTLE_TIMEOUT)
+    bench.record("settle", {"payments": paid, "seconds": round(time.monotonic() - started, 1),
+                            "payer": _wa_money(bench, payer), "payee": _wa_money(bench, payee)})
+    bench.check(f"all {paid} payments settled at the WA exactly once", bool(settled),
+                json.dumps({"payer": _wa_money(bench, payer), "payee": _wa_money(bench, payee), "paid": paid}))
+    holds = _poll(lambda: (_try(bench.cluster.node, "node-1", f"/test-store-holds?payerId={payer}") or {}).get("held") == 0, 30)
+    bench.check("node-1 holds nothing of the payer once its replica shows the settlements", bool(holds))
+    bench.exercised(quiet=quiet, busy=busy, paid=paid)
+
+
+# -- P2-STORE-SETTLE-RESTART a node killed in the middle of settling its trades (SE-1525) ----------------------------
+
+
+def p2_store_settle_restart(bench) -> None:
+    """SE-1525: a node killed while it settles trades it already finished settles each one exactly once after its
+    restart, from its payment journal. node-1 makes two store payments of 100 SC from a payer with 1,000: the first
+    settles its reserve and is killed before the credit (the worker pauses between them), the second is killed before
+    either leg (the worker waits). After the restart the payer must have 800 and the payee 200 at the WA, and they must
+    stay there."""
+    bench.start_cluster()
+    payer, payee = _store_accounts(bench, 1000)
+    bench.cluster.node("node-1", "/test-store-settle-hold?afterReserveMs=60000", "POST")
+    first = bench.cluster.node("node-1", f"/banking-test-store-payment?payerId={payer}&payeeId={payee}&amount=100&commit=true", "POST")
+    _require(bench, "the first trade finished at once", first.get("approved") and first.get("credit"), json.dumps(first))
+    _require(bench, "its reserve reached the WA, its credit not yet",
+             bool(_poll(lambda: _wa_money(bench, payer) == 900 and _wa_money(bench, payee) == 0, 30)),
+             json.dumps({"payer": _wa_money(bench, payer), "payee": _wa_money(bench, payee)}))
+    # The worker sleeps in the first payment's pause, so the second waits in its queue: no leg sent.
+    second = bench.cluster.node("node-1", f"/banking-test-store-payment?payerId={payer}&payeeId={payee}&amount=100&commit=true", "POST")
+    _require(bench, "the second trade finished at once", second.get("approved") and second.get("credit"), json.dumps(second))
+    time.sleep(2)
+    before = {"payer": _wa_money(bench, payer), "payee": _wa_money(bench, payee)}
+    bench.check("before the kill the WA has the first reserve only", before == {"payer": 900, "payee": 0}, json.dumps(before))
+    bench.cluster.kill(slot="node-1")
+    bench.cluster.restart_node("node-1")
+    settled = _poll(lambda: _wa_money(bench, payer) == 800 and _wa_money(bench, payee) == 200, 300)
+    after = {"payer": _wa_money(bench, payer), "payee": _wa_money(bench, payee)}
+    bench.check("after the restart both trades settled: payer 800, payee 200", bool(settled), json.dumps(after))
+    reconciled = _lines(bench, "node-1", rf"store payment reconciled reserve=.* payer={payer} amount=100 reserved=True refunded=False credited=True")
+    bench.check("node-1 reconciled both trades from its journal", len(reconciled) >= 2, str(reconciled)[:400])
+    time.sleep(10)
+    final = {"payer": _wa_money(bench, payer), "payee": _wa_money(bench, payee)}
+    bench.check("the balances hold (no second replay)", final == {"payer": 800, "payee": 200}, json.dumps(final))
+    bench.exercised(before=before, after=after, final=final)
 
 SCENARIOS_WA_OPS = {
     "P2-WA-04": (p2_wa_04, "antenna relay chain, remote terminal, on-demand pull", "3"),
@@ -1821,7 +1879,8 @@ SCENARIOS_WA_OPS = {
     "P2-DROP-CAP": (p2_drop_cap, "#1443: at most drops.maxActive container drops active cluster-wide, offline ones included", "3"),
     "P2-WA-NODE-WAIT": (p2_wa_node_wait, "SE-1228: the WA's game thread never waits on a node whose game thread waits on the WA", "3"),
     "P2-WA-REP-BURST": (p2_wa_rep_burst, "SE-1280: 1,000 reputation writes in one node frame never wait on the WA", "3"),
-    "P2-STORE-BURST": (p2_store_burst, "SE-1883: a store payment's game-thread cost, quiet and with the disk busy", "3"),
+    "P2-STORE-BURST": (p2_store_burst, "SE-1883/SE-1525: a store payment's game-thread cost, quiet and with the disk busy", "3"),
+    "P2-STORE-SETTLE-RESTART": (p2_store_settle_restart, "SE-1525: a node killed mid-settlement settles each trade once after its restart", "3"),
     # P2-WA-02 (concurrent cross-node mutations never overdraw; balances converge) is asserted here.
     "P2-REC-01": (p2_rec_01, "WA killed inside a held mutation; queue replay conserves", "4"),
     "P2-CHR-04": (p2_chr_04, "stale duplicate character arriving at the live body's node (T-0169)", "3"),
