@@ -76,7 +76,7 @@ routes, under the same error handling.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /cluster/respawn-points`, `/respawn-cooldown`, `POST /cluster/respawn-execute` | respawn registry |
+| `GET /cluster/respawn-points`, `/respawn-cooldown`, `POST /cluster/respawn-execute` | respawn registry. `points` is the offline partitions' points overlaid by the nodes' live reports, live winning per respawn entity; `live` and `offline` count each list. Since SE-1869 they travel as two global-state subsystems: `respawns` (live, a change of only positions and oxygen at most every `respawns.motionPublishSeconds`) and `respawns-offline` (published only when it changes) |
 | `POST /cluster/lobby-anchor` | Inspect an existing station or materialize a reserved grid ID, fenced to a serving regular node epoch. Reports pending until its owned partition has a catalogued save. See [lobby administration](Lobby.md). |
 | `POST /cluster/teleport` | server-side teleport |
 | `POST /cluster/grid-delete?entityId=&name=` | #1334: remove an unpiloted grid on its owning node, as the trash collector does; `name` must equal the grid's display name. Refused (`deleted=false` with a `reason`) when the grid is not here, closing, not top-level, frozen for a handover, inside the first `gridDelete.linkSettleSeconds` (60) of its import grace (SE-1317: not the whole 300 s of a recovery load or offline wake), has a seated pilot, is controlled by an online player or is mechanically attached to other grids. A delete that leaves no live member in its partition (also after earlier deletes of the others) queues the partition's empty Final and the registry reaps the row (`emptyRelease: queued`). Fleet sweep: `Tools/leftover-ship-sweep.py` |
