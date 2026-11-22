@@ -49,8 +49,12 @@ internal static class JumpObstacleService
 
     private static readonly ConcurrentDictionary<long, Query> Queries = new();
 
-    private static readonly AccessTools.FieldRef<MyGridJumpDriveSystem, Vector3D> SelectedDestination =
-        AccessTools.FieldRefAccess<MyGridJumpDriveSystem, Vector3D>("m_selectedDestination");
+    private static readonly AccessTools.FieldRef<
+        MyGridJumpDriveSystem,
+        Vector3D
+    > SelectedDestination = AccessTools.FieldRefAccess<MyGridJumpDriveSystem, Vector3D>(
+        "m_selectedDestination"
+    );
 
     private static readonly AccessTools.FieldRef<
         MyGridJumpDriveSystem,
@@ -59,9 +63,10 @@ internal static class JumpObstacleService
         "m_obstaclesInRange"
     );
 
-    private static readonly Func<MyGridJumpDriveSystem, MyCubeGrid> GridOf = AccessTools.MethodDelegate<
-        Func<MyGridJumpDriveSystem, MyCubeGrid>
-    >(AccessTools.PropertyGetter(typeof(MyGridJumpDriveSystem), "Grid"));
+    private static readonly Func<MyGridJumpDriveSystem, MyCubeGrid> GridOf =
+        AccessTools.MethodDelegate<Func<MyGridJumpDriveSystem, MyCubeGrid>>(
+            AccessTools.PropertyGetter(typeof(MyGridJumpDriveSystem), "Grid")
+        );
 
     private static bool Active =>
         ClusterRuntime.IsClustered && !ClusterRuntime.IsWorldAuthority && Sync.IsServer;
@@ -193,13 +198,23 @@ internal static class JumpObstacleService
     }
 
     private static double[] Row(BoundingBoxD bounds) =>
-        new[] { bounds.Min.X, bounds.Min.Y, bounds.Min.Z, bounds.Max.X, bounds.Max.Y, bounds.Max.Z };
+        new[]
+        {
+            bounds.Min.X,
+            bounds.Min.Y,
+            bounds.Min.Z,
+            bounds.Max.X,
+            bounds.Max.Y,
+            bounds.Max.Z,
+        };
 
     // Game thread, every node: the bounds of what this node owns in the box; the World Authority: the offline members
     private static Task<byte[]> OnQuery(PluginMessage message)
     {
         var rows = new List<double[]>();
-        double[] box = JsonSerializer.Deserialize<double[]>(message.Payload ?? Encoding.UTF8.GetBytes("[]"));
+        double[] box = JsonSerializer.Deserialize<double[]>(
+            message.Payload ?? Encoding.UTF8.GetBytes("[]")
+        );
         if (box is { Length: 6 })
         {
             var search = new BoundingBoxD(
