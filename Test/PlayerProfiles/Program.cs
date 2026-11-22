@@ -120,6 +120,37 @@ Check(
     "the cap keeps the most recently seen cameras"
 );
 
+// A node reporting more cameras than the cap, every second: the record settles and stops changing.
+var record5 = new Dictionary<(ulong SteamId, int SerialId), PlayerProfile>();
+var published5 = new GlobalStateDelta<PlayerProfileKey, PlayerProfile>();
+PlayerProfile many = Profile(
+    10,
+    cameras: Enumerable.Range(1, 200).Select(c => Camera(9000 + c)).ToArray()
+);
+int changes = 0;
+for (long second = 0; second < 30; second++)
+    if (
+        PlayerProfileCodec.TakeDelta(
+            record5,
+            PlayerProfileCodec.Merge(
+                record5,
+                [
+                    [many],
+                ],
+                now + second,
+                Week,
+                MaxCameras
+            ),
+            published5
+        ) != null
+    )
+        changes++;
+Check(
+    changes == 1,
+    $"a player over the camera cap changes the record once, not every merge ({changes})"
+);
+Check(record5[(10, 0)].Cameras.Length == MaxCameras, "...and keeps the cap");
+
 // Age: an offline player's cameras expire once no node reported them for the retention period.
 var record3 = new Dictionary<(ulong SteamId, int SerialId), PlayerProfile>();
 var published3 = new GlobalStateDelta<PlayerProfileKey, PlayerProfile>();

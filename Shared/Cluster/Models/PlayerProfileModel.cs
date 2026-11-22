@@ -239,9 +239,11 @@ public static class PlayerProfileCodec
     }
 
     /// <summary>
-    /// Stored union reported, the reporting node's copy winning per entity and stamped as seen now. A
-    /// stamp younger than the refresh interval is kept, so a node reporting the same cameras every second
-    /// does not change the record (and cause a broadcast) every second.
+    /// Stored union reported, the reporting node's copy winning per entity and stamped as seen now, on a grid of
+    /// the refresh interval: a node reporting the same cameras every second changes the record (and causes a
+    /// broadcast) once per interval, not every second. The grid also makes every camera of one report tie, so a
+    /// player reporting more than the cap keeps the same ones: stamped one by one, the cameras the cap dropped
+    /// came back newer than the kept ones and the record flipped on every merge (bench, 2026-11-22).
     /// </summary>
     public static PlayerCameraSetting[] UnionCameras(
         PlayerCameraSetting[] stored,
@@ -251,19 +253,12 @@ public static class PlayerProfileCodec
     )
     {
         long refresh = SeenRefreshSeconds(cameraRetentionSeconds);
+        long seen = now - now % refresh;
         Dictionary<long, PlayerCameraSetting> union =
             stored?.ToDictionary(camera => camera.EntityId)
             ?? new Dictionary<long, PlayerCameraSetting>();
         foreach (PlayerCameraSetting camera in reported ?? Array.Empty<PlayerCameraSetting>())
-        {
-            long seen =
-                union.TryGetValue(camera.EntityId, out PlayerCameraSetting old)
-                && old.Seen > 0
-                && now - old.Seen < refresh
-                    ? old.Seen
-                    : now;
             union[camera.EntityId] = camera with { Seen = seen };
-        }
         return union.Values.OrderBy(camera => camera.EntityId).ToArray();
     }
 
