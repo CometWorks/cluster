@@ -5,7 +5,9 @@ Client diagnostics adds `GET/PUT /admin/v1/rotation` and
 for publication leases, incarnation fencing and the game mod-network contract.
 
 
-The stable operator contract for Quasar, the thin admin CLI, and other automation.
+For third-party integrations, use the `/admin/v1` endpoints listed under
+[Operations](#operations). This is the stable operator contract for Quasar,
+the thin admin CLI and other automation.
 It lives on the same control listener as the legacy routes (`--control`, default
 `127.0.0.1:28016`) under the `/admin/v1` prefix. Everything outside this prefix —
 `/registry/*`, `/handover`, node `/cluster/*` routes — is an internal implementation
