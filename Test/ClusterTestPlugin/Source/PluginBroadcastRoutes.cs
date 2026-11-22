@@ -102,7 +102,8 @@ internal static class PluginBroadcastRoutes
                 );
             }
         );
-        // GET /plugin-broadcast-burst?count=N - N broadcasts at once from here: how many answers of each code, per node (SE-852).
+        // GET /plugin-broadcast-burst?count=N[&size=BYTES] - N broadcasts at once from here: how many answers of each code, per
+        // node (SE-852). size pads each message to that many bytes; the handler echoes it, so the replies are as large (SE-1853).
         TestRoutes.Add(
             "GET",
             "/plugin-broadcast-burst",
@@ -112,13 +113,18 @@ internal static class PluginBroadcastRoutes
                 int count = int.TryParse(context.Request.QueryString["count"], out var given)
                     ? given
                     : 24;
+                int size = int.TryParse(context.Request.QueryString["size"], out var bytes)
+                    ? bytes
+                    : 0;
                 var results = Task.WhenAll(
                         Enumerable
                             .Range(0, count)
                             .Select(i =>
                                 client.BroadcastAsync(
                                     Topic,
-                                    Encoding.UTF8.GetBytes("burst-" + i),
+                                    Encoding.UTF8.GetBytes(
+                                        ("burst-" + i + "-").PadRight(size, 'x')
+                                    ),
                                     Guid.NewGuid(),
                                     TimeSpan.FromSeconds(10),
                                     true
