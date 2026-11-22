@@ -1576,6 +1576,7 @@ public static class ClusterRuntime
             ClientDiagnostics.Update();
         GridListCommand.Update();
         AdminMenuService.Update();
+        JumpObstacleService.Update();
         WatchGameThreadExit();
         UpdateDormancy();
         ApplyPendingAuthorityGeneration();

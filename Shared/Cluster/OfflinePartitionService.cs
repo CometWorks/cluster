@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Sandbox.Game.World;
+using VRageMath;
 
 namespace ClusterPlugin;
 
@@ -76,6 +77,39 @@ public static class OfflinePartitionService
     public static void Install()
     {
         ClusterRuntime.AuthorizeRegistryClient(Gateway);
+    }
+
+    /// <summary>
+    /// SE-1871: the bounds of every offline member (the partition's whole sphere for a row without member spheres)
+    /// that touches <paramref name="box"/>, from the last poll of the offline table. Any thread.
+    /// </summary>
+    internal static List<BoundingBoxD> MemberBoxes(BoundingBoxD box)
+    {
+        Row[] rows;
+        lock (Sync)
+            rows = m_rows;
+        var boxes = new List<BoundingBoxD>();
+        foreach (Row row in rows)
+        {
+            if (row.MemberSpheres.Length == 0)
+            {
+                Add(row.X, row.Y, row.Z, row.Radius);
+                continue;
+            }
+            foreach (double[] sphere in row.MemberSpheres)
+                Add(sphere[0], sphere[1], sphere[2], sphere[3]);
+        }
+        return boxes;
+
+        void Add(double x, double y, double z, double radius)
+        {
+            var member = new BoundingBoxD(
+                new Vector3D(x - radius, y - radius, z - radius),
+                new Vector3D(x + radius, y + radius, z + radius)
+            );
+            if (member.Intersects(box))
+                boxes.Add(member);
+        }
     }
 
     /// <summary>Antenna entries of offline partitions, for the authority's merge (never mutated in place).</summary>
