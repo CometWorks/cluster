@@ -71,13 +71,14 @@ public static class PlayerProfileService
     // directly instead of copying the whole record on every report.
     private static readonly Dictionary<(ulong SteamId, int SerialId), PlayerProfile> Record = new();
 
+    // World Authority, SE-1870: each profile as last broadcast, so a broadcast carries only what changed.
+    // Republishing the whole record on any change sent all 227 live profiles (1.36 MB) about every 6 s.
+    private static readonly Dictionary<(ulong SteamId, int SerialId), string> Published = new();
+
     // Node state.
-    private static Dictionary<Key, PlayerProfile> m_cluster = new();
+    private static readonly Dictionary<(ulong SteamId, int SerialId), PlayerProfile> m_cluster =
+        new();
     private static bool m_clusterReady;
-    private static string m_snapshot = PlayerProfileCodec.WriteSnapshot(
-        Array.Empty<PlayerProfile>()
-    );
-    private static string m_pending;
     private static double m_nextReport;
     private static string m_lastReport;
     private static double m_nextForcedReport;
@@ -97,13 +98,15 @@ public static class PlayerProfileService
     internal static void Install()
     {
         GlobalStateChannel.RegisterAuthorityHandler(Subsystem, ReceiveReport);
+        // Broadcasts are deltas (or, from a World Authority older than SE-1870, full snapshots); the
+        // channel's sequence numbers make a node that missed one resync, which answers the full record.
         GlobalStateChannel.RegisterReplicaHandler(Subsystem, ReceiveSnapshot);
         GlobalStateChannel.RegisterSnapshot(
             Subsystem,
             () =>
             {
                 lock (Sync)
-                    return m_snapshot;
+                    return PlayerProfileCodec.WriteSnapshot(Record.Values);
             },
             ReceiveSnapshot
         );
@@ -203,6 +206,11 @@ public static class PlayerProfileService
     /// cluster's entities - <c>SaveCameraCollection</c> even drops the ones whose entity is not here - so the
     /// World Authority unions them rather than taking a report as the whole truth.
     /// </summary>
+    /// <remarks>
+    /// Only cameras of entities that exist on this node (SE-1870). <see cref="Reconcile"/> seeds the session
+    /// with every stored camera, so reporting the whole map echoed the record back and kept every camera of
+    /// every entity long gone looking alive; the World Authority expires the ones nobody reports.
+    /// </remarks>
     private static PlayerCameraSetting[] CaptureCameras(MyPlayer.PlayerId playerId)
     {
         IReadOnlyDictionary<long, MyEntityCameraSettings> settings =
@@ -210,7 +218,7 @@ public static class PlayerProfileService
         if (settings == null)
             return Array.Empty<PlayerCameraSetting>();
         return settings
-            .Where(entry => entry.Value != null)
+            .Where(entry => entry.Value != null && MyEntities.EntityExists(entry.Key))
             .Take(MaxCameras)
             .Select(entry => new PlayerCameraSetting(
                 entry.Key,
@@ -225,33 +233,6 @@ public static class PlayerProfileService
 
     private static void ApplyPending()
     {
-        string payload;
-        lock (Sync)
-        {
-            payload = m_pending;
-            m_pending = null;
-        }
-        if (payload != null)
-        {
-            try
-            {
-                PlayerProfileSnapshot snapshot = PlayerProfileCodec.ReadSnapshot(payload);
-                lock (Sync)
-                {
-                    m_cluster = snapshot.Profiles.ToDictionary(profile => new Key(
-                        profile.SteamId,
-                        profile.SerialId
-                    ));
-                    m_clusterReady = true;
-                }
-            }
-            catch (Exception error)
-            {
-                Console.WriteLine(
-                    "[ClusterPlugin] player profile snapshot rejected: " + error.Message
-                );
-            }
-        }
         // The World Authority reconciles against its own record; a node waits for its first snapshot, so a
         // node that has not heard from the WA yet never invents a profile for a player.
         if (!ClusterRuntime.IsWorldAuthority)
@@ -294,7 +275,7 @@ public static class PlayerProfileService
         lock (Sync)
             stored = ClusterRuntime.IsWorldAuthority
                 ? Record.GetValueOrDefault((key.SteamId, key.SerialId))
-                : m_cluster.GetValueOrDefault(key);
+                : m_cluster.GetValueOrDefault((key.SteamId, key.SerialId));
         if (stored == null)
         {
             // No record yet - this is a first-ever join. Make sure a toolbar EXISTS for the player, or
@@ -606,7 +587,7 @@ public static class PlayerProfileService
     private static void ReceiveReport(string origin, string payload)
     {
         PlayerProfileReport report = PlayerProfileCodec.ReadReport(payload);
-        string snapshot;
+        string delta;
         lock (Sync)
         {
             double now = ClusterRuntime.LocalMilliseconds;
@@ -618,37 +599,45 @@ public static class PlayerProfileService
                     .ToArray()
             )
                 ReportsByOrigin.Remove(stale);
-            snapshot = Merge();
-            if (snapshot == m_snapshot)
+            delta = Merge();
+            if (delta == null)
                 return;
-            m_snapshot = snapshot;
-            m_pending = snapshot;
         }
-        GlobalStateChannel.Publish(Subsystem, snapshot);
+        GlobalStateChannel.Publish(Subsystem, delta);
     }
 
     /// <summary>
-    /// The hosting node speaks for its own players; everyone else's record stays as it was. Nothing is ever
-    /// removed - a player who has been offline for a week still has their toolbar when they come back.
+    /// The hosting node speaks for its own players; everyone else's record stays as it was. Nothing is
+    /// removed but cameras - a player who has been offline for a week still has their toolbar when they
+    /// come back. Returns the delta to broadcast, or null when no profile changed.
     /// </summary>
     private static string Merge()
     {
         // Oldest report first: see PlayerProfileCodec.Merge for why the order is load-bearing.
-        PlayerProfileCodec.Merge(
+        HashSet<(ulong SteamId, int SerialId)> touched = PlayerProfileCodec.Merge(
             Record,
             ReportsByOrigin
                 .Values.OrderBy(report => report.Received)
-                .Select(report => report.Entries)
+                .Select(report => report.Entries),
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            ClusterConfig.GetInt("profiles.cameraRetentionSeconds"),
+            ClusterConfig.GetInt("profiles.maxCameras")
         );
-        return PlayerProfileCodec.WriteSnapshot(Record.Values);
+        return PlayerProfileCodec.TakeDelta(Record, touched, Published);
     }
 
+    /// <summary>
+    /// A node's copy of the record, from a broadcast (a delta) or a resync (the full record). Parsed here
+    /// rather than later so a payload that does not parse throws into the channel, which resyncs.
+    /// </summary>
     private static void ReceiveSnapshot(string payload)
     {
-        if (payload == null || payload.Length > 32 * 1024 * 1024)
-            throw new InvalidOperationException("Invalid player profile snapshot");
+        PlayerProfileSnapshot snapshot = PlayerProfileCodec.ReadSnapshot(payload);
         lock (Sync)
-            m_pending = payload;
+        {
+            PlayerProfileCodec.Apply(m_cluster, snapshot);
+            m_clusterReady |= snapshot.IsFull;
+        }
     }
 
     /// <summary>
@@ -673,6 +662,7 @@ public static class PlayerProfileService
                 var key = new Key(playerId.GetClientId(), playerId.SerialId);
                 if (Record.ContainsKey((key.SteamId, key.SerialId)))
                     continue;
+                long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 Record[(key.SteamId, key.SerialId)] = new PlayerProfile(
                     key.SteamId,
                     key.SerialId,
@@ -696,7 +686,9 @@ public static class PlayerProfileService
                             camera.Distance,
                             camera.HeadAngle?.X ?? 0f,
                             camera.HeadAngle?.Y ?? 0f,
-                            camera.IsFirstPerson
+                            camera.IsFirstPerson,
+                            // The save does not say when; the restart starts the retention clock.
+                            now
                         ))
                         .ToArray()
                         ?? Array.Empty<PlayerCameraSetting>()
