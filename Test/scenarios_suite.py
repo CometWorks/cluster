@@ -293,6 +293,32 @@ def suite_sdk_08(bench) -> None:
     bench.exercised(processes=processes, codes=counts)
 
 
+def suite_sdk_12(bench) -> None:
+    """SE-1853: a burst of plugin messages near the 64 KiB payload limit is answered Success, every one.
+
+        A node link refuses a send while its reliable queue holds over 256 packets, and such a message is about 60 of
+        them, so a few at once used to fill it: the sender failed the request as Unavailable, and a full queue on the
+        answering node dropped its reply, which the sender timed out. Both counted in PluginServiceDiagnostics Failures.
+        node-1 broadcasts 16 messages of 60 KiB at once to all three processes, whose handlers echo them back.
+        CONTROL: a burst of small messages answers Success too, so a failure is the size, not the bus.
+    """
+    processes = ["node-1", "node-2", "wa-1"]
+    bench.start_cluster(nodes=processes)
+    _plugin_services_ready(bench, processes)
+    for node_id in processes:
+        bench.cluster.node(node_id, "/plugin-broadcast")
+    count = int(os.environ.get("CLUSTER_SDK12_COUNT", "16"))
+    codes = {}
+    for label, size in (("small", 0), ("large", 60 * 1024)):
+        nodes = bench.cluster.node("node-1", f"/plugin-broadcast-burst?count={count}&size={size}", timeout=120)["nodes"]
+        codes[label] = nodes
+        bench.check(f"{label}: all {count * len(processes)} answers Success",
+                    nodes and all(c == {"Success": count} for c in nodes.values()) and set(nodes) == set(processes),
+                    json.dumps(nodes))
+    bench.record("burst-codes", codes)
+    bench.exercised(processes=processes, codes=codes)
+
+
 VIEW_CLIENT_ID = 76561199500009256
 VIEW_REMOTE_PORT = 24158 + 56
 
@@ -943,5 +969,6 @@ SCENARIOS_SUITE = {
     "SUITE-SDK-10": (suite_sdk_10, "PluginSdk offline blocker: a plugin keeps a partition online with no player near, across a move and a restart (SE-903)", "1"),
     "SUITE-SDK-11": (suite_sdk_11, "PluginSdk offline blocker: a cluster stop keeps its partition out of the offline table, so the start loads it (SE-904)", "1"),
     "SUITE-SDK-09": (suite_sdk_09, "plugin global command cluster.global-save: answered only when a recoverable global save holds what came before (SE-865)", "1"),
+    "SUITE-SDK-12": (suite_sdk_12, "plugin bus: a burst of messages near the payload limit is answered Success, every one (SE-1853)", "1"),
     "SUITE-SDK-08": (suite_sdk_08, "plugin bus: no Fenced answer from a healthy node, at any point of its update, in a burst, in a long frame (SE-852)", "1"),
 }

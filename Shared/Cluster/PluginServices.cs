@@ -616,14 +616,26 @@ internal sealed class PluginServices
         }
         try
         {
+            var elapsed = Stopwatch.StartNew();
             if (
-                !DirectTransportNodeLinkPatch.SendPlugin(
-                    JsonSerializer.SerializeToUtf8Bytes(message)
-                )
+                !await SendWhenRoom(
+                        JsonSerializer.SerializeToUtf8Bytes(message),
+                        timeout,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false)
             )
-                return diagnostics.Observe(PluginResult.Failure(PluginResultCode.Unavailable));
+                return diagnostics.Observe(
+                    PluginResult.Failure(
+                        elapsed.Elapsed >= timeout
+                            ? PluginResultCode.Timeout
+                            : PluginResultCode.Unavailable
+                    )
+                );
+            var left = timeout - elapsed.Elapsed;
             if (
-                await Task.WhenAny(completion.Task, Task.Delay(timeout, cancellationToken))
+                left <= TimeSpan.Zero
+                || await Task.WhenAny(completion.Task, Task.Delay(left, cancellationToken))
                     .ConfigureAwait(false) != completion.Task
             )
                 return diagnostics.Observe(PluginResult.Failure(PluginResultCode.Timeout));
@@ -765,7 +777,42 @@ internal sealed class PluginServices
         message.Incarnation = ClusterRuntime.RegistryNodeEpoch;
         message.Code = result.Code;
         message.Payload = result.Payload;
-        DirectTransportNodeLinkPatch.SendPlugin(JsonSerializer.SerializeToUtf8Bytes(message));
+        _ = SendWhenRoom(
+            JsonSerializer.SerializeToUtf8Bytes(message),
+            TimeSpan.FromSeconds(30),
+            CancellationToken.None
+        );
+    }
+
+    /// <summary>
+    /// SE-1853: the node link refuses a send while its reliable queue holds over 256 packets, and a
+    /// message near the 64 KiB payload limit is about 60 of them, so a few at once fill it. Waits for
+    /// room, up to the request's timeout (a reply: the longest one), instead of failing the request or
+    /// dropping the reply. False when the link is down or the time is up.
+    /// </summary>
+    private static async Task<bool> SendWhenRoom(
+        byte[] bytes,
+        TimeSpan timeout,
+        CancellationToken cancellationToken
+    )
+    {
+        if (bytes.Length > 128 * 1024)
+            return false; // Never fits, waiting won't help
+        var waited = Stopwatch.StartNew();
+        while (!DirectTransportNodeLinkPatch.SendPlugin(bytes))
+        {
+            if (!DirectTransportNodeLinkPatch.IsConnected || waited.Elapsed >= timeout)
+                return false;
+            try
+            {
+                await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     public async Task<ClusterLifecycleAcknowledgement> RequestAsync(

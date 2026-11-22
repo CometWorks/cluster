@@ -49,8 +49,9 @@ ownership counts/generation without making those observations a substitute for R
 
 Authenticated, correlated requests rejected by a changed ownership fence receive `Fenced`;
 full dispatch queues return `Capacity`, and a disconnected destination returns `Unavailable`.
-Malformed or spoofed frames are discarded. A lost connection/reply can still produce `Timeout`;
-callers must not assume an unsuccessful response proves that no side effect occurred.
+A full node link send queue is not a failure: requests and replies wait for room, up to the
+request's timeout (SE-1853). Malformed or spoofed frames are discarded. A lost connection/reply
+can still produce `Timeout`; callers must not assume an unsuccessful response proves that no side effect occurred.
 
 The World Authority reports Serving only after its global checkpoint/ledger restore has
 succeeded and the game session is ready. Fresh worlds validate the supplied checkpoint
