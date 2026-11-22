@@ -102,6 +102,32 @@ internal static class MovedRoutes
                 return;
             }
         );
+        // SE-1869, World Authority: these respawn points (a JSON array of ClusterRespawnPoint), each `copies` times with
+        // consecutive respawn entity ids, join the offline partitions' points; an empty array clears them.
+        TestRoutes.Add(
+            "POST",
+            "/respawn-test-offline-points",
+            (context, path) =>
+            {
+                ClusterRespawnPoint[] points = JsonSerializer.Deserialize<ClusterRespawnPoint[]>(
+                    TestRoutes.Query(context, "points")
+                );
+                Write(
+                    context,
+                    200,
+                    "application/json",
+                    Encoding.UTF8.GetBytes(
+                        JsonSerializer.Serialize(
+                            RespawnRegistryService.ConfigureTestOfflinePoints(
+                                points,
+                                int.Parse(TestRoutes.Query(context, "copies", "1"))
+                            )
+                        )
+                    )
+                );
+                return;
+            }
+        );
         TestRoutes.Add(
             "GET",
             "/respawn-test-delay",
