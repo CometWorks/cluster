@@ -81,7 +81,7 @@ public static class OfflinePartitionService
 
     /// <summary>
     /// SE-1871: the bounds of every offline member (the partition's whole sphere for a row without member spheres)
-    /// that touches <paramref name="box"/>, from the last poll of the offline table. Any thread.
+    /// that touches <paramref name="box"/>, from the last poll of the offline table (the World Authority's). Any thread.
     /// </summary>
     internal static List<BoundingBoxD> MemberBoxes(BoundingBoxD box)
     {

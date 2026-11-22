@@ -25,9 +25,10 @@ namespace ClusterPlugin;
 /// partition, ended inside it.
 ///
 /// The charge takes 10 s. When it starts (<c>Jump</c>, on the server), this node asks every node over the plugin
-/// bus for the bounds of the entities it owns in that box, and takes the offline members in it from its copy of
-/// the offline table. When the charge ends, those bounds go into vanilla's obstacle list, inflated the vanilla way,
-/// and vanilla picks the arrival as on a single server. A node that does not answer in time is logged and left out.
+/// bus for the bounds of the entities it owns in that box, and the World Authority for the offline members in it
+/// (only the authority keeps a copy of the offline table). When the charge ends, those bounds go into vanilla's
+/// obstacle list, inflated the vanilla way, and vanilla picks the arrival as on a single server. A role that does
+/// not answer in time is logged and left out.
 /// A charge restored from a save or a handover (no <c>Jump</c> call on this node) asks nothing: vanilla alone.
 /// </summary>
 internal static class JumpObstacleService
@@ -42,7 +43,6 @@ internal static class JumpObstacleService
     private sealed class Query
     {
         public BoundingBoxD Box;
-        public List<BoundingBoxD> Offline;
         public volatile List<BoundingBoxD> Remote;
         public volatile string Missing;
     }
@@ -71,7 +71,6 @@ internal static class JumpObstacleService
         if (
             m_registered
             || !ClusterRuntime.IsClustered
-            || ClusterRuntime.IsWorldAuthority
             || Sandbox.Game.World.MySession.Static?.Ready != true
             || PluginServices.Instance == null
         )
@@ -106,7 +105,6 @@ internal static class JumpObstacleService
         {
             Box = SearchBox(grid.GetPhysicalGroupAABB(), SelectedDestination(system)),
         };
-        query.Offline = OfflinePartitionService.MemberBoxes(query.Box);
         Queries[grid.EntityId] = query;
         byte[] payload = JsonSerializer.SerializeToUtf8Bytes(
             new[]
@@ -129,7 +127,7 @@ internal static class JumpObstacleService
                         Topic,
                         payload,
                         Guid.NewGuid(),
-                        false,
+                        true,
                         Timeout,
                         default
                     )
@@ -177,27 +175,27 @@ internal static class JumpObstacleService
         BoundingBoxD group = grid.GetPhysicalGroupAABB();
         List<BoundingBoxD> obstacles = ObstaclesInRange(system);
         List<BoundingBoxD> remote = query.Remote;
-        foreach (BoundingBoxD box in query.Offline)
-            obstacles.Add(Inflated(box, group));
         if (remote != null)
             foreach (BoundingBoxD box in remote)
                 obstacles.Add(Inflated(box, group));
         Console.WriteLine(
             string.Format(
                 CultureInfo.InvariantCulture,
-                "[ClusterPlugin] jump obstacles grid={0} target=({1:F0},{2:F0},{3:F0}) online={4} offline={5}{6}",
+                "[ClusterPlugin] jump obstacles grid={0} target=({1:F0},{2:F0},{3:F0}) answered={4}{5}",
                 grid.EntityId,
                 desired.X,
                 desired.Y,
                 desired.Z,
                 remote == null ? "late" : remote.Count.ToString(CultureInfo.InvariantCulture),
-                query.Offline.Count,
                 query.Missing == null ? "" : " unanswered=" + query.Missing
             )
         );
     }
 
-    // Game thread, every node: the bounds of what this node owns in the box
+    private static double[] Row(BoundingBoxD bounds) =>
+        new[] { bounds.Min.X, bounds.Min.Y, bounds.Min.Z, bounds.Max.X, bounds.Max.Y, bounds.Max.Z };
+
+    // Game thread, every node: the bounds of what this node owns in the box; the World Authority: the offline members
     private static Task<byte[]> OnQuery(PluginMessage message)
     {
         var rows = new List<double[]>();
@@ -208,6 +206,12 @@ internal static class JumpObstacleService
                 new Vector3D(box[0], box[1], box[2]),
                 new Vector3D(box[3], box[4], box[5])
             );
+            if (ClusterRuntime.IsWorldAuthority)
+            {
+                foreach (BoundingBoxD member in OfflinePartitionService.MemberBoxes(search))
+                    rows.Add(Row(member));
+                return Task.FromResult(JsonSerializer.SerializeToUtf8Bytes(rows));
+            }
             var found = new List<MyEntity>();
             MyGamePruningStructure.GetTopMostEntitiesInBox(ref search, found);
             foreach (MyEntity entity in found)
@@ -219,18 +223,7 @@ internal static class JumpObstacleService
                     || !AdminMenuService.OwnedHere(entity.EntityId)
                 )
                     continue;
-                BoundingBoxD bounds = entity.PositionComp.WorldAABB;
-                rows.Add(
-                    new[]
-                    {
-                        bounds.Min.X,
-                        bounds.Min.Y,
-                        bounds.Min.Z,
-                        bounds.Max.X,
-                        bounds.Max.Y,
-                        bounds.Max.Z,
-                    }
-                );
+                rows.Add(Row(entity.PositionComp.WorldAABB));
             }
         }
         return Task.FromResult(JsonSerializer.SerializeToUtf8Bytes(rows));
