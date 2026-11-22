@@ -57,9 +57,9 @@ building, Magnetar registration, CLI controls, release packaging and debugging.
 CometWorks Clustering (Dynamic Mashing)
 Copyright (C) 2026 CometWorks (https://github.com/CometWorks)
 
-Your own plugins can stay closed under the [plugin exception](EXCEPTION.md),
-including plugins that patch internals at runtime. Copied core code still follows
-AGPL. The [licensing guide](LICENSING.md) lists the MIT contract code and source
+Your own plugins can stay closed when they use the interfaces we document for
+third-party use. See the [plugin exception](EXCEPTION.md) for details.
+The [licensing guide](LICENSING.md) lists the MIT contract code and source
 requirements.
 [Alternative licensing](LICENSING.md#alternative-licensing) is available case by case.
 
