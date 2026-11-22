@@ -74,8 +74,12 @@ now += 1;
 Check(Fold([edited]) == null, "an unchanged report broadcasts nothing");
 
 // ...also later, while the camera stamps are within their refresh interval.
-now += 600;
-Check(Fold([edited]) == null, "re-seen cameras inside the refresh interval broadcast nothing");
+// ...and re-seen cameras change the record at most once per refresh interval (an hour by default).
+int restamps = 0;
+for (int second = 0; second < 3600; second += 5, now += 5)
+    if (Fold([edited]) != null)
+        restamps++;
+Check(restamps <= 1, $"re-seen cameras restamp at most once an hour ({restamps})");
 
 // A node that runs the code from before SE-1870 rejects a delta and keeps its record.
 var old = JsonSerializer.Deserialize<OldSnapshot>(delta);
@@ -128,6 +132,7 @@ PlayerProfile many = Profile(
     cameras: Enumerable.Range(1, 200).Select(c => Camera(9000 + c)).ToArray()
 );
 int changes = 0;
+long t5 = now / 3600 * 3600 + 11; // just past player 10's hourly grid point (phase = steam id 10)
 for (long second = 0; second < 30; second++)
     if (
         PlayerProfileCodec.TakeDelta(
@@ -137,7 +142,7 @@ for (long second = 0; second < 30; second++)
                 [
                     [many],
                 ],
-                now + second,
+                t5 + second,
                 Week,
                 MaxCameras
             ),
@@ -150,6 +155,29 @@ Check(
     $"a player over the camera cap changes the record once, not every merge ({changes})"
 );
 Check(record5[(10, 0)].Cameras.Length == MaxCameras, "...and keeps the cap");
+
+// Many players online across a refresh boundary: they restamp one by one, not all in one broadcast.
+var record6 = new Dictionary<(ulong SteamId, int SerialId), PlayerProfile>();
+var published6 = new GlobalStateDelta<PlayerProfileKey, PlayerProfile>();
+PlayerProfile[] online = Enumerable
+    .Range(1, 200)
+    .Select(i => Profile(76561198000000000UL + (ulong)i * 7919, cameras: [Camera(i)]))
+    .ToArray();
+int biggest = 0;
+for (long second = 0; second < 3700; second += 10)
+{
+    string d = PlayerProfileCodec.TakeDelta(
+        record6,
+        PlayerProfileCodec.Merge(record6, [online], now + second, Week, MaxCameras),
+        published6
+    );
+    if (second > 0 && d != null)
+        biggest = Math.Max(biggest, PlayerProfileCodec.ReadSnapshot(d).Changed.Length);
+}
+Check(
+    biggest < 20,
+    $"the hourly restamp is spread over the hour (largest delta {biggest} of 200 players)"
+);
 
 // Age: an offline player's cameras expire once no node reported them for the retention period.
 var record3 = new Dictionary<(ulong SteamId, int SerialId), PlayerProfile>();
@@ -176,7 +204,7 @@ PlayerProfileCodec.TakeDelta(
         [
             [Profile(8, cameras: [Camera(1)])],
         ],
-        now + 50,
+        now + 40,
         60,
         MaxCameras
     ),
@@ -184,7 +212,7 @@ PlayerProfileCodec.TakeDelta(
 );
 string expiry = PlayerProfileCodec.TakeDelta(
     record3,
-    PlayerProfileCodec.Merge(record3, [], now + 70, 60, MaxCameras),
+    PlayerProfileCodec.Merge(record3, [], now + 80, 60, MaxCameras),
     published3
 );
 Check(expiry != null, "an expiry is broadcast even with nobody reporting");
@@ -195,7 +223,7 @@ Check(
 Check(
     PlayerProfileCodec.TakeDelta(
         record3,
-        PlayerProfileCodec.Merge(record3, [], now + 71, 60, MaxCameras),
+        PlayerProfileCodec.Merge(record3, [], now + 81, 60, MaxCameras),
         published3
     ) == null,
     "an expiry is broadcast once"

@@ -210,7 +210,13 @@ public static class PlayerProfileCodec
             record[key] = profile with
             {
                 Cameras = PruneCameras(
-                    UnionCameras(stored?.Cameras, profile.Cameras, now, cameraRetentionSeconds),
+                    UnionCameras(
+                        stored?.Cameras,
+                        profile.Cameras,
+                        now,
+                        cameraRetentionSeconds,
+                        profile.SteamId
+                    ),
                     now,
                     cameraRetentionSeconds,
                     maxCameras
@@ -243,17 +249,21 @@ public static class PlayerProfileCodec
     /// the refresh interval: a node reporting the same cameras every second changes the record (and causes a
     /// broadcast) once per interval, not every second. The grid also makes every camera of one report tie, so a
     /// player reporting more than the cap keeps the same ones: stamped one by one, the cameras the cap dropped
-    /// came back newer than the kept ones and the record flipped on every merge (bench, 2026-11-22).
+    /// came back newer than the kept ones and the record flipped on every merge (bench, 2026-11-22). The grid's
+    /// phase is per player (<paramref name="phase"/>, the Steam id), so the players online do not all restamp,
+    /// and get broadcast, in the same second of the hour.
     /// </summary>
     public static PlayerCameraSetting[] UnionCameras(
         PlayerCameraSetting[] stored,
         PlayerCameraSetting[] reported,
         long now,
-        long cameraRetentionSeconds
+        long cameraRetentionSeconds,
+        ulong phase = 0
     )
     {
         long refresh = SeenRefreshSeconds(cameraRetentionSeconds);
-        long seen = now - now % refresh;
+        long offset = (long)(phase % (ulong)refresh);
+        long seen = now - ((now - offset) % refresh + refresh) % refresh;
         Dictionary<long, PlayerCameraSetting> union =
             stored?.ToDictionary(camera => camera.EntityId)
             ?? new Dictionary<long, PlayerCameraSetting>();
