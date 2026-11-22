@@ -88,7 +88,9 @@ public static class HitchRecorder
         public const int EntityUpdateAfter = 3;
         public const int AntennaScan = 4;
         public const int SessionComponents = 5;
-        public const int Count = 6;
+        public const int StoreJournal = 6;
+        public const int WorldAuthorityWait = 7;
+        public const int Count = 8;
         public static readonly string[] Names =
         {
             "physics",
@@ -97,6 +99,8 @@ public static class HitchRecorder
             "ent_after",
             "antenna",
             "components",
+            "store_journal",
+            "wa_wait",
         };
     }
 
