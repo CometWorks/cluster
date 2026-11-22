@@ -25,6 +25,10 @@ namespace ClusterPlugin;
 public static class RespawnRegistryService
 {
     private const string Subsystem = "respawns";
+
+    // SE-1869: the offline partitions' points go out on their own subsystem, only when they change. Republishing all of
+    // them with every change of a live point was 94% of each 357 KB `respawns` snapshot on the live cluster.
+    private const string OfflineSubsystem = "respawns-offline";
     private static readonly object Sync = new object();
     private static readonly HttpClient Gateway = ClusterHttp.Client(TimeSpan.FromSeconds(30));
     private static readonly Dictionary<string, Report> Reports = new Dictionary<string, Report>(
@@ -39,10 +43,19 @@ public static class RespawnRegistryService
     private static readonly HashSet<Guid> InvokedOperations = new();
     private static readonly string Node =
         Environment.GetEnvironmentVariable("CLUSTER_NODE_ID") ?? string.Empty;
+
+    // m_points is what every reader sees: the offline points overlaid with the live ones, live winning per respawn entity.
     private static ClusterRespawnPoint[] m_points = Array.Empty<ClusterRespawnPoint>();
+    private static ClusterRespawnPoint[] m_live = Array.Empty<ClusterRespawnPoint>();
+    private static ClusterRespawnPoint[] m_offline = Array.Empty<ClusterRespawnPoint>();
     private static string m_snapshot = RespawnRegistryCodec.Write(
         Array.Empty<ClusterRespawnPoint>()
     );
+    private static string m_offlineSnapshot = RespawnRegistryCodec.Write(
+        Array.Empty<ClusterRespawnPoint>()
+    );
+    private static HashSet<long> m_publishedOfflineIds = new HashSet<long>();
+    private static ClusterRespawnPoint[] m_testOfflinePoints = Array.Empty<ClusterRespawnPoint>();
 
     // SE-1865: the last published snapshot with positions and oxygen levels left out, and when a change of only those may go out.
     private static string m_publishedShape;
@@ -96,6 +109,12 @@ public static class RespawnRegistryService
         GlobalStateChannel.RegisterCommandHandler(Subsystem, HandleCommand);
         GlobalStateChannel.RegisterReplicaHandler(Subsystem, ApplySnapshot);
         GlobalStateChannel.RegisterSnapshot(Subsystem, Snapshot, ApplySnapshot);
+        GlobalStateChannel.RegisterReplicaHandler(OfflineSubsystem, ApplyOfflineSnapshot);
+        GlobalStateChannel.RegisterSnapshot(
+            OfflineSubsystem,
+            OfflineSnapshot,
+            ApplyOfflineSnapshot
+        );
     }
 
     public static void AppendRemoteRespawnPoints(
@@ -1127,7 +1146,11 @@ public static class RespawnRegistryService
         {
             Reports.Clear();
             m_points = Array.Empty<ClusterRespawnPoint>();
+            m_live = m_points;
+            m_offline = m_points;
             m_snapshot = RespawnRegistryCodec.Write(m_points);
+            m_offlineSnapshot = m_snapshot;
+            m_publishedOfflineIds = new HashSet<long>();
             m_publishedShape = null;
         }
     }
@@ -1138,6 +1161,8 @@ public static class RespawnRegistryService
             return new
             {
                 count = m_points.Length,
+                live = m_live.Length,
+                offline = m_offline.Length,
                 points = m_points.ToArray(),
                 pending = m_pendingRespawns.Count,
             };
@@ -1196,6 +1221,36 @@ public static class RespawnRegistryService
             seconds,
             moving,
         };
+    }
+
+    /// <summary>
+    /// SE-1869 test knob, World Authority: <paramref name="points"/> join the offline partitions' respawn points, each
+    /// <paramref name="copies"/> times with consecutive respawn entity ids, until the next call; an empty array clears
+    /// them. A bench has few offline partitions, the live cluster about 935 offline points. Dies with the process.
+    /// </summary>
+    public static object ConfigureTestOfflinePoints(ClusterRespawnPoint[] points, int copies = 1)
+    {
+        if (!ClusterRuntime.IsClustered || !ClusterRuntime.IsWorldAuthority)
+            throw new InvalidOperationException(
+                "Only the World Authority keeps the offline partitions' respawn points"
+            );
+        if (copies is < 1 or > 4096)
+            throw new ArgumentOutOfRangeException(nameof(copies));
+        ClusterRespawnPoint[] offline = (points ?? Array.Empty<ClusterRespawnPoint>())
+            .SelectMany(x =>
+                Enumerable
+                    .Range(0, copies)
+                    .Select(i =>
+                        x with
+                        {
+                            RespawnEntityId = x.RespawnEntityId + i,
+                            Origin = "offline:test",
+                        }
+                    )
+            )
+            .ToArray();
+        Volatile.Write(ref m_testOfflinePoints, offline);
+        return new { count = offline.Length };
     }
 
     public static object TestDelayStatus() =>
@@ -1376,7 +1431,9 @@ public static class RespawnRegistryService
 
     private static void PublishMerged()
     {
-        string snapshot;
+        string snapshot = null;
+        string offlineSnapshot = null;
+        bool offlineFirst = false;
         lock (Sync)
         {
             double cutoff = ClusterRuntime.LocalMilliseconds - 5000;
@@ -1387,51 +1444,96 @@ public static class RespawnRegistryService
                     .ToArray()
             )
                 Reports.Remove(origin);
-            // T-0193: offline partitions' points FIRST, so a live report of the same room (the partition loaded)
-            // wins the Last() below.
-            m_points = OfflinePartitionService
+            m_offline = OfflinePartitionService
                 .RespawnPoints()
-                .Concat(
-                    Reports
-                        .OrderBy(x => x.Value.Received)
-                        .ThenBy(x => x.Key, StringComparer.Ordinal)
-                        .SelectMany(x => x.Value.Points)
-                )
+                .Concat(Volatile.Read(ref m_testOfflinePoints))
+                .GroupBy(x => x.RespawnEntityId)
+                .Select(x => x.First())
+                .OrderBy(x => x.RespawnEntityId)
+                .ToArray();
+            m_live = Reports
+                .OrderBy(x => x.Value.Received)
+                .ThenBy(x => x.Key, StringComparer.Ordinal)
+                .SelectMany(x => x.Value.Points)
                 .GroupBy(x => x.RespawnEntityId)
                 .Select(x => x.Last())
                 .OrderBy(x => x.RespawnEntityId)
                 .ToArray();
-            snapshot = RespawnRegistryCodec.Write(m_points);
-            if (snapshot == m_snapshot)
-                return;
-            // SE-1865: every report from a node with a medbay on a moving ship, or whose oxygen level drifts, changed the
-            // snapshot, and each change sent all points to every node. On the live cluster that was ~360 KB about four
-            // times a second, which backed the ordered global queue up for tens of seconds and delayed chat behind it.
-            // A change of only positions and oxygen levels now waits for respawns.motionPublishSeconds; any other
-            // change (a point added, removed, switched off, or given another owner or share mode) goes out at once.
-            string shape = RespawnRegistryCodec.Write(
-                m_points.Select(x => x with { OxygenLevel = 0, X = 0, Y = 0, Z = 0 }).ToArray()
-            );
-            double now = ClusterRuntime.LocalMilliseconds;
-            if (shape == m_publishedShape && now < m_nextMotionPublish)
-                return;
-            m_publishedShape = shape;
-            m_nextMotionPublish =
-                now + ClusterConfig.GetInt("respawns.motionPublishSeconds") * 1000.0;
-            m_snapshot = snapshot;
+            m_points = Merge(m_offline, m_live);
+
+            string offlineNow = RespawnRegistryCodec.Write(m_offline);
+            if (offlineNow != m_offlineSnapshot)
+            {
+                // A point that moves from a live report into an offline partition (the partition was put to sleep) must
+                // reach the replicas in its new list before it leaves the old one, and the other way round when a
+                // partition loads. The global queue is ordered, so publish the list that gains points first.
+                offlineFirst = m_offline.Any(x =>
+                    !m_publishedOfflineIds.Contains(x.RespawnEntityId)
+                );
+                m_publishedOfflineIds = new HashSet<long>(m_offline.Select(x => x.RespawnEntityId));
+                m_offlineSnapshot = offlineSnapshot = offlineNow;
+            }
+
+            string liveNow = RespawnRegistryCodec.Write(m_live);
+            if (liveNow != m_snapshot)
+            {
+                // SE-1865: every report from a node with a medbay on a moving ship, or whose oxygen level drifts, changed
+                // the snapshot, and each change sent all points to every node. On the live cluster that was ~360 KB
+                // about four times a second, which backed the ordered global queue up for tens of seconds and delayed
+                // chat behind it. A change of only positions and oxygen levels now waits for
+                // respawns.motionPublishSeconds; any other change (a point added, removed, switched off, or given
+                // another owner or share mode) goes out at once.
+                string shape = RespawnRegistryCodec.Write(
+                    m_live.Select(x => x with { OxygenLevel = 0, X = 0, Y = 0, Z = 0 }).ToArray()
+                );
+                double now = ClusterRuntime.LocalMilliseconds;
+                if (shape != m_publishedShape || now >= m_nextMotionPublish)
+                {
+                    m_publishedShape = shape;
+                    m_nextMotionPublish =
+                        now + ClusterConfig.GetInt("respawns.motionPublishSeconds") * 1000.0;
+                    m_snapshot = snapshot = liveNow;
+                }
+            }
         }
+        if (offlineFirst)
+            Publish(OfflineSubsystem, offlineSnapshot);
+        Publish(Subsystem, snapshot);
+        if (!offlineFirst)
+            Publish(OfflineSubsystem, offlineSnapshot);
+    }
+
+    private static void Publish(string subsystem, string snapshot)
+    {
+        if (snapshot == null)
+            return;
         try
         {
-            GlobalStateChannel.Publish(Subsystem, snapshot);
+            GlobalStateChannel.Publish(subsystem, snapshot);
         }
         catch (Exception exception)
         {
             Console.WriteLine(
-                "[ClusterPlugin] global_state unavailable=true subsystem=respawns error="
+                "[ClusterPlugin] global_state unavailable=true subsystem="
+                    + subsystem
+                    + " error="
                     + SecretRedactor.Redact(exception.Message)
             );
         }
     }
+
+    /// <summary>T-0193: the offline partitions' points under the live ones, so a live report of the same medbay (its
+    /// partition loaded) wins.</summary>
+    private static ClusterRespawnPoint[] Merge(
+        ClusterRespawnPoint[] offline,
+        ClusterRespawnPoint[] live
+    ) =>
+        offline
+            .Concat(live)
+            .GroupBy(x => x.RespawnEntityId)
+            .Select(x => x.Last())
+            .OrderBy(x => x.RespawnEntityId)
+            .ToArray();
 
     private static void ApplySnapshot(string payload)
     {
@@ -1441,9 +1543,34 @@ public static class RespawnRegistryService
         {
             foreach (RespawnPointProblem problem in m_receivedProblems.Fresh("snapshot", problems))
                 Console.WriteLine(RespawnProblemLog.Line("replica", "world-authority", problem));
-            m_points = snapshot.Points;
+            m_live = snapshot.Points;
             m_snapshot = payload;
+            m_points = Merge(m_offline, m_live);
         }
+    }
+
+    private static void ApplyOfflineSnapshot(string payload)
+    {
+        // A World Authority from before SE-1869 answers a resync of this subsystem with an empty payload; it still
+        // sends the offline points in `respawns`.
+        var problems = new List<RespawnPointProblem>();
+        ClusterRespawnPoint[] points = string.IsNullOrEmpty(payload)
+            ? Array.Empty<ClusterRespawnPoint>()
+            : RespawnRegistryCodec.Read(payload, problems).Points;
+        lock (Sync)
+        {
+            foreach (RespawnPointProblem problem in m_receivedProblems.Fresh("offline", problems))
+                Console.WriteLine(RespawnProblemLog.Line("replica", "world-authority", problem));
+            m_offline = points;
+            m_offlineSnapshot = payload;
+            m_points = Merge(m_offline, m_live);
+        }
+    }
+
+    private static string OfflineSnapshot()
+    {
+        lock (Sync)
+            return m_offlineSnapshot;
     }
 
     private static string Snapshot()
