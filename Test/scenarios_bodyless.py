@@ -27,6 +27,9 @@ from scenarios_core import CLIENT_ID, HANDOVER_TIMEOUT, _client_partition, _hand
 from scenarios_retire_loading import _node_by_backend
 from scenarios_wa_ops import _owned_by, _poll, _require, _session, _try
 
+#: The relogged client's process key: a fresh data directory, as the rejoin lane does.
+RELOG = "relog"
+
 
 def _player(bench, node_id: str) -> dict:
     """The node's player for the client: attached, dead, character (the test plugin's respawn route)."""
@@ -57,8 +60,10 @@ def _kill(bench, node_id: str) -> None:
 def _relog(bench) -> dict:
     """Close the client and join again, as the player did; it comes back dead, to the respawn screen."""
     bench.kill_client(CLIENT_ID)
-    bench.launch_client(CLIENT_ID)
-    bench.attach_api(CLIENT_ID)
+    _require(bench, "SETUP: the closed client's Gateway session cleared",
+             _poll(lambda: True if _session(bench) is None else None, 360, 5) is not None)
+    bench.launch_client(CLIENT_ID, label=RELOG)
+    bench.attach_api(CLIENT_ID, label=RELOG)
     session = _poll(lambda: (lambda s: s if s and s.get("worldReady") else None)(_session(bench)), 420)
     _require(bench, "SETUP: the relogged client is world-ready", session is not None)
     _require(bench, "SETUP: the relogged client is on the respawn screen", _poll(lambda: _medicals(bench), 120) is not None)
@@ -95,9 +100,12 @@ def _move(bench, partition: int, source: str, target: str, leg: str) -> None:
 def p2_hnd_bodyless(bench) -> None:
     """A dead client on the respawn screen moves with its partition, twice, and then respawns."""
     _join(bench)
-    partition = _client_partition(_partitions(bench, "node-1"))
-    _require(bench, "SETUP: the client's partition is on node-1", partition is not None)
+    _require(bench, "SETUP: the client's partition is on node-1",
+             _client_partition(_partitions(bench, "node-1")) is not None)
     _kill(bench, "node-1")
+    # The body is the client's controlled entity until it respawns; its partition is the one that holds the client.
+    partition = _poll(lambda: _client_partition(_partitions(bench, "node-1")), HANDOVER_TIMEOUT)
+    _require(bench, "SETUP: node-1 reports the dead client in a partition", partition is not None)
     _move(bench, partition, "node-1", "node-2", "dead")
     _relog(bench)
     landed = _node_by_backend(bench, (_session(bench) or {}).get("backend", ""))
