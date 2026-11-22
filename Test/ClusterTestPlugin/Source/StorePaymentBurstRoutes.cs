@@ -98,9 +98,9 @@ internal static class StorePaymentBurstRoutes
                     m_refused++;
                 else
                 {
-                    bool result = false;
-                    MyStoreBlockPatch.TryObserveBalanceChange(payer, -1, ref result);
-                    MyStoreBlockPatch.TryObserveBalanceChange(payee, 1, ref result);
+                    bool observed = false;
+                    MyStoreBlockPatch.TryObserveBalanceChange(payer, -1, ref observed);
+                    MyStoreBlockPatch.TryObserveBalanceChange(payee, 1, ref observed);
                     payment.Commit();
                 }
             }
