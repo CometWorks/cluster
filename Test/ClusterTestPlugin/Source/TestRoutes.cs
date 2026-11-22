@@ -107,6 +107,7 @@ internal static class TestRoutes
         AccountingInterlockObserver.Register();
         GameThreadLoadRoutes.Register(); // SE-1134 real game-thread time: a busy node, a single hitch
         WaCommandBurstRoutes.Register(); // SE-1228 a node game thread waiting on WA commands back to back
+        StorePaymentBurstRoutes.Register(); // SE-1883 store payments back to back on a node game thread
         ReputationBurstRoutes.Register(); // SE-1280 a MES-style burst of reputation writes in one frame
         EntitlementRoutes.Register(); // SE-1158 DLC and skin ownership as the game checks it
         AsleepTestRoutes.Register(); // SE-1272 Havok sleep state of grids across a handover

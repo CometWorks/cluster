@@ -162,10 +162,36 @@ internal static class StorePaymentJournal
             )
         );
 
+    /// <summary>SE-1883: journal appends so far and their total and longest time, for the store payment bench.</summary>
+    internal static long AppendCount,
+        AppendTicks,
+        AppendMaxTicks;
+
     private static void Append(Entry entry)
     {
         if (!m_ready)
             return;
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            AppendLocked(entry);
+        }
+        finally
+        {
+            // SE-1883: a store trade appends on the game thread, so a slow disk shows in the hitch line as store_journal.
+            HitchRecorder.Add(HitchRecorder.Bucket.StoreJournal, started);
+            long ticks = System.Diagnostics.Stopwatch.GetTimestamp() - started;
+            Interlocked.Increment(ref AppendCount);
+            Interlocked.Add(ref AppendTicks, ticks);
+            long max;
+            while ((max = Interlocked.Read(ref AppendMaxTicks)) < ticks)
+                if (Interlocked.CompareExchange(ref AppendMaxTicks, ticks, max) == max)
+                    break;
+        }
+    }
+
+    private static void AppendLocked(Entry entry)
+    {
         lock (Sync)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(m_path));

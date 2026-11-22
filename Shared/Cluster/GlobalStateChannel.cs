@@ -281,7 +281,11 @@ public static class GlobalStateChannel
             }
             else if (!TrySend(command))
                 throw new InvalidOperationException("Global-state node link is disconnected");
-            if (!pending.Task.Wait(timeoutMilliseconds))
+            long waitStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            bool answered = pending.Task.Wait(timeoutMilliseconds);
+            // SE-1883: a game thread waiting for the World Authority shows in the hitch line as wa_wait.
+            HitchRecorder.Add(HitchRecorder.Bucket.WorldAuthorityWait, waitStarted);
+            if (!answered)
             {
                 Interlocked.Increment(ref m_timedOutCommands);
                 throw new TimeoutException("World Authority command timed out");

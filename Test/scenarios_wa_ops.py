@@ -1745,6 +1745,69 @@ def p2_wa_rep_burst(bench) -> None:
     bench.exercised(identity=identity)
 
 
+# -- P2-STORE-BURST store payments keep a node's game thread short under disk load (SE-1883) -----------------------
+
+
+STORE_BURST_MS = 10000  # each phase: the node spends 250 ms of every frame on store payments this long
+STORE_BURST_P90_MS = 50  # a payment's game-thread time at the 90th percentile, with the disk busy
+STORE_DISK_CHUNK_MB = 64  # the load: write and fsync this much at a time, as node saves and replicas do
+
+
+def _disk_load(directory, stop: threading.Event) -> None:
+    """Writes and fsyncs STORE_DISK_CHUNK_MB chunks in `directory` until `stop`, like a host busy with saves."""
+    import os
+    path = directory / "se1883-disk-load.bin"
+    block = os.urandom(1 << 20)
+    try:
+        while not stop.is_set():
+            with open(path, "wb") as stream:
+                for _ in range(STORE_DISK_CHUNK_MB):
+                    stream.write(block)
+                stream.flush()
+                os.fsync(stream.fileno())
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def p2_store_burst(bench) -> None:
+    """SE-1883: a store payment keeps the node's game thread short, also while the disk is busy. On octahedron-test
+    (2026-11-22) NPC traders made 17,288 store trades in a day; 4% of them sat in a game-thread frame of 250-960 ms
+    (p50 360 ms), most of the day's hitch time, and three traders dumping cargo at once dropped a node to half speed.
+    Each trade journaled its payment legs with an fsync on the game thread. Here node-1 spends 250 ms of every frame on
+    1 SC store payments for 10 s on a quiet disk and 10 s while another thread writes and fsyncs 64 MB chunks on the
+    same disk. With the disk busy, a payment's game-thread time must stay under 50 ms at the 90th percentile."""
+    bench.start_cluster()
+    payer = 918830000000000000 + random.randrange(1_000_000)
+    payee = payer + 1
+    for owner in (payer, payee):
+        bench.cluster.node("node-1", f"/banking-test-create?ownerId={owner}&balance=1000000", "POST")
+        _require(bench, f"account {owner} exists at the WA", bool(_poll(
+            lambda: _try(bench.cluster.node, "wa-1", f"/banking-test-status?ownerId={owner}").get("balance") == 1000000, 30)))
+
+    def burst(label: str) -> dict:
+        bench.cluster.node("node-1", f"/test-store-payment-burst?payerId={payer}&payeeId={payee}&ms={STORE_BURST_MS}", "POST")
+        result = _poll(lambda: (lambda answer: answer if answer.get("done") else None)(
+            _try(bench.cluster.node, "node-1", "/test-store-payment-burst")), STORE_BURST_MS / 1000 + 60)
+        bench.record(f"burst-{label}", result or {})
+        _require(bench, f"{label}: the burst finished with payments", bool(result and result.get("payments")), json.dumps(result))
+        return result
+
+    quiet = burst("quiet")
+    stop = threading.Event()
+    load = threading.Thread(target=_disk_load, args=(bench.run_root, stop), daemon=True)
+    load.start()
+    try:
+        busy = burst("busy-disk")
+    finally:
+        stop.set()
+        load.join(60)
+    for label, result in (("quiet", quiet), ("busy-disk", busy)):
+        bench.check(f"{label}: no payment was refused or failed", result["refused"] == 0 and result["failed"] == 0, json.dumps(result))
+    bench.check(f"busy-disk: a store payment held the game thread under {STORE_BURST_P90_MS} ms at p90",
+                busy["paymentP90Ms"] < STORE_BURST_P90_MS, json.dumps(busy))
+    bench.exercised(quiet=quiet, busy=busy)
+
+
 SCENARIOS_WA_OPS = {
     "P2-WA-04": (p2_wa_04, "antenna relay chain, remote terminal, on-demand pull", "3"),
     "P2-WA-06b": (p2_wa_06b, "cross-node pod respawn with least-loaded placement", "3"),
@@ -1755,6 +1818,7 @@ SCENARIOS_WA_OPS = {
     "P2-DROP-CAP": (p2_drop_cap, "#1443: at most drops.maxActive container drops active cluster-wide, offline ones included", "3"),
     "P2-WA-NODE-WAIT": (p2_wa_node_wait, "SE-1228: the WA's game thread never waits on a node whose game thread waits on the WA", "3"),
     "P2-WA-REP-BURST": (p2_wa_rep_burst, "SE-1280: 1,000 reputation writes in one node frame never wait on the WA", "3"),
+    "P2-STORE-BURST": (p2_store_burst, "SE-1883: a store payment holds a node's game thread briefly, also with the disk busy", "3"),
     # P2-WA-02 (concurrent cross-node mutations never overdraw; balances converge) is asserted here.
     "P2-REC-01": (p2_rec_01, "WA killed inside a held mutation; queue replay conserves", "4"),
     "P2-CHR-04": (p2_chr_04, "stale duplicate character arriving at the live body's node (T-0169)", "3"),
