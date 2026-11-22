@@ -13,6 +13,14 @@ another node, then place and repaint again; inspect `/test-entitlements?steamId=
 In a real game process, `P1-SKINS` checks that the node forwards a client's inventory request to the
 Gateway and keeps an owned skin on a painted block while it strips an unowned one.
 
+Global-state deltas and player profiles can be checked without game processes (SE-1870):
+`dotnet run --project Test/GlobalStateDelta/GlobalStateDelta.csproj` checks the generic
+`GlobalStateDelta` helper (only changed entries broadcast, removals, a replica that applies deltas
+matches the authority), and `dotnet run --project Test/PlayerProfiles/PlayerProfiles.csproj` checks
+the player profile codec on a live-sized record: one-player deltas, the camera cap and expiry, and
+that a reader from before the delta format rejects a delta. In a real cluster, `P3-PLR-03` measures
+the `player-profiles` broadcasts on the WA under a live-sized record and checks camera expiry.
+
 Player moderation can be checked without game processes or Steam:
 `dotnet run --project Test/PlayerModeration/PlayerModeration.csproj` exercises the
 production promotion owner, command ledger and global-save section codec using

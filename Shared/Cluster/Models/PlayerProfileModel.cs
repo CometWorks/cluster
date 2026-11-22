@@ -12,12 +12,17 @@ namespace ClusterPlugin;
 /// the only thing that reads and writes every case correctly, and the record is written straight back into
 /// a checkpoint's <c>AllPlayersData</c> where the same serializer picks it up.
 /// </remarks>
+/// <param name="Seen">
+/// SE-1870: Unix seconds (UTC) when a node last reported this camera for an entity it holds; the World
+/// Authority stamps it. 0 = unknown, kept, but first to go when the player is over the camera cap.
+/// </param>
 public sealed record PlayerCameraSetting(
     long EntityId,
     double Distance,
     float HeadX,
     float HeadY,
-    bool FirstPerson
+    bool FirstPerson,
+    long Seen = 0
 );
 
 /// <param name="AdminSettings">
@@ -39,12 +44,31 @@ public sealed record PlayerProfile(
 
 public sealed record PlayerProfileReport(string Origin, PlayerProfile[] Entries);
 
-public sealed record PlayerProfileSnapshot(PlayerProfile[] Profiles);
+public sealed record PlayerProfileKey(ulong SteamId, int SerialId);
+
+/// <summary>
+/// A full snapshot when <see cref="Profiles"/> is set, otherwise a delta (SE-1870): the profiles that changed
+/// since the previous broadcast and the ones dropped from the record. A node running code from before the
+/// delta format rejects a delta as an invalid snapshot and keeps the record it had.
+/// </summary>
+public sealed record PlayerProfileSnapshot(
+    PlayerProfile[] Profiles,
+    PlayerProfile[] Changed = null,
+    PlayerProfileKey[] Removed = null
+)
+{
+    public bool IsFull => Profiles != null;
+}
 
 public static class PlayerProfileCodec
 {
     public const int MaxEntries = 4096;
     public const int MaxToolbarBytes = 256 * 1024;
+
+    /// <summary>
+    /// The most cameras a report or snapshot may carry per player. How many the World Authority keeps is the
+    /// <c>profiles.maxCameras</c> config value, clamped to this.
+    /// </summary>
     public const int MaxCameras = 256;
     public const int ColorSlotCount = 14;
 
@@ -87,9 +111,52 @@ public static class PlayerProfileCodec
         PlayerProfileSnapshot snapshot =
             JsonSerializer.Deserialize<PlayerProfileSnapshot>(payload)
             ?? throw new InvalidOperationException("Invalid player profile snapshot");
-        if (snapshot.Profiles == null || snapshot.Profiles.Length > MaxEntries)
+        if (snapshot.Profiles != null)
+        {
+            if (snapshot.Profiles.Length > MaxEntries)
+                throw new InvalidOperationException("Invalid player profile snapshot");
+            return new PlayerProfileSnapshot(snapshot.Profiles.Where(Valid).ToArray());
+        }
+        if (
+            snapshot.Changed == null
+            || snapshot.Changed.Length > MaxEntries
+            || snapshot.Removed?.Length > MaxEntries
+        )
             throw new InvalidOperationException("Invalid player profile snapshot");
-        return snapshot with { Profiles = snapshot.Profiles.Where(Valid).ToArray() };
+        return new PlayerProfileSnapshot(
+            null,
+            snapshot.Changed.Where(Valid).ToArray(),
+            snapshot.Removed?.Where(key => key != null).ToArray() ?? Array.Empty<PlayerProfileKey>()
+        );
+    }
+
+    /// <summary>
+    /// The delta to broadcast for the <paramref name="touched"/> keys (<see cref="GlobalStateDelta{TKey,TValue}"/>):
+    /// the profiles whose JSON differs from the last broadcast, and the ones no longer in the record. Null when
+    /// nothing changed. Read back by <see cref="ReadSnapshot"/>, whose record has the same Changed and Removed.
+    /// </summary>
+    public static string TakeDelta(
+        Dictionary<(ulong SteamId, int SerialId), PlayerProfile> record,
+        IEnumerable<(ulong SteamId, int SerialId)> touched,
+        GlobalStateDelta<PlayerProfileKey, PlayerProfile> published
+    ) =>
+        published.Take(
+            touched.Select(key => new PlayerProfileKey(key.SteamId, key.SerialId)),
+            key => record.GetValueOrDefault((key.SteamId, key.SerialId))
+        );
+
+    /// <summary>A node's copy of the record: a full snapshot replaces it, a delta patches it.</summary>
+    public static void Apply(
+        Dictionary<(ulong SteamId, int SerialId), PlayerProfile> record,
+        PlayerProfileSnapshot snapshot
+    )
+    {
+        if (snapshot.IsFull)
+            record.Clear();
+        foreach (PlayerProfile profile in snapshot.Profiles ?? snapshot.Changed)
+            record[(profile.SteamId, profile.SerialId)] = profile;
+        foreach (PlayerProfileKey key in snapshot.Removed ?? Array.Empty<PlayerProfileKey>())
+            record.Remove((key.SteamId, key.SerialId));
     }
 
     public static bool Valid(PlayerProfile profile) =>
@@ -115,46 +182,132 @@ public static class PlayerProfileCodec
     /// * <b>Cameras union.</b> They are per entity, a node holds a fraction of the cluster's entities, and
     ///   vanilla's <c>SaveCameraCollection</c> deletes the settings whose entity is not local - so a report
     ///   is an update to the camera set, never its replacement.
+    ///
+    /// SE-1870: the union alone only ever grew (every respawn is a new character entity), up to the cap,
+    /// and the cap then kept the LOWEST entity ids, dropping the newest cameras. Cameras now carry when a
+    /// node last reported them (<see cref="PlayerCameraSetting.Seen"/>); a camera not seen for
+    /// <paramref name="cameraRetentionSeconds"/> is dropped, and a player keeps at most
+    /// <paramref name="maxCameras"/>, the most recently seen.
     /// </summary>
-    /// <param name="record">The record so far; mutated in place, and returned for convenience.</param>
+    /// <param name="record">The record so far; mutated in place.</param>
     /// <param name="reportsOldestFirst">Each origin's latest report, ordered by when it was received.</param>
-    public static Dictionary<(ulong SteamId, int SerialId), PlayerProfile> Merge(
+    /// <param name="now">Unix seconds (UTC).</param>
+    /// <param name="cameraRetentionSeconds">0 or less: cameras never expire by age.</param>
+    /// <returns>The keys whose profile may have changed: reported, pruned or trimmed.</returns>
+    public static HashSet<(ulong SteamId, int SerialId)> Merge(
         Dictionary<(ulong SteamId, int SerialId), PlayerProfile> record,
-        IEnumerable<PlayerProfile[]> reportsOldestFirst
+        IEnumerable<PlayerProfile[]> reportsOldestFirst,
+        long now,
+        long cameraRetentionSeconds,
+        int maxCameras
     )
     {
+        var touched = new HashSet<(ulong SteamId, int SerialId)>();
+        maxCameras = Math.Clamp(maxCameras, 0, MaxCameras);
         foreach (PlayerProfile[] entries in reportsOldestFirst)
         foreach (PlayerProfile profile in entries ?? Array.Empty<PlayerProfile>())
         {
             if (!Valid(profile))
                 continue;
             (ulong, int) key = (profile.SteamId, profile.SerialId);
-            record[key] = record.TryGetValue(key, out PlayerProfile stored)
-                ? profile with
-                {
-                    Cameras = UnionCameras(stored.Cameras, profile.Cameras),
-                }
-                : profile;
+            touched.Add(key);
+            record.TryGetValue(key, out PlayerProfile stored);
+            record[key] = profile with
+            {
+                Cameras = PruneCameras(
+                    UnionCameras(
+                        stored?.Cameras,
+                        profile.Cameras,
+                        now,
+                        cameraRetentionSeconds,
+                        profile.SteamId
+                    ),
+                    now,
+                    cameraRetentionSeconds,
+                    maxCameras
+                ),
+            };
+        }
+        // Players nobody reports age too, so an offline player's cameras expire once, as a small change.
+        foreach ((ulong, int) key in record.Keys.ToArray())
+        {
+            PlayerCameraSetting[] cameras = record[key].Cameras;
+            if (!NeedsPruning(cameras, now, cameraRetentionSeconds, maxCameras))
+                continue;
+            record[key] = record[key] with
+            {
+                Cameras = PruneCameras(cameras, now, cameraRetentionSeconds, maxCameras),
+            };
+            touched.Add(key);
         }
         if (record.Count > MaxEntries)
             foreach ((ulong, int) key in record.Keys.Take(record.Count - MaxEntries).ToArray())
+            {
                 record.Remove(key);
-        return record;
+                touched.Add(key);
+            }
+        return touched;
     }
 
-    /// <summary>Stored union reported, the reporting node's copy winning per entity.</summary>
+    /// <summary>
+    /// Stored union reported, the reporting node's copy winning per entity and stamped as seen now, on a grid of
+    /// the refresh interval: a node reporting the same cameras every second changes the record (and causes a
+    /// broadcast) once per interval, not every second. The grid also makes every camera of one report tie, so a
+    /// player reporting more than the cap keeps the same ones: stamped one by one, the cameras the cap dropped
+    /// came back newer than the kept ones and the record flipped on every merge (bench, 2026-11-22). The grid's
+    /// phase is per player (<paramref name="phase"/>, the Steam id), so the players online do not all restamp,
+    /// and get broadcast, in the same second of the hour.
+    /// </summary>
     public static PlayerCameraSetting[] UnionCameras(
         PlayerCameraSetting[] stored,
-        PlayerCameraSetting[] reported
+        PlayerCameraSetting[] reported,
+        long now,
+        long cameraRetentionSeconds,
+        ulong phase = 0
     )
     {
-        if (stored == null || stored.Length == 0)
-            return reported ?? Array.Empty<PlayerCameraSetting>();
-        Dictionary<long, PlayerCameraSetting> union = stored.ToDictionary(camera =>
-            camera.EntityId
-        );
+        long refresh = SeenRefreshSeconds(cameraRetentionSeconds);
+        long offset = (long)(phase % (ulong)refresh);
+        long seen = now - ((now - offset) % refresh + refresh) % refresh;
+        Dictionary<long, PlayerCameraSetting> union =
+            stored?.ToDictionary(camera => camera.EntityId)
+            ?? new Dictionary<long, PlayerCameraSetting>();
         foreach (PlayerCameraSetting camera in reported ?? Array.Empty<PlayerCameraSetting>())
-            union[camera.EntityId] = camera;
-        return union.Values.OrderBy(camera => camera.EntityId).Take(MaxCameras).ToArray();
+            union[camera.EntityId] = camera with { Seen = seen };
+        return union.Values.OrderBy(camera => camera.EntityId).ToArray();
+    }
+
+    private static long SeenRefreshSeconds(long cameraRetentionSeconds) =>
+        cameraRetentionSeconds > 0 ? Math.Clamp(cameraRetentionSeconds / 4, 1, 3600) : 3600;
+
+    private static bool Expired(PlayerCameraSetting camera, long now, long retention) =>
+        retention > 0 && camera.Seen > 0 && now - camera.Seen > retention;
+
+    private static bool NeedsPruning(
+        PlayerCameraSetting[] cameras,
+        long now,
+        long retention,
+        int maxCameras
+    ) =>
+        cameras != null
+        && (cameras.Length > maxCameras || cameras.Any(camera => Expired(camera, now, retention)));
+
+    /// <summary>Drop expired cameras, then keep the most recently seen <paramref name="maxCameras"/>, ordered by entity.</summary>
+    public static PlayerCameraSetting[] PruneCameras(
+        PlayerCameraSetting[] cameras,
+        long now,
+        long cameraRetentionSeconds,
+        int maxCameras
+    )
+    {
+        if (cameras == null)
+            return Array.Empty<PlayerCameraSetting>();
+        return cameras
+            .Where(camera => !Expired(camera, now, cameraRetentionSeconds))
+            .OrderByDescending(camera => camera.Seen)
+            .ThenByDescending(camera => camera.EntityId)
+            .Take(Math.Clamp(maxCameras, 0, MaxCameras))
+            .OrderBy(camera => camera.EntityId)
+            .ToArray();
     }
 }

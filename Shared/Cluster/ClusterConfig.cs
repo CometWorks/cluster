@@ -334,6 +334,11 @@ public static class ClusterConfig
         // WA only (SE-1865): a respawn point change of only positions and oxygen levels (medbays on moving ships) is
         // published to the nodes at most every motionPublishSeconds; other changes go out at once. 0 = every change.
         ["respawns.motionPublishSeconds"] = "10",
+        // WA only (SE-1870): a player's camera settings (per controlled entity) are dropped once no node has reported
+        // their entity for cameraRetentionSeconds (0 = never by age), and a player keeps the maxCameras most recently
+        // seen. Without this every respawn's character added one, up to 256 per player, all broadcast and saved.
+        ["profiles.cameraRetentionSeconds"] = "604800",
+        ["profiles.maxCameras"] = "32",
         // #1354 (UnvisitedNpcSweeper): an NPC grid (a top-level grid whose big owners are all NPC identities) that has
         // been online for unvisitedMinutes with no player or viewed camera within visitRadius ("auto" = the sync
         // distance) is removed; inside a gap band of the mod-mes spawn pattern after unvisitedMinutes / gapRemovalFactor.
