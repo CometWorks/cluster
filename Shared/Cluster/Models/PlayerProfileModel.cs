@@ -99,21 +99,6 @@ public static class PlayerProfileCodec
             )
         );
 
-    public static string WriteDelta(
-        IEnumerable<PlayerProfile> changed,
-        IEnumerable<PlayerProfileKey> removed
-    ) =>
-        JsonSerializer.Serialize(
-            new PlayerProfileSnapshot(
-                null,
-                changed
-                    .OrderBy(profile => profile.SteamId)
-                    .ThenBy(profile => profile.SerialId)
-                    .ToArray(),
-                removed.ToArray()
-            )
-        );
-
     public static PlayerProfileSnapshot ReadSnapshot(string payload)
     {
         if (payload == null || payload.Length > 32 * 1024 * 1024)
@@ -141,34 +126,19 @@ public static class PlayerProfileCodec
     }
 
     /// <summary>
-    /// The delta to broadcast for the <paramref name="touched"/> keys: the profiles whose JSON differs from
-    /// what was last broadcast, and the ones no longer in the record. Null when nothing changed.
-    /// <paramref name="published"/> is updated to what the delta carries.
+    /// The delta to broadcast for the <paramref name="touched"/> keys (<see cref="GlobalStateDelta{TKey,TValue}"/>):
+    /// the profiles whose JSON differs from the last broadcast, and the ones no longer in the record. Null when
+    /// nothing changed. Read back by <see cref="ReadSnapshot"/>, whose record has the same Changed and Removed.
     /// </summary>
     public static string TakeDelta(
         Dictionary<(ulong SteamId, int SerialId), PlayerProfile> record,
         IEnumerable<(ulong SteamId, int SerialId)> touched,
-        Dictionary<(ulong SteamId, int SerialId), string> published
-    )
-    {
-        var changed = new List<PlayerProfile>();
-        var removed = new List<PlayerProfileKey>();
-        foreach ((ulong SteamId, int SerialId) key in touched)
-        {
-            if (!record.TryGetValue(key, out PlayerProfile profile))
-            {
-                if (published.Remove(key))
-                    removed.Add(new PlayerProfileKey(key.SteamId, key.SerialId));
-                continue;
-            }
-            string json = JsonSerializer.Serialize(profile);
-            if (published.TryGetValue(key, out string last) && last == json)
-                continue;
-            published[key] = json;
-            changed.Add(profile);
-        }
-        return changed.Count == 0 && removed.Count == 0 ? null : WriteDelta(changed, removed);
-    }
+        GlobalStateDelta<PlayerProfileKey, PlayerProfile> published
+    ) =>
+        published.Take(
+            touched.Select(key => new PlayerProfileKey(key.SteamId, key.SerialId)),
+            key => record.GetValueOrDefault((key.SteamId, key.SerialId))
+        );
 
     /// <summary>A node's copy of the record: a full snapshot replaces it, a delta patches it.</summary>
     public static void Apply(

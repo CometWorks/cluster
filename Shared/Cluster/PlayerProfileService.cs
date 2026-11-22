@@ -73,7 +73,7 @@ public static class PlayerProfileService
 
     // World Authority, SE-1870: each profile as last broadcast, so a broadcast carries only what changed.
     // Republishing the whole record on any change sent all 227 live profiles (1.36 MB) about every 6 s.
-    private static readonly Dictionary<(ulong SteamId, int SerialId), string> Published = new();
+    private static readonly GlobalStateDelta<PlayerProfileKey, PlayerProfile> Published = new();
 
     // Node state.
     private static readonly Dictionary<(ulong SteamId, int SerialId), PlayerProfile> m_cluster =

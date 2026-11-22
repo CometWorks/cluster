@@ -25,7 +25,7 @@ PlayerProfile Profile(ulong steam, int toolbarBytes = 2400, params PlayerCameraS
     );
 
 var record = new Dictionary<(ulong SteamId, int SerialId), PlayerProfile>();
-var published = new Dictionary<(ulong SteamId, int SerialId), string>();
+var published = new GlobalStateDelta<PlayerProfileKey, PlayerProfile>();
 var node = new Dictionary<(ulong SteamId, int SerialId), PlayerProfile>();
 
 string Fold(params PlayerProfile[][] reports) =>
@@ -122,7 +122,7 @@ Check(
 
 // Age: an offline player's cameras expire once no node reported them for the retention period.
 var record3 = new Dictionary<(ulong SteamId, int SerialId), PlayerProfile>();
-var published3 = new Dictionary<(ulong SteamId, int SerialId), string>();
+var published3 = new GlobalStateDelta<PlayerProfileKey, PlayerProfile>();
 PlayerProfileCodec.TakeDelta(
     record3,
     PlayerProfileCodec.Merge(
