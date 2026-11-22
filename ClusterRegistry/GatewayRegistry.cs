@@ -5878,11 +5878,17 @@ internal sealed partial class GatewayRegistry : IDisposable
                 );
         }
         // A kept-ID split or member transfer can move just the lobby grid out of a still-live partition.
-        if (_state.LobbyAnchor is { } lobby && inputs.Any(input => input.Partition == lobby.Partition))
+        if (
+            _state.LobbyAnchor is { } lobby
+            && inputs.Any(input => input.Partition == lobby.Partition)
+        )
         {
             ulong holding = Holding(lobby.GridId);
-            ulong destination = holding != 0 ? holding : kind == LineageKind.Merge ? outputIds[0]
-                : outputIds.Contains(lobby.Partition) ? lobby.Partition : 0;
+            ulong destination =
+                holding != 0 ? holding
+                : kind == LineageKind.Merge ? outputIds[0]
+                : outputIds.Contains(lobby.Partition) ? lobby.Partition
+                : 0;
             _state.LobbyAnchor = lobby with { Partition = destination };
         }
         foreach ((ulong client, ClientPartition location) in _state.ClientPartitions.ToArray())
@@ -9128,6 +9134,7 @@ internal sealed partial class GatewayRegistry : IDisposable
         public PluginSdk.Clustering.PluginRecordStore PluginStore { get; set; } = new();
         public Guid? LastManagedRestore { get; set; }
         public Dictionary<string, ManagedProof> ManagedProofs { get; set; } = [];
+
         /// <summary>
         /// Monotonic mutation counter, written with the state (Docs/StateDurability.md).
         /// A recovered snapshot identifies itself by this, not by its file mtime: wall-clock

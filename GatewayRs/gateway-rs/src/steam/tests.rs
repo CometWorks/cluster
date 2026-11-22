@@ -311,6 +311,37 @@ fn close_keeps_the_rejoin_grace_then_ends_the_session() {
 }
 
 #[test]
+fn boot_closes_the_session_and_refuses_the_client_for_the_block() {
+    let (registry, mut worker, mailbox, fake, shared) = setup("boot");
+    let t0 = Instant::now();
+    let session = join(&registry, &mut worker, &mailbox, &fake, t0);
+    mailbox.send(WorkerCmd::Boot { client_id: USER, session, block: Duration::from_secs(10) });
+    worker.step(t0);
+    let (_, event) = registry.expect(types::CLIENT_EVENT).unwrap();
+    assert_eq!((event["event"].as_str(), event["detail"].as_str()), (Some("disconnected"), Some("steam-booted")));
+    assert_eq!(shared.owner(USER), None);
+    assert_eq!(fake.with(|s| s.closed.clone()), vec![USER], "P2P closes at once, no rejoin grace");
+
+    // The client still plays the ended session: its requests and packets are refused, so its Steam
+    // reports the connection failed (vanilla's host-left path).
+    let t1 = t0 + Duration::from_secs(5);
+    fake.with(|s| s.callbacks.push(SteamCallback::SessionRequest(USER)));
+    fake.with(|s| s.open.insert(USER));
+    fake.with(|s| s.incoming.push_back((USER, 2, game(14, b"stale"))));
+    worker.step(t1);
+    assert!(registry.expect(types::JOIN_REQUEST).is_none(), "no join while booted");
+    assert_eq!(fake.with(|s| s.closed.clone()), vec![USER, USER], "the request is refused");
+    assert!(fake.with(|s| s.accepted.len()) == 1);
+
+    // After the block the reconnector's join is a normal one.
+    let t2 = t0 + Duration::from_secs(11);
+    fake.with(|s| s.open.remove(&USER));
+    fake.with(|s| s.callbacks.push(SteamCallback::SessionRequest(USER)));
+    worker.step(t2);
+    registry.expect(types::JOIN_REQUEST).expect("a join after the block asks C#");
+}
+
+#[test]
 fn refused_failed_silent_and_ipc_loss() {
     let (registry, mut worker, mailbox, fake, _shared) = setup("ends");
     let now = Instant::now();

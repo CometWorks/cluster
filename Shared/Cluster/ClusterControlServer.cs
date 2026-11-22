@@ -740,7 +740,10 @@ internal sealed partial class ClusterControlServer
                 Write(context, 200, "application/json", Encoding.UTF8.GetBytes(result));
                 return;
             }
-            if (context.Request.HttpMethod == "POST" && path.Equals("/cluster/lobby-anchor", StringComparison.OrdinalIgnoreCase))
+            if (
+                context.Request.HttpMethod == "POST"
+                && path.Equals("/cluster/lobby-anchor", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 HandleLobbyAnchor(context);
                 return;

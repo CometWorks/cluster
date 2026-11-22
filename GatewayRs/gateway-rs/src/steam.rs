@@ -470,6 +470,8 @@ pub struct SteamWorker<A: SteamApi> {
     clients: HashMap<u64, Client>,
     /// Open P2P sessions and when each was detached (None while a client uses it).
     p2p: HashMap<u64, Option<Instant>>,
+    /// SE-1824: booted users and until when their session requests and packets are refused.
+    booted: HashMap<u64, Instant>,
     pending: HashMap<u32, Pending>,
     pending_by_user: HashMap<u64, u32>,
     skin_checks: HashMap<u64, SkinCheck>,
@@ -505,6 +507,7 @@ impl<A: SteamApi> SteamWorker<A> {
                 endpoint,
                 clients: HashMap::new(),
                 p2p: HashMap::new(),
+                booted: HashMap::new(),
                 pending: HashMap::new(),
                 pending_by_user: HashMap::new(),
                 skin_checks: HashMap::new(),
@@ -615,7 +618,10 @@ impl<A: SteamApi> SteamWorker<A> {
     fn callback(&mut self, callback: SteamCallback, now: Instant) {
         match callback {
             SteamCallback::SessionRequest(user) => {
-                if self.clients.contains_key(&user) {
+                if self.is_booted(user, now) {
+                    eprintln!("Refused Steam session with {user}: booted to the main menu");
+                    self.api.close(user);
+                } else if self.clients.contains_key(&user) {
                     // C# refuses a second session for a live client (OpenSteamSession) and closes P2P.
                     eprintln!("Refused Steam session with {user}: a session is already open");
                     self.api.close(user);
@@ -659,6 +665,9 @@ impl<A: SteamApi> SteamWorker<A> {
     /// A session request, or traffic from a user with no client (a rejoin inside the grace):
     /// ask C#, keeping what arrives meanwhile.
     fn open(&mut self, user: u64, first: Option<Packet>, now: Instant) {
+        if self.is_booted(user, now) {
+            return;
+        }
         if !self.shared.ipc.connected() {
             eprintln!("Refused Steam session with {user}: ClusterGateway is not connected");
             self.hard_close(user, "no ClusterGateway");
@@ -817,6 +826,9 @@ impl<A: SteamApi> SteamWorker<A> {
     // ---------------------------------------------------------------- traffic
 
     fn client_packet(&mut self, user: u64, channel: u8, payload: Vec<u8>, now: Instant) {
+        if self.is_booted(user, now) {
+            return;
+        }
         // Traffic means the peer is there: adopt the session whether it was detached or never
         // announced by a request (SteamFrontend.PumpLoop).
         self.p2p.insert(user, None);
@@ -868,6 +880,27 @@ impl<A: SteamApi> SteamWorker<A> {
         self.client_event(user, session, "disconnected", Some(detail));
     }
 
+    /// SE-1824: `SteamFrontend.Boot`. Unlike `detach`, closes the P2P session at once and refuses the
+    /// user's session requests and packets for `block`, so a client still playing an ended session
+    /// gets a failed connection from its Steam, which vanilla handles as the host leaving (a clean
+    /// unload and the reconnector), instead of a JOIN_RESULT refusal.
+    fn boot(&mut self, user: u64, block: Duration, now: Instant) {
+        self.booted.insert(user, now + block);
+        self.hard_close(user, "booted to the main menu");
+        self.drop_client(user, "steam-booted".to_owned());
+    }
+
+    fn is_booted(&mut self, user: u64, now: Instant) -> bool {
+        match self.booted.get(&user) {
+            Some(until) if now < *until => true,
+            Some(_) => {
+                self.booted.remove(&user);
+                false
+            }
+            None => false,
+        }
+    }
+
     /// Ends the session at Steam too; the browser player row goes with it.
     fn hard_close(&mut self, user: u64, reason: &str) {
         self.api.end_auth(user);
@@ -904,6 +937,12 @@ impl<A: SteamApi> SteamWorker<A> {
                 if self.session_matches(client_id, session) {
                     eprintln!("Disconnecting Steam client {client_id}: {reason}");
                     self.detach(client_id, "steam-session-closed", now);
+                }
+            }
+            WorkerCmd::Boot { client_id, session, block } => {
+                if self.session_matches(client_id, session) {
+                    eprintln!("Booting Steam client {client_id} for {} ms", block.as_millis());
+                    self.boot(client_id, block, now);
                 }
             }
             WorkerCmd::ForceReconnect { client_id, session, reason } => {

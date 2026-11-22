@@ -298,6 +298,39 @@ internal sealed class SteamFrontend : IDisposable
 
     public void PublishDirty() => _publishDirty = true;
 
+    /// <summary>Booted users and the tick until which their session requests are refused.</summary>
+    private readonly ConcurrentDictionary<ulong, long> _bootedUntil = new();
+
+    /// <summary>
+    /// SE-1824: unlike <see cref="Close"/>, closes the P2P session at once and refuses the user's
+    /// session requests and packets for <paramref name="block"/>. A client still playing a session
+    /// the Gateway ended keeps sending; refused, its Steam reports the connection failed, which a
+    /// vanilla client handles as the host leaving (MyMultiplayerClient.Peer2Peer_ConnectionFailed):
+    /// a clean unload and its reconnector. The JOIN_RESULT refusal used before took the unload path
+    /// that leaves the world half unloaded for a pilot (MyMultiplayerClient.OnUserJoined).
+    /// </summary>
+    public void Boot(ulong userId, TimeSpan block)
+    {
+        _bootedUntil[userId] = Environment.TickCount64 + (long)block.TotalMilliseconds;
+        if (_sessions.TryGetValue(userId, out SteamSession? session))
+            session.DetachedAt = Environment.TickCount64;
+        _outgoing.Enqueue(
+            new Outgoing(userId, 0, [], DeliveryMethod.ReliableOrdered, OutgoingKind.Boot)
+        );
+        _publishDirty = true;
+        SessionClosed(userId);
+    }
+
+    private bool Booted(ulong userId)
+    {
+        if (!_bootedUntil.TryGetValue(userId, out long until))
+            return false;
+        if (Environment.TickCount64 < until)
+            return true;
+        _bootedUntil.TryRemove(userId, out _);
+        return false;
+    }
+
     public object Status() =>
         new
         {
@@ -354,6 +387,8 @@ internal sealed class SteamFrontend : IDisposable
                         )
                             break;
                         Interlocked.Increment(ref _receivedPackets);
+                        if (Booted((ulong)remote))
+                            continue;
                         byte[] payload = buffer[..(int)read];
                         // Traffic means the peer is there: adopt the session whether it was
                         // detached by a forced disconnect or never announced by a request.
@@ -462,6 +497,9 @@ internal sealed class SteamFrontend : IDisposable
                     break;
                 case OutgoingKind.EndAuth:
                     SteamGameServer.EndAuthSession(user);
+                    break;
+                case OutgoingKind.Boot:
+                    HardClose(message.UserId, "booted to the main menu");
                     break;
                 case OutgoingKind.GroupStatus:
                     SteamGameServer.RequestUserGroupStatus(
@@ -677,6 +715,12 @@ internal sealed class SteamFrontend : IDisposable
     private void OnSessionRequest(P2PSessionRequest_t request)
     {
         ulong userId = (ulong)request.m_steamIDRemote;
+        if (Booted(userId))
+        {
+            SteamGameServerNetworking.CloseP2PSessionWithUser(request.m_steamIDRemote);
+            Console.WriteLine($"Refused Steam session with {userId}: booted to the main menu");
+            return;
+        }
         if (!SessionRequested(userId))
         {
             SteamGameServerNetworking.CloseP2PSessionWithUser(request.m_steamIDRemote);
@@ -917,6 +961,7 @@ internal sealed class SteamFrontend : IDisposable
         BeginAuth,
         EndAuth,
         GroupStatus,
+        Boot,
     }
 
     private readonly record struct Outgoing(
@@ -957,5 +1002,7 @@ internal sealed class SteamFrontend : IDisposable
         public override void Send(GatewayPacket packet) => frontend.Send(userId, packet);
 
         public override void Disconnect() => frontend.Close(userId);
+
+        public override void Boot(TimeSpan block) => frontend.Boot(userId, block);
     }
 }

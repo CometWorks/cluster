@@ -12994,6 +12994,17 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
         };
     }
 
+    /// <summary>Vanilla's "the host left" control message for a client.</summary>
+    private GatewayPacket HostLeftPacket(ulong clientId, ClientChannel peer)
+    {
+        byte[] payload = new byte[10];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload, 1); // MyControlMessageEnum.Disconnected
+        // T-0244: the Client field must be the id the client knows its server by, or it is not
+        // "the host left" to it (MyMultiplayerClient_ClientLeft) and the vanilla client ignores it.
+        BinaryPrimitives.WriteUInt64LittleEndian(payload.AsSpan(2), ReconnectServerId(peer));
+        return new GatewayPacket(clientId, 0, payload, DeliveryMethod.ReliableOrdered);
+    }
+
     private void ForceReconnect(ClientSession session, string reason)
     {
         lock (session.RelayLock)
@@ -13021,14 +13032,7 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 RemoveDeadSession(session, reason);
                 return;
             }
-            byte[] payload = new byte[10];
-            BinaryPrimitives.WriteUInt16LittleEndian(payload, 1); // MyControlMessageEnum.Disconnected
-            // T-0244: the Client field must be the id the client knows its server by, or it is not
-            // "the host left" to it (MyMultiplayerClient_ClientLeft) and the vanilla client ignores it.
-            BinaryPrimitives.WriteUInt64LittleEndian(payload.AsSpan(2), ReconnectServerId(peer));
-            peer.Send(
-                new GatewayPacket(session.ClientId, 0, payload, DeliveryMethod.ReliableOrdered)
-            );
+            peer.Send(HostLeftPacket(session.ClientId, peer));
             ThreadPool.QueueUserWorkItem(_ =>
             {
                 Thread.Sleep(25);
