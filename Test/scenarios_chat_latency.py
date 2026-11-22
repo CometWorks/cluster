@@ -30,13 +30,15 @@ LIMIT_SECONDS = 2.0
 LOAD_COPIES = 1500  # per node; two nodes stay under the registry's 4096-point cap
 LOAD_SETTLE_SECONDS = 60
 LINES_PER_WAY = 3
+SPAM_GAP_SECONDS = 3
 
 
 def _queue(bench) -> dict:
     backend = _nodes(bench)["node-1"].backend
     nodes = bench.cluster.get("/transport/status").get("nodes") or []
     node = next((n for n in nodes if n.get("endpoint") == backend), None)
-    return (node or {}).get("reliableQueue") or {"endpoints": [n.get("endpoint") for n in nodes], "backend": backend}
+    # Null with CLUSTER_RELAY=external: gateway-rs holds the node links. The live Gateway runs the internal relay.
+    return (node or {}).get("reliableQueue") or {}
 
 
 def _relayed(bench) -> list[str]:
@@ -66,6 +68,8 @@ def _whisper(bench, sender_api, receiver_api, receiver_identity: int, label: str
         "gatewayQueue": queue,
     }
     bench.record(f"whisper-{label}", row)
+    # Vanilla chat anti-spam drops a sender's next line within SpamMessagesTime and mutes it for a while.
+    time.sleep(SPAM_GAP_SECONDS)
     return row
 
 
