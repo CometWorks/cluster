@@ -82,10 +82,21 @@ def _load(bench, seconds: float) -> None:
     """node-1 and node-2 report LOAD_COPIES moving medbays each for ``seconds`` (0 stops them)."""
     for node, base in (("node-1", 9_100_000_000_000_000), ("node-2", 9_200_000_000_000_000)):
         point = {
-            "Origin": node, "RespawnEntityId": base, "GridEntityId": base - 1, "PartitionId": 1, "Generation": 1,
-            "Name": "SE-1865 moving medbay " + "x" * 120, "OwnerIdentityId": 0, "ShareMode": 2, "Working": True,
-            "SpawnWithoutOxygen": True, "SetFactionToSpawnee": False, "OxygenLevel": 0.5,
-            "X": 1000.0, "Y": 2000.0, "Z": 3000.0,
+            "Origin": node,
+            "RespawnEntityId": base,
+            "GridEntityId": base - 1,
+            "PartitionId": 1,
+            "Generation": 1,
+            "Name": "SE-1865 moving medbay " + "x" * 120,
+            "OwnerIdentityId": 0,
+            "ShareMode": 2,
+            "Working": True,
+            "SpawnWithoutOxygen": True,
+            "SetFactionToSpawnee": False,
+            "OxygenLevel": 0.5,
+            "X": 1000.0,
+            "Y": 2000.0,
+            "Z": 3000.0,
         }
         points = json.dumps([point] if seconds > 0 else [])
         query = f"points={points}&seconds={seconds}&copies={LOAD_COPIES}&moving=true"
@@ -120,8 +131,12 @@ def p2_chat_latency(bench) -> None:
 
     bench.record("config-default", bench.cluster.handover_config({"respawns.motionPublishSeconds": "10"}))
     drained = _poll(lambda: (lambda q: q if q.get("globalOrdered", 0) < 64 else None)(_queue(bench)), 600)
-    _require(bench, "SETUP: the Gateway's ordered queue toward node-1 drained", drained is not None,
-             json.dumps(_queue(bench)))
+    _require(
+        bench,
+        "SETUP: the Gateway's ordered queue toward node-1 drained",
+        drained is not None,
+        json.dumps(_queue(bench)),
+    )
     time.sleep(LOAD_SETTLE_SECONDS)
     _check(bench, "throttled", _phase(bench, api1, api2, id1, id2, "throttled"))
     _load(bench, 0)
