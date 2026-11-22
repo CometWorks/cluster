@@ -151,7 +151,10 @@ public static class CharacterRegistryService
         if (ClusterRuntime.LocalMilliseconds >= m_nextReport)
         {
             m_nextReport = ClusterRuntime.LocalMilliseconds + 1000;
-            string payload = JsonSerializer.Serialize(new Report(Node, CaptureLocal()));
+            Entry[] local = CaptureLocal();
+            if (ClusterRuntime.LocalMilliseconds < m_testEntriesUntil)
+                local = local.Concat(TestEntries()).ToArray();
+            string payload = JsonSerializer.Serialize(new Report(Node, local));
             if (ClusterRuntime.IsWorldAuthority)
                 ReceiveReport(Node, payload);
             else
@@ -657,6 +660,64 @@ public static class CharacterRegistryService
     }
 
     // -- test/operator surface ---------------------------------------------
+
+    private static int m_testEntries;
+    private static long m_testEntriesBase;
+    private static double m_testEntriesUntil;
+    private static bool m_testEntriesHelmet;
+
+    /// <summary>
+    /// SE-1867: this node's next reports carry <paramref name="count"/> synthetic online bodies for
+    /// <paramref name="seconds"/>, one identity each from <paramref name="baseId"/> on, whose oxygen and energy drift
+    /// every second like a live suit's. <paramref name="helmet"/> sets their helmet toggle. Dies with the process.
+    /// </summary>
+    public static object ConfigureTestEntries(int count, long baseId, double seconds, bool helmet)
+    {
+        if (!ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority)
+            throw new InvalidOperationException(
+                "Only a regular cluster node reports characters to the World Authority"
+            );
+        if (count is < 0 or > MaxEntries / 2 || baseId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(count));
+        m_testEntries = count;
+        m_testEntriesBase = baseId;
+        m_testEntriesHelmet = helmet;
+        m_testEntriesUntil = ClusterRuntime.LocalMilliseconds + seconds * 1000;
+        return new
+        {
+            count,
+            baseId,
+            seconds,
+            helmet,
+        };
+    }
+
+    private static IEnumerable<Entry> TestEntries()
+    {
+        float drift = (float)(ClusterRuntime.LocalMilliseconds / 1000 % 1000) / 1000;
+        return Enumerable
+            .Range(0, m_testEntries)
+            .Select(i => new Entry(
+                m_testEntriesBase + i,
+                m_testEntriesBase + i,
+                0,
+                false,
+                true,
+                new Settings(
+                    m_testEntriesBase + i,
+                    m_testEntriesHelmet,
+                    false,
+                    false,
+                    false,
+                    true,
+                    "Default_Astronaut",
+                    1f,
+                    1f - drift,
+                    1f - drift
+                ),
+                true
+            ));
+    }
 
     public static object Status()
     {
