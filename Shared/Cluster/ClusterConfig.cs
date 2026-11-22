@@ -331,6 +331,9 @@ public static class ClusterConfig
         // GATEWAY only (T-0269): a wake whose demander's node is above this multiple of the mean node load
         // loads on the least-loaded node instead; 0 = always the demander's node.
         ["offline.wakeOverloadRatio"] = "1.5",
+        // WA only (SE-1865): a respawn point change of only positions and oxygen levels (medbays on moving ships) is
+        // published to the nodes at most every motionPublishSeconds; other changes go out at once. 0 = every change.
+        ["respawns.motionPublishSeconds"] = "10",
         // #1354 (UnvisitedNpcSweeper): an NPC grid (a top-level grid whose big owners are all NPC identities) that has
         // been online for unvisitedMinutes with no player or viewed camera within visitRadius ("auto" = the sync
         // distance) is removed; inside a gap band of the mod-mes spawn pattern after unvisitedMinutes / gapRemovalFactor.

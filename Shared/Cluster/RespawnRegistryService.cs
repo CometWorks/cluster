@@ -43,6 +43,10 @@ public static class RespawnRegistryService
     private static string m_snapshot = RespawnRegistryCodec.Write(
         Array.Empty<ClusterRespawnPoint>()
     );
+
+    // SE-1865: the last published snapshot with positions and oxygen levels left out, and when a change of only those may go out.
+    private static string m_publishedShape;
+    private static double m_nextMotionPublish;
     private static PartitionManager m_partitions;
     private static PartitionPersistence m_persistence;
     private static double m_nextReport;
@@ -62,6 +66,7 @@ public static class RespawnRegistryService
     private static readonly RespawnProblemLog m_receivedProblems = new RespawnProblemLog();
     private static ClusterRespawnPoint[] m_testRawPoints = Array.Empty<ClusterRespawnPoint>();
     private static double m_testRawPointsUntil;
+    private static bool m_testRawPointsMoving;
     private const double PendingRetryIntervalMilliseconds = 5000;
     private const double PendingDeadlineMilliseconds = 300000;
 
@@ -1103,7 +1108,15 @@ public static class RespawnRegistryService
         else
         {
             if (ClusterRuntime.LocalMilliseconds < m_testRawPointsUntil)
-                local = local.Concat(Volatile.Read(ref m_testRawPoints)).ToArray();
+            {
+                IEnumerable<ClusterRespawnPoint> raw = Volatile.Read(ref m_testRawPoints);
+                if (m_testRawPointsMoving)
+                {
+                    double shift = ClusterRuntime.LocalMilliseconds / 1000;
+                    raw = raw.Select(x => x with { X = x.X + shift });
+                }
+                local = local.Concat(raw).ToArray();
+            }
             GlobalStateChannel.SendRequest(Subsystem, RespawnRegistryCodec.Write(local));
         }
     }
@@ -1115,6 +1128,7 @@ public static class RespawnRegistryService
             Reports.Clear();
             m_points = Array.Empty<ClusterRespawnPoint>();
             m_snapshot = RespawnRegistryCodec.Write(m_points);
+            m_publishedShape = null;
         }
     }
 
@@ -1151,15 +1165,37 @@ public static class RespawnRegistryService
     /// <paramref name="points"/> as they are, past the capture's checks: what a node sent when one of its medbays
     /// misreported. Dies with the process.
     /// </summary>
-    public static object ConfigureTestRawPoints(ClusterRespawnPoint[] points, double seconds)
+    /// <param name="copies">SE-1865: each point this many times, with consecutive respawn entity ids.</param>
+    /// <param name="moving">SE-1865: the points drift 1 m/s along X, like medbays on a flying ship.</param>
+    public static object ConfigureTestRawPoints(
+        ClusterRespawnPoint[] points,
+        double seconds,
+        int copies = 1,
+        bool moving = false
+    )
     {
         if (!ClusterRuntime.IsClustered || ClusterRuntime.IsWorldAuthority)
             throw new InvalidOperationException(
                 "Only a regular cluster node reports respawn points to the World Authority"
             );
-        Volatile.Write(ref m_testRawPoints, points ?? Array.Empty<ClusterRespawnPoint>());
+        if (copies is < 1 or > 10000)
+            throw new ArgumentOutOfRangeException(nameof(copies));
+        ClusterRespawnPoint[] raw = (points ?? Array.Empty<ClusterRespawnPoint>())
+            .SelectMany(x =>
+                Enumerable
+                    .Range(0, copies)
+                    .Select(i => x with { RespawnEntityId = x.RespawnEntityId + i })
+            )
+            .ToArray();
+        m_testRawPointsMoving = moving;
+        Volatile.Write(ref m_testRawPoints, raw);
         m_testRawPointsUntil = ClusterRuntime.LocalMilliseconds + seconds * 1000;
-        return new { count = m_testRawPoints.Length, seconds };
+        return new
+        {
+            count = m_testRawPoints.Length,
+            seconds,
+            moving,
+        };
     }
 
     public static object TestDelayStatus() =>
@@ -1368,6 +1404,20 @@ public static class RespawnRegistryService
             snapshot = RespawnRegistryCodec.Write(m_points);
             if (snapshot == m_snapshot)
                 return;
+            // SE-1865: every report from a node with a medbay on a moving ship, or whose oxygen level drifts, changed the
+            // snapshot, and each change sent all points to every node. On the live cluster that was ~360 KB about four
+            // times a second, which backed the ordered global queue up for tens of seconds and delayed chat behind it.
+            // A change of only positions and oxygen levels now waits for respawns.motionPublishSeconds; any other
+            // change (a point added, removed, switched off, or given another owner or share mode) goes out at once.
+            string shape = RespawnRegistryCodec.Write(
+                m_points.Select(x => x with { OxygenLevel = 0, X = 0, Y = 0, Z = 0 }).ToArray()
+            );
+            double now = ClusterRuntime.LocalMilliseconds;
+            if (shape == m_publishedShape && now < m_nextMotionPublish)
+                return;
+            m_publishedShape = shape;
+            m_nextMotionPublish =
+                now + ClusterConfig.GetInt("respawns.motionPublishSeconds") * 1000.0;
             m_snapshot = snapshot;
         }
         try

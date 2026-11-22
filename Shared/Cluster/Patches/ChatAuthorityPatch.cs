@@ -95,7 +95,12 @@ public static class ChatAuthorityPatch
             {
                 GlobalStateChannel.Publish(
                     Subsystem,
-                    JsonSerializer.Serialize(Message.From(msg, sender)),
+                    JsonSerializer.Serialize(
+                        Message.From(msg, sender) with
+                        {
+                            AcceptedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        }
+                    ),
                     retry: false
                 );
             }
@@ -209,6 +214,7 @@ public static class ChatAuthorityPatch
             ?? throw new InvalidOperationException("Invalid chat success");
         ChatMsg msg = message.ToChatMsg();
         var channel = (ChatChannel)message.Channel;
+        int relayed = 0;
         // Vanilla sends a targeted broadcast controller or scripted message only to its target, also
         // when the target is the player whose request triggered it.
         bool targeted =
@@ -230,7 +236,20 @@ public static class ChatAuthorityPatch
             )
                 continue;
             MyMultiplayerBaseSeams.ClusterRelayChat(msg, member);
+            relayed++;
         }
+        // SE-1865: how long the accepted line took from the WA to here (by the WA's and this node's clocks).
+        if (message.AcceptedAt > 0)
+            Console.WriteLine(
+                "[ClusterPlugin] chat relayed channel="
+                    + channel
+                    + " sender="
+                    + message.Sender
+                    + " recipients="
+                    + relayed
+                    + " sinceAcceptMs="
+                    + (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - message.AcceptedAt)
+            );
         // The sender's own node, the one it is attached to, accepts the line the way vanilla does (SkipAccepted).
         if (
             !ClusterRuntime.IsWorldAuthority
@@ -255,7 +274,8 @@ public static class ChatAuthorityPatch
         bool HasCustomData = false,
         string AuthorName = null,
         ulong? SenderId = null,
-        uint? TextColor = null
+        uint? TextColor = null,
+        long AcceptedAt = 0
     )
     {
         public static Message From(ChatMsg msg, ulong sender) =>
