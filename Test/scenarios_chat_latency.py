@@ -28,6 +28,7 @@ from scenarios_wa_ops import _client_identity, _poll, _require
 
 LIMIT_SECONDS = 2.0
 LOAD_COPIES = 1500  # per node; two nodes stay under the registry's 4096-point cap
+LOAD_NAME_PADDING = 900  # ~1.2 KB a point: ~3.6 MB a snapshot, under the codec's 4 MB cap
 LOAD_SETTLE_SECONDS = 60
 LINES_PER_WAY = 3
 SPAM_GAP_SECONDS = 3
@@ -91,7 +92,7 @@ def _load(bench, seconds: float) -> None:
             "GridEntityId": base - 1,
             "PartitionId": 1,
             "Generation": 1,
-            "Name": "SE-1865 moving medbay " + "x" * 120,
+            "Name": "SE-1865 moving medbay " + "x" * LOAD_NAME_PADDING,
             "OwnerIdentityId": 0,
             "ShareMode": 2,
             "Working": True,
