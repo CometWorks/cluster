@@ -347,6 +347,9 @@ def _crash_and_recover(bench, variant: str) -> None:
         wait_until(lambda: (lambda st: st.get("exists") and st.get("balance") == 500)(
             bench.cluster.node("wa-1", f"/banking-test-status?ownerId={payer}")), HANDOVER_TIMEOUT,
             "the payer account at the WA")
+        # SE-1525: node-1 approves against its replica; one that has not seen the account yet would ask the WA instead.
+        wait_until(lambda: (_try_status(bench, "node-1", payer) or {}).get("balance") == 500, HANDOVER_TIMEOUT,
+                   "the payer account in node-1's replica")
         # Re-catalogue right before the hold: node-1 cannot save again until the kill.
         before_sequence = newest["SaveId"]["Sequence"]
         bench.cluster.node("node-1", f"/save-capture?partition={partition}", method="POST")
