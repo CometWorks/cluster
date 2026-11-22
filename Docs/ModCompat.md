@@ -25,6 +25,21 @@ components is never C by default, because they may expect the session component 
 Local and global storage are per machine, which here means per node, and mostly hold logs and client settings.
 They are reported and counted but do not make a mod C.
 
+## Member policy table
+
+`Shared/Cluster/ModApiPolicyTable.cs` (SE-1840) goes one level below the groups: one row per member of the mod API
+(`Sandbox.ModAPI`, `VRage.ModAPI`, `VRage.Game.ModAPI`, `SpaceEngineers.Game.ModAPI` and their sub-namespaces,
+plus `MyVisualScriptLogicProvider`), with its cluster policy (`local`, `replicated`, `node-scoped`, `per-node`,
+`affinity`, `client`), the breakage class B1-B8 of the clustering plan's `Modding.md`, whether a cluster-side
+shim could fix it, the mod channel operation that replaces it, how many local Workshop mods use it, and a
+file:line reason from the decompiled game. The file's header explains the columns. The scanner does not read
+it yet. `Test/ModApiPolicy` fails when the game has a member without a row or a row names a member the game
+dropped; it runs in the release build against the DS it downloads, or by hand:
+
+```bash
+dotnet run --project Test/ModApiPolicy/ModApiPolicyChecks.csproj -c Release -- <DedicatedServer64 folder>
+```
+
 ## Overrides
 
 Precedence: admin > author > automatic. The scan always runs, so a mod update that changes its API use shows
