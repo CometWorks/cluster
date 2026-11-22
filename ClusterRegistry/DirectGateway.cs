@@ -1461,7 +1461,35 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         );
                         attempting = moving.Id;
                         attemptingBalance = chosen.Move.Reason.StartsWith("balance");
-                        if (movingClients == 0)
+                        ClientSession[] bodyless =
+                            moving.Clients.Length == 0
+                                ? BodylessSessionsRoutedTo(
+                                    moving.Id,
+                                    chosen.From.Node.Backend,
+                                    chosen.From.Report.Partitions
+                                )
+                                : [];
+                        if (bodyless.Length != 0)
+                        {
+                            Console.WriteLine(
+                                $"Partition {moving.Id} carries client(s) {string.Join(", ", bodyless.Select(x => x.ClientId))} "
+                                    + "routed to it and in no partition of its node (respawn screen)"
+                            );
+                            Handover(
+                                    bodyless,
+                                    chosen.From.Node.Control,
+                                    chosen.To.Node.Control,
+                                    chosen.To.Node.Backend,
+                                    moving.Id,
+                                    readinessBudget: attemptingBalance
+                                        ? BalanceReadinessBudget
+                                        : null
+                                )
+                                .GetAwaiter()
+                                .GetResult();
+                            handedOver = true;
+                        }
+                        else if (movingClients == 0)
                             FencedClientlessHandover(
                                     chosen.From.Node.Control,
                                     chosen.To.Node.Control,
@@ -9506,6 +9534,39 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
     /// </summary>
     /// <summary>How long after CLIENT_READY an automatic (balance/co-location) handover leaves a client alone (T-0238).</summary>
     internal static readonly TimeSpan PostReadySettle = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// SE-1876: settled sessions on <paramref name="sourceBackend"/> routed to <paramref name="partition"/> (placement, else
+    /// character home) that the source reports in none of its partitions: a player on the respawn screen, whose body is
+    /// gone, so no node lists it. Its route still names the partition, so a move that left it behind was deferred for
+    /// the whole RouteOverReportGrace and then refused as remote-use, until a drain deadline force-closed the node under
+    /// it (bench P2-RETIRE-BODYLESS, node-link-lost). The handover carries such a client with its home instead; the
+    /// target creates its player from the binding (ReplicationServerPatch.CreateBodylessPlayer).
+    /// </summary>
+    private ClientSession[] BodylessSessionsRoutedTo(
+        ulong partition,
+        IPEndPoint sourceBackend,
+        IEnumerable<PartitionInfo> sourcePartitions
+    )
+    {
+        if (_registry is not { } registry)
+            return [];
+        HashSet<ulong> placed = [.. sourcePartitions.SelectMany(x => x.Clients)];
+        return
+        [
+            .. _clients.Values.Where(x =>
+                x.WorldReady
+                && !JoinStillSettling(x.ClientId)
+                && !x.SwitchingBackend
+                && x.BackendEndpoint.Equals(sourceBackend)
+                && !placed.Contains(x.ClientId)
+                && (
+                    registry.GetClientPartition(x.ClientId)?.Partition
+                    ?? registry.GetCharacterHome(x.ClientId)?.Partition
+                ) == partition
+            ),
+        ];
+    }
 
     private bool JoinStillSettling(ulong client) =>
         _clients.TryGetValue(client, out ClientSession? session)

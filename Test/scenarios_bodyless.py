@@ -36,6 +36,12 @@ def _player(bench, node_id: str) -> dict:
     return _try(bench.cluster.node, node_id, f"/respawn-test-player?userId={CLIENT_ID}") or {}
 
 
+def _routed(bench) -> int | None:
+    """The partition the Gateway routes the client to (its placement, else its character home)."""
+    route = _try(bench.cluster.get, f"/registry/client-routes?client={CLIENT_ID}")
+    return route.get("Partition") if isinstance(route, dict) else None
+
+
 def _forced(bench) -> list[str]:
     return _lines(bench, "gateway", rf"Force reconnect client {CLIENT_ID}:|Client {CLIENT_ID} could not be re-adopted")
 
@@ -103,13 +109,14 @@ def p2_hnd_bodyless(bench) -> None:
     _require(bench, "SETUP: the client's partition is on node-1",
              _client_partition(_partitions(bench, "node-1")) is not None)
     _kill(bench, "node-1")
-    # The body is the client's controlled entity until it respawns; its partition is the one that holds the client.
-    partition = _poll(lambda: _client_partition(_partitions(bench, "node-1")), HANDOVER_TIMEOUT)
-    _require(bench, "SETUP: node-1 reports the dead client in a partition", partition is not None)
+    # A dead body is in no partition, so no node reports the client; the Gateway still routes it to its partition.
+    partition = _routed(bench)
+    _require(bench, "SETUP: the Gateway routes the dead client to a partition", partition is not None)
     _move(bench, partition, "node-1", "node-2", "dead")
     _relog(bench)
     landed = _node_by_backend(bench, (_session(bench) or {}).get("backend", ""))
     _require(bench, "SETUP: the relogged client was routed to its home partition on node-2", landed == "node-2", landed)
+    _require(bench, "SETUP: its route still names the moved partition", _routed(bench) == partition, str(_routed(bench)))
     _move(bench, partition, "node-2", "node-1", "relogged")
     respawned = _try(bench.wait_spawned, CLIENT_ID)
     bench.check("the client respawns", isinstance(respawned, dict) and bench.living_character(CLIENT_ID) is not None,

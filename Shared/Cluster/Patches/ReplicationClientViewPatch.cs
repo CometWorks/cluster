@@ -7,6 +7,7 @@ using HarmonyLib;
 using Sandbox.Engine.Multiplayer;
 using Sandbox.Game;
 using Sandbox.Game.Entities;
+using Sandbox.Game.Entities.Character;
 using Sandbox.Game.Replication;
 using Sandbox.Game.Replication.StateGroups;
 using VRage;
@@ -104,6 +105,20 @@ public static class ReplicationClientViewPatch
         // Two membership tests against a list that holds the client's whole exported view; a set makes them
         // constant instead of two full scans on the handover's game-thread path.
         HashSet<IMyReplicable> exportedSet = exported.ToHashSet();
+        // SE-1876: a client on the respawn screen still controls its dead body, which is in no partition. The body stays
+        // here and the client moves without it; refusing the capture kept the client on a node being drained.
+        if (
+            !exportedSet.Contains(client.State.ControlledReplicable)
+            && DeadBody(client.State.ControlledReplicable)
+            && (
+                client.State.CharacterReplicable == null
+                || client.State.CharacterReplicable == client.State.ControlledReplicable
+            )
+        )
+        {
+            state.ControlledReplicableId = state.CharacterReplicableId = 0;
+            state.ControlledEntityId = state.CharacterEntityId = 0;
+        }
         if (
             (
                 state.ControlledReplicableId != 0
@@ -129,6 +144,11 @@ public static class ReplicationClientViewPatch
                 Collect(child, included);
         }
     }
+
+    private static bool DeadBody(IMyReplicable replicable) =>
+        replicable is IMyEntityReplicable entity
+        && MyEntities.TryGetEntityById(entity.EntityId, out MyEntity body)
+        && body is MyCharacter { IsDead: true };
 
     /// <summary>T-0368: the source's half of VoxelCarryPolicy for one voxel replicable in the client's view.</summary>
     private static bool CarriesVoxel(
