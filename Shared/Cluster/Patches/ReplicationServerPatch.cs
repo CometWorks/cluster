@@ -156,6 +156,8 @@ public static class ReplicationServerPatch
             character = importedCharacter;
         }
         MyPlayer player = clientState.GetPlayer();
+        if (player == null && character == null)
+            player = CreateBodylessPlayer(clientId, networkClient);
         if (player == null && character != null)
         {
             long identityId = character.GetPlayerIdentityId();
@@ -207,6 +209,32 @@ public static class ReplicationServerPatch
         if (character != null && player.Identity.Character != character)
             player.Identity.ChangeCharacter(character);
         ReplicationClientViewPatch.ValidateBindings(replication, clientState, state);
+    }
+
+    /// <summary>
+    /// SE-1876: a client on the respawn screen carries no character, so nothing above could create its player here, and
+    /// both the target of a handover and the source taking it back after an abort refused it as "Target player is not
+    /// ready". A scale-in drain of the partition holding a dead player's home then force-reconnected the player
+    /// (octahedron 2026-11-22 07:08Z, partition 50571). Create the player from the client's binding instead, as the node
+    /// a cross-node respawn switches to does (RespawnRegistryService.AdoptSwitchedClient), so the client moves with the
+    /// partition and stays on its respawn screen. Null for a client without an identity yet (a first join), which is in
+    /// no partition, so no handover carries it.
+    /// </summary>
+    private static MyPlayer CreateBodylessPlayer(ulong clientId, MyNetworkClient networkClient)
+    {
+        MyPlayerCollection players = MySession.Static.Players;
+        long identityId = players.TryGetIdentityId(clientId, 0);
+        MyIdentity identity = identityId == 0 ? null : players.TryGetIdentity(identityId);
+        if (identity == null)
+            return null;
+        return players.CreateNewPlayer(
+            identity,
+            new MyPlayer.PlayerId(clientId, 0),
+            networkClient.DisplayName,
+            true,
+            initialPlayer: false,
+            newIdentity: false
+        );
     }
 
     public static int AddEntities(ulong clientId, IEnumerable<long> entityIds) =>
