@@ -2,7 +2,7 @@
 
 CometWorks Cluster uses [AGPL v3 or later](LICENSE) (`AGPL-3.0-or-later`).
 Your own plugins can stay closed if they use only our third-party interfaces
-and follow the documentation. Private core patches fall outside the
+for their documented purpose. Private core patches fall outside the
 [plugin exception](EXCEPTION.md), even when bundled as a plugin.
 If you need a core change to fix a bug or add support, consider sending it
 upstream or keeping it in a separate AGPL fork.
