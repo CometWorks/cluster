@@ -59,12 +59,18 @@ public static class CharacterRegistryService
         Array.Empty<DespawnOrder>(),
         Array.Empty<Settings>()
     );
+
+    // WA: the full snapshot as of the last publish; the resync answer.
     private static string m_snapshot = "";
+
+    // SE-1867, WA: what the nodes hold, per part, so a publish carries only the entries that changed.
+    private static readonly GlobalStateDelta<long, Instance> PublishedInstances = new();
+    private static readonly GlobalStateDelta<long, DespawnOrder> PublishedDespawn = new();
+    private static readonly GlobalStateDelta<long, Settings> PublishedRecord = new();
 
     // SE-1867: the last published snapshot with the suit gauges left out, and when a change of only those may go out.
     private static string m_publishedShape;
     private static double m_nextGaugePublish;
-    private static string m_pending;
     private static double m_nextReport;
     private static readonly HashSet<long> Seeded = new();
 
@@ -123,10 +129,19 @@ public static class CharacterRegistryService
 
     public sealed record Snapshot(Instance[] Instances, DespawnOrder[] Despawn, Settings[] Record);
 
+    /// <summary>SE-1867: one publish, the changed and removed entries of each part. Instances and Record are keyed by
+    /// identity, Despawn by the entity to despawn. A node from before SE-1867 fails to read it as a
+    /// <see cref="Snapshot"/> (objects, not arrays) and keeps its last snapshot.</summary>
+    public sealed record Delta(
+        GlobalStateDeltaPayload<long, Instance> Instances,
+        GlobalStateDeltaPayload<long, DespawnOrder> Despawn,
+        GlobalStateDeltaPayload<long, Settings> Record
+    );
+
     internal static void Install()
     {
         GlobalStateChannel.RegisterAuthorityHandler(Subsystem, ReceiveReport);
-        GlobalStateChannel.RegisterReplicaHandler(Subsystem, ReceiveSnapshot);
+        GlobalStateChannel.RegisterReplicaHandler(Subsystem, ReceiveDelta);
         GlobalStateChannel.RegisterSnapshot(
             Subsystem,
             () =>
@@ -277,33 +292,6 @@ public static class CharacterRegistryService
 
     private static void ApplyPending()
     {
-        string payload;
-        lock (Sync)
-        {
-            payload = m_pending;
-            m_pending = null;
-        }
-        if (payload != null)
-        {
-            try
-            {
-                Snapshot snapshot = JsonSerializer.Deserialize<Snapshot>(payload);
-                if (
-                    snapshot?.Instances != null
-                    && snapshot.Despawn != null
-                    && snapshot.Record != null
-                    && snapshot.Instances.Length <= MaxEntries
-                    && snapshot.Despawn.Length <= MaxEntries
-                )
-                    m_cluster = snapshot;
-            }
-            catch (Exception error)
-            {
-                Console.WriteLine(
-                    "[ClusterPlugin] character registry snapshot rejected: " + error.Message
-                );
-            }
-        }
         Snapshot cluster = m_cluster;
         // Drop remembered results for orders that are no longer present, so the table cannot
         // grow and a returning order is reported afresh rather than silently suppressed.
@@ -465,6 +453,7 @@ public static class CharacterRegistryService
         )
             throw new InvalidOperationException("Invalid character report");
         string snapshot;
+        string delta;
         lock (Sync)
         {
             double now = ClusterRuntime.LocalMilliseconds;
@@ -497,10 +486,14 @@ public static class CharacterRegistryService
             m_publishedShape = shape;
             m_nextGaugePublish =
                 now + ClusterConfig.GetInt("characters.gaugePublishSeconds") * 1000.0;
+            // SE-1867: only what changed goes out. 125 of the 199 live records belonged to players who were not
+            // online and went out unchanged with every publish; a node that misses a delta resyncs to m_snapshot.
+            delta = TakeDelta(m_cluster, merged);
             m_snapshot = snapshot;
-            m_pending = snapshot;
+            m_cluster = merged;
         }
-        GlobalStateChannel.Publish(Subsystem, snapshot);
+        if (delta != null)
+            GlobalStateChannel.Publish(Subsystem, delta);
     }
 
     /// <summary>
@@ -586,12 +579,98 @@ public static class CharacterRegistryService
         );
     }
 
+    private static string TakeDelta(Snapshot published, Snapshot merged)
+    {
+        static string Part<T>(
+            GlobalStateDelta<long, T> tracker,
+            IEnumerable<T> before,
+            IEnumerable<T> after,
+            Func<T, long> keyOf
+        )
+            where T : class
+        {
+            Dictionary<long, T> current = after.ToDictionary(keyOf);
+            return tracker.Take(
+                    before.Select(keyOf).Concat(current.Keys),
+                    key => current.GetValueOrDefault(key)
+                ) ?? "null";
+        }
+        string instances = Part(
+            PublishedInstances,
+            published.Instances,
+            merged.Instances,
+            x => x.IdentityId
+        );
+        string despawn = Part(PublishedDespawn, published.Despawn, merged.Despawn, x => x.EntityId);
+        string record = Part(PublishedRecord, published.Record, merged.Record, x => x.IdentityId);
+        return instances == "null" && despawn == "null" && record == "null"
+            ? null
+            : $"{{\"Instances\":{instances},\"Despawn\":{despawn},\"Record\":{record}}}";
+    }
+
+    /// <summary>A resync: the whole registry replaces this node's copy.</summary>
     private static void ReceiveSnapshot(string payload)
     {
         if (payload == null || payload.Length > 8 * 1024 * 1024)
             throw new InvalidOperationException("Invalid character registry snapshot");
+        if (payload.Length == 0)
+            return; // the World Authority has not published yet
+        Snapshot snapshot = JsonSerializer.Deserialize<Snapshot>(payload);
+        if (
+            snapshot?.Instances == null
+            || snapshot.Despawn == null
+            || snapshot.Record == null
+            || snapshot.Instances.Length > MaxEntries
+            || snapshot.Despawn.Length > MaxEntries
+        )
+            throw new InvalidOperationException("Invalid character registry snapshot");
         lock (Sync)
-            m_pending = payload;
+            m_cluster = snapshot;
+    }
+
+    /// <summary>SE-1867: a publish patches this node's copy. A throw makes the channel resync.</summary>
+    private static void ReceiveDelta(string payload)
+    {
+        if (payload == null || payload.Length > 8 * 1024 * 1024)
+            throw new InvalidOperationException("Invalid character registry delta");
+        // A World Authority from before SE-1867 still publishes whole snapshots (a rolling deploy).
+        using (JsonDocument document = JsonDocument.Parse(payload))
+            if (
+                document.RootElement.TryGetProperty("Instances", out JsonElement instances)
+                && instances.ValueKind == JsonValueKind.Array
+            )
+            {
+                ReceiveSnapshot(payload);
+                return;
+            }
+        Delta delta =
+            JsonSerializer.Deserialize<Delta>(payload)
+            ?? throw new InvalidOperationException("Invalid character registry delta");
+        static T[] Patch<T>(T[] held, GlobalStateDeltaPayload<long, T> part, Func<T, long> keyOf)
+            where T : class
+        {
+            if (part == null)
+                return held;
+            if (
+                part.Changed == null
+                || part.Changed.Length > MaxEntries
+                || part.Removed?.Length > MaxEntries
+            )
+                throw new InvalidOperationException("Invalid character registry delta");
+            Dictionary<long, T> record = held.ToDictionary(keyOf);
+            GlobalStateDelta<long, T>.Apply(record, part, keyOf);
+            if (record.Count > MaxEntries)
+                throw new InvalidOperationException(
+                    "Character registry delta overflows the registry"
+                );
+            return record.Values.OrderBy(keyOf).ToArray();
+        }
+        lock (Sync)
+            m_cluster = new Snapshot(
+                Patch(m_cluster.Instances, delta.Instances, x => x.IdentityId),
+                Patch(m_cluster.Despawn, delta.Despawn, x => x.EntityId),
+                Patch(m_cluster.Record, delta.Record, x => x.IdentityId)
+            );
     }
 
     private static void Raise(string message)
@@ -729,6 +808,8 @@ public static class CharacterRegistryService
                 instances = m_cluster.Instances,
                 settings = m_cluster.Record,
                 pendingDespawn = m_cluster.Despawn,
+                // SE-1867, WA: the size of a full snapshot, what every publish sent before deltas.
+                snapshotBytes = m_snapshot.Length,
                 alarms = Alarms.ToArray(),
                 // The audit result, straight out of the replicated map: any identity the cluster believes has
                 // more than one body. Empty is invariant 7 holding.
