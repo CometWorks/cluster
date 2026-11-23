@@ -81,6 +81,9 @@ public static class ClusterConfig
         // SE-1525: a store trade finishes against the node's banking replica and settles with the World Authority in the
         // background. false: every trade waits on the game thread for the WA to approve its debit, as before.
         ["store.asyncPayments"] = "true",
+        // SE-1892: a station purchase of ore, ingots, components or ammo adds its items in one call, not one per unit.
+        // false: vanilla's per-unit loop (a 78,063-ingot purchase was a 300-840 ms frame on the live cluster).
+        ["store.batchPurchases"] = "true",
         ["hitch.thresholdMs"] = "100",
         ["hitch.logThresholdMs"] = "250",
         // SE-1228: a game thread stuck this long in one frame logs every thread's stack once, while it is still stuck, so a

@@ -6,8 +6,9 @@ Vanilla's MyStoreBlock.BuyPhysicalItemInternal adds a purchase with ``amount`` c
 each recomputing the inventory's volume and mass and raising its change events.
 
 One regular node + WA, no client. ``/test-store-bulk-add`` adds N iron ingots to an empty large cargo container of a
-dynamic ship on node-1's game thread, as vanilla's per-unit loop and as one AddItems(N). Both must leave the same
-amount; the batched add must take a small fraction of the loop's time.
+dynamic ship on node-1's game thread, with the loop's AddItems call as vanilla makes it and as the cluster's
+transpiler rewrites it (MyStoreBlockPatch.AddPurchased). Both must leave the same amount; the patched loop must take a
+small fraction of vanilla's time. The node starting at all proves the transpiler found its anchors.
 
 * ``P2-STORE-BULK-ADD`` - 78,063 ingots (the largest live purchase), three rounds of each mode.
 """
@@ -29,16 +30,16 @@ def _add(bench, mode: str) -> dict:
 
 def p2_store_bulk_add(bench) -> None:
     bench.start_cluster(nodes=STARTED)
-    runs = {mode: [_add(bench, mode) for _ in range(ROUNDS)] for mode in ("loop", "batched")}
+    runs = {mode: [_add(bench, mode) for _ in range(ROUNDS)] for mode in ("vanilla", "patched")}
     bench.record("bulk-add", runs)
-    loop = statistics.median(r["ms"] for r in runs["loop"])
-    batched = statistics.median(r["ms"] for r in runs["batched"])
+    loop = statistics.median(r["ms"] for r in runs["vanilla"])
+    batched = statistics.median(r["ms"] for r in runs["patched"])
     amounts = {r["inInventory"] for mode in runs.values() for r in mode}
     if not bench.check(f"both modes leave {AMOUNT} ingots", amounts == {float(AMOUNT)}, str(amounts)):
         raise ClusterError(f"amounts {amounts}")
-    bench.check(f"batched add {batched:.1f} ms is under a tenth of the per-unit loop's {loop:.1f} ms",
+    bench.check(f"patched loop {batched:.1f} ms is under a tenth of vanilla's {loop:.1f} ms",
                 batched * 10 < loop)
-    bench.exercised(amount=AMOUNT, loopMedianMs=loop, batchedMedianMs=batched)
+    bench.exercised(amount=AMOUNT, vanillaMedianMs=loop, patchedMedianMs=batched)
 
 
 SCENARIOS_STORE_BULK = {

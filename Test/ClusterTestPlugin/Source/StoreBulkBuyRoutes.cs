@@ -16,8 +16,9 @@ namespace ClusterTestPlugin;
 /// SE-1892 bench route: where a bulk store purchase spends its frame. A station purchase of N units runs vanilla's
 /// item loop of MyStoreBlock.BuyPhysicalItemInternal: N times CreateNewObject and inventory.AddItems(1, item). Live
 /// (2026-11-23) the buys of 20,000 or more ingots were in 300-840 ms frames and the smaller ones never. The route
-/// runs that loop, or the one AddItems(N, item) the fix makes of it, into a large cargo container of a dynamic ship,
-/// and answers its game-thread time and the inventory's amount.
+/// runs that loop into a large cargo container of a dynamic ship, with the loop's AddItems call as vanilla makes it
+/// (mode=vanilla) or as the cluster's transpiler makes it, Shared.Patches.MyStoreBlockPatch.AddPurchased
+/// (mode=patched), and answers its game-thread time and the inventory's amount.
 /// </summary>
 internal static class StoreBulkBuyRoutes
 {
@@ -25,14 +26,14 @@ internal static class StoreBulkBuyRoutes
 
     public static void Register()
     {
-        // POST /test-store-bulk-add?amount=N&mode=loop|batched[&item=Iron] - one bulk add on the game thread.
+        // POST /test-store-bulk-add?amount=N&mode=vanilla|patched[&item=Iron] - one bulk add on the game thread.
         TestRoutes.Add(
             "POST",
             "/test-store-bulk-add",
             context =>
             {
                 int amount = (int)TestRoutes.Long(context, "amount");
-                string mode = context.Request.QueryString["mode"] ?? "loop";
+                string mode = context.Request.QueryString["mode"] ?? "vanilla";
                 string item = context.Request.QueryString["item"] ?? "Iron";
                 TestRoutes.Json(
                     context,
@@ -50,13 +51,20 @@ internal static class StoreBulkBuyRoutes
         inventory.Clear();
         var definition = new SerializableDefinitionId(typeof(MyObjectBuilder_Ingot), item);
         Stopwatch watch = Stopwatch.StartNew();
-        if (mode == "loop")
+        if (mode == "vanilla")
             for (int i = 0; i < amount; i++)
                 inventory.AddItems(1, MyObjectBuilderSerializerKeen.CreateNewObject(definition));
-        else if (mode == "batched")
-            inventory.AddItems(amount, MyObjectBuilderSerializerKeen.CreateNewObject(definition));
+        else if (mode == "patched")
+            for (int i = 0; i < amount; i++)
+                Shared.Patches.MyStoreBlockPatch.AddPurchased(
+                    inventory,
+                    1,
+                    MyObjectBuilderSerializerKeen.CreateNewObject(definition),
+                    amount,
+                    ref i
+                );
         else
-            throw new ArgumentException("mode is loop or batched");
+            throw new ArgumentException("mode is vanilla or patched");
         double ms = watch.Elapsed.TotalMilliseconds;
         Plugin.Log($"store-bulk-add mode={mode} amount={amount} item={item} ms={ms:F1} (SE-1892)");
         return new
