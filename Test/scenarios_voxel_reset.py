@@ -140,7 +140,7 @@ def _registry_rows(bench) -> dict[int, dict]:
 
 def _node_partitions(bench, node: str) -> dict[int, list[int]]:
     """partition id -> member ids, as the node reports them."""
-    return {int(row["id"]): [int(m["id"]) for m in row.get("members") or []}
+    return {int(row["id"]): [int(m["id"]) for m in (row.get("members") or [])]
             for row in _node(bench, node, "/partitions")["partitions"]}
 
 
