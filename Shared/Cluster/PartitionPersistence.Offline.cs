@@ -92,6 +92,44 @@ internal sealed partial class PartitionPersistence
     private readonly Dictionary<ulong, DateTime> m_offlineRetryAfter =
         new Dictionary<ulong, DateTime>();
     private readonly Dictionary<ulong, DateTime> m_onlineSince = new Dictionary<ulong, DateTime>();
+
+    /// <summary>SE-1892: partitions recovered soon after they went offline, held online until this time (game thread).</summary>
+    private readonly Dictionary<ulong, DateTime> m_rewokenUntil = new Dictionary<ulong, DateTime>();
+
+    /// <summary>SE-1892: holds a just-recovered partition online when its newest save (the offline Final) is younger
+    /// than offline.rewakeWindowSeconds. Returns the hold's end, or null when none applies.</summary>
+    internal static DateTime? RewakeHold(DateTime now, DateTimeOffset? saveCreated, int windowSeconds, int holdSeconds)
+    {
+        if (holdSeconds <= 0 || saveCreated is not { } saved)
+            return null;
+        double age = (now - saved.UtcDateTime).TotalSeconds;
+        return age >= 0 && age < windowSeconds ? now.AddSeconds(holdSeconds) : null;
+    }
+
+    private void NoteRecoveredForRewake(RecoveryClaim recovery)
+    {
+        DateTime now = DateTime.UtcNow;
+        if (
+            RewakeHold(
+                now,
+                recovery.SaveCreated,
+                ClusterConfig.GetInt("offline.rewakeWindowSeconds"),
+                ClusterConfig.GetInt("offline.rewakeHoldSeconds")
+            )
+            is not { } until
+        )
+            return;
+        m_rewokenUntil[recovery.Partition] = until;
+        MyLog.Default?.WriteLineAndConsole(
+            "[ClusterPlugin] recovery of partition "
+                + recovery.Partition
+                + " came "
+                + (int)(now - recovery.SaveCreated.Value.UtcDateTime).TotalSeconds
+                + " s after its newest save; held online until "
+                + until.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture)
+                + "Z (SE-1892)"
+        );
+    }
     private DateTime m_nextOfflineSweep;
     private DateTime m_nextGridBackfill;
     private Task m_gridBackfill;
@@ -290,6 +328,13 @@ internal sealed partial class PartitionPersistence
         foreach (ulong gone in m_onlineSince.Keys.Where(id => !present.Contains(id)).ToArray())
             m_onlineSince.Remove(gone);
         foreach (
+            ulong gone in m_rewokenUntil
+                .Where(x => x.Value <= now || !present.Contains(x.Key))
+                .Select(x => x.Key)
+                .ToArray()
+        )
+            m_rewokenUntil.Remove(gone);
+        foreach (
             ulong gone in m_offlineQuietSince.Keys.Where(id => !present.Contains(id)).ToArray()
         )
             m_offlineQuietSince.Remove(gone);
@@ -445,6 +490,8 @@ internal sealed partial class PartitionPersistence
             return "backoff";
         if ((now - m_onlineSince[id]).TotalSeconds < minOnline)
             return "recent";
+        if (m_rewokenUntil.TryGetValue(id, out DateTime held) && held > now)
+            return "rewoken"; // SE-1892
         if (routed.Contains(id))
             return "client";
         lock (m_drainSaves)

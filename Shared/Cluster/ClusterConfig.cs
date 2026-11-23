@@ -313,6 +313,11 @@ public static class ClusterConfig
         ["offline.minOnlineSeconds"] = "60", // T-0237: covers the route-to-attach window of a join (10-13 s)
         ["offline.quietMeters"] = "8000",
         ["offline.retrySeconds"] = "300",
+        // SE-1892: a partition recovered within rewakeWindowSeconds of going offline is held online for rewakeHoldSeconds
+        // after the load (blocker "rewoken"): bots and chained merge wakes brought 317 of 1,418 offline partitions
+        // back within 5 min on 2026-11-22/23, each reload a 300-2200 ms load frame. rewakeHoldSeconds 0 = off.
+        ["offline.rewakeWindowSeconds"] = "1800",
+        ["offline.rewakeHoldSeconds"] = "3600",
         ["offline.offerGrids"] = "true", // SE-810: an offline offer carries the partition's grids; false leaves them to the backfill
         ["offline.gridBackfillSeconds"] = "10", // SE-810: per node, one offline row without grids read from its Final
         // Read by the GATEWAY and the World Authority from this same document: a client-bearing
@@ -445,6 +450,11 @@ public static class ClusterConfig
         // partition unowned once its empty Final is catalogued, and the registry reaps the row. "false" restores
         // holding it, unreported, until the node's drain releases it.
         ["recovery.releaseEmpty"] = "true",
+        // SE-1892: "staged" builds a recovery's entities on the staged import's builders (import.stageWorkers) and Adds
+        // them over frames of at most activatePerFrame entities in whole physical groups; the partition is owned and
+        // its Final captured after the last one. "inline" restores creating every entity in the load frame.
+        ["recovery.mode"] = "staged",
+        ["recovery.activatePerFrame"] = "8",
         // SE-1317: POST /cluster/grid-delete refuses a grid for this long after its handover commit or recovery load,
         // while its links re-form (T-0254's 60 s). Not the trash's 300 s recovery grace: an offline wake is a recovery
         // load and the woken partition goes offline again before that ends. A bench sets a few seconds.
@@ -604,6 +614,7 @@ public static class ClusterConfig
     >
     {
         ["import.mode"] = new[] { "legacy", "staged" },
+        ["recovery.mode"] = new[] { "inline", "staged" },
         // T-0120. Without this entry Normalize() has no branch that accepts a word: the key is not a
         // list, not an enumeration, its default is not true/false, so every PUT falls through to the
         // integer branch and throws "expects a non-negative integer, got off". The knob would have

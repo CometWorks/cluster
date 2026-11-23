@@ -61,7 +61,7 @@ namespace ClusterPlugin;
 /// </summary>
 internal sealed partial class ClusterControlServer
 {
-    private sealed class StagedEntity
+    internal sealed class StagedEntity
     {
         public MyObjectBuilder_EntityBase Builder;
         public MyEntity Entity;
@@ -73,7 +73,7 @@ internal sealed partial class ClusterControlServer
         public List<Action> EntityEvents;
     }
 
-    private sealed class StagePlan
+    internal sealed class StagePlan
     {
         public List<StagedEntity> Staged = new List<StagedEntity>();
         public List<MyObjectBuilder_EntityBase> Kept = new List<MyObjectBuilder_EntityBase>();
