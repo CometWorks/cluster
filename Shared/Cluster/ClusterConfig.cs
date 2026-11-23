@@ -316,8 +316,8 @@ public static class ClusterConfig
         // SE-1892: a partition recovered within rewakeWindowSeconds of going offline is held online for rewakeHoldSeconds
         // after the load (blocker "rewoken"): bots and chained merge wakes brought 317 of 1,418 offline partitions
         // back within 5 min on 2026-11-22/23, each reload a 300-2200 ms load frame. rewakeHoldSeconds 0 = off.
-        ["offline.rewakeWindowSeconds"] = "1800",
-        ["offline.rewakeHoldSeconds"] = "3600",
+        ["offline.rewakeWindowSeconds"] = "900",
+        ["offline.rewakeHoldSeconds"] = "1800",
         ["offline.offerGrids"] = "true", // SE-810: an offline offer carries the partition's grids; false leaves them to the backfill
         ["offline.gridBackfillSeconds"] = "10", // SE-810: per node, one offline row without grids read from its Final
         // Read by the GATEWAY and the World Authority from this same document: a client-bearing
