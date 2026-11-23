@@ -72,7 +72,11 @@ def _config(bench, values: dict) -> bool:
 
 
 def _loads(bench, partition: int) -> list[str]:
-    return _lines(bench, NODE, LOADED.format(p=partition))
+    """One line per load: the node writes each line to its console log and its game log."""
+    lines = {}
+    for line in _lines(bench, NODE, LOADED.format(p=partition)):
+        lines.setdefault(re.search(LOADED.format(p=partition), line).group(1), line)
+    return list(lines.values())
 
 
 def _longest_frame(times: str) -> int:
