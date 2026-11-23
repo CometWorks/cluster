@@ -723,8 +723,13 @@ internal sealed partial class DirectGateway
         {
             lock (_offlineWakeAsked)
                 _lastPartitionReportsValue = value;
+            if (value is { } pass)
+                _voxelResetMemory.Observe(pass.Reports);
         }
     }
+
+    /// <summary>SE-1706: the member spheres each partition was last reported with, for the voxel reset occupancy.</summary>
+    private readonly VoxelResetOccupancy.Memory _voxelResetMemory = new();
     private (
         DateTime At,
         (string Node, PartitionReport Report)[] Reports

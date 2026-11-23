@@ -63,7 +63,7 @@ internal static class VoxelResetPolicy
     }
 
     /// <summary>
-    /// Why a unit with this world box must not reset now, or null when it may. <paramref name="spheres"/> are
+    /// Why a unit with this world box must not reset now (its nearest blocker), or null when it may. <paramref name="spheres"/> are
     /// [x,y,z,r] rows of every partition member (grids and characters, online or offline); a member closer than
     /// <paramref name="gridMeters"/> blocks. An online player closer than <paramref name="playerMeters"/> blocks.
     /// </summary>
@@ -76,21 +76,26 @@ internal static class VoxelResetPolicy
         double playerMeters
     )
     {
+        // SE-1706: the nearest blocker, for the status line.
+        string kind = null;
+        double nearest = double.MaxValue;
         foreach (double[] s in spheres)
         {
             if (s == null || s.Length < 4)
                 continue;
             double gap = DistanceToBox(s[0], s[1], s[2], boxMin, boxMax) - s[3];
-            if (gap < gridMeters)
-                return "member " + gap.ToString("0", CultureInfo.InvariantCulture) + " m";
+            if (gap < gridMeters && gap < nearest)
+                (kind, nearest) = ("member", gap);
         }
         foreach ((double x, double y, double z) in players)
         {
             double gap = DistanceToBox(x, y, z, boxMin, boxMax);
-            if (gap < playerMeters)
-                return "player " + gap.ToString("0", CultureInfo.InvariantCulture) + " m";
+            if (gap < playerMeters && gap < nearest)
+                (kind, nearest) = ("player", gap);
         }
-        return null;
+        return kind == null
+            ? null
+            : kind + " " + Math.Max(0, nearest).ToString("0", CultureInfo.InvariantCulture) + " m";
     }
 }
 

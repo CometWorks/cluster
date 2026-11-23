@@ -124,14 +124,27 @@ internal static partial class SelfTest
         DateTime at = new(2026, 11, 18, 12, 0, 0, DateTimeKind.Utc);
         var pass = (at, new[] { ("n1", Report(withSpheres, old)) });
 
-        VoxelResetOccupancy none2 = VoxelResetOccupancy.Build(at, null, [offline], [1]);
+        static VoxelResetOccupancy.LivePartition Live(
+            ulong id,
+            string? node = "n1",
+            bool recovering = false
+        ) => new(id, node, recovering);
+        var memory = new VoxelResetOccupancy.Memory();
+        VoxelResetOccupancy none2 = VoxelResetOccupancy.Build(
+            at,
+            null,
+            [offline],
+            [Live(1)],
+            memory
+        );
         Check(!none2.Complete, "no report pass yet is incomplete");
 
         VoxelResetOccupancy full = VoxelResetOccupancy.Build(
             at.AddSeconds(5),
             pass,
             [offline],
-            [1, 2]
+            [Live(1), Live(2)],
+            memory
         );
         Check(full.Complete && full.Reason == null, "every live partition reported: complete");
         Check(
@@ -148,10 +161,91 @@ internal static partial class SelfTest
         );
         Check(full.AgeSeconds == 5, "age is since the pass");
 
-        VoxelResetOccupancy partial = VoxelResetOccupancy.Build(at, pass, [offline], [1, 2, 77]);
+        // SE-1706: unknown positions wait; an unlisted row of a reporting owner is memberless after a minute; a row
+        // seen before is judged where it was last seen.
+        foreach (
+            (VoxelResetOccupancy.LivePartition row, string what) in new[]
+            {
+                (Live(77, "n9"), "owned by a node that did not report"),
+                (Live(77, null), "unowned"),
+                (Live(77, recovering: true), "recovering, never seen"),
+                (Live(77), "new since the pass"),
+            }
+        )
+        {
+            VoxelResetOccupancy unknown = VoxelResetOccupancy.Build(
+                at,
+                pass,
+                [offline],
+                [Live(1), Live(2), row],
+                new VoxelResetOccupancy.Memory()
+            );
+            Check(
+                !unknown.Complete && unknown.Reason!.Contains("77"),
+                "a live partition with no known position makes it incomplete: " + what
+            );
+        }
+        var held = new VoxelResetOccupancy.Memory();
+        VoxelResetOccupancy first = VoxelResetOccupancy.Build(
+            at,
+            pass,
+            [],
+            [Live(1), Live(2), Live(77)],
+            held
+        );
+        Check(!first.Complete, "an unlisted row is not memberless at once");
+        var later = (at.AddSeconds(59), pass.Item2);
         Check(
-            !partial.Complete && partial.Reason!.Contains("77"),
-            "a live partition nobody reported makes it incomplete"
+            !VoxelResetOccupancy.Build(at, later, [], [Live(1), Live(2), Live(77)], held).Complete,
+            "nor after 59 s"
+        );
+        later = (at.AddSeconds(60), pass.Item2);
+        VoxelResetOccupancy settled = VoxelResetOccupancy.Build(
+            at,
+            later,
+            [],
+            [Live(1), Live(2), Live(77)],
+            held
+        );
+        Check(
+            settled.Complete && settled.Memberless == 1 && settled.Spheres.Length == 3,
+            "the reporting owner left it out for 60 s: memberless, no sphere"
+        );
+
+        // Partition 2 was listed above; a pass without it (its grid closed, or a recovery that holds its save) still
+        // keeps its last spheres occupied, even while it recovers or its owner is silent.
+        var memoryOf2 = new VoxelResetOccupancy.Memory();
+        memoryOf2.Observe(pass.Item2);
+        var without2 = (at.AddSeconds(120), new[] { ("n1", Report(withSpheres)) });
+        foreach (
+            VoxelResetOccupancy.LivePartition row in new[]
+            {
+                Live(2),
+                Live(2, recovering: true),
+                Live(2, "n9"),
+            }
+        )
+        {
+            VoxelResetOccupancy remembered = VoxelResetOccupancy.Build(
+                at.AddSeconds(120),
+                without2,
+                [],
+                [Live(1), row],
+                memoryOf2
+            );
+            Check(
+                remembered.Complete
+                    && remembered.Remembered == 1
+                    && remembered.Spheres.Any(x =>
+                        x.SequenceEqual(new double[] { 10, 20, 30, 40 })
+                    ),
+                $"a row seen before is judged by its last spheres (node {row.Node}, recovering {row.Recovering})"
+            );
+        }
+        VoxelResetOccupancy.Build(at.AddSeconds(121), without2, [], [Live(1)], memoryOf2);
+        Check(
+            !memoryOf2.LastSpheres.ContainsKey(2),
+            "a row that is gone (retired, reaped) is forgotten"
         );
     }
 }

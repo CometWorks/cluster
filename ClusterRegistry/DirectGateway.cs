@@ -7796,7 +7796,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         DateTime.UtcNow,
                         _lastPartitionReports,
                         _registry.OfflinePartitions(0).Partitions,
-                        _registry.LivePartitionIds()
+                        _registry.LivePartitions(),
+                        _voxelResetMemory
                     ),
                     redact: false
                 );

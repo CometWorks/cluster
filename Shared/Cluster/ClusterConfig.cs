@@ -423,6 +423,8 @@ public static class ClusterConfig
         ["voxelReset.playerMeters"] = "1000",
         ["voxelReset.scanSeconds"] = "60",
         ["voxelReset.cubesPerUpdate"] = "2",
+        // SE-1706: seconds between the WA's "voxel_reset status" lines (due and blocked units, nearest blocker, resets, skip reason).
+        ["voxelReset.statusSeconds"] = "300",
         // WORLD AUTHORITY: the role a player gets on first joining the cluster when the promotion map has no entry for
         // them: None (default, vanilla), Scripter, Moderator or SpaceMaster. An explicit role, None included, is never
         // overwritten, so a demoted player stays demoted. Bots get it too.
