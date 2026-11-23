@@ -7796,8 +7796,27 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                         DateTime.UtcNow,
                         _lastPartitionReports,
                         _registry.OfflinePartitions(0).Partitions,
-                        _registry.LivePartitionIds()
+                        _registry.LivePartitions(),
+                        _voxelResetMemory
                     ),
+                    redact: false
+                );
+                return;
+            }
+            if (path.Equals("/registry/voxel-resets", StringComparison.OrdinalIgnoreCase))
+            {
+                // SE-1706: per voxel storage, the unix seconds of its newest reset, as the World Authority posts them
+                // from its ledger (after each reset and every voxelReset.statusSeconds, so a restarted Gateway
+                // refills). GET answers {storage: unixSeconds}; the NPC miners read it to rescan an asteroid.
+                if (context.Request.HttpMethod == "POST")
+                    foreach (
+                        (string storage, long unix) in ReadJson<Dictionary<string, long>>(context)
+                    )
+                        _voxelResets.AddOrUpdate(storage, unix, (_, old) => Math.Max(old, unix));
+                WriteJson(
+                    context,
+                    200,
+                    new SortedDictionary<string, long>(_voxelResets, StringComparer.Ordinal),
                     redact: false
                 );
                 return;

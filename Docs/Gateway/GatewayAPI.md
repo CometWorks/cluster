@@ -61,12 +61,20 @@ State: `GET /registry/status` (lifecycle phase, nodes, node plan, executors).
   whose grids aren't known yet: they went offline from a node that predates the field. The nodes fill those in from
   the Final, one row per node every `offline.gridBackfillSeconds`, with `GET .../grids/missing?after=&limit=` and `POST .../grids`.
   A row a load has claimed is listed until it drops, so prefer what the nodes report for the same id.
-- **Voxel reset occupancy** (SE-1595): `GET /registry/voxel-reset-occupancy` answers `{complete, reason, ageSeconds, spheres}`.
-  `spheres` are the `[x,y,z,r]` member spheres of every partition in the last complete report pass plus those of every
-  offline partition. `complete` is false, with the first few ids in `reason`, while a live partition is in neither
-  (unowned, recovering, or new since the pass): its members have no known position. The World Authority's
-  `VoxelResetService` polls it every `voxelReset.scanSeconds` and resets nothing while it is incomplete or the pass is
-  over 120 s old.
+- **Voxel reset occupancy** (SE-1595): `GET /registry/voxel-reset-occupancy` answers
+  `{complete, reason, ageSeconds, spheres, remembered, memberless}`. `spheres` are the `[x,y,z,r]` member spheres of
+  every partition in the last complete report pass plus those of every offline partition. SE-1706: a live partition
+  the pass does not list counts with the member spheres the Gateway last saw it with (`remembered`), since its save
+  may bring its content back there. One whose owner reported without it for 60 s and that was never seen since the
+  Gateway started is memberless (`memberless`): its content left the node, which keeps the lease until its drain.
+  `complete` is false, with the first few ids in `reason`, only while a live partition has no known position at all
+  (never seen and unowned, recovering, owned by a node that did not report, or new since the pass). The World
+  Authority's `VoxelResetService` polls it every `voxelReset.scanSeconds`, resets nothing while it is incomplete or
+  the pass is over 120 s old, and logs a `voxel_reset status` line every `voxelReset.statusSeconds`.
+- **Voxel resets** (SE-1706): `GET /registry/voxel-resets` answers `{storage: unixSeconds}`, the newest reset of any
+  cube of each voxel storage (an asteroid resets whole, a planet by 64 m cubes). The World Authority posts the same
+  shape from its ledger (`POST`, merged by the newest value) after its resets and every `voxelReset.statusSeconds`, so
+  a restarted Gateway is refilled within that time. The NPC miners read it to go back to an asteroid that grew back.
 - **NPC census** (#1354): `GET /registry/npc-census` answers `{ageSeconds, online, offline, grids: [{id, x, y, z, u}]}`:
   the NPC grids (a mechanical-hierarchy root grid whose big owners are all NPC identities) of the last complete
   report pass (each partition row's `npc`) plus those an offline partition's row kept from its offer (`OfflineRequest.Npc`),

@@ -37,6 +37,13 @@ internal static class VoxelResetService
     private static bool m_fetching;
     private static bool m_authorized;
     private static string m_lastSkip;
+    private static string m_skipNow;
+    private static double m_nextStatus;
+    private static int m_due;
+    private static int m_blocked;
+    private static string m_nearest;
+    private static int m_resets;
+    private static bool m_publishDue = true;
     private static readonly Queue<(string Storage, long Cube)> m_queue = new();
     private static readonly HashSet<(string Storage, long Cube)> m_queued = new();
 
@@ -45,7 +52,9 @@ internal static class VoxelResetService
         bool Complete,
         string Reason,
         double AgeSeconds,
-        double[][] Spheres
+        double[][] Spheres,
+        int Remembered,
+        int Memberless
     );
 
     private static string ResetRoot(string journalRoot) => Path.Combine(journalRoot, "reset");
@@ -95,8 +104,94 @@ internal static class VoxelResetService
             m_nextScan = now + scanMs;
             FetchOccupancy();
             Plan(journal.Ledger, scanMs);
+            if (m_publishDue)
+            {
+                m_publishDue = false;
+                PublishResets(journal.Ledger.LastResets());
+            }
         }
         Execute(journal, ClusterConfig.GetInt("voxelReset.cubesPerUpdate"), scanMs);
+        if (now >= m_nextStatus)
+        {
+            m_nextStatus =
+                now + 1000L * Math.Max(1, ClusterConfig.GetInt("voxelReset.statusSeconds"));
+            Status(journal.Ledger);
+            // Also refills a Gateway that restarted since.
+            m_publishDue = true;
+        }
+    }
+
+    /// <summary>SE-1706: the newest reset per storage to the Gateway's GET /registry/voxel-resets, for whoever needs to
+    /// know that an asteroid grew back (the NPC miners).</summary>
+    private static void PublishResets(Dictionary<string, long> resets)
+    {
+        string gateway = Environment
+            .GetEnvironmentVariable("CLUSTER_GATEWAY_REGISTRY")
+            ?.TrimEnd('/');
+        if (resets.Count == 0 || string.IsNullOrWhiteSpace(gateway))
+            return;
+        string body = JsonSerializer.Serialize(resets);
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try
+            {
+                if (!m_authorized)
+                {
+                    ClusterRuntime.AuthorizeRegistryClient(Http);
+                    m_authorized = true;
+                }
+                using var content = new StringContent(
+                    body,
+                    System.Text.Encoding.UTF8,
+                    "application/json"
+                );
+                using HttpResponseMessage response = Http.PostAsync(
+                        gateway + "/registry/voxel-resets",
+                        content
+                    )
+                    .GetAwaiter()
+                    .GetResult();
+                if (!response.IsSuccessStatusCode)
+                    throw new InvalidOperationException("HTTP " + (int)response.StatusCode);
+            }
+            catch (Exception exception)
+            {
+                m_publishDue = true;
+                Console.WriteLine(
+                    "[ClusterPlugin] voxel_reset publish_failed=true error=" + exception.Message
+                );
+            }
+        });
+    }
+
+    /// <summary>SE-1706: one line every voxelReset.statusSeconds, because the skip line is logged only when its reason
+    /// changes and host.log rotates every ~30 min. Counts are from the last scan; resets since the last status line.</summary>
+    private static void Status(VoxelEditLedger ledger)
+    {
+        Occupancy occupancy;
+        string skip;
+        lock (Sync)
+        {
+            occupancy = m_occupancy;
+            skip = m_skipNow;
+        }
+        Console.WriteLine(
+            string.Format(
+                CultureInfo.InvariantCulture,
+                "[ClusterPlugin] voxel_reset status edited_cubes={0} due={1} blocked={2} nearest_blocker={3} resets={4} queued={5} skip={6} occupancy_age_s={7:0} remembered={8} memberless={9}",
+                ledger.EditedCubes(),
+                m_due,
+                m_blocked,
+                m_nearest == null ? "-" : "\"" + m_nearest + "\"",
+                m_resets,
+                m_queue.Count,
+                skip == null ? "-" : "\"" + skip + "\"",
+                occupancy?.AgeSeconds ?? -1,
+                occupancy?.Remembered ?? 0,
+                occupancy?.Memberless ?? 0
+            )
+        );
+        m_resets = 0;
     }
 
     private static void SaveLedger(VoxelEditLedger ledger, string journalRoot)
@@ -166,7 +261,13 @@ internal static class VoxelResetService
                         ? reason.GetString()
                         : null,
                     root.GetProperty("ageSeconds").GetDouble(),
-                    spheres
+                    spheres,
+                    root.TryGetProperty("remembered", out JsonElement remembered)
+                        ? remembered.GetInt32()
+                        : 0,
+                    root.TryGetProperty("memberless", out JsonElement memberless)
+                        ? memberless.GetInt32()
+                        : 0
                 );
                 lock (Sync)
                     m_occupancy = occupancy;
@@ -187,6 +288,7 @@ internal static class VoxelResetService
     {
         lock (Sync)
         {
+            m_skipNow = why;
             if (why == m_lastSkip)
                 return;
             m_lastSkip = why;
@@ -215,7 +317,7 @@ internal static class VoxelResetService
         else
         {
             lock (Sync)
-                m_lastSkip = null;
+                m_lastSkip = m_skipNow = null;
             return occupancy;
         }
         return null;
@@ -264,6 +366,26 @@ internal static class VoxelResetService
             return;
         long nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         long age = ClusterConfig.GetInt("voxelReset.ageSeconds");
+        int due = 0,
+            blocked = 0;
+        string nearest = null;
+        double nearestMeters = double.MaxValue;
+        // Counts a due unit, and keeps the nearest blocker of the blocked ones; true when it may reset.
+        bool Judge(string blocker)
+        {
+            due++;
+            if (blocker == null)
+                return true;
+            blocked++;
+            double meters = double.Parse(
+                blocker.Split(' ')[1],
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture
+            );
+            if (meters < nearestMeters)
+                (nearest, nearestMeters) = (blocker, meters);
+            return false;
+        }
         foreach (KeyValuePair<string, KeyValuePair<long, long>[]> storage in ledger.Edits())
         {
             MyVoxelBase voxel = Resettable(storage.Key);
@@ -274,7 +396,7 @@ internal static class VoxelResetService
                 foreach (KeyValuePair<long, long> cube in storage.Value)
                     if (
                         VoxelResetPolicy.Due(cube.Value, nowUnix, age)
-                        && Blocked(voxel, cube.Key, occupancy) == null
+                        && Judge(Blocked(voxel, cube.Key, occupancy))
                     )
                         Enqueue(storage.Key, cube.Key);
                 continue;
@@ -282,11 +404,12 @@ internal static class VoxelResetService
             // An asteroid goes back whole: once its newest edit is old enough and nothing is near any of it.
             if (!VoxelResetPolicy.Due(storage.Value.Max(x => x.Value), nowUnix, age))
                 continue;
-            if (Blocked(voxel, 0, occupancy) != null)
+            if (!Judge(Blocked(voxel, 0, occupancy)))
                 continue;
             foreach (KeyValuePair<long, long> cube in storage.Value)
                 Enqueue(storage.Key, cube.Key);
         }
+        (m_due, m_blocked, m_nearest) = (due, blocked, nearest);
     }
 
     private static void Enqueue(string storage, long cube)
@@ -347,6 +470,8 @@ internal static class VoxelResetService
                 continue;
             }
             Drop();
+            m_resets++;
+            m_publishDue = true;
             (int x, int y, int z) = VoxelResetPolicy.CubeOf(cube);
             Console.WriteLine(
                 string.Format(
