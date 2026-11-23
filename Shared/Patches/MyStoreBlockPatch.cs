@@ -126,6 +126,39 @@ public static class MyStoreBlockPatch
     private static readonly MethodInfo BeginBuyPrefabMethod = Helper(nameof(BeginBuyPrefab));
     private static readonly MethodInfo CommitMethod = Helper(nameof(Commit));
     private static readonly MethodInfo SettleDeferredMethod = Helper(nameof(SettleDeferred));
+    private static readonly MethodInfo AddPurchasedMethod = Helper(nameof(AddPurchased));
+
+    /// <summary>
+    /// SE-1892: the item loop's AddItems call. An ore, ingot, component or ammo purchase adds every unit still to add in
+    /// one call and sets <paramref name="unit"/> to the loop's last iteration, so the loop ends after it. Vanilla added a
+    /// 78,063-ingot purchase with 78,063 calls, each refreshing the inventory's volume and mass and raising its change
+    /// events: a 300-840 ms frame on the live cluster. Anything else (a datapad, a tool) keeps one call per unit.
+    /// store.batchPurchases=false restores the per-unit calls.
+    /// </summary>
+    public static bool AddPurchased(
+        MyInventoryBase inventory,
+        MyFixedPoint one,
+        MyObjectBuilder_Base item,
+        int amount,
+        ref int unit
+    )
+    {
+        int left = amount - unit;
+        if (
+            left <= 1
+            || item
+                is not (
+                    MyObjectBuilder_Ore
+                    or MyObjectBuilder_Ingot
+                    or MyObjectBuilder_Component
+                    or MyObjectBuilder_AmmoMagazine
+                )
+            || !ClusterConfig.GetBool("store.batchPurchases")
+        )
+            return inventory.AddItems(one, item);
+        unit = amount - 1;
+        return inventory.AddItems(left, item);
+    }
 
     private static MethodInfo Helper(string name) =>
         EconomyIl.Required(
@@ -320,6 +353,40 @@ public static class MyStoreBlockPatch
             Return
         );
         InjectCommitAfterLastBalanceCall(code, original, 2, SendBuyItemResultLong);
+        BatchItemLoop(code, original);
+    }
+
+    // SE-1892: the item loop `for (i = 0; i < amount; i++) { ... inventory.AddItems(1, item); }` adds a purchase one unit
+    // per call. Its only AddItems call becomes AddPurchased(inventory, 1, item, amount, ref i), which adds every unit left
+    // in one call and moves i to the last iteration. The counter is the local the loop increments right after the call.
+    private static void BatchItemLoop(List<CodeInstruction> code, MethodBase original)
+    {
+        int add = EconomyIl.FindExactly(
+            code,
+            original,
+            "item loop AddItems",
+            1,
+            instruction => EconomyIl.Calls(instruction, AddItemsMethod)
+        )[0];
+        int store = EconomyIl.FindNext(
+            code,
+            original,
+            "item loop counter increment",
+            add,
+            8,
+            instruction => instruction.IsStloc()
+        );
+        EconomyIl.Require(
+            code[store - 1].opcode == OpCodes.Add,
+            original,
+            "item loop counter increment is an add"
+        );
+        int counter = code[store].LocalIndex();
+        code[add] = new CodeInstruction(OpCodes.Call, AddPurchasedMethod).MoveLabelsFrom(code[add]);
+        code.InsertRange(
+            add,
+            new[] { CodeInstruction.LoadArgument(2), CodeInstruction.LoadLocal(counter, useAddress: true) }
+        );
     }
 
     // Transpiler seam: MyStoreBlockPatch.BuyGasInternal
