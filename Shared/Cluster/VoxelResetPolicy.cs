@@ -232,6 +232,15 @@ internal sealed class VoxelEditLedger
                 : -1;
     }
 
+    /// <summary>SE-1706: per storage, the newest reset of any of its cubes (unix seconds).</summary>
+    public Dictionary<string, long> LastResets()
+    {
+        lock (m_lock)
+            return m_resets
+                .Where(x => x.Value.Count > 0)
+                .ToDictionary(x => x.Key, x => x.Value.Values.Max(), StringComparer.Ordinal);
+    }
+
     public int EditedCubes()
     {
         lock (m_lock)

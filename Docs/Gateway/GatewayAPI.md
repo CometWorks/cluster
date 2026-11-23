@@ -71,6 +71,10 @@ State: `GET /registry/status` (lifecycle phase, nodes, node plan, executors).
   (never seen and unowned, recovering, owned by a node that did not report, or new since the pass). The World
   Authority's `VoxelResetService` polls it every `voxelReset.scanSeconds`, resets nothing while it is incomplete or
   the pass is over 120 s old, and logs a `voxel_reset status` line every `voxelReset.statusSeconds`.
+- **Voxel resets** (SE-1706): `GET /registry/voxel-resets` answers `{storage: unixSeconds}`, the newest reset of any
+  cube of each voxel storage (an asteroid resets whole, a planet by 64 m cubes). The World Authority posts the same
+  shape from its ledger (`POST`, merged by the newest value) after its resets and every `voxelReset.statusSeconds`, so
+  a restarted Gateway is refilled within that time. The NPC miners read it to go back to an asteroid that grew back.
 - **NPC census** (#1354): `GET /registry/npc-census` answers `{ageSeconds, online, offline, grids: [{id, x, y, z, u}]}`:
   the NPC grids (a mechanical-hierarchy root grid whose big owners are all NPC identities) of the last complete
   report pass (each partition row's `npc`) plus those an offline partition's row kept from its offer (`OfflineRequest.Npc`),

@@ -92,6 +92,15 @@ internal static partial class SelfTest
             "per-storage newest edit and the count"
         );
 
+        // SE-1706: the newest reset per storage, for GET /registry/voxel-resets.
+        restarted.MarkReset("Rock", VoxelResetPolicy.CubeKey(1, 0, 0), 300);
+        restarted.MarkReset("Rock", VoxelResetPolicy.CubeKey(2, 0, 0), 250);
+        Dictionary<string, long> resets = restarted.LastResets();
+        Check(
+            resets.Count == 2 && resets["Moon"] == 200 && resets["Rock"] == 300,
+            "last resets: the newest cube per storage"
+        );
+
         // Occupancy: online member spheres (or the bounding sphere of a node predating them) plus offline ones.
         static PartitionReport Report(params PartitionInfo[] partitions) =>
             new(3000, 1000, partitions, 0);

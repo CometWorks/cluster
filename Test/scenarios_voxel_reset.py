@@ -234,6 +234,20 @@ def p2_vox_reset_memberless(bench) -> None:
                 set(after["A"].values()) == {pristine["A"]["node-1"]}, json.dumps(after["A"]))
     bench.check("the whole asteroid is back to the generated voxels on node-1, node-2 and the WA",
                 set(after["rock"].values()) == {pristine["rock"]["node-1"]}, json.dumps(after["rock"]))
+    published = {}
+
+    def listed():
+        published.update(bench.cluster.get("/registry/voxel-resets"))
+        return published.get(asteroid, 0) >= int(started) - 1
+
+    try:
+        wait_until(listed, 30, "the asteroid's reset published")
+    except ClusterError:
+        pass
+    bench.record("voxel-resets", published)
+    bench.check("GET /registry/voxel-resets lists the asteroid's reset time (unix seconds)",
+                published.get(asteroid, 0) >= int(started) - 1 and published.get(asteroid, 0) <= time.time() + 5,
+                json.dumps(published))
     time.sleep(10)
     held = _hashes(bench, queries["B"])
     bench.check("B keeps the edit: E's save could bring it back 100 m away", set(held.values()) == {edited["B"]},

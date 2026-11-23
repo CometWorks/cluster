@@ -43,6 +43,7 @@ internal static class VoxelResetService
     private static int m_blocked;
     private static string m_nearest;
     private static int m_resets;
+    private static bool m_publishDue = true;
     private static readonly Queue<(string Storage, long Cube)> m_queue = new();
     private static readonly HashSet<(string Storage, long Cube)> m_queued = new();
 
@@ -103,6 +104,11 @@ internal static class VoxelResetService
             m_nextScan = now + scanMs;
             FetchOccupancy();
             Plan(journal.Ledger, scanMs);
+            if (m_publishDue)
+            {
+                m_publishDue = false;
+                PublishResets(journal.Ledger.LastResets());
+            }
         }
         Execute(journal, ClusterConfig.GetInt("voxelReset.cubesPerUpdate"), scanMs);
         if (now >= m_nextStatus)
@@ -110,7 +116,52 @@ internal static class VoxelResetService
             m_nextStatus =
                 now + 1000L * Math.Max(1, ClusterConfig.GetInt("voxelReset.statusSeconds"));
             Status(journal.Ledger);
+            // Also refills a Gateway that restarted since.
+            m_publishDue = true;
         }
+    }
+
+    /// <summary>SE-1706: the newest reset per storage to the Gateway's GET /registry/voxel-resets, for whoever needs to
+    /// know that an asteroid grew back (the NPC miners).</summary>
+    private static void PublishResets(Dictionary<string, long> resets)
+    {
+        string gateway = Environment
+            .GetEnvironmentVariable("CLUSTER_GATEWAY_REGISTRY")
+            ?.TrimEnd('/');
+        if (resets.Count == 0 || string.IsNullOrWhiteSpace(gateway))
+            return;
+        string body = JsonSerializer.Serialize(resets);
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try
+            {
+                if (!m_authorized)
+                {
+                    ClusterRuntime.AuthorizeRegistryClient(Http);
+                    m_authorized = true;
+                }
+                using var content = new StringContent(
+                    body,
+                    System.Text.Encoding.UTF8,
+                    "application/json"
+                );
+                using HttpResponseMessage response = Http.PostAsync(
+                        gateway + "/registry/voxel-resets",
+                        content
+                    )
+                    .GetAwaiter()
+                    .GetResult();
+                if (!response.IsSuccessStatusCode)
+                    throw new InvalidOperationException("HTTP " + (int)response.StatusCode);
+            }
+            catch (Exception exception)
+            {
+                m_publishDue = true;
+                Console.WriteLine(
+                    "[ClusterPlugin] voxel_reset publish_failed=true error=" + exception.Message
+                );
+            }
+        });
     }
 
     /// <summary>SE-1706: one line every voxelReset.statusSeconds, because the skip line is logged only when its reason
@@ -420,6 +471,7 @@ internal static class VoxelResetService
             }
             Drop();
             m_resets++;
+            m_publishDue = true;
             (int x, int y, int z) = VoxelResetPolicy.CubeOf(cube);
             Console.WriteLine(
                 string.Format(

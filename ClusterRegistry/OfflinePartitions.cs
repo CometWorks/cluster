@@ -730,6 +730,10 @@ internal sealed partial class DirectGateway
 
     /// <summary>SE-1706: the member spheres each partition was last reported with, for the voxel reset occupancy.</summary>
     private readonly VoxelResetOccupancy.Memory _voxelResetMemory = new();
+
+    /// <summary>SE-1706: GET /registry/voxel-resets, the newest reset per voxel storage the World Authority posted.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _voxelResets =
+        new(StringComparer.Ordinal);
     private (
         DateTime At,
         (string Node, PartitionReport Report)[] Reports
