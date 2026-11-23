@@ -141,7 +141,8 @@ def p2_rec_staged(bench) -> None:
     _config(bench, {"offline.enabled": "false", "offline.wakeMeters": "0", "offline.leadSeconds": "0",
                     "offline.quietMeters": "0", "offline.minOnlineSeconds": "0", "offline.graceSeconds": "2",
                     "offline.settleFrames": "0", "offline.compensate": "false"})
-    station = bench.cluster.node(NODE, "/offline-test-large-station?owner=0", "POST", timeout=120)
+    owner = bench.cluster.node(NODE, "/identity-test-create?name=se1892-owner", "POST")["identityId"]
+    station = bench.cluster.node(NODE, f"/offline-test-large-station?owner={owner}", "POST", timeout=120)
     bench.record("station", station)
     grids = {int(station["grid"])}
     for i in range(PROBES):
