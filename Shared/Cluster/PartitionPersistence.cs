@@ -511,7 +511,11 @@ internal sealed partial class PartitionPersistence
         }
         // A readiness-deferred claim stays pending until a later update. Bound this
         // pass to its original queue so requeueing cannot spin on the game thread.
-        bool loadedThisUpdate = false;
+        // SE-1892: a staged recovery in flight is this update's load (a slice frame, or a wait for its builders); the
+        // next claim starts after it.
+        bool loadedThisUpdate = m_stagedRecovery != null;
+        if (loadedThisUpdate)
+            StepStagedRecovery();
         for (
             int pending = m_recoveries.Count;
             pending > 0 && !loadedThisUpdate && m_recoveries.TryDequeue(out RecoveryClaim recovery);
@@ -555,102 +559,16 @@ internal sealed partial class PartitionPersistence
                 int saved = LoadRecovery(recovery);
                 if (saved == DeferredLoad)
                     continue; // still claimed in its readiness or census queue
-                lock (m_owned)
-                    m_owned[recovery.Partition] = recovery.Generation;
-                m_claimedPending.TryRemove(recovery.Partition, out _);
-                lock (m_recoveryFailureCounts)
-                    m_recoveryFailureCounts.Remove(recovery.Partition);
-                // Peek, twice over: Get() runs the topology sweep (the P1-SAV-07 hazard, see
-                // PartitionManager.Peek), and its post-sweep count includes co-located neighbors the
-                // sweep just merged in - this line claims what recovery LOADED, so it must report the
-                // adopted member set, not the census a merge already rewrote (P1-REC-05b read a 1-entity
-                // save and logged "2 members" off the beacon next door).
-                PartitionManager.Partition loadedPartition = m_partitions.Peek(recovery.Partition);
-                MyLog.Default?.WriteLineAndConsole(
-                    "[ClusterPlugin] recovery loaded partition "
-                        + recovery.Partition
-                        + " generation "
-                        + recovery.Generation
-                        + " with "
-                        + loadedPartition.Members.Count
-                        + " members ["
-                        + string.Join(",", loadedPartition.Members)
-                        + "] ("
-                        + m_lastLoadTimes
-                        + ")"
-                );
-                // T-0388: an empty layout is dropped by the next sweep, so this partition is never reported again; the
-                // registry kept its row on this node until the drain's memberless release (321894 on node-282, 01:11 to
-                // 03:16 on 2026-10-03). Release it as soon as its empty Final is catalogued instead.
-                if (
-                    MarkEmptyRecovery(
-                        ClusterConfig.GetBool("recovery.releaseEmpty"),
-                        saved,
-                        loadedPartition.Members.Count
-                    )
-                )
-                {
-                    m_emptyRecoveries[recovery.Partition] = (recovery.Generation, DateTime.UtcNow);
-                    MyLog.Default?.WriteLineAndConsole(
-                        "[ClusterPlugin] recovery of partition "
-                            + recovery.Partition
-                            + " generation "
-                            + recovery.Generation
-                            + " is empty: all "
-                            + saved
-                            + " saved entities are live elsewhere or stale; it is released"
-                            + " unowned once its empty Final is catalogued (T-0388)"
-                    );
-                }
-                // T-0254: a recovery load recreates the entities like a handover import, and breaks them like one
-                // too (P517 on node-5 05:39:27 2026-09-26: 60 DoDisconnects in the next 180 s).
-                ClientLayerRefresh.NoteImport(loadedPartition.Members); // T-0300: offer the new grids to clients now, not at the next 16 s layer refresh
-                MySessionComponentTrashPatch.ProtectArrivals(
-                    loadedPartition.Members,
-                    MySessionComponentTrashPatch.RecoveryGraceSeconds
-                ); // T-0254: the displaced players' way back
+                if (saved == StagedLoad)
+                    continue; // SE-1892: built off the game thread, Added over the next updates (StepStagedRecovery)
+                CompleteRecovery(recovery, saved);
             }
             catch (Exception exception)
             {
-                int failures;
-                lock (m_recoveryFailureCounts)
-                    failures = m_recoveryFailureCounts[recovery.Partition] =
-                        m_recoveryFailureCounts.GetValueOrDefault(recovery.Partition) + 1;
-                int quarantineAfter = ClusterConfig.GetInt("recovery.quarantineAfter");
-                if (quarantineAfter > 0 && failures >= quarantineAfter)
-                {
-                    // P2-REC-03: content that keeps failing to load is poison, not a transient - a warm
-                    // candidate re-added forever would reclaim and fail in a loop with the partition never
-                    // becoming repairable. SE-1161: the cold path looped the same way (the registry offered
-                    // the released row straight back: node-1 claimed 3432 71 times in 3 minutes, 2026-11-06).
-                    // Quarantine it: visible on /cluster/quarantine, repairable in place, and the registry
-                    // hands it to nobody while this node reports it. The claim is still released.
-                    string staged = m_assignedRecoveries.TryGetValue(
-                        recovery.Partition,
-                        out var assigned
-                    )
-                        ? assigned.Path
-                        : "<recovery claim " + recovery.Partition + ">";
-                    Quarantine(staged, exception, recovery.Partition);
-                    lock (m_recoveryFailureCounts)
-                        m_recoveryFailureCounts.Remove(recovery.Partition);
-                    m_failedRecoveries.Enqueue(recovery);
-                    continue;
-                }
-                if (m_warmRecovery)
-                    m_recoveryCandidates.TryAdd(recovery.Partition, 0);
-                m_failedRecoveries.Enqueue(recovery);
-                MyLog.Default?.WriteLineAndConsole(
-                    "[ClusterPlugin] ERROR: recovery load failed for partition "
-                        + recovery.Partition
-                        + " generation "
-                        + recovery.Generation
-                        + "; releasing claim for retry: "
-                        + SecretRedactor.Redact(exception.ToString())
-                );
+                FailRecovery(recovery, exception);
             }
         }
-        Volatile.Write(ref m_recoveryLoadInFlight, 0);
+        Volatile.Write(ref m_recoveryLoadInFlight, m_stagedRecovery != null ? 1 : 0);
         // Bench seam only (#1286): the first lost ownership waits DiscardDelayMs here (and a fenced node's exit with it),
         // so the doomed copies stay in this node's census while a peer's recovery census asks. Production never sets it.
         if (DiscardDelayMs > 0 && !m_lostOwnership.IsEmpty && m_discardHeldUntil == default)
@@ -6617,6 +6535,26 @@ internal sealed partial class PartitionPersistence
                     + string.Join(",", staleCopies.Select(stale => stale.EntityId))
             );
         }
+        if (ClusterConfig.Get("recovery.mode") == "staged")
+        {
+            // SE-1892: Init off the game thread, Adds over the next updates; StepStagedRecovery finishes what follows.
+            m_stagedRecovery = new StagedRecovery
+            {
+                Claim = recovery,
+                Entities = entities,
+                Saved = saved,
+                Stage = ClusterControlServer.BeginRecoveryStage(entities.Values),
+                PrepareMs = phase.ElapsedMilliseconds,
+                Times =
+                    "read "
+                    + readMs
+                    + ", screen "
+                    + (screenMs - readMs)
+                    + ", compensation "
+                    + (compensationMs - screenMs),
+            };
+            return StagedLoad;
+        }
         bool adopted = false;
         try
         {
@@ -6636,43 +6574,7 @@ internal sealed partial class PartitionPersistence
                 VRage.MyEntityIdentifier.AllocationSuspended = suspended;
             }
             adopted = true;
-            m_partitions.Adopt(recovery.Partition, entities.Keys);
-            // Recovered content is confirmed ownership: lift any fence taint an assigned save left.
-            UntaintEntities(entities.Keys);
-            m_state[recovery.Partition] = new State { Generation = recovery.Generation };
-            // Peek, never Get: Get runs the topology sweep, which is free to split the partition
-            // adopted two lines up - mid-load - and did (see PartitionManager.Peek).
-            PartitionManager.Partition recovered = m_partitions.Peek(recovery.Partition);
-            if (recovered.HasPending)
-                // Big grids from the save are still in the parallel init pipeline; a Final taken
-                // now would silently omit them. The recovery cover stays claimable until the first
-                // periodic capture lands after the pin drains, so nothing is stranded by waiting.
-                MyLog.Default?.WriteLineAndConsole(
-                    "[ClusterPlugin] recovery Final deferred for partition "
-                        + recovery.Partition
-                        + ": members still initializing"
-                );
-            else
-            {
-                // T-0316: the entities are created and adopted; a Final that cannot be captured in the load frame
-                // (a vanilla component that serializes only after its first update) must not fail the recovery.
-                // Failing it releases the claim, and with a client routed to the partition the registry refuses
-                // that release and fences the node (r32 20:27-20:30, three node deaths). The recovery cover stays
-                // claimable until the first periodic capture lands, as for the deferred case above.
-                try
-                {
-                    QueueCapture(recovered, "Final");
-                }
-                catch (Exception exception)
-                {
-                    MyLog.Default?.WriteLineAndConsole(
-                        "[ClusterPlugin] recovery Final deferred for partition "
-                            + recovery.Partition
-                            + ": capture failed in the load frame (T-0316): "
-                            + SecretRedactor.Redact(exception.ToString())
-                    );
-                }
-            }
+            AdoptRecovered(recovery, entities.Keys);
         }
         catch
         {
