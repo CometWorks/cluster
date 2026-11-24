@@ -1,7 +1,8 @@
-using System.Reflection;
-using System.Runtime.Loader;
 using System.Text.RegularExpressions;
 using ClusterPlugin;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using ModCompatScan;
 
 // SE-1840: every public member of the game's mod API has exactly one row in ModApiPolicyTable, every row is
 // well formed, and no row names a member the game no longer has. Exit 0 = pass, 1 = fail, 2 = no game found.
@@ -20,6 +21,28 @@ if (!File.Exists(Path.Combine(dir, "Sandbox.Game.dll")))
     return 2;
 }
 
+if (!(args.Length <= 1 || args.Length == 3 && (args[1] == "--scan" || args[1] == "--check-corpus")))
+{
+    Console.Error.WriteLine(
+        "usage: ModApiPolicyChecks [DEDICATED64 [--scan|--check-corpus WORKSHOP_CONTENT]]"
+    );
+    return 2;
+}
+var empty = CSharpCompilation.Create(
+    "WorkshopMod",
+    references: ScriptReferences.References(dir),
+    options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true)
+);
+if (args.Length == 3 && args[1] == "--scan")
+{
+    foreach (
+        var entry in CorpusUsage
+            .Read(args[2], empty)
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+    )
+        Console.WriteLine($"{entry.Key}\t{entry.Value}");
+    return 0;
+}
 var errors = new List<string>();
 var policies = new HashSet<string>
 {
@@ -48,9 +71,11 @@ foreach (string line in ModApiPolicyTable.Text.Split('\n'))
         errors.Add($"duplicate row: {member}");
     if (!policies.Contains(f[1]))
         errors.Add($"unknown policy {f[1]}: {member}");
-    if (!breakage.IsMatch(f[2]))
+    bool unverified = f[6].Contains("UNCERTAIN");
+    bool pendingReview = unverified && f[1] == "node-scoped" && f[2] == "?" && f[3] == "?";
+    if (!pendingReview && !breakage.IsMatch(f[2]))
         errors.Add($"bad breakage {f[2]}: {member}");
-    if (!int.TryParse(f[5], out _))
+    if (!int.TryParse(f[5], out int modCount) || modCount < 0)
         errors.Add($"bad mods count {f[5]}: {member}");
     if (harmless.Contains(f[1]))
     {
@@ -59,90 +84,82 @@ foreach (string line in ModApiPolicyTable.Text.Split('\n'))
         if (f[6].Contains("UNCERTAIN"))
             errors.Add($"UNCERTAIN row must be node-scoped or stricter: {member}");
     }
-    else if (f[2] == "-" || (f[3] != "yes" && f[3] != "no"))
+    else if (!pendingReview && (f[2] == "-" || (f[3] != "yes" && f[3] != "no")))
         errors.Add($"{f[1]} row needs a breakage class and shim yes/no: {member}");
     if (!member.EndsWith(".*") && !fileLine.IsMatch(f[6]))
         errors.Add($"reason without file:line: {member}");
 }
 
-// The game's mod API, enumerated the way the table names it.
-AssemblyLoadContext.Default.Resolving += (context, name) =>
+var corpus = File.ReadLines(Path.Combine(AppContext.BaseDirectory, "CorpusMembers.txt"))
+    .ToHashSet(StringComparer.Ordinal);
+var game = new HashSet<string>(StringComparer.Ordinal);
+foreach (var assembly in empty.SourceModule.ReferencedAssemblySymbols.Where(GameSurface.IsGame))
 {
-    string candidate = Path.Combine(dir, name.Name + ".dll");
-    return File.Exists(candidate) ? context.LoadFromAssemblyPath(candidate) : null;
-};
-string[] namespaces =
-{
-    "Sandbox.ModAPI",
-    "VRage.Game.ModAPI",
-    "SpaceEngineers.Game.ModAPI",
-    "VRage.ModAPI",
-};
-string[] assemblies =
-{
-    "Sandbox.Game",
-    "Sandbox.Common",
-    "SpaceEngineers.Game",
-    "VRage.Game",
-    "VRage",
-    "VRage.Library",
-    "VRage.Math",
-    "SpaceEngineers.ObjectBuilders",
-    "VRage.Input",
-    "VRage.Scripting",
-};
-var game = new SortedSet<string>(StringComparer.Ordinal);
-foreach (string name in assemblies)
-{
-    string path = Path.Combine(dir, name + ".dll");
-    if (!File.Exists(path))
-        continue;
-    Type[] types;
-    try
+    foreach (var type in GameSurface.Types(assembly.GlobalNamespace))
     {
-        types = AssemblyLoadContext.Default.LoadFromAssemblyPath(path).GetExportedTypes();
-    }
-    catch (ReflectionTypeLoadException e)
-    {
-        types = e.Types.Where(type => type != null).ToArray();
-    }
-    foreach (Type type in types)
-    {
-        string ns = type.Namespace ?? "";
-        bool modApi = namespaces.Any(each => ns == each || ns.StartsWith(each + "."));
-        if (!modApi && type.FullName != "Sandbox.Game.MyVisualScriptLogicProvider")
+        if (type.DeclaredAccessibility != Accessibility.Public)
             continue;
-        string typeName = Regex.Replace(type.FullName, @"`\d+", "").Replace('+', '.');
-        if (type.IsEnum || typeof(Delegate).IsAssignableFrom(type))
+        bool api = GameSurface.IsInterfaceSurface(type);
+        foreach (var member in type.GetMembers())
         {
-            game.Add(typeName + ".*");
-            continue;
-        }
-        const BindingFlags flags =
-            BindingFlags.Public
-            | BindingFlags.Instance
-            | BindingFlags.Static
-            | BindingFlags.DeclaredOnly;
-        foreach (MemberInfo member in type.GetMembers(flags))
-        {
-            if (member is ConstructorInfo || member is Type)
+            if (member is not (IPropertySymbol or IFieldSymbol or IEventSymbol or IMethodSymbol))
                 continue;
-            if (member is MethodInfo method && method.IsSpecialName)
-                continue;
-            game.Add(typeName + "." + member.Name);
+            string key = GameSurface.Key(member);
+            if (api && GameSurface.DeclaredMember(member) || corpus.Contains(key))
+                game.Add(key);
         }
     }
 }
-
+game.UnionWith(["System.*", "VRageMath.*"]);
+foreach (string member in corpus.Where(member => !game.Contains(member)))
+    errors.Add($"corpus member not found in the game: {member}");
 foreach (string member in game.Where(member => !rows.ContainsKey(member)))
     errors.Add($"game member without a row: {member}");
-foreach (
-    string member in rows.Keys.Where(member =>
-        !game.Contains(member) && member != "System.*" && member != "VRageMath.*"
-    )
-)
+foreach (string member in rows.Keys.Where(member => !game.Contains(member)))
     errors.Add($"row for a member the game does not have: {member}");
 
+// A Workshop mod can call concrete APIs and two overloads at one site. Exercise source binding
+// through the same path as a corpus scan, including the policy attached to each resolved symbol.
+var probe = CSharpSyntaxTree.ParseText(
+    """
+    using VRage.Game.ModAPI;
+    using VRageMath;
+    using Sandbox.Game.Entities;
+    class Probe {
+        void Check(IMyPlayerCollection players, LineD line) {
+            players.TryGetIdentityId(1L);
+            players.TryGetIdentityId(1UL);
+            MyGamePruningStructure.GetAllEntitiesInRay(ref line, null);
+        }
+    }
+    """
+);
+var sample = empty.AddSyntaxTrees(probe);
+var diagnostics = sample.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error);
+errors.AddRange(diagnostics.Select(d => d.ToString()));
+var seen = CorpusUsage.Members(sample.GetSemanticModel(probe)).ToHashSet();
+var expected = new Dictionary<string, string>
+{
+    ["VRage.Game.ModAPI.IMyPlayerCollection.TryGetIdentityId(System.Int64)"] = "node-scoped",
+    ["VRage.Game.ModAPI.IMyPlayerCollection.TryGetIdentityId(System.UInt64)"] = "replicated",
+    [
+        "Sandbox.Game.Entities.MyGamePruningStructure.GetAllEntitiesInRay(VRageMath.LineD@,System.Collections.Generic.List{VRageMath.MyLineSegmentOverlapResult{VRage.Game.Entity.MyEntity}},Sandbox.Game.Entities.MyEntityQueryType)"
+    ] = "node-scoped",
+};
+foreach (var (key, policy) in expected)
+    if (!seen.Contains(key) || !rows.TryGetValue(key, out var row) || row[1] != policy)
+        errors.Add($"source probe expected {key} to resolve as {policy}");
+
+var counted = rows.Where(row => row.Value[5] != "0").Select(row => row.Key).ToHashSet();
+if (!counted.SetEquals(corpus))
+    errors.Add(
+        "the members with positive Workshop counts do not match the pinned corpus member list"
+    );
+if (args.Length == 3 && args[1] == "--check-corpus")
+{
+    foreach (var member in CorpusUsage.Read(args[2], empty).Keys.Except(rows.Keys))
+        errors.Add($"live corpus member without a row: {member}");
+}
 var counts = rows.Values.GroupBy(f => f[1]).OrderBy(g => g.Key);
 Console.WriteLine($"game members {game.Count}, rows {rows.Count}");
 foreach (var group in counts)

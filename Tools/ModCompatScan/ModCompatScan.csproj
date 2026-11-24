@@ -19,6 +19,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="ScriptReferences.cs" />
     <Compile Include="../../Shared/Cluster/ModCompatScanner.cs" Link="ModCompatScanner.cs" />
   </ItemGroup>
   <ItemGroup>
