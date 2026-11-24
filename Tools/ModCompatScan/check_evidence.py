@@ -25,12 +25,28 @@ def check(tool: Path) -> None:
         with zipfile.ZipFile(archive / "fixture_legacy.bin", "w") as z:
             for f in loose.rglob("*.cs"):
                 z.write(f, f.relative_to(loose).as_posix())
+        direct = Path(folder) / "direct"
+        scripts = direct / "Data" / "Scripts"
+        scripts.mkdir(parents=True)
+        for filename in ("First.cs", "Second.cs"):
+            (scripts / filename).write_text("public class RootScript {}")
         run = subprocess.check_output(
-            ["dotnet", tool, "--evidence", *sorted(fixtures.iterdir()), archive],
+            [
+                "dotnet",
+                tool,
+                "--evidence",
+                *sorted(fixtures.iterdir()),
+                archive,
+                direct,
+            ],
             text=True,
         )
         scans = {row["mod"]: row for row in map(json.loads, run.splitlines())}
     assert all(not row["compileErrors"] for row in scans.values())
+    assert scans["direct"]["assembly"].split(",") == [
+        "direct_First.cs",
+        "direct_Second.cs",
+    ]
     scanner = scans["fixture-d-scan"]
     assert scanner["evidence"] == scans["packed"]["evidence"]
     assert scanner["evidence"]["EntityCollections"] == 1

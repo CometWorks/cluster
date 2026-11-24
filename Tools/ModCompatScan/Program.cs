@@ -267,7 +267,7 @@ internal static class Program
         return failed == 0 ? 0 : 1;
     }
 
-    /// <summary>One assembly per Data/Scripts subfolder, as MyScriptManager.LoadScripts groups them.</summary>
+    /// <summary>MyScriptManager groups by the first path component below Data/Scripts. A file directly in that folder is its own group.</summary>
     private static List<Assembly> Compile(
         string id,
         string mod,
@@ -280,7 +280,6 @@ internal static class Program
         var assemblies = new List<Assembly>();
         var groups = WorkshopScripts
             .Scripts(mod)
-            .Where(file => file.Path.Contains('/'))
             .GroupBy(file => file.Path.Split('/')[0])
             .OrderBy(group => group.Key, StringComparer.Ordinal);
         foreach (var group in groups)
