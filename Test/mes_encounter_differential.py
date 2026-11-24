@@ -1,6 +1,7 @@
 """Request a named MES encounter once and find the resulting grid on standalone and clustered servers."""
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -92,6 +93,18 @@ def run(corpus, results):
         try:
             mods = work / "Mods"
             stage(corpus / "244850" / MES, mods)
+            mes_files = mods / f"{MES}.sbm"
+            scripts = sorted((mes_files / "Data/Scripts").rglob("*.cs"))
+            if not scripts:
+                raise ValueError(f"No MES scripts found in {mes_files}")
+            revision = hashlib.sha256()
+            for script in scripts:
+                revision.update(
+                    script.relative_to(mes_files).as_posix().encode() + b"\0"
+                )
+                revision.update(hashlib.sha256(script.read_bytes()).digest())
+            report["mes_script_count"] = len(scripts)
+            report["mes_scripts_sha256"] = revision.hexdigest()
             shutil.copytree(
                 Path(__file__).parent / "MesEncounterFixture", mods / f"{PROBE}.sbm"
             )
