@@ -23,9 +23,15 @@ internal static class Program
                 Environment.GetEnvironmentVariable("HOME") ?? ".",
                 ".steam/steam/steamapps/common/SpaceEngineersDedicatedServer/DedicatedServer64"
             );
+        if (args.Length == 1 && args[0] == "--policy-tsv")
+        {
+            Console.WriteLine(ModApiPolicyTable.Text);
+            return 0;
+        }
         if (args.Length == 1 && args[0] == "--selftest")
             return SelfTest();
         bool json = false;
+        bool evidence = false;
         string expectFile = null;
         var mods = new List<string>();
         for (int i = 0; i < args.Length; i++)
@@ -34,6 +40,10 @@ internal static class Program
             {
                 case "--dedicated64":
                     dedicated64 = args[++i];
+                    break;
+                case "--evidence":
+                    evidence = true;
+                    json = true;
                     break;
                 case "--json":
                     json = true;
@@ -84,7 +94,8 @@ internal static class Program
                 parseOptions,
                 out List<string> errors
             );
-            ModScanResult scan = ModCompatScanner.Scan(assemblies);
+            var detail = evidence ? new MemberEvidence() : null;
+            ModScanResult scan = ModCompatScanner.Scan(assemblies, detail);
             string manifestPath = Path.Combine(mod, AuthorManifestName);
             string manifest = File.Exists(manifestPath)
                 ? ModCompatScanner.ReadAuthorManifest(File.ReadLines(manifestPath))
@@ -122,6 +133,7 @@ internal static class Program
                             authorManifest = manifest,
                             unresolvedCalls = scan.UnresolvedCalls,
                             compileErrors = errors,
+                            evidence = detail,
                         }
                     )
                 );
@@ -266,15 +278,10 @@ internal static class Program
     {
         errors = new List<string>();
         var assemblies = new List<Assembly>();
-        string scripts = Path.Combine(mod, "Data", "Scripts");
-        if (!Directory.Exists(scripts))
-            return assemblies;
-        var groups = Directory
-            .GetFiles(scripts, "*.cs", SearchOption.AllDirectories)
-            .Where(file => Path.GetDirectoryName(file) != scripts)
-            .GroupBy(file =>
-                Path.GetRelativePath(scripts, file).Split(Path.DirectorySeparatorChar)[0]
-            )
+        var groups = WorkshopScripts
+            .Scripts(mod)
+            .Where(file => file.Path.Contains('/'))
+            .GroupBy(file => file.Path.Split('/')[0])
             .OrderBy(group => group.Key, StringComparer.Ordinal);
         foreach (var group in groups)
         {
@@ -301,7 +308,7 @@ internal static class Program
     /// newer language version, as some plugin loaders allow, is retried with the latest one.</summary>
     private static byte[] Emit(
         string name,
-        List<string> files,
+        List<(string Path, string Text)> files,
         List<MetadataReference> references,
         CSharpParseOptions parseOptions,
         out List<string> errors
@@ -318,9 +325,9 @@ internal static class Program
             var trees = files
                 .Select(file =>
                     CSharpSyntaxTree.ParseText(
-                        ScriptReferences.UsingHeader + File.ReadAllText(file),
+                        ScriptReferences.UsingHeader + file.Text,
                         options,
-                        file
+                        file.Path
                     )
                 )
                 .ToList();

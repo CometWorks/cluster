@@ -12,6 +12,7 @@
     <Reference Include="Microsoft.CodeAnalysis" HintPath="$(Dedicated64Dir)Microsoft.CodeAnalysis.dll" />
     <Reference Include="Microsoft.CodeAnalysis.CSharp" HintPath="$(Dedicated64Dir)Microsoft.CodeAnalysis.CSharp.dll" />
     <Compile Include="../../Tools/ModCompatScan/ScriptReferences.cs" Link="ScriptReferences.cs" />
+    <Compile Include="../../Tools/ModCompatScan/WorkshopScripts.cs" Link="WorkshopScripts.cs" />
     <None Update="CorpusMembers.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

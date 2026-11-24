@@ -9,6 +9,8 @@ namespace Fixture
     [MyEntityComponentDescriptor(typeof(MyObjectBuilder_Beacon), false)]
     public class BeaconLogic : MyGameLogicComponent
     {
+        private int starts;
+
         public override void Init(MyObjectBuilder_EntityBase objectBuilder)
         {
             using (
@@ -17,7 +19,10 @@ namespace Fixture
                     typeof(BeaconLogic)
                 )
             )
+            {
                 writer.Write(Entity.EntityId);
+                writer.Write(++starts);
+            }
         }
     }
 

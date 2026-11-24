@@ -1,4 +1,3 @@
-using System.IO.Compression;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -17,7 +16,7 @@ internal static class CorpusUsage
         {
             var used = new HashSet<string>(StringComparer.Ordinal);
             bool hasScripts = false;
-            foreach (var group in Scripts(mod).GroupBy(s => s.Path.Split('/')[0]))
+            foreach (var group in WorkshopScripts.Scripts(mod).GroupBy(s => s.Path.Split('/')[0]))
             {
                 hasScripts = true;
                 groups++;
@@ -86,46 +85,6 @@ internal static class CorpusUsage
                 && (ns == "System" || ns.StartsWith("System.", StringComparison.Ordinal))
             )
                 yield return "System.*";
-        }
-    }
-
-    private static IEnumerable<(string Path, string Text)> Scripts(string mod)
-    {
-        foreach (
-            var data in Directory
-                .EnumerateDirectories(mod)
-                .Where(d => Path.GetFileName(d).Equals("Data", StringComparison.OrdinalIgnoreCase))
-        )
-        foreach (
-            var scripts in Directory
-                .EnumerateDirectories(data)
-                .Where(d =>
-                    Path.GetFileName(d).Equals("Scripts", StringComparison.OrdinalIgnoreCase)
-                )
-        )
-        foreach (
-            var file in Directory
-                .EnumerateFiles(scripts, "*", SearchOption.AllDirectories)
-                .Where(f => Path.GetExtension(f).Equals(".cs", StringComparison.OrdinalIgnoreCase))
-        )
-            yield return (
-                Path.GetRelativePath(scripts, file).Replace(Path.DirectorySeparatorChar, '/'),
-                File.ReadAllText(file)
-            );
-        foreach (var file in Directory.EnumerateFiles(mod, "*_legacy.bin"))
-        {
-            using var zip = ZipFile.OpenRead(file);
-            foreach (var entry in zip.Entries)
-            {
-                var path = entry.FullName.Replace('\\', '/');
-                if (
-                    !path.StartsWith("Data/Scripts/", StringComparison.OrdinalIgnoreCase)
-                    || !path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-                )
-                    continue;
-                using var reader = new StreamReader(entry.Open());
-                yield return (path[13..], reader.ReadToEnd());
-            }
         }
     }
 }
