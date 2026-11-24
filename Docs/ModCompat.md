@@ -121,3 +121,31 @@ A transparent grid/entity proxy for WA-hosted mods, a shared or proxied file sys
 second "dedicated node" role (#260 section 2). The mod channel extensions a class D mod needs (role, owner routing,
 player nodes, handover hooks, channel reset) came with #1280: Docs/ModChannel.md, and the reference adaptation
 `TestMods/fixture-d-reference`.
+
+## Offline Workshop corpus report
+
+The [verdict table](ModCorpus/verdicts.tsv) covers 1,500 subscription-ranked mods and 18 loadable dependencies from the November 2026 catalog. One additional Workshop dependency is a programmable-block script. The scan used the November 24 script inventory and Dedicated Server 1.211.018 on Linux. The catalog SHA-256 is `a864b1b720a50da3aec54f0e5b67a1617dcb40c0cadcb2d0907e5021e2a7f763`.
+
+| Static verdict | Ranked | Extra dependencies | Interpretation |
+|---|---:|---:|---|
+| A | 1,027 | 9 | No compiled scripts, confirmed against the script inventory. Content can still fail to load. |
+| B | 8 | 1 | The scanner found no flagged member or state pattern. |
+| D | 256 | 5 | A member or state pattern calls for adaptation or a functional check. |
+| U | 209 | 3 | Compilation or policy evidence is incomplete. |
+
+B-state denotes isolated mutable entity logic, C denotes session state suitable for WA-only placement, and S denotes risks covered by named shim candidates. This run assigned none of these three verdicts. X requires a human decision about whether adaptation is feasible. The `runtime_class` column is the existing scanner's A–D placement input. Use it to compare a live load record with a successful offline compile.
+
+The [member table](ModCorpus/members.tsv) counts IL references to methods and fields, including property and event accessors. Each mod contributes its lifetime subscription count once per member it uses. Multiple subscriptions from the same player can occur in different mods. The [summary](ModCorpus/summary.tsv) applies the same weighting to breakages and shim candidates. A mod may appear under several candidates. A candidate count measures exposure to a change, even when the mod also needs another fix.
+
+B2 includes static or session fields holding collections of entities. B4 counts mutable instance fields declared on entity components. B6 includes direct world-changing calls in session simulation callbacks. These are candidates for behavioral testing. A scratch collection reused during a scan, for example, can produce a B2 hit even if it retains no entity between ticks. Indirect calls through mod helpers, subscriptions made conditionally, entity IDs stored as integers and mutable objects behind readonly fields need further inspection. Role-check sites count reads of `IsDedicated` and `IsServer`. A read alone does not establish which branch guards a later action.
+
+Fifty-four Workshop items had offline compile diagnostics. U also covers uncertain or unmapped IL members when the scanner has no stronger reason for a D verdict. Compiled groups from a partially compiling mod still contribute observed sites to the frequency tables. The compiler uses the installed DS compatibility substitutions and protobuf tag pass. It can retry with a newer C# language version and does not run the game's whitelist or the optional DotNetCompat plugin. Compile diagnostics and live cluster errors are recorded separately.
+
+Build and regenerate from the cluster repository root, with the directory containing the DS assemblies in `SPACE_ENGINEERS_BIN64`. The corpus directory contains `catalogue.tsv`, `scripts.tsv` and the Workshop folders under `244850/`.
+
+```bash
+dotnet build Tools/ModCompatScan -c Release -p:Dedicated64="$SPACE_ENGINEERS_BIN64"
+scanner=Tools/ModCompatScan/bin/Release/net10.0/ModCompatScan.dll
+python3 Tools/ModCompatScan/check_evidence.py "$scanner"
+python3 Tools/ModCompatScan/corpus.py "$scanner" /mnt/hdd/se1-mod-corpus Docs/ModCorpus
+```
