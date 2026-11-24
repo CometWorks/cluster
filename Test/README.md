@@ -257,7 +257,10 @@ Automatic encounters, player-triggered spawning and NPC behavior need separate c
 
 Add `--handover` to move the spawned grid from node 1 to node 2 and back. The
 standalone control records the spawn coordinates from MES's public NPC API and
-the presence of its serialized NPC record. Before each transfer the runner
-locates the grid's sole owner. At arrival it checks the handover gate, grid
-identity, terminal custom data, MES spawn coordinates and SHA-256 of the NPC
-record held in the grid's mod storage.
+decodes the spawn group, original prefab, stored start coordinates and spawned-by-MES
+flag in the grid's NPC record. The cluster repeats those reads after roughly
+30 simulation seconds on node 1 without moving, then after the same interval
+on each receiving node. Each transfer must have a sole owner, a clean handover
+gate and the original grid ID, terminal custom data and NPC identity. The
+report includes the storage size and SHA-256 for investigating differences.
+MES also writes a timestamp into this record.

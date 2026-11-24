@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using ProtoBuf;
 using Sandbox.ModAPI;
 using VRage.Game.Components;
 using VRage.Game.ModAPI;
@@ -9,6 +10,23 @@ using VRageMath;
 
 namespace ClusterMesEncounterProbe
 {
+    // Immutable identity fields from MES's serialized NpcData.
+    [ProtoContract]
+    public class EncounterIdentity
+    {
+        [ProtoMember(4)]
+        public string SpawnGroup;
+
+        [ProtoMember(7)]
+        public string Prefab;
+
+        [ProtoMember(11)]
+        public Vector3D Start;
+
+        [ProtoMember(21)]
+        public bool SpawnedByMes;
+    }
+
     [MySessionComponentDescriptor(MyUpdateOrder.AfterSimulation)]
     public class Probe : MySessionComponentBase
     {
@@ -92,7 +110,7 @@ namespace ClusterMesEncounterProbe
             }
             if (after)
             {
-                foreach (var phase in new[] { "initial", "away", "returned" })
+                foreach (var phase in new[] { "initial", "control", "away", "returned" })
                     if (!sampled.Contains(phase) && Command(phase))
                         SampleNpc(phase);
             }
@@ -100,6 +118,9 @@ namespace ClusterMesEncounterProbe
 
         private void SampleNpc(string phase)
         {
+            // Exactly 1,800 simulation ticks pass before each settled observation.
+            if (phase != "initial" && ++stateAttempts < 60)
+                return;
             var entities = new HashSet<IMyEntity>();
             MyAPIGateway.Entities.GetEntities(entities, e => e is IMyCubeGrid);
             foreach (var entity in entities)
@@ -116,8 +137,12 @@ namespace ClusterMesEncounterProbe
                 string data = null;
                 if (grid.Storage != null)
                     grid.Storage.TryGetValue(NpcData, out data);
-                if ((origin == Vector3D.Zero || string.IsNullOrEmpty(data)) && ++stateAttempts < 20)
-                    return;
+                var identity = string.IsNullOrEmpty(data)
+                    ? null
+                    : MyAPIGateway.Utilities.SerializeFromBinary<EncounterIdentity>(
+                        Convert.FromBase64String(data)
+                    );
+                var storedStart = identity?.Start ?? Vector3D.Zero;
                 Log(
                     "state="
                         + phase
@@ -131,6 +156,18 @@ namespace ClusterMesEncounterProbe
                         + origin.Z
                         + " terminal="
                         + (terminal.CustomData == "ClusterProbe-NPC")
+                        + " group="
+                        + (string.IsNullOrEmpty(identity?.SpawnGroup) ? "-" : identity.SpawnGroup)
+                        + " prefab="
+                        + (string.IsNullOrEmpty(identity?.Prefab) ? "-" : identity.Prefab)
+                        + " stored="
+                        + storedStart.X
+                        + ","
+                        + storedStart.Y
+                        + ","
+                        + storedStart.Z
+                        + " spawned="
+                        + (identity != null && identity.SpawnedByMes)
                         + " npc="
                         + (data ?? "-")
                 );
@@ -138,12 +175,13 @@ namespace ClusterMesEncounterProbe
                 stateAttempts = 0;
                 return;
             }
-            if (++stateAttempts == 20)
-            {
-                Log("state=" + phase + " grid=0 origin=0,0,0 terminal=False npc=-");
-                sampled.Add(phase);
-                stateAttempts = 0;
-            }
+            Log(
+                "state="
+                    + phase
+                    + " grid=0 origin=0,0,0 terminal=False group=- prefab=- stored=0,0,0 spawned=False npc=-"
+            );
+            sampled.Add(phase);
+            stateAttempts = 0;
         }
 
         private bool Command(string phase)
