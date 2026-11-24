@@ -19,9 +19,13 @@ internal static class WeakRefRoutes
     private static readonly Dictionary<long, WeakReference> Tracked =
         new Dictionary<long, WeakReference>();
 
+    private static readonly Dictionary<long, MyEntity> Held = new();
+    private static readonly Dictionary<long, (WeakReference Block, WeakReference Physics)> Parts =
+        new();
+
     public static void Register()
     {
-        // POST /weakref-track?entity= - weak-reference the entity AND every grid physically attached to it
+        // Track the looked-up instance; a handover probe can also retain an explicit strong root.
         TestRoutes.Add(
             "POST",
             "/weakref-track",
@@ -31,6 +35,8 @@ internal static class WeakRefRoutes
                     TestRoutes.Query(context, "entity"),
                     CultureInfo.InvariantCulture
                 );
+                bool hold = TestRoutes.Query(context, "strong", "false") == "true";
+                bool parts = TestRoutes.Query(context, "parts", "false") == "true";
                 TestRoutes.Json(
                     context,
                     200,
@@ -39,7 +45,16 @@ internal static class WeakRefRoutes
                         if (!MyEntities.TryGetEntityById(entity, out MyEntity root))
                             throw new ArgumentException("Unknown entity " + entity);
                         lock (Tracked)
+                        {
                             Tracked[entity] = new WeakReference(root);
+                            if (hold)
+                                Held[entity] = root;
+                            if (parts && root is MyCubeGrid grid)
+                                Parts[entity] = (
+                                    new WeakReference(grid.GetBlocks().FirstOrDefault()),
+                                    new WeakReference(grid.Physics)
+                                );
+                        }
                         return (object)
                             new
                             {
@@ -47,6 +62,57 @@ internal static class WeakRefRoutes
                                 tracked = Tracked.Count,
                                 registeredHandles = HkHandle.GetHandlesAmount(),
                             };
+                    })
+                );
+            }
+        );
+        TestRoutes.Add(
+            "POST",
+            "/weakref-release",
+            context =>
+            {
+                long entity = TestRoutes.Long(context, "entity");
+                lock (Tracked)
+                    TestRoutes.Json(context, 200, new { removed = Held.Remove(entity) });
+            }
+        );
+        TestRoutes.Add(
+            "GET",
+            "/weakref-lookup",
+            context =>
+            {
+                long entity = TestRoutes.Long(context, "entity");
+                TestRoutes.Json(
+                    context,
+                    200,
+                    TestRoutes.OnGameThread(() =>
+                    {
+                        bool found = MyEntities.TryGetEntityById(entity, out MyEntity local);
+                        lock (Tracked)
+                        {
+                            Tracked.TryGetValue(entity, out var weak);
+                            var cached = weak?.Target as MyEntity;
+                            Parts.TryGetValue(entity, out var parts);
+                            return (object)
+                                new
+                                {
+                                    process = Environment.ProcessId,
+                                    entity,
+                                    found,
+                                    localId = local?.EntityId,
+                                    localClosed = local?.Closed,
+                                    localBlocks = (local as MyCubeGrid)?.BlocksCount,
+                                    cachedId = cached?.EntityId,
+                                    cachedClosed = cached?.Closed,
+                                    cachedBlocks = (cached as MyCubeGrid)?.BlocksCount,
+                                    sampledBlockAlive = parts.Block?.IsAlive,
+                                    sampledPhysicsAlive = parts.Physics?.IsAlive,
+                                    sameLocalInstance = found
+                                        && cached != null
+                                        && ReferenceEquals(local, cached),
+                                    held = Held.ContainsKey(entity),
+                                };
+                        }
                     })
                 );
             }

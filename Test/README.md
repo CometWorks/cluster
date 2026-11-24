@@ -301,3 +301,18 @@ the same damage applied to their targets. Only the treatment facility is enabled
 A pass requires full repair on that grid while the disabled grid retains its
 measured damage. The test world shortens nanite travel using the mod's config.
 This case covers same-grid repair in creative mode.
+
+### Grid references after handover
+
+From `Test/`, run `python grid_reference_lifetime.py /path/to/new-results` with the
+usual bench environment, test plugin and a claimed slot. The source node spawns
+two ordinary 27-block armor grids in one partition. It holds one grid strongly
+and tracks both grid instances, a sample block from each, and their physics
+wrappers weakly. The cluster transfers the whole partition to the other node.
+
+The report records process IDs, live lookups and the retired source objects.
+It drains the normal game callback queue and forces collections before and
+after releasing the strong reference. Surviving weak witnesses have other
+possible roots. The grid retention verdict stays inconclusive when the weak-only
+grid survives or the held grid survives release. The sampled block and physics
+observations describe those individual objects. They do not measure heap size.
