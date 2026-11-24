@@ -166,8 +166,8 @@ The [verdict table](ModCorpus/verdicts.tsv) covers 1,500 subscription-ranked mod
 |---|---:|---:|---|
 | A | 1,027 | 9 | No compiled scripts, confirmed against the script inventory. Content can still fail to load. |
 | B | 8 | 1 | The scanner found no flagged member or state pattern. |
-| D | 255 | 5 | A member or state pattern calls for adaptation or a functional check. |
-| U | 210 | 3 | Compilation or policy evidence is incomplete. |
+| D | 259 | 5 | A member or state pattern calls for adaptation or a functional check. |
+| U | 206 | 3 | Compilation or policy evidence is incomplete. |
 
 B-state denotes isolated mutable entity logic, C denotes session state suitable for WA-only placement, and S denotes risks covered by named shim candidates. This run assigned none of these three verdicts. X requires a human decision about whether adaptation is feasible. The `runtime_class` column is the existing scanner's A–D placement input. Use it to compare a live load record with a successful offline compile.
 
@@ -175,7 +175,9 @@ The [member table](ModCorpus/members.tsv) counts IL references to methods and fi
 
 B2 includes static or session fields holding collections of entities. B4 counts mutable instance fields declared on entity components. B6 includes direct world-changing calls in session simulation callbacks. These are candidates for behavioral testing. A scratch collection reused during a scan, for example, can produce a B2 hit even if it retains no entity between ticks. Indirect calls through mod helpers, subscriptions made conditionally, entity IDs stored as integers and mutable objects behind readonly fields need further inspection. Role-check sites count reads of `IsDedicated` and `IsServer`. A read alone does not establish which branch guards a later action.
 
-Fifty-four Workshop items had offline compile diagnostics. U also covers uncertain or unmapped IL members when the scanner has no stronger reason for a D verdict. Compiled groups from a partially compiling mod still contribute observed sites to the frequency tables. The compiler uses the installed DS compatibility substitutions and protobuf tag pass. It can retry with a newer C# language version and does not run the game's whitelist or the optional DotNetCompat plugin. Compile diagnostics and live cluster errors are recorded separately.
+Fifty-five Workshop items had offline compile diagnostics. U also covers uncertain or unmapped IL members when the scanner has no stronger reason for a D verdict. Compiled groups from a partially compiling mod still contribute observed sites to the frequency tables. The compiler uses the installed DS compatibility substitutions and protobuf tag pass. It can retry with a newer C# language version and does not run the game's whitelist or the optional DotNetCompat plugin. Compile diagnostics and live cluster errors are recorded separately.
+
+The DS groups source files by the first path component beneath `Data/Scripts`. A root-level `.cs` file is therefore a one-file assembly. Twenty catalog entries store all their scripts there. Nineteen compile under the stock offline profile and one produces a compiler diagnostic. Four other entries mix root scripts with nested groups. The smoke wave began with the earlier scan pinned to `4bd530d`. Its live logs can be compared against this corrected table without reloading the worlds.
 
 Build and regenerate from the cluster repository root, with the directory containing the DS assemblies in `SPACE_ENGINEERS_BIN64`. The corpus directory contains `catalogue.tsv`, `scripts.tsv` and the Workshop folders under `244850/`.
 
