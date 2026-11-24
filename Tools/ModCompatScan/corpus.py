@@ -11,7 +11,7 @@ from pathlib import Path
 
 def read_tsv(path: Path) -> list[dict[str, str]]:
     with path.open(encoding="utf-8", newline="") as source:
-        return list(csv.DictReader(source, delimiter="\t"))
+        return list(csv.DictReader(source, delimiter="\t", quoting=csv.QUOTE_NONE))
 
 
 def write_tsv(path: Path, columns: list[str], rows) -> None:
