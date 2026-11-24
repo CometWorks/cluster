@@ -70,11 +70,20 @@ internal static class Program
             return File.Exists(candidate) ? context.LoadFromAssemblyPath(candidate) : null;
         };
         List<MetadataReference> references = ScriptReferences.References(dedicated64);
+        var parseOptions = ScriptReferences.ParseOptions(
+            CSharpCompilation.Create("GameVersion", references: references)
+        );
         int failures = 0;
         foreach (string mod in mods)
         {
             string id = Path.GetFileName(Path.GetFullPath(mod).TrimEnd('/')).Replace(".sbm", "");
-            List<Assembly> assemblies = Compile(id, mod, references, out List<string> errors);
+            List<Assembly> assemblies = Compile(
+                id,
+                mod,
+                references,
+                parseOptions,
+                out List<string> errors
+            );
             ModScanResult scan = ModCompatScanner.Scan(assemblies);
             string manifestPath = Path.Combine(mod, AuthorManifestName);
             string manifest = File.Exists(manifestPath)
@@ -251,6 +260,7 @@ internal static class Program
         string id,
         string mod,
         List<MetadataReference> references,
+        CSharpParseOptions parseOptions,
         out List<string> errors
     )
     {
@@ -272,6 +282,7 @@ internal static class Program
                 $"{id}_{group.Key}",
                 group.ToList(),
                 references,
+                parseOptions,
                 out List<string> groupErrors
             );
             if (image == null)
@@ -286,12 +297,13 @@ internal static class Program
         return assemblies;
     }
 
-    /// <summary>The game's parse options (C# 6, its conditional symbols on 1.210); a mod that only compiles with a
+    /// <summary>C# 6 with the dedicated server’s conditional symbols. A mod that only compiles with a
     /// newer language version, as some plugin loaders allow, is retried with the latest one.</summary>
     private static byte[] Emit(
         string name,
         List<string> files,
         List<MetadataReference> references,
+        CSharpParseOptions parseOptions,
         out List<string> errors
     )
     {
@@ -300,10 +312,9 @@ internal static class Program
             LanguageVersion version in new[] { LanguageVersion.CSharp6, LanguageVersion.Latest }
         )
         {
-            var options = new CSharpParseOptions(
-                version,
-                DocumentationMode.None
-            ).WithPreprocessorSymbols("BRANCH_STABLE", "STABLE", "VERSION_210", "BUILD_14");
+            var options = parseOptions
+                .WithLanguageVersion(version)
+                .WithDocumentationMode(DocumentationMode.None);
             var trees = files
                 .Select(file =>
                     CSharpSyntaxTree.ParseText(

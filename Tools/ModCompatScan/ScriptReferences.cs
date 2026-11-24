@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection.PortableExecutable;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace ModCompatScan;
 
@@ -14,6 +15,23 @@ internal static class ScriptReferences
         "using VRage;\r\nusing VRage.Game.Components;\r\nusing VRage.ObjectBuilders;\r\nusing VRage.ModAPI;\r\n"
         + "using VRage.Game.ModAPI;\r\nusing Sandbox.Common.ObjectBuilders;\r\nusing VRage.Game;\r\nusing Sandbox.ModAPI;\r\n"
         + "using VRage.Game.ModAPI.Interfaces;\r\nusing SpaceEngineers.Game.ModAPI;\r\n#line 1\r\n";
+
+    internal static CSharpParseOptions ParseOptions(CSharpCompilation compilation)
+    {
+        var version = (int)
+            compilation
+                .GetTypeByMetadataName("SpaceEngineers.Game.SpaceEngineersGame")
+                .GetMembers("SE_VERSION")
+                .OfType<IFieldSymbol>()
+                .Single()
+                .ConstantValue;
+        return CSharpParseOptions.Default.WithPreprocessorSymbols(
+            "BRANCH_STABLE",
+            "STABLE",
+            $"VERSION_{version / 1000 % 1000}",
+            $"BUILD_{version % 1000}"
+        );
+    }
 
     /// <summary>The runtime's own assemblies first, then every managed DS64 assembly the runtime does not provide.</summary>
     internal static List<MetadataReference> References(string dedicated64)
