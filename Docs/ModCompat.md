@@ -39,7 +39,7 @@ reason. For a concrete member that implements a ModAPI interface, the reason nam
 A declaration reference locates the API in DS 1.211.018. Rows marked `UNCERTAIN` need a cluster check.
 A `?` for breakage and shim means both are unknown. A downstream verdict must preserve that uncertainty. Mutable definition and settings fields have a
 per-node write policy. Reading the stock value (for example, a block definition’s PCU) is consistent across
-nodes that load the same content. A classifier should apply B7 to writes or mutations of referenced state.
+nodes that load the same content. The scanner counts field stores and property setters toward B7 for these policies. Reading a scalar still contributes to member frequency. Taking a field address or loading a mutable reference can allow a later write through an alias, so those sites remain unverified. For VSL callback fields the scanner counts assignments, including delegate subscription and removal. A bare delegate read alone leaves its use unresolved.
 
 `Test/ModApiPolicy/CorpusMembers.txt` pins the distinct resolved member keys from the subscription-ranked
 Workshop corpus collected on 2026-11-22. It includes the ranked items and dependencies. There were 482 scripted
