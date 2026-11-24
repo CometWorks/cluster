@@ -69,11 +69,9 @@ def classify(row: dict, policy: dict[str, list[str]], scripted: bool):
     unmapped = 0
     for key, sites in detail["Members"].items():
         rule = policy.get(key)
-        if rule is None or rule[2] == "?":
+        if rule is None or rule[2] == "?" or "UNCERTAIN:" in rule[6]:
             unmapped += sites
             continue
-        if "UNCERTAIN:" in rule[6]:
-            unmapped += sites
         if rule[2] == "-":
             continue
         breaks.update({b: sites for b in rule[2].split(",")})
