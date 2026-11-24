@@ -84,16 +84,25 @@ def measure(bench, nodes, issuer):
 
 
 def npc_state(bench, node, phase):
+    started = time.monotonic()
     command(bench, node, phase)
-    pattern = rf"mes_encounter_probe state={phase} grid=(\d+) origin=([^ ]+) terminal=(True|False) npc=(\S+)"
-    line = bench.cluster.wait_node_log(node, pattern, 35)
-    grid, origin, terminal, payload = re.search(pattern, line).groups()
+    pattern = rf"mes_encounter_probe state={phase} grid=(\d+) origin=([^ ]+) terminal=(True|False) group=(\S+) prefab=(\S+) stored=(\S+) spawned=(True|False) npc=(\S+)"
+    line = bench.cluster.wait_node_log(node, pattern, 80)
+    grid, origin, terminal, group, prefab, stored, spawned, payload = re.search(
+        pattern, line
+    ).groups()
     data = base64.b64decode(payload, validate=True) if payload != "-" else b""
     return {
         "node": node,
+        "phase": phase,
+        "sample_seconds": round(time.monotonic() - started, 1),
         "grid": grid,
         "spawn_origin": [float(n) for n in origin.split(",")],
         "terminal_marker": terminal == "True",
+        "spawn_group": group,
+        "prefab": prefab,
+        "stored_origin": [float(n) for n in stored.split(",")],
+        "spawned_by_mes": spawned == "True",
         "npc_bytes": len(data),
         "npc_sha256": hashlib.sha256(data).hexdigest() if data else None,
     }
@@ -110,12 +119,31 @@ def round_trip(bench, report):
         places = bench.entity_owner(bench.diag("entities"), int(grid))
         return places[0][1] if len(places) == 1 and places[0][0] == node else None
 
-    valid = (
-        initial["grid"] == grid
-        and initial["spawn_origin"] == stock["spawn_origin"]
-        and initial["terminal_marker"]
-        and initial["npc_bytes"] > 0
-    )
+    def matches(state):
+        return (
+            state["grid"] == grid
+            and state["terminal_marker"]
+            and state["npc_bytes"] > 0
+            and all(
+                state[field] == stock[field]
+                for field in (
+                    "spawn_origin",
+                    "stored_origin",
+                    "spawn_group",
+                    "prefab",
+                    "spawned_by_mes",
+                )
+            )
+        )
+
+    control = npc_state(bench, "node-1", "control")
+    stages.append(control)
+    if not matches(initial) or not matches(control):
+        report["error"] = (
+            "NPC state already differs on the issuing node before any transfer"
+        )
+        return "INCONCLUSIVE"
+    valid = True
     for source, target, phase in (
         ("node-1", "node-2", "away"),
         ("node-2", "node-1", "returned"),
@@ -129,13 +157,7 @@ def round_trip(bench, report):
         state["partition"] = partition
         state["gate_residuals"] = _gate_residuals(bench, target, partition)
         stages.append(state)
-        valid = valid and (
-            state["grid"] == grid
-            and state["spawn_origin"] == stock["spawn_origin"]
-            and state["terminal_marker"]
-            and state["npc_sha256"] == initial["npc_sha256"]
-            and state["gate_residuals"] == 0
-        )
+        valid = valid and matches(state) and state["gate_residuals"] == 0
     return "PASS" if valid else "DIFF"
 
 
@@ -192,6 +214,9 @@ def run(corpus, results, handover=False):
                     report["standalone"]["initial"] = baseline
                     if (
                         baseline["spawn_origin"] == [0.0, 0.0, 0.0]
+                        or baseline["spawn_group"] != "ClusterProbe-Encounter"
+                        or baseline["prefab"] != "ClusterProbe-Ship"
+                        or baseline["stored_origin"] != baseline["spawn_origin"]
                         or baseline["npc_bytes"] == 0
                         or not baseline["terminal_marker"]
                         or baseline["grid"]
