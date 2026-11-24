@@ -11,7 +11,7 @@ from pathlib import Path
 
 def read_tsv(path: Path) -> list[dict[str, str]]:
     with path.open(encoding="utf-8", newline="") as source:
-        return list(csv.DictReader(source, delimiter="\t"))
+        return list(csv.DictReader(source, delimiter="\t", quoting=csv.QUOTE_NONE))
 
 
 def write_tsv(path: Path, columns: list[str], rows) -> None:
@@ -69,13 +69,24 @@ def classify(row: dict, policy: dict[str, list[str]], scripted: bool):
     unmapped = 0
     for key, sites in detail["Members"].items():
         rule = policy.get(key)
-        if rule is None or rule[2] == "?":
+        if rule is None or rule[2] == "?" or "UNCERTAIN:" in rule[6]:
             unmapped += sites
             continue
-        if "UNCERTAIN:" in rule[6]:
-            unmapped += sites
         if rule[2] == "-":
             continue
+        # Definitions and settings have a B7 policy for mutations. A read of the
+        # stock scalar cannot diverge. Keep object or by-ref accesses unresolved
+        # when the scanner cannot follow what the caller does with the result.
+        if (
+            "changing shared definition data at runtime affects this process" in rule[6]
+            or "mod writes to that object are not broadcast" in rule[6]
+            or key in detail["VslDelegateFields"]
+        ):
+            sites = detail["Writes"].get(key, 0)
+            if not sites or key not in detail["VslDelegateFields"]:
+                unmapped += detail["IndirectAccess"].get(key, 0)
+            if not sites:
+                continue
         breaks.update({b: sites for b in rule[2].split(",")})
         if rule[3] == "yes":
             shims.add(

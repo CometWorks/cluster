@@ -39,7 +39,7 @@ reason. For a concrete member that implements a ModAPI interface, the reason nam
 A declaration reference locates the API in DS 1.211.018. Rows marked `UNCERTAIN` need a cluster check.
 A `?` for breakage and shim means both are unknown. A downstream verdict must preserve that uncertainty. Mutable definition and settings fields have a
 per-node write policy. Reading the stock value (for example, a block definition’s PCU) is consistent across
-nodes that load the same content. A classifier should apply B7 to writes or mutations of referenced state.
+nodes that load the same content. The scanner counts field stores and property setters toward B7 for these policies. Reading a scalar still contributes to member frequency. Taking a field address or loading a mutable reference can allow a later write through an alias, so those sites remain unverified. For VSL callback fields the scanner counts assignments, including delegate subscription and removal. A bare delegate read alone leaves its use unresolved.
 
 `Test/ModApiPolicy/CorpusMembers.txt` pins the distinct resolved member keys from the subscription-ranked
 Workshop corpus collected on 2026-11-22. It includes the ranked items and dependencies. There were 482 scripted
@@ -130,8 +130,8 @@ The [verdict table](ModCorpus/verdicts.tsv) covers 1,500 subscription-ranked mod
 |---|---:|---:|---|
 | A | 1,027 | 9 | No compiled scripts, confirmed against the script inventory. Content can still fail to load. |
 | B | 8 | 1 | The scanner found no flagged member or state pattern. |
-| D | 256 | 5 | A member or state pattern calls for adaptation or a functional check. |
-| U | 209 | 3 | Compilation or policy evidence is incomplete. |
+| D | 255 | 5 | A member or state pattern calls for adaptation or a functional check. |
+| U | 210 | 3 | Compilation or policy evidence is incomplete. |
 
 B-state denotes isolated mutable entity logic, C denotes session state suitable for WA-only placement, and S denotes risks covered by named shim candidates. This run assigned none of these three verdicts. X requires a human decision about whether adaptation is feasible. The `runtime_class` column is the existing scanner's A–D placement input. Use it to compare a live load record with a successful offline compile.
 
