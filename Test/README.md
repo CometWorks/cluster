@@ -225,3 +225,18 @@ checks the actual World Authority lease overlay, manual and default baselines,
 forgetting a player, replica and replacement-authority expiry, and origin fencing
 without a game process.
 The Cluster CLI `--self-test` checks the new policy verb against contract parity.
+
+### Workshop speed limit comparison
+
+With the standard bench environment, a claimed slot and its RAM guard, run
+`python mod_speed_differential.py /path/to/corpus /path/to/new-results` from
+`Test/`. The corpus must contain Workshop item `380165093` under `244850/`.
+
+The observer reads the small- and large-grid speed limits after the session is ready.
+The stock control should read 100 m/s for both. The same stock world with Midspace's
+Ship Speed Unlimited should read 150,000,000 m/s. The World Authority and both regular
+nodes each load the same pinned source. A difference from the stock modded world
+produces `DIFF`. A missing measurement or an unexpected stock control produces
+`INCONCLUSIVE`. The verdict, measurements, source hashes and process logs go into
+the results folder. The standalone test loads a copy of the cluster's local Workshop
+folder patch so the two configurations compile identical script bytes.

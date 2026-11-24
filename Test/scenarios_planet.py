@@ -389,7 +389,7 @@ def start_standalone(bench, world_dir: Path, name: str = "stock", hub_plugins: l
     env["DOTNET_DbgMiniDumpName"] = str(config.dumps / f"{name}.%p.dmp")
     process = bench.cluster._spawn(name, [
         str(config.launcher), "-config", str(magnetar), "-ds64", str(config.ds64), "-profile", name,
-        *update_args, "-multiInstance", "-noconsent", "-noconsole", "-ignorelastsession",
+        *update_args, *(["-noimplicitmod"] if staged_mods is not None else []), "-multiInstance", "-noconsent", "-noconsole", "-ignorelastsession",
         "-port", game_port, "-path", str(data)], env, cwd=magnetar)
     server = Standalone(bench, name, process, config.root / f"{name}.log", spec.control, key, data)
     for marker in ready:

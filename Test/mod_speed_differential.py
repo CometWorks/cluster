@@ -13,6 +13,7 @@ import zipfile
 from pathlib import Path
 
 from bench import Bench, HOST
+from cluster import ClusterError
 from scenarios_planet import start_standalone
 
 MOD = "380165093"
@@ -62,6 +63,7 @@ def run(corpus, results):
             ],
             check=True,
         )
+        (work / "no-mods").mkdir()
         stage(corpus / "244850" / MOD, work / "Mods")
         scripts = sorted((work / "Mods").rglob("*.cs"))
         if not scripts:
@@ -91,7 +93,7 @@ def run(corpus, results):
         try:
             bench.cluster.prepare(wipe=True)
             for name, stock_world, mods in (
-                ("control", vanilla, None),
+                ("control", vanilla, work / "no-mods"),
                 ("stock", world, work / "Mods"),
             ):
                 server = start_standalone(
@@ -126,14 +128,16 @@ def run(corpus, results):
                         MARKER, bench.cluster.wait_node_log(role, MARKER, 30)
                     ).groups()
                 ]
-            if tuple(samples["stock"]) != EXPECTED or any(
-                c == m for c, m in zip(samples["control"], EXPECTED)
+            if tuple(samples["stock"]) != EXPECTED or tuple(samples["control"]) != (
+                100,
+                100,
             ):
                 return "INCONCLUSIVE"
             return (
                 "PASS"
                 if all(
-                    p == samples["stock"] for n, p in samples.items() if n != "control"
+                    samples[node] == samples["stock"]
+                    for node in ("wa-1", "node-1", "node-2")
                 )
                 else "DIFF"
             )
@@ -157,7 +161,17 @@ if __name__ == "__main__":
     ap.add_argument("results", type=Path, help="new results folder")
     args = ap.parse_args()
     args.results.mkdir(parents=True)
-    verdict = run(args.corpus, args.results)
+    try:
+        verdict = run(args.corpus, args.results)
+    except (
+        OSError,
+        ValueError,
+        ClusterError,
+        TimeoutError,
+        subprocess.CalledProcessError,
+    ) as error:
+        (args.results / "error.txt").write_text(str(error) + "\n")
+        verdict = "INCONCLUSIVE"
     print(verdict)
     (args.results / "verdict.txt").write_text(verdict + "\n")
     raise SystemExit(0 if verdict == "PASS" else 1)
