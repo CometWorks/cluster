@@ -56,6 +56,38 @@ def stage(source, mods):
                 shutil.copyfileobj(src, dest)
 
 
+def build_observer(work):
+    project = Path(__file__).parent / "ModDefinitionProbe"
+    bundle = work / "ModDefinitionProbe"
+    subprocess.run(
+        [
+            "dotnet",
+            "build",
+            str(project / "ModDefinitionProbe.csproj"),
+            "-c",
+            "Release",
+            "-o",
+            str(bundle),
+        ],
+        check=True,
+    )
+    return bundle
+
+
+def world_with_mods(vanilla, world, ids):
+    shutil.copytree(vanilla, world)
+    items = "".join(
+        f'<ModItem FriendlyName="{mod}"><Name>{mod}.sbm</Name><PublishedFileId>{mod}</PublishedFileId><PublishedServiceName>Steam</PublishedServiceName></ModItem>'
+        for mod in ids
+    )
+    for filename in ("Sandbox.sbc", "Sandbox_config.sbc"):
+        path = world / filename
+        text, count = re.subn(r"<Mods\s*/>", f"<Mods>{items}</Mods>", path.read_text())
+        if count != 1:
+            raise ValueError(f"{filename} must contain a single empty Mods element")
+        path.write_text(text)
+
+
 def run(corpus, results, case_name):
     case = CASES[case_name]
     os.environ["MOD_DEFINITION_CASE"] = case_name
@@ -67,7 +99,6 @@ def run(corpus, results, case_name):
         line = bench.cluster.wait_node_log(node, marker, 30)
         return [float(value) for value in re.search(marker, line).groups()]
 
-    project = Path(__file__).parent / "ModDefinitionProbe"
     # The normal bench observer installs cluster control routes; this lane only reads a game value.
     os.environ["CLUSTER_TEST_PLUGIN"] = "0"
     bench = Bench(
@@ -76,19 +107,7 @@ def run(corpus, results, case_name):
     started = time.monotonic()
     with tempfile.TemporaryDirectory(dir=results) as temp:
         work = Path(temp)
-        bundle = work / "ModDefinitionProbe"
-        subprocess.run(
-            [
-                "dotnet",
-                "build",
-                str(project / "ModDefinitionProbe.csproj"),
-                "-c",
-                "Release",
-                "-o",
-                str(bundle),
-            ],
-            check=True,
-        )
+        bundle = build_observer(work)
         (work / "no-mods").mkdir()
         stage(corpus / "244850" / case.workshop, work / "Mods")
         scripts = sorted((work / "Mods").rglob("*.cs"))
@@ -102,14 +121,7 @@ def run(corpus, results, case_name):
         }
         vanilla = HOST.package / "examples/Cluster-Simple"
         world = work / "ModWorld"
-        shutil.copytree(vanilla, world)
-        for filename in ("Sandbox.sbc", "Sandbox_config.sbc"):
-            path = world / filename
-            item = f'<Mods><ModItem FriendlyName="{case.workshop}"><Name>{case.workshop}.sbm</Name><PublishedFileId>{case.workshop}</PublishedFileId><PublishedServiceName>Steam</PublishedServiceName></ModItem></Mods>'
-            text, count = re.subn(r"<Mods\s*/>", item, path.read_text())
-            if count != 1:
-                raise ValueError(f"{filename} must contain a single empty Mods element")
-            path.write_text(text)
+        world_with_mods(vanilla, world, [case.workshop])
 
         config = bench.cluster.config
         config.world_template = world

@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<Definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <Prefabs>
+    <Prefab xsi:type="MyObjectBuilder_PrefabDefinition">
+      <Id Type="MyObjectBuilder_PrefabDefinition" Subtype="ClusterProbe-Ship"/>
+      <CubeGrids>
+        <CubeGrid>
+          <GridSizeEnum>Large</GridSizeEnum>
+          <DisplayName>ClusterProbe Encounter</DisplayName>
+          <PositionAndOrientation>
+            <Position x="0" y="0" z="0"/><Forward x="0" y="0" z="-1"/><Up x="0" y="1" z="0"/>
+          </PositionAndOrientation>
+          <CubeBlocks>
+            <MyObjectBuilder_CubeBlock xsi:type="MyObjectBuilder_BatteryBlock">
+              <SubtypeName>LargeBlockBatteryBlock</SubtypeName>
+              <CustomName>ClusterProbe encounter marker</CustomName>
+              <CurrentStoredPower>1</CurrentStoredPower>
+            </MyObjectBuilder_CubeBlock>
+          </CubeBlocks>
+        </CubeGrid>
+      </CubeGrids>
+    </Prefab>
+  </Prefabs>
+</Definitions>

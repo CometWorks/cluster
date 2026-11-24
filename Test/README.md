@@ -240,3 +240,17 @@ A differing node produces DIFF. An incomplete measurement or unexpected stock
 control yields INCONCLUSIVE. The output folder contains the verdict, values and
 logs. See [Workshop definition probes](ModDefinitionProbe/README.md) for the
 mods and fields covered.
+
+### MES encounter spawn
+
+Run `python mes_encounter_differential.py /path/to/corpus /path/to/new-results`
+with the same bench environment and slot as the definition comparisons. The
+runner stages the pinned Modular Encounters Systems Workshop item (1521905890)
+and a test encounter containing a single marked battery grid.
+
+The fixture checks for the marker before issuing the request. Standalone and
+node-1 each call MES's published `CustomSpawnRequest` once at the same empty
+space coordinates. The test records the return value, the grid ID in MES's
+successful-spawn callback, and the grid IDs visible to each process after the
+request. A passing run needs exactly one live grid whose ID matches the callback.
+Automatic encounters, player-triggered spawning and NPC behavior need separate cases.
