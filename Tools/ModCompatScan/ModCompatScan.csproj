@@ -21,6 +21,7 @@
     <Compile Include="Program.cs" />
     <Compile Include="WorkshopScripts.cs" />
     <Compile Include="MemberEvidence.cs" />
+    <Compile Include="WorkshopCompiler.cs" />
     <Compile Include="../../Shared/Cluster/ModApiPolicyTable.cs" Link="ModApiPolicyTable.cs" />
     <Compile Include="ScriptReferences.cs" />
     <Compile Include="WorkshopScripts.cs" />
