@@ -325,7 +325,7 @@ internal static class Program
             var trees = files
                 .Select(file =>
                     CSharpSyntaxTree.ParseText(
-                        ScriptReferences.UsingHeader + file.Text,
+                        WorkshopCompiler.PrepareSource(file.Text),
                         options,
                         file.Path
                     )
@@ -342,7 +342,7 @@ internal static class Program
                 )
             );
             using var image = new MemoryStream();
-            var emitted = compilation.Emit(image);
+            var emitted = WorkshopCompiler.WithProtoTags(compilation).Emit(image);
             if (emitted.Success)
                 return image.ToArray();
             errors ??= emitted
