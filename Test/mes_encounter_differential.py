@@ -213,10 +213,11 @@ def run(corpus, results, handover=False):
                     baseline = npc_state(bench, "stock", "initial")
                     report["standalone"]["initial"] = baseline
                     if (
-                        baseline["spawn_origin"] == [0.0, 0.0, 0.0]
+                        baseline["spawn_origin"] != [120.0, 70.0, 110.0]
                         or baseline["spawn_group"] != "ClusterProbe-Encounter"
                         or baseline["prefab"] != "ClusterProbe-Ship"
                         or baseline["stored_origin"] != baseline["spawn_origin"]
+                        or not baseline["spawned_by_mes"]
                         or baseline["npc_bytes"] == 0
                         or not baseline["terminal_marker"]
                         or baseline["grid"]
