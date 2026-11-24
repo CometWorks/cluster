@@ -23,9 +23,15 @@ internal static class Program
                 Environment.GetEnvironmentVariable("HOME") ?? ".",
                 ".steam/steam/steamapps/common/SpaceEngineersDedicatedServer/DedicatedServer64"
             );
+        if (args.Length == 1 && args[0] == "--policy-tsv")
+        {
+            Console.WriteLine(ModApiPolicyTable.Text);
+            return 0;
+        }
         if (args.Length == 1 && args[0] == "--selftest")
             return SelfTest();
         bool json = false;
+        bool evidence = false;
         string expectFile = null;
         var mods = new List<string>();
         for (int i = 0; i < args.Length; i++)
@@ -34,6 +40,10 @@ internal static class Program
             {
                 case "--dedicated64":
                     dedicated64 = args[++i];
+                    break;
+                case "--evidence":
+                    evidence = true;
+                    json = true;
                     break;
                 case "--json":
                     json = true;
@@ -84,7 +94,8 @@ internal static class Program
                 parseOptions,
                 out List<string> errors
             );
-            ModScanResult scan = ModCompatScanner.Scan(assemblies);
+            var detail = evidence ? new MemberEvidence() : null;
+            ModScanResult scan = ModCompatScanner.Scan(assemblies, detail);
             string manifestPath = Path.Combine(mod, AuthorManifestName);
             string manifest = File.Exists(manifestPath)
                 ? ModCompatScanner.ReadAuthorManifest(File.ReadLines(manifestPath))
@@ -122,6 +133,7 @@ internal static class Program
                             authorManifest = manifest,
                             unresolvedCalls = scan.UnresolvedCalls,
                             compileErrors = errors,
+                            evidence = detail,
                         }
                     )
                 );

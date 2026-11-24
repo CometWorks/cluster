@@ -8,6 +8,13 @@ using System.Text;
 
 namespace ClusterPlugin;
 
+internal interface IModScanEvidence
+{
+    int UnresolvedTypes { get; set; }
+    void Field(FieldInfo field, bool sessionComponent, bool logicComponent);
+    void Site(MemberInfo target, MethodBase caller, bool sessionComponent);
+}
+
 /// <summary>Mod compatibility class (T-0242, #260). A: no scripts. B: entity-local scripts. C: global logic in
 /// session components that only touches replicated global state (runs on the WA only). D: global decision plus
 /// per-grid action or cluster-wide client messaging; correct only once adapted to the cluster mod channel.</summary>
@@ -138,7 +145,13 @@ public static class ModCompatScanner
 
     /// <summary>Scans the compiled assemblies of one mod (the script manager builds one per Data/Scripts
     /// subfolder); none means the mod has no compiled scripts (class A).</summary>
-    public static ModScanResult Scan(IReadOnlyCollection<Assembly> assemblies)
+    public static ModScanResult Scan(IReadOnlyCollection<Assembly> assemblies) =>
+        Scan(assemblies, null);
+
+    internal static ModScanResult Scan(
+        IReadOnlyCollection<Assembly> assemblies,
+        IModScanEvidence evidence
+    )
     {
         var result = new ModScanResult();
         if (assemblies == null || assemblies.Count == 0)
@@ -156,12 +169,17 @@ public static class ModCompatScanner
                 StringComparer.Ordinal
             )
         )
-            ScanAssembly(result, assembly, hash);
+            ScanAssembly(result, assembly, hash, evidence);
         result.IlSha256 = Convert.ToHexString(hash.GetHashAndReset());
         return Classify(result, hasScripts: true);
     }
 
-    private static void ScanAssembly(ModScanResult result, Assembly assembly, IncrementalHash hash)
+    private static void ScanAssembly(
+        ModScanResult result,
+        Assembly assembly,
+        IncrementalHash hash,
+        IModScanEvidence evidence
+    )
     {
         Type[] types;
         try
@@ -170,12 +188,15 @@ public static class ModCompatScanner
         }
         catch (ReflectionTypeLoadException partial)
         {
+            if (evidence != null)
+                evidence.UnresolvedTypes += partial.Types.Count(type => type == null);
             types = partial.Types.Where(type => type != null).ToArray();
         }
         foreach (Type type in types.OrderBy(type => type.MetadataToken))
         {
             string typeName = type.FullName ?? type.Name;
             bool sessionComponent = HasAttribute(type, "MySessionComponentDescriptor");
+            bool logicComponent = HasAttribute(type, "MyEntityComponentDescriptor");
             if (sessionComponent)
             {
                 Add(result, SessionComponents, typeName);
@@ -185,10 +206,11 @@ public static class ModCompatScanner
                 )
                     Add(result, SessionState, typeName + ".GetObjectBuilder");
             }
-            if (HasAttribute(type, "MyEntityComponentDescriptor"))
+            if (logicComponent)
                 Add(result, GameLogicComponents, typeName);
             foreach (FieldInfo field in type.GetFields(Declared))
             {
+                evidence?.Field(field, sessionComponent, logicComponent);
                 if (
                     field.IsLiteral
                     && field.Name == AuthorConstantName
@@ -218,12 +240,26 @@ public static class ModCompatScanner
                     continue;
                 hash.AppendData(Encoding.UTF8.GetBytes(typeName + "::" + method.Name + "\0"));
                 hash.AppendData(il);
-                ScanBody(result, method, il, typeName + "." + method.Name);
+                ScanBody(
+                    result,
+                    method,
+                    il,
+                    typeName + "." + method.Name,
+                    evidence,
+                    sessionComponent
+                );
             }
         }
     }
 
-    private static void ScanBody(ModScanResult result, MethodBase method, byte[] il, string site)
+    private static void ScanBody(
+        ModScanResult result,
+        MethodBase method,
+        byte[] il,
+        string site,
+        IModScanEvidence evidence,
+        bool sessionComponent
+    )
     {
         Type[] typeArguments = method.DeclaringType is { IsGenericType: true } owner
             ? owner.GetGenericArguments()
@@ -261,6 +297,25 @@ public static class ModCompatScanner
                 case OperandType.InlineSwitch:
                     position += 4 + 4 * BitConverter.ToInt32(il, position);
                     break;
+                case OperandType.InlineField when evidence != null:
+                    int fieldToken = BitConverter.ToInt32(il, position);
+                    position += 4;
+                    FieldInfo field;
+                    try
+                    {
+                        field = method.Module.ResolveField(
+                            fieldToken,
+                            typeArguments,
+                            methodArguments
+                        );
+                    }
+                    catch (Exception)
+                    {
+                        result.UnresolvedCalls++;
+                        break;
+                    }
+                    evidence.Site(field, method, sessionComponent);
+                    break;
                 case OperandType.InlineMethod:
                     int token = BitConverter.ToInt32(il, position);
                     position += 4;
@@ -274,6 +329,7 @@ public static class ModCompatScanner
                         result.UnresolvedCalls++;
                         break;
                     }
+                    evidence?.Site(target, method, sessionComponent);
                     Match(result, target, site);
                     break;
                 default:
