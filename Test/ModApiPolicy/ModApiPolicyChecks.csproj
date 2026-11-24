@@ -1,7 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- SE-1840: checks Shared/Cluster/ModApiPolicyTable.cs against the game's mod API.
-       usage: dotnet run (project Test/ModApiPolicy/ModApiPolicyChecks.csproj, Release), optionally followed by the
-       DedicatedServer64 folder after the double-dash separator. The folder defaults to $DEDICATED64, then $SPACE_ENGINEERS_BIN64, then the Steam install of the Dedicated Server. -->
+  <!-- The dedicated server supplies Roslyn for the Workshop source checks. See Docs/ModCompat.md. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>

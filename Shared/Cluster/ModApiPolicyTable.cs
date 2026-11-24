@@ -19,9 +19,8 @@ namespace ClusterPlugin;
 //              row the code did not settle; those keep node-scoped or a stricter policy.
 //
 // Test/ModApiPolicy checks that every public member of the game's ModAPI namespaces (Sandbox.ModAPI, VRage.ModAPI,
-// VRage.Game.ModAPI, SpaceEngineers.Game.ModAPI and their sub-namespaces) and of MyVisualScriptLogicProvider has a
-// row, and that no row names a member the game no longer has. Code, not an embedded file, like the PB policy table
-// of the Performance plugin (ScriptPolicyTable.cs), so a loader that compiles the plugin from source keeps it.
+// VRage.Game.ModAPI, SpaceEngineers.Game.ModAPI and their sub-namespaces), MyVisualScriptLogicProvider, and each
+// member in the pinned corpus snapshot has a row. Compiling the table with the plugin also ships it in source builds.
 internal static class ModApiPolicyTable
 {
     public const string Text =
@@ -3084,7 +3083,7 @@ Sandbox.Game.MyVisualScriptLogicProvider.IsSavingEnabled()	per-node	B6	no	role (
 Sandbox.Game.MyVisualScriptLogicProvider.IsSurvival()	local	-	-	-	0	MyVisualScriptLogicProvider.cs:4165 definitions, mods and session settings are the same on every node (cluster join hash)
 Sandbox.Game.MyVisualScriptLogicProvider.IsUnderGround(VRageMath.Vector3D)	local	-	-	-	0	MyVisualScriptLogicProvider.cs:3985 definitions, mods and session settings are the same on every node (cluster join hash)
 Sandbox.Game.MyVisualScriptLogicProvider.ItemSpawned	node-scoped	B2	no	request (WA)	4	MyVisualScriptLogicProvider.cs:846 UNCERTAIN: raised where the spawn happens; whether a grid imported by handover raises it again on the target node was not traced
-Sandbox.Game.MyVisualScriptLogicProvider.JoinResult(VRage.Network.JoinResult)	affinity	B8	no	player-nodes	0	MyVisualScriptLogicProvider.cs:8994 raised on the node the client is attached to; a node switch raises it on the new node again
+Sandbox.Game.MyVisualScriptLogicProvider.JoinResult(VRage.Network.JoinResult)	local	-	-	-	0	MyVisualScriptLogicProvider.cs:8994 returns its enum argument unchanged
 Sandbox.Game.MyVisualScriptLogicProvider.KickPlayer(System.UInt64,System.Boolean,System.Boolean)	node-scoped	B3	no	player-nodes + to-node	0	MyVisualScriptLogicProvider.cs:4430 resolves the player through its identity's Character (GetIdentityFromPlayerId); a player attached to another node has no character here
 Sandbox.Game.MyVisualScriptLogicProvider.KickPlayerFromFaction(System.Int64)	replicated	-	-	-	0	MyVisualScriptLogicProvider.cs:4071 factions, reputation and their requests are WA-replicated; mutations are executed on the WA (cluster: Cluster/Patches/MyFactionCollectionPatch.cs:22)
 Sandbox.Game.MyVisualScriptLogicProvider.LandingGearUnlocked	local	-	-	-	2	MyVisualScriptLogicProvider.cs:900 event raised where it happens; by the proximity rule that is one node, so it fires once cluster-wide
@@ -3132,22 +3131,22 @@ Sandbox.Game.MyVisualScriptLogicProvider.PlaySound(System.String,System.String,S
 Sandbox.Game.MyVisualScriptLogicProvider.PlaySoundAmbient(System.String)	node-scoped	B5	yes	player-nodes + to-node	0	MyVisualScriptLogicProvider.cs:2005 server-raised event to clients (MyMultiplayer.RaiseStaticEvent); reaches only clients attached to this node
 Sandbox.Game.MyVisualScriptLogicProvider.PlaySoundAmbientLocal(System.String)	client	-	-	-	0	MyVisualScriptLogicProvider.cs:2028 client UI, input, camera, audio or HUD; nothing to do on a server
 Sandbox.Game.MyVisualScriptLogicProvider.PlaySoundLocal(System.String,System.String,System.Boolean)	client	-	-	-	0	MyVisualScriptLogicProvider.cs:1950 client UI, input, camera, audio or HUD; nothing to do on a server
-Sandbox.Game.MyVisualScriptLogicProvider.PlayerConnectRequest	affinity	B8	no	player-nodes	2	MyVisualScriptLogicProvider.cs:819 raised on the node the client is attached to; a node switch raises it on the new node again
+Sandbox.Game.MyVisualScriptLogicProvider.PlayerConnectRequest	affinity	B8	no	player-nodes	2	MyVisualScriptLogicProvider.cs:819 a player event on the handling process; occurrence during a handover has not been verified
 Sandbox.Game.MyVisualScriptLogicProvider.PlayerConnected	per-node	B8	yes	player-nodes	13	MyVisualScriptLogicProvider.cs:813 fires on the target when it creates the arriving player during a handover; traversal is visible to the cluster (TraversalAnnouncementPatch.cs:62)
 Sandbox.Game.MyVisualScriptLogicProvider.PlayerDied	local	-	-	-	5	MyVisualScriptLogicProvider.cs:810 event raised where it happens; by the proximity rule that is one node, so it fires once cluster-wide
 Sandbox.Game.MyVisualScriptLogicProvider.PlayerDisconnected	per-node	B8	yes	player-nodes	16	MyVisualScriptLogicProvider.cs:816 fires on the source when it removes the departing player during a handover; traversal is visible to the cluster (TraversalAnnouncementPatch.cs:62)
-Sandbox.Game.MyVisualScriptLogicProvider.PlayerDropped	affinity	B8	no	player-nodes	3	MyVisualScriptLogicProvider.cs:843 raised on the node the client is attached to; a node switch raises it on the new node again
+Sandbox.Game.MyVisualScriptLogicProvider.PlayerDropped	affinity	B8	no	player-nodes	3	MyVisualScriptLogicProvider.cs:843 a player event on the handling process; occurrence during a handover has not been verified
 Sandbox.Game.MyVisualScriptLogicProvider.PlayerEnteredCockpit	local	-	-	-	9	MyVisualScriptLogicProvider.cs:789 event raised where it happens; by the proximity rule that is one node, so it fires once cluster-wide
 Sandbox.Game.MyVisualScriptLogicProvider.PlayerHealthRecharging	local	-	-	-	2	MyVisualScriptLogicProvider.cs:828 event raised where it happens; by the proximity rule that is one node, so it fires once cluster-wide
 Sandbox.Game.MyVisualScriptLogicProvider.PlayerLeftCockpit	local	-	-	-	9	MyVisualScriptLogicProvider.cs:786 event raised where it happens; by the proximity rule that is one node, so it fires once cluster-wide
 Sandbox.Game.MyVisualScriptLogicProvider.PlayerPickedUp	local	-	-	-	2	MyVisualScriptLogicProvider.cs:840 event raised where it happens; by the proximity rule that is one node, so it fires once cluster-wide
-Sandbox.Game.MyVisualScriptLogicProvider.PlayerRequestsRespawn	affinity	B8	no	player-nodes	2	MyVisualScriptLogicProvider.cs:807 raised on the node the client is attached to; a node switch raises it on the new node again
+Sandbox.Game.MyVisualScriptLogicProvider.PlayerRequestsRespawn	affinity	B8	no	player-nodes	2	MyVisualScriptLogicProvider.cs:807 a player event on the handling process; occurrence during a handover has not been verified
 Sandbox.Game.MyVisualScriptLogicProvider.PlayerResearchClear(System.Int64)	node-scoped	B3	no	player-nodes + to-node	0	MyVisualScriptLogicProvider.cs:5764 resolves the player through its identity's Character (GetIdentityFromPlayerId); a player attached to another node has no character here
 Sandbox.Game.MyVisualScriptLogicProvider.PlayerResearchClearAll()	node-scoped	B3	no	player-nodes + to-node	0	MyVisualScriptLogicProvider.cs:5754 resolves the player through its identity's Character (GetIdentityFromPlayerId); a player attached to another node has no character here
 Sandbox.Game.MyVisualScriptLogicProvider.PlayerResearchLock(System.Int64,VRage.Game.MyDefinitionId)	node-scoped	B3	no	player-nodes + to-node	0	MyVisualScriptLogicProvider.cs:5798 resolves the player through its identity's Character (GetIdentityFromPlayerId); a player attached to another node has no character here
 Sandbox.Game.MyVisualScriptLogicProvider.PlayerResearchUnlock(System.Int64,VRage.Game.MyDefinitionId)	node-scoped	B3	no	player-nodes + to-node	3	MyVisualScriptLogicProvider.cs:5788 resolves the player through its identity's Character (GetIdentityFromPlayerId); a player attached to another node has no character here
-Sandbox.Game.MyVisualScriptLogicProvider.PlayerRespawnRequest	affinity	B8	no	player-nodes	8	MyVisualScriptLogicProvider.cs:822 raised on the node the client is attached to; a node switch raises it on the new node again
-Sandbox.Game.MyVisualScriptLogicProvider.PlayerSpawned	affinity	B8	no	player-nodes	7	MyVisualScriptLogicProvider.cs:801 raised on the node the client is attached to; a node switch raises it on the new node again
+Sandbox.Game.MyVisualScriptLogicProvider.PlayerRespawnRequest	affinity	B8	no	player-nodes	8	MyVisualScriptLogicProvider.cs:822 a player event on the handling process; occurrence during a handover has not been verified
+Sandbox.Game.MyVisualScriptLogicProvider.PlayerSpawned	affinity	B8	no	player-nodes	7	MyVisualScriptLogicProvider.cs:801 a player event on the handling process; occurrence during a handover has not been verified
 Sandbox.Game.MyVisualScriptLogicProvider.PlayerSuitRecharging	local	-	-	-	2	MyVisualScriptLogicProvider.cs:831 event raised where it happens; by the proximity rule that is one node, so it fires once cluster-wide
 Sandbox.Game.MyVisualScriptLogicProvider.PrefabSpawned	node-scoped	B2	no	request (WA)	4	MyVisualScriptLogicProvider.cs:885 UNCERTAIN: raised where the spawn happens; whether a grid imported by handover raises it again on the target node was not traced
 Sandbox.Game.MyVisualScriptLogicProvider.PrefabSpawnedDetailed	node-scoped	B2	no	request (WA)	6	MyVisualScriptLogicProvider.cs:888 UNCERTAIN: raised where the spawn happens; whether a grid imported by handover raises it again on the target node was not traced
@@ -3357,7 +3356,7 @@ Sandbox.Game.MyVisualScriptLogicProvider.SwitchToolbarToSlot(System.Int32,System
 Sandbox.Game.MyVisualScriptLogicProvider.SwitchToolbarToSlotLocal(System.Int32,System.Int64)	client	-	-	-	2	MyVisualScriptLogicProvider.cs:7827 client UI, input, camera, audio or HUD; nothing to do on a server
 Sandbox.Game.MyVisualScriptLogicProvider.TakeScreenshot(System.String,System.String)	client	-	-	-	0	MyVisualScriptLogicProvider.cs:6168 client UI, input, camera, audio or HUD; nothing to do on a server
 Sandbox.Game.MyVisualScriptLogicProvider.TargetingSetWhitelist(System.String,System.Boolean)	node-scoped	B3	no	owner-of / to-owner	1	MyVisualScriptLogicProvider.cs:1560 looks the entity up by name or id on this node (MyEntities.TryGetEntityByName / GetEntityById); no effect when it is on another node
-Sandbox.Game.MyVisualScriptLogicProvider.TeamBalancerPlayerSorted	affinity	B8	no	player-nodes	2	MyVisualScriptLogicProvider.cs:804 raised on the node the client is attached to; a node switch raises it on the new node again
+Sandbox.Game.MyVisualScriptLogicProvider.TeamBalancerPlayerSorted	affinity	B8	no	player-nodes	2	MyVisualScriptLogicProvider.cs:804 a player event on the handling process; occurrence during a handover has not been verified
 Sandbox.Game.MyVisualScriptLogicProvider.TimerBlockTriggered	local	-	-	-	2	MyVisualScriptLogicProvider.cs:834 event raised where it happens; by the proximity rule that is one node, so it fires once cluster-wide
 Sandbox.Game.MyVisualScriptLogicProvider.TimerBlockTriggeredEntityName	local	-	-	-	2	MyVisualScriptLogicProvider.cs:837 event raised where it happens; by the proximity rule that is one node, so it fires once cluster-wide
 Sandbox.Game.MyVisualScriptLogicProvider.ToggleAbilityToSprint(System.Int64,System.Boolean)	node-scoped	B5	yes	player-nodes + to-node	0	MyVisualScriptLogicProvider.cs:7131 server-raised event to clients (MyMultiplayer.RaiseStaticEvent); reaches only clients attached to this node
@@ -4752,10 +4751,10 @@ Sandbox.ModAPI.MyAPIUtilities.MessageEntered	client	-	-	-	0	MyAPIUtilities.cs:47
 Sandbox.ModAPI.MyAPIUtilities.MessageEnteredSender	client	-	-	-	2	MyAPIUtilities.cs:49 client UI, input, camera, audio or HUD; nothing to do on a server
 Sandbox.ModAPI.MyAPIUtilities.MessageRecieved	client	-	-	-	0	MyAPIUtilities.cs:51 client UI, input, camera, audio or HUD; nothing to do on a server
 Sandbox.ModAPI.MyAPIUtilities.RecieveMessage(System.UInt64,System.String)	client	-	-	-	0	MyAPIUtilities.cs:125 client UI, input, camera, audio or HUD; nothing to do on a server
-Sandbox.ModAPI.MyAPIUtilities.RegisterMessageHandler(System.Int64,System.Action{System.Object})	local	-	-	-	13	MyAPIUtilities.cs:640 in-process cross-mod bus; both mods always run in the same process
-Sandbox.ModAPI.MyAPIUtilities.SendModMessage(System.Int64,System.Object)	local	-	-	-	16	MyAPIUtilities.cs:658 in-process cross-mod bus; both mods always run in the same process
+Sandbox.ModAPI.MyAPIUtilities.RegisterMessageHandler(System.Int64,System.Action{System.Object})	local	-	-	-	13	MyAPIUtilities.cs:640 in-process mod bus; a listener placed only on the WA receives no calls from regular nodes
+Sandbox.ModAPI.MyAPIUtilities.SendModMessage(System.Int64,System.Object)	local	-	-	-	16	MyAPIUtilities.cs:658 in-process mod bus; a listener placed only on the WA receives no calls from regular nodes
 Sandbox.ModAPI.MyAPIUtilities.Static	local	-	-	-	36	MyAPIUtilities.cs:25 process-wide registration or service; every node runs the mod and registers its own
-Sandbox.ModAPI.MyAPIUtilities.UnregisterMessageHandler(System.Int64,System.Action{System.Object})	local	-	-	-	13	MyAPIUtilities.cs:650 in-process cross-mod bus; both mods always run in the same process
+Sandbox.ModAPI.MyAPIUtilities.UnregisterMessageHandler(System.Int64,System.Action{System.Object})	local	-	-	-	13	MyAPIUtilities.cs:650 in-process mod bus; a listener placed only on the WA receives no calls from regular nodes
 Sandbox.ModAPI.MyAPIUtilities.Variables	per-node	B7	no	request (WA)	5	MyAPIUtilities.cs:29 MyAPIUtilities.Variables lives in this node's checkpoint (ScriptManagerData); every node has its own and only the WA copy is saved
 Sandbox.ModAPI.MyAutopilotPathfindingState.*	local	-	-	-	0	value, parser or helper; no world state
 Sandbox.ModAPI.MyExplosionTypeEnum.*	local	-	-	-	41	value, parser or helper; no world state
@@ -6594,10 +6593,10 @@ VRage.Game.ModAPI.IMyUtilities.ReadFileInGlobalStorage(System.String)	per-node	B
 VRage.Game.ModAPI.IMyUtilities.ReadFileInLocalStorage(System.String,System.Type)	per-node	B7	yes	request (WA)	81	MyAPIUtilities.cs:200 reads this node's own copy; consistent only while no node writes it at runtime (cluster: ModCompatService.cs:493)
 VRage.Game.ModAPI.IMyUtilities.ReadFileInModLocation(System.String,VRage.Game.MyObjectBuilder_Checkpoint.ModItem)	local	-	-	-	18	MyAPIUtilities.cs:140 reads files shipped with the mod or the game; identical on every node
 VRage.Game.ModAPI.IMyUtilities.ReadFileInWorldStorage(System.String,System.Type)	per-node	B7	yes	request (WA)	82	MyAPIUtilities.cs:219 reads this node's own copy; consistent only while no node writes it at runtime (cluster: ModCompatService.cs:493)
-VRage.Game.ModAPI.IMyUtilities.RegisterMessageHandler(System.Int64,System.Action{System.Object})	local	-	-	-	153	MyAPIUtilities.cs:640 in-process cross-mod bus; both mods always run in the same process
+VRage.Game.ModAPI.IMyUtilities.RegisterMessageHandler(System.Int64,System.Action{System.Object})	local	-	-	-	153	MyAPIUtilities.cs:640 in-process mod bus; a listener placed only on the WA receives no calls from regular nodes
 VRage.Game.ModAPI.IMyUtilities.RemoveVariable(System.String)	per-node	B7	no	request (WA)	4	MyAPIUtilities.cs:635 MyAPIUtilities.Variables lives in this node's checkpoint (ScriptManagerData); every node has its own and only the WA copy is saved
 VRage.Game.ModAPI.IMyUtilities.SendMessage(System.String)	node-scoped	B5	yes	player-nodes + to-node	11	MyAPIUtilities.cs:106 UNCERTAIN: MyMultiplayer.SendChatMessage from the server; player chat is accepted on the WA (cluster: Cluster/Patches/ChatAuthorityPatch.cs:58), server-sent chat was not traced
-VRage.Game.ModAPI.IMyUtilities.SendModMessage(System.Int64,System.Object)	local	-	-	-	128	MyAPIUtilities.cs:658 in-process cross-mod bus; both mods always run in the same process
+VRage.Game.ModAPI.IMyUtilities.SendModMessage(System.Int64,System.Object)	local	-	-	-	128	MyAPIUtilities.cs:658 in-process mod bus; a listener placed only on the WA receives no calls from regular nodes
 VRage.Game.ModAPI.IMyUtilities.SerializeFromBinary``1(System.Byte[])	local	-	-	-	145	MyAPIUtilities.cs:322 value, parser or helper; no world state
 VRage.Game.ModAPI.IMyUtilities.SerializeFromXML``1(System.String)	local	-	-	-	143	MyAPIUtilities.cs:303 value, parser or helper; no world state
 VRage.Game.ModAPI.IMyUtilities.SerializeToBinary``1(``0)	local	-	-	-	211	MyAPIUtilities.cs:315 value, parser or helper; no world state
@@ -6606,7 +6605,7 @@ VRage.Game.ModAPI.IMyUtilities.SetVariable``1(System.String,``0)	per-node	B7	no	
 VRage.Game.ModAPI.IMyUtilities.ShowMessage(System.String,System.String)	client	-	-	-	125	MyAPIUtilities.cs:101 client UI, input, camera, audio or HUD; nothing to do on a server
 VRage.Game.ModAPI.IMyUtilities.ShowMissionScreen(System.String,System.String,System.String,System.String,System.Action{VRage.Game.ModAPI.ResultEnum},System.String)	client	-	-	-	45	MyAPIUtilities.cs:453 client UI, input, camera, audio or HUD; nothing to do on a server
 VRage.Game.ModAPI.IMyUtilities.ShowNotification(System.String,System.Int32,System.String)	client	-	-	-	151	MyAPIUtilities.cs:87 client UI, input, camera, audio or HUD; nothing to do on a server
-VRage.Game.ModAPI.IMyUtilities.UnregisterMessageHandler(System.Int64,System.Action{System.Object})	local	-	-	-	153	MyAPIUtilities.cs:650 in-process cross-mod bus; both mods always run in the same process
+VRage.Game.ModAPI.IMyUtilities.UnregisterMessageHandler(System.Int64,System.Action{System.Object})	local	-	-	-	153	MyAPIUtilities.cs:650 in-process mod bus; a listener placed only on the WA receives no calls from regular nodes
 VRage.Game.ModAPI.IMyUtilities.WriteBinaryFileInGlobalStorage(System.String)	per-node	B7	yes	request (WA)	0	MyAPIUtilities.cs:561 writes this node's own file (<world>/Storage/<mod> or UserDataPath/Storage); only the WA copy is kept (cluster: ModCompatService.cs:493)
 VRage.Game.ModAPI.IMyUtilities.WriteBinaryFileInLocalStorage(System.String,System.Type)	per-node	B7	yes	request (WA)	12	MyAPIUtilities.cs:580 writes this node's own file (<world>/Storage/<mod> or UserDataPath/Storage); only the WA copy is kept (cluster: ModCompatService.cs:493)
 VRage.Game.ModAPI.IMyUtilities.WriteBinaryFileInWorldStorage(System.String,System.Type)	per-node	B7	yes	request (WA)	4	MyAPIUtilities.cs:599 writes this node's own file (<world>/Storage/<mod> or UserDataPath/Storage); only the WA copy is kept (cluster: ModCompatService.cs:493)

@@ -12,12 +12,7 @@ internal static class CorpusUsage
         int groups = 0,
             partial = 0,
             scripted = 0;
-        var options = CSharpParseOptions.Default.WithPreprocessorSymbols(
-            "BRANCH_STABLE",
-            "STABLE",
-            "VERSION_211",
-            "BUILD_18"
-        );
+        var options = ScriptReferences.ParseOptions(empty);
         foreach (string mod in Directory.EnumerateDirectories(root).Order())
         {
             var used = new HashSet<string>(StringComparer.Ordinal);
