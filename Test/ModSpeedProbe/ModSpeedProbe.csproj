@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Sandbox.Game;Sandbox.Common;VRage;VRage.Game;VRage.Math;VRage.Library;VRage.Scripting;VRage.Network;VRage.Dedicated">
+      <HintPath>$(Dedicated64Dir)%(Identity).dll</HintPath><Private>false</Private>
+    </Reference>
+    <PackageReference Include="Lib.Harmony" Version="2.4.2" ExcludeAssets="runtime" />
+    <Compile Include="../../Shared/Cluster/Patches/LocalWorldModsPatch.cs" />
+    <None Update="ModSpeedProbe.xml" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -289,7 +289,7 @@ def _hub_snapshot() -> Path | None:
 def start_standalone(bench, world_dir: Path, name: str = "stock", hub_plugins: list[str] | None = None,
                      timeout: float = SERVER_TIMEOUT, ready: tuple[str, ...] = ("Game ready",),
                      local_plugins: list[Path] | None = None, extra_env: dict[str, str] | None = None,
-                     port_slot: int | None = None) -> Standalone:
+                     port_slot: int | None = None, staged_mods: Path | None = None) -> Standalone:
     """Load ``world_dir`` on a stock dedicated server: the Magnetar launcher, the host's
     DedicatedServer64, and a profile with the hub plugins only - no cluster plugin, no Direct
     Transport, no test plugin. Runs in the next free port slot after the cluster's nodes, with the
@@ -318,6 +318,9 @@ def start_standalone(bench, world_dir: Path, name: str = "stock", hub_plugins: l
     data = config.root / f"{name}-data"
     shutil.rmtree(data, ignore_errors=True)
     data.mkdir(parents=True)
+
+    if staged_mods is not None:
+        shutil.copytree(staged_mods, data / "Mods")
 
     # Sources: the cluster's hub snapshot when there is one; no local or dev-folder plugin at all.
     sources_dir = magnetar / "Sources"
