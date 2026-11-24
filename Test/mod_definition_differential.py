@@ -12,6 +12,7 @@ import time
 import zipfile
 from pathlib import Path
 from typing import NamedTuple
+from xml.sax.saxutils import escape
 
 from bench import Bench, HOST
 from cluster import ClusterError
@@ -29,6 +30,8 @@ CASES = {
     "speed": Case(
         "380165093", ("large", "small"), (100, 100), (150_000_000, 150_000_000)
     ),
+    "speed-500": Case("379815146", ("large", "small"), (100, 100), (500, 500)),
+    "speed-configured": Case("599536562", ("large", "small"), (100, 100), (850, 420)),
     "sound": Case(
         "1662953858", ("welder", "drill", "rain"), (0.5, 0.27, 0.2), (0.15, 0.06, 0.08)
     ),
@@ -88,6 +91,28 @@ def world_with_mods(vanilla, world, ids):
         path.write_text(text)
 
 
+def configure_ship_speeds(world, large, small):
+    # The mod reads a serialized string from MyAPIGateway.Utilities.GetVariable.
+    path = world / "Sandbox.sbc"
+    settings = (
+        "<MidspaceEnvironmentComponent>"
+        f"<LargeShipMaxSpeed>{large}</LargeShipMaxSpeed>"
+        f"<SmallShipMaxSpeed>{small}</SmallShipMaxSpeed>"
+        "</MidspaceEnvironmentComponent>"
+    )
+    entry = (
+        "<variables><dictionary><item><Key>MidspaceEnvironmentComponent</Key>"
+        f'<Value xsi:type="xsd:string">{escape(settings)}</Value>'
+        "</item></dictionary></variables>"
+    )
+    text, count = re.subn(
+        r"<variables>\s*<dictionary\s*/>\s*</variables>", entry, path.read_text()
+    )
+    if count != 1:
+        raise ValueError(f"Expected one empty script variable dictionary in {path}")
+    path.write_text(text)
+
+
 def run(corpus, results, case_name):
     case = CASES[case_name]
     os.environ["MOD_DEFINITION_CASE"] = case_name
@@ -122,6 +147,12 @@ def run(corpus, results, case_name):
         vanilla = HOST.package / "examples/Cluster-Simple"
         world = work / "ModWorld"
         world_with_mods(vanilla, world, [case.workshop])
+        control_world = vanilla
+        if case_name == "speed-configured":
+            control_world = work / "ControlWorld"
+            shutil.copytree(vanilla, control_world)
+            configure_ship_speeds(control_world, *case.expected)
+            configure_ship_speeds(world, *case.expected)
 
         config = bench.cluster.config
         config.world_template = world
@@ -131,7 +162,7 @@ def run(corpus, results, case_name):
         try:
             bench.cluster.prepare(wipe=True)
             for name, stock_world, mods in (
-                ("control", vanilla, work / "no-mods"),
+                ("control", control_world, work / "no-mods"),
                 ("stock", world, work / "Mods"),
             ):
                 server = start_standalone(
