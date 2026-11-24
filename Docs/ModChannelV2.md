@@ -1,0 +1,34 @@
+# Cluster mod API v2 proposal
+
+This proposal covers server-side Workshop scripts. Version 1 already answers role and player-node queries, routes messages to nodes and grid owners, and carries up to 16 KiB of mod state across a grid handover. The largest remaining gap for an author is deciding what to do when an owner moves or a request reaches the World Authority (WA) and the reply never comes back. See [the v1 protocol](ModChannel.md) and [the member scan](ModCorpus/verdicts.tsv).
+
+## Operations and ownership
+
+| Author's question | Proposed helper operation | Contract |
+|---|---|---|
+| Which players or entities match? | `Players`, `QueryOwners` | Return IDs, positions, an observation tick and the responding node epochs. The mod registers a named local query. Each regular node evaluates it against its owned entities. The caller merges by entity ID and receives a list of missing nodes on timeout. Cap records and encoded bytes per response. |
+| Can I modify this grid? | `OnOwner(entityId, command, operationId)` | Resolve the grid owner, which validates its current ownership before acting. On a stale route it returns a redirect or a retryable handover result. A deleted grid returns missing. A caller retries with the same operation ID. |
+| Where does a spawn belong? | `AtPosition(position, command, operationId)` | The cluster chooses the regular node responsible for the position under the current partition map. That node rechecks the assignment before it spawns. If no regular node covers the point, return unavailable. |
+| Who decides a global action? | `OnAuthority(command, operationId)` | The WA serializes decisions for this mod. Persist the operation ID, decision and any pending dispatch before acknowledging a grant. The grant can be retrieved after a timeout or change of WA. |
+| Where can world or player settings survive a restart? | `Read`, `CompareExchange` | Store records under the mod's namespace on the WA using the existing world persistence boundary. A successful write returns the new revision. A conflicting writer gets the current revision. Use the stable player identity as part of a key for player state. |
+| How do I reach a player after a node switch? | `ToPlayer(identityId, message, operationId)` | Look up the active attachment, deliver there and let the recipient deduplicate the operation. An unavailable player can be retried or skipped according to the mod's rules. Persistent messages require a separate stored record. |
+
+A query can return a partial or stale snapshot. Collision checks, range checks and writes that depend on a particular entity run again on its owner. A handover during a query can leave two observations of one entity or none. A mod requiring a complete result must retry an incomplete query or postpone its decision.
+
+A durable grant alone cannot make a game-world mutation exactly once. A node can crash between spawning a grid and recording success. For a recoverable spawn, the owner gives the grid a stable operation marker and the mod looks for that marker before retrying. For operations that cannot be reconciled, return an unknown outcome and let the mod decide whether to compensate.
+
+## One file for Workshop authors
+
+An author copies a single C# source file into the mod and registers its local implementations in the session component. The helper registers its reply handler before it sends the synchronous v1 role request. With no reply it uses the local implementations on a vanilla or Torch server. On a cluster advertising v2 it negotiates supported operations and payload versions. A v1 cluster can still handle an owner message through v1. A missing capability for a global write must surface as unsupported, since a local fallback there could execute the write on every node. An ordinary game client keeps using the mod's normal client-to-server path.
+
+Use a versioned envelope containing an operation name, schema version, request ID, operation ID, deadline and serialized payload. The copied helper exposes typed methods and keeps the existing object-array bus at its boundary. Unknown payload versions, a full queue and a message larger than the advertised UTF-8 byte limit each produce a specific result. The plugin advertises per-mod and per-node byte and request budgets. Register requests against the calling mod instance where the host can establish that identity. The shared cross-mod message bus is visible to other loaded mods, so namespace isolation needs a host-bound registration before enabling durable writes. Keep v1's existing rates and payload contract for v1 callers.
+
+The author supplies local handlers for the same operation names. The helper unregisters on unload, bounds outstanding callbacks and completes each callback once on a game update. A timeout means the reply missed its deadline. Retrying a read needs a new request ID. Retrying a write keeps the operation ID. After a reset the helper drops cached routes and observations, then queries the durable result of any pending write.
+
+## Paper ports
+
+**Modular Encounters Systems, rank 1.** The scanned revision contains 11 calls to the player-list overload, 25 to `TryGetEntityById` and five to one `SpawnPrefab` overload. In the Workshop source, `Entities/PlayerManager.cs` refreshes the player list and `Helpers/CollisionHelper.cs` inspects world entities. A cluster port can select encounter candidates from position snapshots, ask the WA to grant one encounter per operation ID, and send the granted spawn to the node covering its position. The owner checks local collision and distance immediately before spawning. A test should seed two nodes with eligible players, force a lost reply after the grant, and assert one marked prefab across both owners. Vanilla runs the local selection and spawn handlers in the same world.
+
+**Paint Gun, rank 28, Workshop 500818376.** `Libraries/NetworkLib/Network.cs` enumerates players and sends updates to them. `Utilities/Utils.cs` looks up an entity by ID. The scan found five player-list calls, two directed client sends and one `TryGetEntityById` call. Route the paint command to the grid owner, check permission and range there, and deliver visual updates to interested clients on their current nodes. Preserve the mod's distance filter. A test should repaint one block next to a partition boundary, move the grid, and replay the same operation during a client switch. Assert the final block color on the new owner and the update on each in-range client. On vanilla both operations dispatch locally.
+
+These are design checks against the pinned scripts. Runtime acceptance needs the standalone and cluster scenarios above, restart tests for durable writes, and an explicit storage and message budget measured during the pilot. The v2 wire format and limits are pending design approval.
