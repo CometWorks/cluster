@@ -295,8 +295,9 @@ Run `python nanite_repair_differential.py /path/to/corpus /path/to/new-results`.
 Workshop item 219757726 uses its construction nanites to repair damaged armor.
 The fixture creates two powered, static grids 2 km apart. Their armor targets
 are at least 35 m from the factory, outside the block's 4 m native welder
-radius. Both factories start disabled, receive 100 steel plates and have the
-same damage applied to their targets. Only the treatment facility is enabled.
+radius. Each grid carries a remote control so the mod can find its power
+distributor. Both factories start disabled, receive 100 steel plates and have
+the same damage applied to their targets. Only the treatment facility is enabled.
 A pass requires full repair on that grid while the disabled grid retains its
 measured damage. The test world shortens nanite travel using the mod's config.
 This case covers same-grid repair in creative mode.

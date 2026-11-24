@@ -64,6 +64,14 @@ namespace NaniteRepairFixture
                         CurrentStoredPower = 3f,
                     }
                 );
+            // The mod obtains a grid's resource distributor from a ship controller.
+            grid.CubeBlocks.Add(
+                new MyObjectBuilder_RemoteControl
+                {
+                    SubtypeName = "LargeBlockRemoteControl",
+                    Min = new Vector3I(15, 1, 0),
+                }
+            );
             var live = (IMyCubeGrid)MyAPIGateway.Entities.CreateFromObjectBuilderAndAdd(grid);
             var factory = (IMyFunctionalBlock)live.GetCubeBlock(Vector3I.Zero).FatBlock;
             factory
@@ -130,6 +138,11 @@ namespace NaniteRepairFixture
             if (frames > 240 && (enabled.Target.IsFullIntegrity || frames >= 4800))
             {
                 Observe("settled");
+                enabled.Factory.RefreshCustomInfo();
+                MyLog.Default.WriteLineAndConsole(
+                    "nanite_factory "
+                        + enabled.Factory.CustomInfo.Replace("\r", "").Replace("\n", " | ")
+                );
                 done = true;
             }
         }
