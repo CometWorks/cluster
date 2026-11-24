@@ -276,3 +276,15 @@ including damage still queued for application. The standalone control must
 show damage to the bare grid and full absorption on the shielded grid. The
 cluster repeats the test on node 1. Other damage types, upgrades, handover, and
 client effects need separate cases.
+
+### Advanced Welding pad merge
+
+`weld_pad_differential.py CORPUS RESULTS` loads Workshop item 510790477 and a
+fixture mod in standalone and clustered worlds. The issuing server spawns two
+separate grids with named batteries and opposing large weld pads. It samples
+both grids while apart, moves the dynamic grid into pad contact and samples
+again after 120 simulation ticks. A merge must preserve both original battery
+IDs on one of the original grids, consume both pads and leave no duplicate on
+the other cluster roles. The raw role snapshots are saved in
+`MOD-WELD-PADS/observations.json`. This scenario exercises pad welding. Detaching
+a block with a player's hand grinder requires a separate case.
