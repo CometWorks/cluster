@@ -226,17 +226,17 @@ forgetting a player, replica and replacement-authority expiry, and origin fencin
 without a game process.
 The Cluster CLI `--self-test` checks the new policy verb against contract parity.
 
-### Workshop speed limit comparison
+### Workshop definition comparisons
 
 With the standard bench environment, a claimed slot and its RAM guard, run
-`python mod_speed_differential.py /path/to/corpus /path/to/new-results` from
-`Test/`. The corpus must contain Workshop item `380165093` under `244850/`.
+`python mod_definition_differential.py /path/to/corpus /path/to/new-results --case sound`
+from `Test/`. Use `--case speed` for Midspace's Ship Speed Unlimited. The
+original `mod_speed_differential.py` command still defaults to the speed case.
 
-The observer reads the small- and large-grid speed limits after the session is ready.
-The stock control should read 100 m/s for both. The same stock world with Midspace's
-Ship Speed Unlimited should read 150,000,000 m/s. The World Authority and both regular
-nodes each load the same pinned source. A difference from the stock modded world
-produces `DIFF`. A missing measurement or an unexpected stock control produces
-`INCONCLUSIVE`. The verdict, measurements, source hashes and process logs go into
-the results folder. The standalone test loads a copy of the cluster's local Workshop
-folder patch so the two configurations compile identical script bytes.
+Each case records the Workshop script hashes and live game values from two
+standalone controls and a three-process cluster. The unmodded and modded stock
+controls must show the expected change before cluster agreement earns a PASS.
+A differing node produces DIFF. An incomplete measurement or unexpected stock
+control yields INCONCLUSIVE. The output folder contains the verdict, values and
+logs. See [Workshop definition probes](ModDefinitionProbe/README.md) for the
+mods and fields covered.

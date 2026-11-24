@@ -1,5 +1,5 @@
 <PluginData xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="GitHubPlugin">
-  <Id>mod-speed-probe</Id><RepoId>CometWorks/cluster</RepoId>
-  <FriendlyName>Mod speed limit test observer</FriendlyName>
+  <Id>mod-definition-probe</Id><RepoId>CometWorks/cluster</RepoId>
+  <FriendlyName>Workshop definition test observer</FriendlyName>
   <Runtimes>CoreCLR</Runtimes><Commit>test-only</Commit>
 </PluginData>

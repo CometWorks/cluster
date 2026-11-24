@@ -6,6 +6,6 @@
     </Reference>
     <PackageReference Include="Lib.Harmony" Version="2.4.2" ExcludeAssets="runtime" />
     <Compile Include="../../Shared/Cluster/Patches/LocalWorldModsPatch.cs" />
-    <None Update="ModSpeedProbe.xml" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="ModDefinitionProbe.xml" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
