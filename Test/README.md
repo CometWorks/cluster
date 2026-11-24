@@ -264,3 +264,15 @@ on each receiving node. Each transfer must have a sole owner, a clean handover
 gate and the original grid ID, terminal custom data and NPC identity. The
 report includes the storage size and SHA-256 for investigating differences.
 MES also writes a timestamp into this record.
+
+### Energy Shields damage absorption
+
+From `Test/`, run `python shield_damage_differential.py /path/to/corpus /path/to/new-results`
+with the bench environment and a claimed slot. The fixture creates two powered
+armor grids and adds the Workshop shield generator to one of them. After five
+simulation seconds it applies the same 20-point hit to each grid. It records the
+damage reported after the mod's handler and the resulting integrity loss,
+including damage still queued for application. The standalone control must
+show damage to the bare grid and full absorption on the shielded grid. The
+cluster repeats the test on node 1. Other damage types, upgrades, handover, and
+client effects need separate cases.
