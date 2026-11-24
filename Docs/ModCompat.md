@@ -166,8 +166,8 @@ The [verdict table](ModCorpus/verdicts.tsv) covers 1,500 subscription-ranked mod
 |---|---:|---:|---|
 | A | 1,027 | 9 | No compiled scripts, confirmed against the script inventory. Content can still fail to load. |
 | B | 8 | 1 | The scanner found no flagged member or state pattern. |
-| D | 256 | 5 | A member or state pattern calls for adaptation or a functional check. |
-| U | 209 | 3 | Compilation or policy evidence is incomplete. |
+| D | 255 | 5 | A member or state pattern calls for adaptation or a functional check. |
+| U | 210 | 3 | Compilation or policy evidence is incomplete. |
 
 B-state denotes isolated mutable entity logic, C denotes session state suitable for WA-only placement, and S denotes risks covered by named shim candidates. This run assigned none of these three verdicts. X requires a human decision about whether adaptation is feasible. The `runtime_class` column is the existing scanner's A–D placement input. Use it to compare a live load record with a successful offline compile.
 
