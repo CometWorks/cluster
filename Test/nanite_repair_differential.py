@@ -61,6 +61,9 @@ def measure(bench, roles, issuer):
     return dict(
         issuer=issuer,
         measurements=rows,
+        terminal_status=bench.cluster.wait_node_log(
+            issuer, "nanite_factory ", 10
+        ).partition("nanite_factory ")[2],
         result=(
             "INCONCLUSIVE"
             if not usable
@@ -78,13 +81,13 @@ if __name__ == "__main__":
     result = run_staged(
         args.corpus,
         args.results,
-        "MOD-NANITE-REPAIR",
-        "Nanite Control Facility armor repair",
-        MOD,
-        PROBE,
-        "NaniteRepairFixture",
-        measure,
-        configure,
+        scenario="MOD-NANITE-REPAIR",
+        title="Nanite Control Facility armor repair",
+        mod=MOD,
+        probe=PROBE,
+        fixture="NaniteRepairFixture",
+        measure=measure,
+        configure=configure,
     )
     print(result["result"])
     raise SystemExit(0 if result["result"] == "PASS" else 1)

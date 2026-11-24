@@ -18,7 +18,17 @@ NODES = ("wa-1", "node-1", "node-2")
 
 
 def run_staged(
-    corpus, results, scenario, title, mod, probe, fixture, measure, configure=None
+    corpus,
+    results,
+    *,
+    scenario,
+    title,
+    mod,
+    probe,
+    fixture,
+    measure,
+    world_name="ModWorld",
+    configure=None,
 ):
     os.environ["CLUSTER_TEST_PLUGIN"] = "0"
     bench = Bench(scenario, title, "2", results)
@@ -41,7 +51,7 @@ def run_staged(
                 for p in sorted(sources)
             }
             shutil.copytree(Path(__file__).parent / fixture, mods / f"{probe}.sbm")
-            world = work / "ModWorld"
+            world = work / world_name
             world_with_mods(
                 HOST.package / "examples/Cluster-Simple", world, [mod, probe]
             )

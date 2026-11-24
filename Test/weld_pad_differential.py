@@ -100,12 +100,13 @@ def run(corpus: Path, results: Path):
     return run_staged(
         corpus,
         results,
-        "MOD-WELD-PADS",
-        "Advanced Welding pad merge",
-        MOD,
-        PROBE,
-        "WeldPadFixture",
-        measure,
+        scenario="MOD-WELD-PADS",
+        title="Advanced Welding pad merge",
+        mod=MOD,
+        probe=PROBE,
+        fixture="WeldPadFixture",
+        measure=measure,
+        world_name="WeldWorld",
     )
 
 
