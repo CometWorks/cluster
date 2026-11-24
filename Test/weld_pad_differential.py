@@ -94,6 +94,14 @@ def measure(bench, roles, issuer):
     if initial != control or not apart(control, issuer):
         return report
     command(bench, issuer, "align")
+    pattern = (
+        r"weld_pad_probe positioned before=([\d.-]+) after=([\d.-]+) upDot=([\d.-]+)"
+    )
+    positions = re.search(pattern, bench.cluster.wait_node_log(issuer, pattern, 30))
+    before, after, up = map(float, positions.groups())
+    report["pose"] = {"apart_m": before, "aligned_m": after, "up_dot": up}
+    if before < 10 or abs(after - 2.7) > 0.01 or abs(up + 1) > 0.01:
+        return report
     observed = report["aligned"] = sample(bench, roles, "aligned")
     report["result"] = "PASS" if merged(control, observed, issuer) else "DIFF"
     return report

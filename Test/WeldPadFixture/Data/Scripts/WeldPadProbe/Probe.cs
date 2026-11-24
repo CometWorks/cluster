@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Globalization;
 using Sandbox.Common.ObjectBuilders;
 using Sandbox.ModAPI;
 using VRage.Game;
@@ -78,7 +79,19 @@ namespace WeldPadProbe
             if (Command("align") && first != null && second != null)
             {
                 // The pad faces are half a block from their respective marker blocks.
+                var before = Vector3D.Distance(first.GetPosition(), second.GetPosition());
                 second.SetPosition(first.GetPosition() + first.WorldMatrix.Up * 2.7);
+                var after = Vector3D.Distance(first.GetPosition(), second.GetPosition());
+                var up = Vector3D.Dot(first.WorldMatrix.Up, second.WorldMatrix.Up);
+                MyLog.Default.WriteLineAndConsole(
+                    string.Format(
+                        CultureInfo.InvariantCulture,
+                        "weld_pad_probe positioned before={0:F3} after={1:F3} upDot={2:F3}",
+                        before,
+                        after,
+                        up
+                    )
+                );
                 lastAction = ticks;
             }
             foreach (var phase in new[] { "initial", "apart", "aligned" })
