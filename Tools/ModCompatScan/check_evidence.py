@@ -53,6 +53,29 @@ def check(tool: Path) -> None:
     assert classify(scans["fixture-a-data"], policy, False)[0] == "A"
     assert classify(scans["fixture-a-data"], policy, True)[0] == "U"
     assert classify(dict(scanner, compileErrors=["example"]), policy, True)[0] == "U"
+    unresolved = dict(
+        scanner,
+        evidence=dict(
+            scanner["evidence"],
+            Members={"example": 1},
+            EntityCollections=0,
+            MutableLogicFields=0,
+            UpdateMembers={},
+        ),
+    )
+    provisional = {
+        "example": [
+            "example",
+            "node-scoped",
+            "B1",
+            "no",
+            "-",
+            "1",
+            "UNCERTAIN: unverified",
+        ]
+    }
+    verdict, breaks, _, _, unknown = classify(unresolved, provisional, True)
+    assert verdict == "U" and not breaks and unknown == 1
     print(
         "PASS archive parity, overload policy lookup, B1/B2/B4/B6/B7, failed and missing IL"
     )
