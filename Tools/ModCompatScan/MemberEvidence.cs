@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
 using ClusterPlugin;
 
 namespace ModCompatScan;
@@ -9,6 +10,9 @@ namespace ModCompatScan;
 internal sealed class MemberEvidence : IModScanEvidence
 {
     public Dictionary<string, int> Members { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, int> Writes { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, int> IndirectAccess { get; } = new(StringComparer.Ordinal);
+    public HashSet<string> VslDelegateFields { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, int> UpdateMembers { get; } = new(StringComparer.Ordinal);
     public int EntityCollections { get; private set; }
     public int MutableLogicFields { get; private set; }
@@ -34,7 +38,7 @@ internal sealed class MemberEvidence : IModScanEvidence
         );
     }
 
-    public void Site(MemberInfo target, MethodBase caller, bool sessionComponent)
+    public void Site(MemberInfo target, MethodBase caller, bool sessionComponent, OpCode code)
     {
         var type = target.DeclaringType;
         if (type == null || type.Assembly == caller.Module.Assembly)
@@ -57,12 +61,57 @@ internal sealed class MemberEvidence : IModScanEvidence
             key = MemberKey(target);
         else
             return;
+        RecordAccess(target, code, key);
         Members[key] = Members.GetValueOrDefault(key) + 1;
         if (
             sessionComponent
             && caller.Name is "UpdateAfterSimulation" or "UpdateBeforeSimulation" or "Simulate"
         )
             UpdateMembers[key] = UpdateMembers.GetValueOrDefault(key) + 1;
+    }
+
+    private void RecordAccess(MemberInfo target, OpCode code, string key)
+    {
+        Type value;
+        if (target is FieldInfo field)
+        {
+            value = field.FieldType;
+            if (
+                field.DeclaringType.FullName == "Sandbox.Game.MyVisualScriptLogicProvider"
+                && typeof(MulticastDelegate).IsAssignableFrom(value)
+            )
+                VslDelegateFields.Add(key);
+            if (code == OpCodes.Stfld || code == OpCodes.Stsfld)
+            {
+                Writes[key] = Writes.GetValueOrDefault(key) + 1;
+                return;
+            }
+        }
+        else if (target is MethodInfo { IsSpecialName: true } method)
+        {
+            if (
+                method.Name.StartsWith("set_")
+                || method.Name.StartsWith("add_")
+                || method.Name.StartsWith("remove_")
+            )
+            {
+                Writes[key] = Writes.GetValueOrDefault(key) + 1;
+                return;
+            }
+            if (!method.Name.StartsWith("get_"))
+                return;
+            value = method.ReturnType;
+        }
+        else
+            return;
+        // An address or a returned mutable object may be written through a later instruction.
+        if (
+            code == OpCodes.Ldflda
+            || code == OpCodes.Ldsflda
+            || value.IsByRef
+            || (!value.IsValueType && value != typeof(string))
+        )
+            IndirectAccess[key] = IndirectAccess.GetValueOrDefault(key) + 1;
     }
 
     private static string MemberKey(MemberInfo target)
