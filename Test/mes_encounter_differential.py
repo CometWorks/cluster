@@ -60,22 +60,23 @@ def measure(bench, nodes, issuer):
             if f"no line matching /{callback}/" not in str(error):
                 raise
     after = snapshot("after")
-    callbacks = []
+    callbacks = {}
     for node in nodes:
         logs = list(
             (cluster.config.root / f"{node}-data").glob("SpaceEngineersDedicated_*.log")
         )
         if len(logs) != 1:
             raise ValueError(f"Expected one game log for {node}, got {len(logs)}")
-        callbacks.extend(re.findall(callback, logs[0].read_text(errors="replace")))
+        callbacks[node] = re.findall(callback, logs[0].read_text(errors="replace"))
     live = [gid for r in after.values() for gid in r["grids"]]
+    announced = [gid for grid_ids in callbacks.values() for gid in grid_ids]
     return {
         "issuer": issuer,
         "before": before,
         "accepted": accepted,
         "after": after,
         "callbacks": callbacks,
-        "spawned_once": accepted and len(live) == 1 and callbacks == live,
+        "spawned_once": accepted and len(live) == 1 and announced == live,
     }
 
 
