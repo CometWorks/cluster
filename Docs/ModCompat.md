@@ -50,7 +50,10 @@ runtime. It feeds the corpus verdicts and the mod channel design, so it is data,
 A concrete member that implements a ModAPI interface member, or has its name and signature, inherits that
 row's policy and names it in the reason. Mutable definition and settings fields are per-node with `on` set to
 `write`: reading a stock value, such as a block definition's PCU, is the same on every node that loads the same
-content.
+content. The corpus verdicts count only field stores and property setters toward a `write` row. Taking a
+field address or loading a mutable reference can allow a later write through an alias, so those sites stay
+unverified. For VSL callback fields the scanner counts assignments, including delegate subscription and
+removal; a bare delegate read leaves its use unresolved.
 
 ### Checking
 

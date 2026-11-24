@@ -12,7 +12,7 @@ internal interface IModScanEvidence
 {
     int UnresolvedTypes { get; set; }
     void Field(FieldInfo field, bool sessionComponent, bool logicComponent);
-    void Site(MemberInfo target, MethodBase caller, bool sessionComponent);
+    void Site(MemberInfo target, MethodBase caller, bool sessionComponent, OpCode code);
 }
 
 /// <summary>Mod compatibility class (T-0242, #260). A: no scripts. B: entity-local scripts. C: global logic in
@@ -314,7 +314,7 @@ public static class ModCompatScanner
                         result.UnresolvedCalls++;
                         break;
                     }
-                    evidence.Site(field, method, sessionComponent);
+                    evidence.Site(field, method, sessionComponent, code);
                     break;
                 case OperandType.InlineMethod:
                     int token = BitConverter.ToInt32(il, position);
@@ -329,7 +329,7 @@ public static class ModCompatScanner
                         result.UnresolvedCalls++;
                         break;
                     }
-                    evidence?.Site(target, method, sessionComponent);
+                    evidence?.Site(target, method, sessionComponent, code);
                     Match(result, target, site);
                     break;
                 default:

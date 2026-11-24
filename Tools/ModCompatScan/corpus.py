@@ -74,6 +74,19 @@ def classify(row: dict, policy: dict[str, list[str]], scripted: bool):
             continue
         if rule[2] == "-":
             continue
+        # Definitions and settings have a B7 policy for mutations. A read of the
+        # stock scalar cannot diverge. Keep object or by-ref accesses unresolved
+        # when the scanner cannot follow what the caller does with the result.
+        if (
+            "changing shared definition data at runtime affects this process" in rule[6]
+            or "mod writes to that object are not broadcast" in rule[6]
+            or key in detail["VslDelegateFields"]
+        ):
+            sites = detail["Writes"].get(key, 0)
+            if not sites or key not in detail["VslDelegateFields"]:
+                unmapped += detail["IndirectAccess"].get(key, 0)
+            if not sites:
+                continue
         breaks.update({b: sites for b in rule[2].split(",")})
         if rule[3] == "yes":
             shims.add(
