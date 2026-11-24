@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Reflection.PortableExecutable;
 using System.Runtime.Loader;
 using System.Text.Json;
 using ClusterPlugin;
@@ -14,12 +13,6 @@ namespace ModCompatScan;
 
 internal static class Program
 {
-    // MyScriptManager.UpdateCompatibility prepends these to every mod script before compiling it.
-    private const string UsingHeader =
-        "using VRage;\r\nusing VRage.Game.Components;\r\nusing VRage.ObjectBuilders;\r\nusing VRage.ModAPI;\r\n"
-        + "using VRage.Game.ModAPI;\r\nusing Sandbox.Common.ObjectBuilders;\r\nusing VRage.Game;\r\nusing Sandbox.ModAPI;\r\n"
-        + "using VRage.Game.ModAPI.Interfaces;\r\nusing SpaceEngineers.Game.ModAPI;\r\n#line 1\r\n";
-
     private const string AuthorManifestName = "cluster-mod-compat.txt";
 
     private static int Main(string[] args)
@@ -76,7 +69,7 @@ internal static class Program
             string candidate = Path.Combine(dedicated64, name.Name + ".dll");
             return File.Exists(candidate) ? context.LoadFromAssemblyPath(candidate) : null;
         };
-        List<MetadataReference> references = References(dedicated64);
+        List<MetadataReference> references = ScriptReferences.References(dedicated64);
         int failures = 0;
         foreach (string mod in mods)
         {
@@ -253,30 +246,6 @@ internal static class Program
         return failed == 0 ? 0 : 1;
     }
 
-    /// <summary>The runtime's own assemblies first, then every managed DS64 assembly the runtime does not provide.</summary>
-    private static List<MetadataReference> References(string dedicated64)
-    {
-        var paths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (
-            string path in ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")).Split(
-                Path.PathSeparator
-            )
-        )
-            paths.TryAdd(Path.GetFileNameWithoutExtension(path), path);
-        foreach (string path in Directory.GetFiles(dedicated64, "*.dll"))
-        {
-            if (paths.ContainsKey(Path.GetFileNameWithoutExtension(path)))
-                continue;
-            using var stream = File.OpenRead(path);
-            using var reader = new PEReader(stream);
-            if (reader.HasMetadata)
-                paths[Path.GetFileNameWithoutExtension(path)] = path;
-        }
-        return paths
-            .Values.Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
-            .ToList();
-    }
-
     /// <summary>One assembly per Data/Scripts subfolder, as MyScriptManager.LoadScripts groups them.</summary>
     private static List<Assembly> Compile(
         string id,
@@ -337,7 +306,11 @@ internal static class Program
             ).WithPreprocessorSymbols("BRANCH_STABLE", "STABLE", "VERSION_210", "BUILD_14");
             var trees = files
                 .Select(file =>
-                    CSharpSyntaxTree.ParseText(UsingHeader + File.ReadAllText(file), options, file)
+                    CSharpSyntaxTree.ParseText(
+                        ScriptReferences.UsingHeader + File.ReadAllText(file),
+                        options,
+                        file
+                    )
                 )
                 .ToList();
             CSharpCompilation compilation = CSharpCompilation.Create(

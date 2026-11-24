@@ -418,7 +418,7 @@ jobs:
       - name: Check the mod API policy table against the game
         env:
           DEDICATED64: ${{ github.workspace }}/ds64
-        run: dotnet run --project Test/ModApiPolicy/ModApiPolicyChecks.csproj -c Release
+        run: dotnet run --project Test/ModApiPolicy/ModApiPolicyChecks.csproj -c Release -p:Dedicated64="$DEDICATED64"
 
       - name: Test client diagnostics contract and Manager publication bridge
         run: |

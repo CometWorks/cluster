@@ -27,17 +27,31 @@ They are reported and counted but do not make a mod C.
 
 ## Member policy table
 
-`Shared/Cluster/ModApiPolicyTable.cs` (SE-1840) goes one level below the groups: one row per member of the mod API
-(`Sandbox.ModAPI`, `VRage.ModAPI`, `VRage.Game.ModAPI`, `SpaceEngineers.Game.ModAPI` and their sub-namespaces,
-plus `MyVisualScriptLogicProvider`), with its cluster policy (`local`, `replicated`, `node-scoped`, `per-node`,
-`affinity`, `client`), the breakage class B1-B8 of the clustering plan's `Modding.md`, whether a cluster-side
-shim could fix it, the mod channel operation that replaces it, how many local Workshop mods use it, and a
-file:line reason from the decompiled game. The file's header explains the columns. The scanner does not read
-it yet. `Test/ModApiPolicy` fails when the game has a member without a row or a row names a member the game
-dropped; it runs in the release build against the DS it downloads, or by hand:
+The table in `Shared/Cluster/ModApiPolicyTable.cs` covers public members in the ModAPI namespaces and
+`MyVisualScriptLogicProvider`, plus concrete game members that Workshop mods call. It keys methods by
+parameter signature. The two `IMyPlayerCollection.TryGetIdentityId` overloads illustrate why. Passing a Steam
+ID returns the World Authority’s identity binding. Passing an identity ID asks for a live player object and
+can return null when the player is on another node. A VSL GPS operation for all players similarly reaches
+only the node’s own roster.
+
+Each row records a policy, breakage class, possible shim, mod-channel operation, Workshop mod count, and
+reason. For a concrete member that implements a ModAPI interface, the reason names the interface contract.
+A declaration reference locates the API in DS 1.211.018. Rows marked `UNCERTAIN` need a cluster check.
+A `?` for breakage and shim means both are unknown. A downstream verdict must preserve that uncertainty.
+
+`Test/ModApiPolicy/CorpusMembers.txt` pins the distinct resolved member keys from the subscription-ranked
+Workshop corpus collected on 2026-11-22. It includes the ranked items and dependencies. There were 482 scripted
+mods and 534 script groups. In 78 groups the dedicated-server compiler reported errors. The scan includes
+members Roslyn could bind in those groups. Dynamic and unresolved calls have no entry in the counts.
+
+The release build checks the table against the dedicated server and the pinned keys. To check it locally,
+run the project from the repository root. To also check every resolved call in a Workshop content directory,
+pass the path to the game's numbered mod directories as the last argument. The scanner reads unpacked
+scripts and legacy archives. `--scan` writes the current member keys and distinct mod counts as TSV to stdout.
 
 ```bash
-dotnet run --project Test/ModApiPolicy/ModApiPolicyChecks.csproj -c Release -- <DedicatedServer64 folder>
+dotnet run --project Test/ModApiPolicy -c Release
+dotnet run --project Test/ModApiPolicy -c Release -p:Dedicated64="$DEDICATED64" -- "$DEDICATED64" --check-corpus /mnt/hdd/se1-mod-corpus/244850
 ```
 
 ## Overrides
