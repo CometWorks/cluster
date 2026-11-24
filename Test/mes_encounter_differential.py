@@ -1,6 +1,7 @@
 """Request a named MES encounter once and find the resulting grid on standalone and clustered servers."""
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -12,8 +13,10 @@ import time
 from pathlib import Path
 
 from bench import Bench, HOST
-from cluster import ClusterError
+from cluster import ClusterError, wait_until
 from mod_definition_differential import build_observer, stage, world_with_mods
+from scenarios import _force_handover
+from scenarios_ext import _gate_residuals
 from scenarios_planet import start_standalone
 
 MES = "1521905890"
@@ -21,17 +24,17 @@ PROBE = "9991845001"
 NODES = ("wa-1", "node-1", "node-2")
 
 
+def command(bench, node, phase):
+    path = bench.cluster.config.root / f"{node}-data/Mods/{PROBE}.sbm/{phase}.txt"
+    path.touch(exist_ok=False)
+
+
 def measure(bench, nodes, issuer):
     cluster = bench.cluster
 
-    def touch(node, phase):
-        (cluster.config.root / f"{node}-data/Mods/{PROBE}.sbm/{phase}.txt").touch(
-            exist_ok=False
-        )
-
     def snapshot(phase):
         for node in nodes:
-            touch(node, phase)
+            command(bench, node, phase)
         rows = {}
         pattern = rf"mes_encounter_probe {phase}=([-0-9,]+) api=(True|False)"
         for node in nodes:
@@ -46,7 +49,7 @@ def measure(bench, nodes, issuer):
     before = snapshot("before")
     if any(r["grids"] for r in before.values()):
         raise ValueError("The fixture marker was present before the request")
-    touch(issuer, "spawn")
+    command(bench, issuer, "spawn")
     pattern = r"mes_encounter_probe accepted=(True|False)"
     accepted = (
         re.search(pattern, cluster.wait_node_log(issuer, pattern, 30))[1] == "True"
@@ -80,7 +83,63 @@ def measure(bench, nodes, issuer):
     }
 
 
-def run(corpus, results):
+def npc_state(bench, node, phase):
+    command(bench, node, phase)
+    pattern = rf"mes_encounter_probe state={phase} grid=(\d+) origin=([^ ]+) terminal=(True|False) npc=(\S+)"
+    line = bench.cluster.wait_node_log(node, pattern, 35)
+    grid, origin, terminal, payload = re.search(pattern, line).groups()
+    data = base64.b64decode(payload, validate=True) if payload != "-" else b""
+    return {
+        "node": node,
+        "grid": grid,
+        "spawn_origin": [float(n) for n in origin.split(",")],
+        "terminal_marker": terminal == "True",
+        "npc_bytes": len(data),
+        "npc_sha256": hashlib.sha256(data).hexdigest() if data else None,
+    }
+
+
+def round_trip(bench, report):
+    stock = report["standalone"]["initial"]
+    grid = report["cluster"]["after"]["node-1"]["grids"][0]
+    stages = report["cluster"]["handover"] = []
+    initial = npc_state(bench, "node-1", "initial")
+    stages.append(initial)
+
+    def owner(node):
+        places = bench.entity_owner(bench.diag("entities"), int(grid))
+        return places[0][1] if len(places) == 1 and places[0][0] == node else None
+
+    valid = (
+        initial["grid"] == grid
+        and initial["spawn_origin"] == stock["spawn_origin"]
+        and initial["terminal_marker"]
+        and initial["npc_bytes"] > 0
+    )
+    for source, target, phase in (
+        ("node-1", "node-2", "away"),
+        ("node-2", "node-1", "returned"),
+    ):
+        partition = wait_until(
+            lambda: owner(source), 35, f"unique owner {source} for {grid}"
+        )
+        _force_handover(bench, source, target, partition)
+        wait_until(lambda: owner(target), 45, f"unique owner {target} for {grid}")
+        state = npc_state(bench, target, phase)
+        state["partition"] = partition
+        state["gate_residuals"] = _gate_residuals(bench, target, partition)
+        stages.append(state)
+        valid = valid and (
+            state["grid"] == grid
+            and state["spawn_origin"] == stock["spawn_origin"]
+            and state["terminal_marker"]
+            and state["npc_sha256"] == initial["npc_sha256"]
+            and state["gate_residuals"] == 0
+        )
+    return "PASS" if valid else "DIFF"
+
+
+def run(corpus, results, handover=False):
     os.environ["CLUSTER_TEST_PLUGIN"] = "0"
     bench = Bench("MOD-MES-SPAWN", "MES custom encounter spawn", "2", results)
     started = time.monotonic()
@@ -128,6 +187,19 @@ def run(corpus, results):
             )
             try:
                 report["standalone"] = measure(bench, ["stock"], "stock")
+                if handover and report["standalone"]["spawned_once"]:
+                    baseline = npc_state(bench, "stock", "initial")
+                    report["standalone"]["initial"] = baseline
+                    if (
+                        baseline["spawn_origin"] == [0.0, 0.0, 0.0]
+                        or baseline["npc_bytes"] == 0
+                        or not baseline["terminal_marker"]
+                        or baseline["grid"]
+                        != report["standalone"]["after"]["stock"]["grids"][0]
+                    ):
+                        raise ValueError(
+                            "Standalone MES did not establish the NPC state and terminal marker"
+                        )
             finally:
                 stock.stop()
             if not report["standalone"]["spawned_once"]:
@@ -138,8 +210,13 @@ def run(corpus, results):
                 )
             bench.cluster.start()
             bench.cluster.wait_ready(timeout=240, serving=True)
+            if handover:
+                bench.cluster.post("/automatic/pause")
             report["cluster"] = measure(bench, NODES, "node-1")
             report["result"] = "PASS" if report["cluster"]["spawned_once"] else "DIFF"
+            if handover and report["cluster"]["spawned_once"]:
+                report["result"] = "INCONCLUSIVE"
+                report["result"] = round_trip(bench, report)
         except (
             ValueError,
             OSError,
@@ -159,8 +236,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("corpus", type=Path)
     parser.add_argument("results", type=Path)
+    parser.add_argument(
+        "--handover",
+        action="store_true",
+        help="move the encounter and its MES state across both nodes and back",
+    )
     args = parser.parse_args()
     args.results.mkdir(parents=True)
-    verdict = run(args.corpus, args.results)
+    verdict = run(args.corpus, args.results, args.handover)
     print(verdict)
     raise SystemExit(0 if verdict == "PASS" else 1)

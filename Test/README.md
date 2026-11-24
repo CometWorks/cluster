@@ -254,3 +254,10 @@ space coordinates. The test records the return value, the grid ID in MES's
 successful-spawn callback, and the grid IDs visible to each process after the
 request. A passing run needs exactly one live grid whose ID matches the callback.
 Automatic encounters, player-triggered spawning and NPC behavior need separate cases.
+
+Add `--handover` to move the spawned grid from node 1 to node 2 and back. The
+standalone control records the spawn coordinates from MES's public NPC API and
+the presence of its serialized NPC record. Before each transfer the runner
+locates the grid's sole owner. At arrival it checks the handover gate, grid
+identity, terminal custom data, MES spawn coordinates and SHA-256 of the NPC
+record held in the grid's mod storage.

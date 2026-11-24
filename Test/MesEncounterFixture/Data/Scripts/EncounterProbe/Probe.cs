@@ -16,6 +16,10 @@ namespace ClusterMesEncounterProbe
         private const string Marker = "ClusterProbe encounter marker";
         private Func<List<string>, MatrixD, Vector3, bool, string, string, bool> spawn;
         private Action<Action<IMyCubeGrid>, bool> subscribe;
+        private Func<IMyCubeGrid, Vector3D> npcStart;
+        private static readonly Guid NpcData = new Guid("29FFD684-13D7-4045-BF76-CD48BF80E36A");
+        private readonly HashSet<string> sampled = new HashSet<string>();
+        private int stateAttempts;
         private int ticks;
         private bool before,
             requested,
@@ -35,6 +39,7 @@ namespace ClusterMesEncounterProbe
                 (Func<List<string>, MatrixD, Vector3, bool, string, string, bool>)
                     api["CustomSpawnRequest"];
             subscribe = (Action<Action<IMyCubeGrid>, bool>)api["RegisterSuccessfulSpawnAction"];
+            npcStart = (Func<IMyCubeGrid, Vector3D>)api["GetNpcStartCoordinates"];
             subscribe(Spawned, true);
         }
 
@@ -84,6 +89,60 @@ namespace ClusterMesEncounterProbe
             {
                 after = true;
                 Snapshot("after");
+            }
+            if (after)
+            {
+                foreach (var phase in new[] { "initial", "away", "returned" })
+                    if (!sampled.Contains(phase) && Command(phase))
+                        SampleNpc(phase);
+            }
+        }
+
+        private void SampleNpc(string phase)
+        {
+            var entities = new HashSet<IMyEntity>();
+            MyAPIGateway.Entities.GetEntities(entities, e => e is IMyCubeGrid);
+            foreach (var entity in entities)
+            {
+                var grid = (IMyCubeGrid)entity;
+                var blocks = new List<IMySlimBlock>();
+                grid.GetBlocks(blocks, b => (b.FatBlock as IMyTerminalBlock)?.CustomName == Marker);
+                if (blocks.Count != 1)
+                    continue;
+                var terminal = (IMyTerminalBlock)blocks[0].FatBlock;
+                if (phase == "initial")
+                    terminal.CustomData = "ClusterProbe-NPC";
+                var origin = npcStart == null ? Vector3D.Zero : npcStart(grid);
+                string data = null;
+                if (grid.Storage != null)
+                    grid.Storage.TryGetValue(NpcData, out data);
+                if ((origin == Vector3D.Zero || string.IsNullOrEmpty(data)) && ++stateAttempts < 20)
+                    return;
+                Log(
+                    "state="
+                        + phase
+                        + " grid="
+                        + grid.EntityId
+                        + " origin="
+                        + origin.X
+                        + ","
+                        + origin.Y
+                        + ","
+                        + origin.Z
+                        + " terminal="
+                        + (terminal.CustomData == "ClusterProbe-NPC")
+                        + " npc="
+                        + (data ?? "-")
+                );
+                sampled.Add(phase);
+                stateAttempts = 0;
+                return;
+            }
+            if (++stateAttempts == 20)
+            {
+                Log("state=" + phase + " grid=0 origin=0,0,0 terminal=False npc=-");
+                sampled.Add(phase);
+                stateAttempts = 0;
             }
         }
 
