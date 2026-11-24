@@ -1,24 +1,13 @@
 """Compare a real Advanced Welding pad merge on standalone and cluster."""
 
 import argparse
-import hashlib
-import json
-import os
 import re
-import shutil
-import subprocess
-import tempfile
-import time
 from pathlib import Path
 
-from bench import Bench, HOST
-from cluster import ClusterError
-from mod_definition_differential import build_observer, stage, world_with_mods
-from scenarios_planet import start_standalone
+from staged_mod_differential import run_staged
 
 MOD = "510790477"
 PROBE = "9991845003"
-NODES = ("wa-1", "node-1", "node-2")
 
 
 def command(bench, role, phase):
@@ -108,73 +97,16 @@ def measure(bench, roles, issuer):
 
 
 def run(corpus: Path, results: Path):
-    os.environ["CLUSTER_TEST_PLUGIN"] = "0"
-    bench = Bench("MOD-WELD-PADS", "Advanced Welding pad merge", "2", results)
-    started = time.monotonic()
-    report = {
-        "mod": MOD,
-        "result": "INCONCLUSIVE",
-        "package": json.loads((HOST.package / "manifest.json").read_text()),
-    }
-    with tempfile.TemporaryDirectory(dir=results) as temp:
-        work = Path(temp)
-        try:
-            mods = work / "Mods"
-            stage(corpus / "244850" / MOD, mods)
-            sources = (mods / f"{MOD}.sbm" / "Data/Scripts").rglob("*.cs")
-            report["script_sha256"] = {
-                p.relative_to(mods)
-                .as_posix(): hashlib.sha256(p.read_bytes())
-                .hexdigest()
-                for p in sorted(sources)
-            }
-            shutil.copytree(
-                Path(__file__).parent / "WeldPadFixture", mods / f"{PROBE}.sbm"
-            )
-            world = work / "WeldWorld"
-            world_with_mods(
-                HOST.package / "examples/Cluster-Simple", world, [MOD, PROBE]
-            )
-            config = bench.cluster.config
-            config.world_template = world
-            bench.cluster.prepare(wipe=True)
-            observer = build_observer(work)
-            stock = start_standalone(
-                bench,
-                world,
-                ready=("Game ready",),
-                local_plugins=[observer],
-                staged_mods=mods,
-                extra_env={"MOD_DEFINITION_STAGE_STOCK": "1"},
-            )
-            try:
-                reference = report["standalone"] = measure(bench, ["stock"], "stock")
-            finally:
-                stock.stop()
-            if reference["result"] != "PASS":
-                return report
-            for role in NODES:
-                shutil.copytree(
-                    mods, config.root / f"{role}-data/Mods", dirs_exist_ok=True
-                )
-            bench.cluster.start()
-            bench.cluster.wait_ready(timeout=240, serving=True)
-            bench.cluster.post("/automatic/pause")
-            actual = report["cluster"] = measure(bench, NODES, "node-1")
-            report["result"] = actual["result"]
-        except (
-            OSError,
-            ValueError,
-            TimeoutError,
-            ClusterError,
-            subprocess.CalledProcessError,
-        ) as exc:
-            report["error"] = str(exc)
-        finally:
-            report["seconds"] = round(time.monotonic() - started, 1)
-            bench.record("observations", report)
-            bench.close()
-    return report
+    return run_staged(
+        corpus,
+        results,
+        "MOD-WELD-PADS",
+        "Advanced Welding pad merge",
+        MOD,
+        PROBE,
+        "WeldPadFixture",
+        measure,
+    )
 
 
 if __name__ == "__main__":
