@@ -40,6 +40,26 @@ def check(tool: Path) -> None:
     )
     assert breaks["B3"] == 1
     members = scanner["evidence"]["Members"]
+    evidence = scanner["evidence"]
+    owner = "Sandbox.Definitions.MyCubeBlockDefinition."
+    vsl = "Sandbox.Game.MyVisualScriptLogicProvider."
+    assert members[owner + "PCU"] == 1 and owner + "PCU" not in evidence["Writes"]
+    assert evidence["Writes"][owner + "MaxIntegrity"] == 1
+    assert (
+        members[owner + "GuiVisible"] == 2
+        and evidence["Writes"][owner + "GuiVisible"] == 1
+    )
+    assert evidence["IndirectAccess"][owner + "IntegrityPointsPerSec"] == 1
+    assert evidence["IndirectAccess"][owner + "MountPoints"] == 1
+    assert (
+        members[vsl + "PlayerDisconnected"] == 2
+        and evidence["Writes"][vsl + "PlayerDisconnected"] == 1
+    )
+    assert (
+        members[vsl + "PlayerConnected"] == 1
+        and vsl + "PlayerConnected" not in evidence["Writes"]
+    )
+    assert breaks["B7"] == 2 and breaks["B8"] == 1
     overload = "VRage.Game.ModAPI.IMyPlayerCollection.TryGetIdentityId"
     assert (
         members[overload + "(System.Int64)"]
@@ -53,8 +73,31 @@ def check(tool: Path) -> None:
     assert classify(scans["fixture-a-data"], policy, False)[0] == "A"
     assert classify(scans["fixture-a-data"], policy, True)[0] == "U"
     assert classify(dict(scanner, compileErrors=["example"]), policy, True)[0] == "U"
+    unresolved = dict(
+        scanner,
+        evidence=dict(
+            scanner["evidence"],
+            Members={"example": 1},
+            EntityCollections=0,
+            MutableLogicFields=0,
+            UpdateMembers={},
+        ),
+    )
+    provisional = {
+        "example": [
+            "example",
+            "node-scoped",
+            "B1",
+            "no",
+            "-",
+            "1",
+            "UNCERTAIN: unverified",
+        ]
+    }
+    verdict, breaks, _, _, unknown = classify(unresolved, provisional, True)
+    assert verdict == "U" and not breaks and unknown == 1
     print(
-        "PASS archive parity, overload policy lookup, B1/B2/B4/B6/B7, failed and missing IL"
+        "PASS archive parity, overload policy, field and delegate mutation, B1/B2/B4/B6/B7/B8, incomplete IL"
     )
 
 
