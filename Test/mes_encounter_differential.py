@@ -114,6 +114,9 @@ def round_trip(bench, report):
     stages = report["cluster"]["handover"] = []
     initial = npc_state(bench, "node-1", "initial")
     stages.append(initial)
+    # A real encounter lands where MES's placement puts it, a different point each run: its origin is
+    # compared against node-1's record of this run, the identity fields against the standalone run's.
+    origin = initial if report.get("encounter") else stock
 
     def owner(node):
         places = bench.entity_owner(bench.diag("entities"), int(grid))
@@ -124,15 +127,13 @@ def round_trip(bench, report):
             state["grid"] == grid
             and state["terminal_marker"]
             and state["npc_bytes"] > 0
+            and state["spawn_origin"]
+            == state["stored_origin"]
+            == origin["spawn_origin"]
+            and state["spawn_origin"] != [0.0, 0.0, 0.0]
             and all(
                 state[field] == stock[field]
-                for field in (
-                    "spawn_origin",
-                    "stored_origin",
-                    "spawn_group",
-                    "prefab",
-                    "spawned_by_mes",
-                )
+                for field in ("spawn_group", "prefab", "spawned_by_mes")
             )
         )
 
@@ -234,7 +235,11 @@ def run(corpus, results, handover=False, encounter=None):
                         else ("ClusterProbe-Encounter", "ClusterProbe-Ship")
                     )
                     if (
-                        baseline["spawn_origin"] != [120.0, 70.0, 110.0]
+                        (
+                            baseline["spawn_origin"] == [0.0, 0.0, 0.0]
+                            if encounter
+                            else baseline["spawn_origin"] != [120.0, 70.0, 110.0]
+                        )
                         or baseline["spawn_group"] != group
                         or baseline["prefab"] in ("-", "")
                         or baseline["prefab"] != prefab
