@@ -196,3 +196,9 @@ and enforces sharing consent. No game process is needed to run its focused tests
 ```sh
 python3 -m unittest discover -s Cli -p test_relay.py -v
 ```
+
+## Supported-grid sleep
+
+The Performance server plugin owns supported-grid sleep. Install it on the nodes where you want the optimization. Its simulation settings control the speed thresholds and hold time. Existing `CLUSTER_FORCED_SLEEP`, `CLUSTER_FORCED_SLEEP_LINEAR`, `CLUSTER_FORCED_SLEEP_ANGULAR` and `CLUSTER_FORCED_SLEEP_SECONDS` values supply the defaults. Cluster preserves sleeping bodies across handover independently.
+
+The two plugins use game-thread callbacks in the current AppDomain. Cluster publishes `CometWorks.Cluster.IsFrozen` as a `Func<long, bool>` for checking a candidate grid or island member by entity ID. Performance waits for this callback on cluster nodes, which lets older nodes retain their own sleep service during an upgrade. While running, Performance publishes `Performance.ForcedSleep.ReleaseForTransfer` as an `Action<long>`. Cluster calls it after marking an entity frozen and before capturing its physics state. It releases the group's sleep hold without activating its rigid bodies.

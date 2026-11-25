@@ -5799,7 +5799,7 @@ internal sealed partial class ClusterControlServer
     /// SE-1272 (import.keepAsleep), target, right after the thaw: puts back to sleep the arrived grids the source had
     /// asleep. Havok adds every enabled body awake, so a resting pile woke on each handover and the target solved all of
     /// it until it settled again (live 2026-11-08, Moon Station's 207 leftover trader shuttles: 0.08 sim speed, 7.8 s to
-    /// recover). The island call (HkEntity.Deactivate is only a request, see ForcedSleepService.Sleep) sleeps a body at
+    /// recover). The island call (HkEntity.Deactivate is only a request) sleeps a body at
     /// once, but the first physics step after the add wakes them all again (bench: 12 of 12 asleep after the call, 12
     /// awake two frames later), so the ones still at rest two frames later are put to sleep a second time. One that is
     /// moving by then was woken by something real and is left alone; a touch by an awake body wakes a sleeper as in

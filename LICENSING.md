@@ -11,6 +11,7 @@ upstream or keeping it in a separate AGPL fork.
 
 - [Gateway admin API](Docs/Gateway/AdminAPI.md#operations), covering the
   documented `/admin/v1` endpoints.
+- [Supported-grid sleep callbacks](Docs/Gateway/EnvVars.md#supported-grid-sleep) for coordinating forced sleep with entity transfer.
 
 If you are reading this in a binary package, open this guide in the source
 for your release or build revision. [Find releases](https://github.com/CometWorks/cluster/releases).
