@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Threading;
 using HarmonyLib;
 
@@ -18,7 +19,10 @@ internal static class ContractConfirmHoldRoutes
             "/contract-test-hold-confirm",
             context =>
             {
-                long contract = TestRoutes.Long(context, "contract");
+                long contract = long.Parse(
+                    TestRoutes.Query(context, "contract"),
+                    CultureInfo.InvariantCulture
+                );
                 if (contract < 0)
                     throw new ArgumentOutOfRangeException(nameof(contract));
                 if (!m_patched)
