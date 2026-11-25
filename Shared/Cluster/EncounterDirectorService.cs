@@ -7,6 +7,7 @@ using System.Text.Json;
 using Sandbox.Definitions;
 using Sandbox.Game.Entities;
 using Sandbox.Game.World;
+using SpaceEngineers.Game.EntityComponents.GameLogic;
 using SpaceEngineers.Game.SessionComponents;
 using VRage.Game;
 using VRage.Game.Entity;
@@ -34,6 +35,11 @@ public static class EncounterDirectorService
     private static readonly List<object> Dispatches = new();
     private static readonly string Node =
         Environment.GetEnvironmentVariable("CLUSTER_NODE_ID") ?? string.Empty;
+
+    // Give a new prefab time to enter a node report and a handed-over encounter time to reappear.
+    private const double CensusGraceMs = 60_000;
+    private static readonly Dictionary<long, double> RecentEncounters = new();
+    private static NpcCensusService.Snapshot m_lastEncounterCensus;
     private static double m_nextSweep;
     private static double m_nextMeteorCheck;
     private static readonly Dictionary<long, double> m_meteorDue = new();
@@ -102,12 +108,20 @@ public static class EncounterDirectorService
         if (MySession.Static?.Ready != true)
             return;
         UpdateMeteorSchedule(ClusterRuntime.LocalMilliseconds);
-        if (MySession.Static.Settings.GlobalEncounterCap == 0)
+        if (MySession.Static.Settings.GlobalEncounterCap <= 0 || Lane.Busy)
             return;
         double now = ClusterRuntime.LocalMilliseconds;
+        var census = NpcCensusService.Current;
         lock (Sync)
+        {
+            if (census?.Encounters != null && census != m_lastEncounterCensus)
+            {
+                m_lastEncounterCensus = census;
+                RefreshEncounters(RecentEncounters, census.Encounters, now);
+            }
             if (now < m_nextSweep)
                 return;
+        }
         double interval = Math.Max(1, MySession.Static.Settings.GlobalEncounterTimer) * 60000d;
         double next = Math.Max(SweepIntervalMilliseconds, interval);
         lock (Sync)
@@ -118,7 +132,12 @@ public static class EncounterDirectorService
             m_nextSweep = now + next;
             // T-0167: the first sweep of a World Authority process waits one interval, as vanilla's
             // timer does; sweeping at once spawned an encounter on every WA start and failover.
-            if (first)
+            if (
+                first
+                || census?.Encounters == null
+                || census.Age(now) > NpcCensusService.MaxAgeSeconds
+                || RecentEncounters.Count >= MySession.Static.Settings.GlobalEncounterCap
+            )
                 return;
         }
 
@@ -129,7 +148,10 @@ public static class EncounterDirectorService
         );
         if (target == null)
             return;
-        string spawnGroup = PickSpawnGroup();
+        string spawnGroup = MySession
+            .Static.GetComponent<MyGlobalEncountersGenerator>()
+            ?.PickRandomSpawnGroup()
+            ?.Id.SubtypeName;
         if (spawnGroup == null)
             return;
         var request = new ClusterEncounterRequest(
@@ -155,6 +177,23 @@ public static class EncounterDirectorService
                 );
             }
         });
+    }
+
+    internal static void RefreshEncounters(
+        Dictionary<long, double> recent,
+        long[] reported,
+        double now
+    )
+    {
+        foreach (long id in reported)
+            recent[id] = now;
+        foreach (
+            long expired in recent
+                .Where(pair => now - pair.Value > CensusGraceMs)
+                .Select(pair => pair.Key)
+                .ToArray()
+        )
+            recent.Remove(expired);
     }
 
     /// <summary>
@@ -286,6 +325,9 @@ public static class EncounterDirectorService
             ?? throw new InvalidOperationException(
                 "Owning node returned an empty encounter result"
             );
+        if (result.Spawned && result.EncounterId != 0)
+            lock (Sync)
+                RecentEncounters[result.EncounterId] = ClusterRuntime.LocalMilliseconds;
         RecordDispatch(request, node, result);
         return result;
     }
@@ -358,6 +400,7 @@ public static class EncounterDirectorService
             ?? throw new InvalidOperationException("Global encounter generator is not loaded");
         int before = generator.ClusterActiveEncounters();
         bool spawned = false;
+        long encounterId = 0;
         for (int attempt = 1; !spawned && attempt <= PlacementAttempts; attempt++)
         {
             bool forcedFailure;
@@ -367,7 +410,9 @@ public static class EncounterDirectorService
                 if (forcedFailure)
                     m_testPlacementFailures--;
             }
-            spawned = !forcedFailure && generator.ClusterSpawnGlobalEncounter(request.SpawnGroup);
+            spawned =
+                !forcedFailure
+                && generator.ClusterSpawnGlobalEncounter(request.SpawnGroup, out encounterId);
             if (!spawned && attempt < PlacementAttempts)
                 Console.WriteLine(
                     "[ClusterPlugin] encounter placement retry group="
@@ -382,8 +427,24 @@ public static class EncounterDirectorService
             request.SpawnGroup,
             before,
             generator.ClusterActiveEncounters(),
-            null
+            null,
+            encounterId
         );
+    }
+
+    internal static long[] ActiveIds() =>
+        MySession
+            .Static?.GetComponent<MyGlobalEncountersGenerator>()
+            ?.m_encounterComponents.Keys.ToArray()
+        ?? [];
+
+    internal static long[] IdsIn(IEnumerable<MyEntity> entities)
+    {
+        var ids = new HashSet<long>();
+        foreach (var entity in entities)
+            if (entity.Components.TryGet<MyGlobalEncounterComponent>(out var component))
+                ids.Add(component.EncounterId);
+        return ids.ToArray();
     }
 
     /// <summary>Reports the executing node's encounter grids so a lane can probe their partitions.</summary>

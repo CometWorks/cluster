@@ -76,6 +76,7 @@ internal sealed partial class PartitionPersistence
 
         /// <summary>#1354: the NPC grids among the members, for the registry's NPC census.</summary>
         public object[] Npc;
+        public long[] Encounters;
         public object[] Grids;
         public VRageMath.BoundingSphereD Sphere;
         public long EstimatedSnapshotBytes;
@@ -98,7 +99,12 @@ internal sealed partial class PartitionPersistence
 
     /// <summary>SE-1892: holds a just-recovered partition online when its newest save (the offline Final) is younger
     /// than offline.rewakeWindowSeconds. Returns the hold's end, or null when none applies.</summary>
-    internal static DateTime? RewakeHold(DateTime now, DateTimeOffset? saveCreated, int windowSeconds, int holdSeconds)
+    internal static DateTime? RewakeHold(
+        DateTime now,
+        DateTimeOffset? saveCreated,
+        int windowSeconds,
+        int holdSeconds
+    )
     {
         if (holdSeconds <= 0 || saveCreated is not { } saved)
             return null;
@@ -130,6 +136,7 @@ internal sealed partial class PartitionPersistence
                 + "Z (SE-1892)"
         );
     }
+
     private DateTime m_nextOfflineSweep;
     private DateTime m_nextGridBackfill;
     private Task m_gridBackfill;
@@ -727,6 +734,7 @@ internal sealed partial class PartitionPersistence
             .ToArray();
         long[] ids = entities.Select(entity => entity.EntityId).ToArray();
         object[] npc = NpcCensusService.Rows(entities);
+        long[] encounters = EncounterDirectorService.IdsIn(entities);
         object[] grids = ClusterConfig.GetBool("offline.offerGrids")
             ? OfflineGridRows.Rows(entities)
             : null;
@@ -750,6 +758,7 @@ internal sealed partial class PartitionPersistence
             Antennas = JsonSerializer.Serialize(antennas),
             RespawnPoints = JsonSerializer.Serialize(respawns),
             Npc = npc,
+            Encounters = encounters,
             Grids = grids,
             OfflineGameFrame = OfflineCompensation.FrozenFrame(save.Profiles),
             ProfileSummary = OfflineCompensation.Summary(save.Profiles),
@@ -871,6 +880,7 @@ internal sealed partial class PartitionPersistence
                 MemberIds = entities.Select(entity => entity.EntityId).ToArray(),
                 MemberSpheres = spheres,
                 Npc = NpcCensusService.Rows(entities),
+                Encounters = EncounterDirectorService.IdsIn(entities),
                 Grids = grids,
                 Sphere = partition.Sphere,
                 EstimatedSnapshotBytes = bytes,
@@ -1015,6 +1025,7 @@ internal sealed partial class PartitionPersistence
             Antennas = JsonSerializer.Serialize(transition.Antennas),
             RespawnPoints = JsonSerializer.Serialize(transition.RespawnPoints),
             transition.Npc,
+            transition.Encounters,
             transition.Grids,
             OfflineGameFrame = OfflineCompensation.FrozenFrame(transition.Save.Profiles),
             ProfileSummary = OfflineCompensation.Summary(transition.Save.Profiles),

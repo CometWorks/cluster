@@ -28,7 +28,8 @@ internal sealed record PartitionReport(
     // PartitionInfo.SimLoadUs. The balancer switches its load dimension from PCU to the measured
     // cost only when EVERY node in a pass reports true - the two units are not commensurable, so a
     // mixed fleet keeps comparing in PCU.
-    [property: JsonPropertyName("simLoadSupported")] bool SimLoadSupported = false
+    [property: JsonPropertyName("simLoadSupported")] bool SimLoadSupported = false,
+    [property: JsonPropertyName("encounters")] long[]? Encounters = null
 );
 
 internal sealed record PartitionInfo(

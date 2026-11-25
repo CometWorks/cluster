@@ -152,6 +152,19 @@ internal static partial class SelfTest
             "#1443: a drop row writes d, and e only when known: " + dropWire
         );
 
+        var encounters = DirectGateway.MergeEncounterIds(
+            [Report() with { Encounters = [10, 20] }, Report() with { Encounters = [20] }],
+            [new OfflinePartition { Encounters = [20, 30] }]
+        );
+        Check(
+            encounters != null && encounters.ToHashSet().SetEquals([10L, 20L, 30L]),
+            "encounters shared by nodes and frozen partitions count once"
+        );
+        Check(
+            DirectGateway.MergeEncounterIds([Report()], []) == null,
+            "a node without encounter reports leaves the cluster count unknown"
+        );
+
         // The node's offline offer (PartitionPersistence.Offline: anonymous objects, default System.Text.Json naming).
         string offer = JsonSerializer.Serialize(
             new

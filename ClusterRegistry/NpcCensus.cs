@@ -61,7 +61,8 @@ internal sealed record NpcCensus(
     [property:
         JsonPropertyName("backupAt"),
         JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)
-    ] long? BackupAt = null
+    ] long? BackupAt = null,
+    [property: JsonPropertyName("encounters")] long[]? Encounters = null
 );
 
 internal sealed partial class DirectGateway
@@ -101,7 +102,11 @@ internal sealed partial class DirectGateway
                     out int online,
                     out int offlineNpc
                 );
-                _npcCensus = new NpcCensus(0, online, offlineNpc, grids);
+                var encounters = MergeEncounterIds(
+                    reports.Reports.Select(x => x.Report),
+                    _npcCensusOfflineRows
+                );
+                _npcCensus = new NpcCensus(0, online, offlineNpc, grids, Encounters: encounters);
                 _npcCensusReportsAt = reports.At;
             }
             return _npcCensus with
@@ -113,6 +118,26 @@ internal sealed partial class DirectGateway
                 ),
             };
         }
+    }
+
+    // The grid and its sub-encounters share one encounter id. It can appear on several nodes or
+    // in a frozen partition. An older node cannot report its encounters yet.
+    internal static long[]? MergeEncounterIds(
+        IEnumerable<PartitionReport> reports,
+        IEnumerable<OfflinePartition> offline
+    )
+    {
+        var ids = new HashSet<long>();
+        foreach (PartitionReport report in reports)
+        {
+            if (report.Encounters == null)
+                return null;
+            ids.UnionWith(report.Encounters);
+        }
+        foreach (OfflinePartition partition in offline)
+            if (partition.Encounters != null)
+                ids.UnionWith(partition.Encounters);
+        return [.. ids];
     }
 
     /// <summary>

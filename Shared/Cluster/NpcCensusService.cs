@@ -73,6 +73,7 @@ public static class NpcCensusService
 
         /// <summary>#1443: the unopened container drops, online and offline.</summary>
         public DropRow[] Drops;
+        public long[] Encounters;
 
         /// <summary>The registry's age of the census when it answered, and the local time of the answer.</summary>
         public double AgeAtAnswer,
@@ -268,6 +269,11 @@ public static class NpcCensusService
             Offline = root.GetProperty("offline").GetInt32(),
             AgeAtAnswer = root.GetProperty("ageSeconds").GetDouble(),
             AnsweredAt = answeredAt,
+            Encounters =
+                root.TryGetProperty("encounters", out JsonElement ids)
+                && ids.ValueKind == JsonValueKind.Array
+                    ? JsonSerializer.Deserialize<long[]>(ids)
+                    : null,
             BackupAt =
                 root.TryGetProperty("backupAt", out JsonElement backupAt)
                 && backupAt.ValueKind == JsonValueKind.Number
