@@ -431,6 +431,30 @@ internal static class ContractTestRoutes
                 TestRoutes.Text(context, 200, GlobalStateChannel.SendCommand("contracts", payload));
             }
         );
+        // POST /contract-test-strand-reservation?contract=&identity= - reserves the offer at the World Authority for
+        // the identity without writing an intent, as if its origin had lost its contract-accepts folder.
+        TestRoutes.Add(
+            "POST",
+            "/contract-test-strand-reservation",
+            context =>
+            {
+                long contract = TestRoutes.Long(context, "contract"),
+                    identity = TestRoutes.Long(context, "identity");
+                string payload = TestRoutes.OnGameThread(() =>
+                    JsonSerializer
+                        .Serialize(
+                            ContractLedger.AcceptRequest(
+                                System().m_inactiveContracts[contract],
+                                identity,
+                                0,
+                                Guid.NewGuid()
+                            )
+                        )
+                        .Replace("\"Kind\":\"Accept\"", "\"Kind\":\"Reserve\"")
+                );
+                TestRoutes.Text(context, 200, GlobalStateChannel.SendCommand("contracts", payload));
+            }
+        );
         // POST /contract-test-rpc?op=accept|queue-accept|finish|abandon|status&userId=&block=&contract= - the contract block's own server
         // request handler for an attached player, as if the player's client had sent it (the client has no contract
         // screen to drive headless). Finish names the player's character as the delivering entity.

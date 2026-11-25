@@ -335,26 +335,10 @@ internal static class StorePaymentJournal
             ContractLedger.RecoverPlayerAccepts(Path.GetDirectoryName(m_path), Array.Empty<Guid>());
             return;
         }
-        List<Entry> entries;
-        lock (Sync)
-            entries = File.ReadAllLines(m_path)
-                .Where(line => !string.IsNullOrWhiteSpace(line))
-                .Select(line =>
-                {
-                    try
-                    {
-                        return JsonSerializer.Deserialize<Entry>(line);
-                    }
-                    catch
-                    {
-                        return null;
-                    }
-                })
-                .Where(entry => entry != null)
-                .ToList();
+        List<Entry> entries = ReadEntries();
         ContractLedger.RecoverPlayerAccepts(
             Path.GetDirectoryName(m_path),
-            entries.Where(e => e.ContractOperation != Guid.Empty).Select(e => e.ContractOperation)
+            ContractOperations(entries)
         );
         HashSet<Guid> closed = entries
             .Where(entry => entry.Op == "closed")
@@ -381,6 +365,39 @@ internal static class StorePaymentJournal
         )
             Enqueue(new Work(null, entry, entry, false, "reconciled", command));
     }
+
+    private static List<Entry> ReadEntries()
+    {
+        lock (Sync)
+            return !File.Exists(m_path)
+                ? new List<Entry>()
+                : File.ReadAllLines(m_path)
+                    .Where(line => !string.IsNullOrWhiteSpace(line))
+                    .Select(line =>
+                    {
+                        try
+                        {
+                            return JsonSerializer.Deserialize<Entry>(line);
+                        }
+                        catch
+                        {
+                            return null;
+                        }
+                    })
+                    .Where(entry => entry != null)
+                    .ToList();
+    }
+
+    private static HashSet<Guid> ContractOperations(IEnumerable<Entry> entries) =>
+        entries
+            .Where(entry => entry.ContractOperation != Guid.Empty)
+            .Select(entry => entry.ContractOperation)
+            .ToHashSet();
+
+    /// <summary>The contract grants whose payment decision is in the journal. Reads the file, so callers run it off
+    /// the game thread.</summary>
+    internal static HashSet<Guid> ContractOperations() =>
+        m_ready ? ContractOperations(ReadEntries()) : new HashSet<Guid>();
 
     private static void Enqueue(Work work)
     {

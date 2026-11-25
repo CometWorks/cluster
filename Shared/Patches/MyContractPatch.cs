@@ -225,6 +225,9 @@ public static class MyContractPatch
     {
         if (!ContractLedger.AllowActivation(self, playerId, out Guid approvedOperation))
             return false;
+        // Recorded before any early return, so the commit below always reports a granted reservation.
+        if (approvedOperation != Guid.Empty)
+            ContractActivation.Current.PlayerReservation = (self.Id, approvedOperation);
         var seam = MyContractSeams.ClusterBeginDeposit;
         if (seam == null)
             return true;
@@ -242,10 +245,7 @@ public static class MyContractPatch
         // A refused acceptance leaves the reserved deposit to the finalizer, which refunds it.
         var accept = MyContractSeams.ClusterAccept;
         if (approvedOperation != Guid.Empty)
-        {
-            ContractActivation.Current.PlayerReservation = (self.Id, approvedOperation);
             return true;
-        }
         if (accept != null)
         {
             Guid operation = Guid.NewGuid();
@@ -264,11 +264,9 @@ public static class MyContractPatch
         ContractActivation.Current.PlayerReservation = default;
         IDisposable scope = ContractActivation.Current.Deposit;
         if (scope != null)
-        {
             MyContractSeams.ClusterCommitDeposit?.Invoke(scope, reservation.Operation);
-            if (reservation.Operation != Guid.Empty)
-                ContractLedger.PlayerDepositCommitted(reservation.Contract, reservation.Operation);
-        }
+        if (reservation.Operation != Guid.Empty)
+            ContractLedger.PlayerDepositCommitted(reservation.Contract, reservation.Operation);
     }
 
     /// <summary>Called from the injected IL of Finish/Fail. Returns false when another node settled first.</summary>

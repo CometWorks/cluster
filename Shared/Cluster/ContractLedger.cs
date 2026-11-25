@@ -137,7 +137,12 @@ internal static partial class ContractLedger
 
     private sealed record Snapshot(string Contracts, Settlement[] Settled);
 
-    private sealed record Reservation(string Origin, Request Offer, long[] Owners);
+    private sealed record Reservation(
+        string Origin,
+        Request Offer,
+        long[] Owners,
+        DateTime ReservedUtc = default
+    );
 
     private static readonly Dictionary<long, Reservation> Reservations = new();
 
@@ -191,7 +196,7 @@ internal static partial class ContractLedger
         {
             lock (Sync)
                 if (
-                    Reservations.ContainsKey(contract.Id)
+                    Reservations.TryGetValue(contract.Id, out var reserved) && !Expired(reserved)
                     || contract
                         .Owners.Append(playerId)
                         .Any(owner =>
@@ -533,7 +538,7 @@ internal static partial class ContractLedger
             "Accept" or "Reserve" => AcceptHere(origin, request),
             "Confirm" or "Release" => FinishReservation(origin, request),
             "Withdraw" => WithdrawHere(request.ContractId, request.AcceptanceOperation),
-            "Update" => UpdateHere(request),
+            "Update" => UpdateHere(origin, request),
             "Finish" or "Fail" => Settle(request, origin, ranHere: false),
             "BlockGone" => BlockGoneHere(request.Block),
             _ => throw new InvalidOperationException(
@@ -569,12 +574,24 @@ internal static partial class ContractLedger
             throw new InvalidOperationException("Invalid accepted contract");
         lock (Sync)
             if (Reservations.TryGetValue(builder.Id, out var existing))
-                return new Result(
+            {
+                bool same =
                     request.Kind == "Reserve"
-                        && existing.Origin == origin
-                        && existing.Offer.AcceptanceOperation == request.AcceptanceOperation,
-                    "offer reserved"
+                    && existing.Origin == origin
+                    && existing.Offer.AcceptanceOperation == request.AcceptanceOperation;
+                if (same || !Expired(existing))
+                    return new Result(same, "offer reserved");
+                // Its origin neither confirmed nor released it in time, for example because it lost its intent folder.
+                Reservations.Remove(builder.Id);
+                Console.WriteLine(
+                    "[ClusterPlugin] contract reservation expired id="
+                        + builder.Id
+                        + " origin="
+                        + existing.Origin
+                        + " operation="
+                        + existing.Offer.AcceptanceOperation
                 );
+            }
         if (system.m_activeContracts.ContainsKey(builder.Id))
             return new Result(false, "already accepted");
         lock (Sync)
@@ -597,7 +614,7 @@ internal static partial class ContractLedger
             lock (Sync)
                 Reservations.Add(
                     builder.Id,
-                    new Reservation(origin, request, builder.Owners.ToArray())
+                    new Reservation(origin, request, builder.Owners.ToArray(), DateTime.UtcNow)
                 );
             return new Result(true);
         }
@@ -607,8 +624,12 @@ internal static partial class ContractLedger
 
     private static bool AtLimit(MyIdentity identity) =>
         identity.ActiveContracts.Count
-            + Reservations.Values.Count(r => r.Owners.Contains(identity.IdentityId))
+            + Reservations.Values.Count(r => !Expired(r) && r.Owners.Contains(identity.IdentityId))
         >= System.GetContractLimitPerPlayer();
+
+    private static bool Expired(Reservation reservation) =>
+        DateTime.UtcNow - reservation.ReservedUtc
+        > TimeSpan.FromSeconds(ClusterConfig.GetInt("contracts.reservationSeconds"));
 
     private static Result FinishReservation(string origin, Request request)
     {
@@ -616,23 +637,64 @@ internal static partial class ContractLedger
         lock (Sync)
         {
             if (!Reservations.TryGetValue(request.ContractId, out reserved))
-                return new Result(
-                    request.Kind == "Release"
-                        || SettledIds.Contains(request.ContractId)
-                        || Accepted.TryGetValue(request.ContractId, out var accepted)
-                            && accepted.Operation == request.AcceptanceOperation
-                );
-            if (
+            {
+                if (request.Kind == "Release" || SettledIds.Contains(request.ContractId))
+                    return new Result(true);
+                if (Accepted.TryGetValue(request.ContractId, out var accepted))
+                    return new Result(
+                        accepted.Operation == request.AcceptanceOperation,
+                        "different acceptance"
+                    );
+            }
+            else if (
                 reserved.Origin != origin
                 || reserved.Offer.AcceptanceOperation != request.AcceptanceOperation
             )
                 return new Result(request.Kind == "Release", "different reservation");
         }
+        if (reserved == null)
+            return LateConfirm(origin, request);
         if (request.Kind == "Confirm")
             InstallAcceptance(reserved.Offer, Parse(reserved.Offer.Contract).Single());
         lock (Sync)
             Reservations.Remove(request.ContractId);
         return new Result(true);
+    }
+
+    // The reservation expired and gave way. Nobody has taken the offer since, so the origin's grant still stands.
+    private static Result LateConfirm(string origin, Request request)
+    {
+        if (request.Contract == null)
+            return new Result(false, "no reservation");
+        if (System.m_activeContracts.ContainsKey(request.ContractId))
+            return new Result(false, "already accepted");
+        InstallAcceptance(request, Parse(request.Contract).Single());
+        Console.WriteLine(
+            "[ClusterPlugin] contract confirmed after its reservation expired id="
+                + request.ContractId
+                + " origin="
+                + origin
+        );
+        return new Result(true);
+    }
+
+    // A settlement or update from the origin means its player already holds the grant, so the pending
+    // confirmation can only succeed. Installing it now keeps the request from being refused meanwhile.
+    private static void InstallPendingGrant(string origin, long contractId)
+    {
+        Reservation reserved;
+        lock (Sync)
+            if (!Reservations.TryGetValue(contractId, out reserved) || reserved.Origin != origin)
+                return;
+        InstallAcceptance(reserved.Offer, Parse(reserved.Offer.Contract).Single());
+        lock (Sync)
+            Reservations.Remove(contractId);
+        Console.WriteLine(
+            "[ClusterPlugin] contract installed ahead of its confirmation id="
+                + contractId
+                + " origin="
+                + origin
+        );
     }
 
     private static void InstallAcceptance(Request request, MyObjectBuilder_Contract builder)
@@ -676,8 +738,9 @@ internal static partial class ContractLedger
         return new Result(true);
     }
 
-    private static Result UpdateHere(Request request)
+    private static Result UpdateHere(string origin, Request request)
     {
+        InstallPendingGrant(origin, request.ContractId);
         MySessionComponentContractSystem system =
             System ?? throw new InvalidOperationException("No contract system");
         if (
@@ -726,6 +789,8 @@ internal static partial class ContractLedger
                 return new Result(ProbesSettled.Add(id), "probe");
         MySessionComponentContractSystem system =
             System ?? throw new InvalidOperationException("No contract system");
+        if (!ranHere)
+            InstallPendingGrant(origin, id);
         if (
             !system.m_activeContracts.TryGetValue(id, out MyContract contract)
             || contract.State != MyContractStateEnum.Active
@@ -945,7 +1010,15 @@ internal static partial class ContractLedger
         {
             Reservations.Clear();
             foreach (var reservation in restored?.Reserved ?? Array.Empty<Reservation>())
-                Reservations.Add(reservation.Offer.ContractId, reservation);
+                Reservations.Add(
+                    reservation.Offer.ContractId,
+                    reservation.ReservedUtc == default
+                        ? reservation with
+                        {
+                            ReservedUtc = DateTime.UtcNow,
+                        }
+                        : reservation
+                );
             Accepted.Clear();
             foreach (Acceptance acceptance in restored?.Accepted ?? Array.Empty<Acceptance>())
                 Accepted[acceptance.Id] = acceptance;

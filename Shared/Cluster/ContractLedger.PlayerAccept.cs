@@ -75,23 +75,44 @@ internal static partial class ContractLedger
         }
     }
 
+    // Decides an intent from the durable payment journal: a recorded grant is confirmed, anything else released.
+    // A failure other than an unreadable intent tries again a minute later, so it does not wait for a restart.
     private static async Task RecoverIntent(string path, HashSet<Guid> committed)
     {
-        try
+        while (true)
         {
-            var intent =
-                JsonSerializer.Deserialize<Intent>(File.ReadAllText(path))
-                ?? throw new InvalidDataException("Empty contract acceptance intent");
-            bool confirm =
-                !ContractAcceptIntentFile.IsReleasing(path)
-                && committed.Contains(intent.Offer.AcceptanceOperation);
-            await ResolveIntent(intent, path, confirm);
-        }
-        catch (Exception error)
-        {
-            Console.WriteLine(
-                $"[ClusterPlugin] leaving unresolved contract intent {path}: {error}"
-            );
+            // The release phase renames the intent; an earlier attempt may have got that far.
+            string release = Path.ChangeExtension(path, ".release");
+            if (!File.Exists(path) && File.Exists(release))
+                path = release;
+            if (!File.Exists(path))
+                return;
+            try
+            {
+                var intent =
+                    JsonSerializer.Deserialize<Intent>(File.ReadAllText(path))
+                    ?? throw new InvalidDataException("Empty contract acceptance intent");
+                bool confirm =
+                    !ContractAcceptIntentFile.IsReleasing(path)
+                    && committed.Contains(intent.Offer.AcceptanceOperation);
+                await ResolveIntent(intent, path, confirm);
+                return;
+            }
+            catch (Exception error) when (error is JsonException or InvalidDataException)
+            {
+                Console.WriteLine(
+                    $"[ClusterPlugin] leaving unreadable contract intent {path}: {error}"
+                );
+                return;
+            }
+            catch (Exception error)
+            {
+                Console.WriteLine(
+                    $"[ClusterPlugin] contract intent {path} failed, retrying in a minute: {error}"
+                );
+            }
+            await Task.Delay(TimeSpan.FromMinutes(1)).ConfigureAwait(false);
+            committed = StorePaymentJournal.ContractOperations();
         }
     }
 
@@ -127,18 +148,25 @@ internal static partial class ContractLedger
             }
             path = release;
         }
-        var decision = new Request(
-            confirm ? "Confirm" : "Release",
-            intent.Offer.ContractId,
-            AcceptanceOperation: intent.Offer.AcceptanceOperation
-        );
+        // The decision carries the offer, so a confirmation that arrives after the reservation expired can still
+        // install the grant when nobody else took the offer.
+        var decision = intent.Offer with
+        {
+            Kind = confirm ? "Confirm" : "Release",
+        };
         Result answer;
         while ((answer = Send(decision, intent.Decision)) == null)
             await Task.Delay(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         if (!answer.Success)
-            throw new InvalidDataException(
-                $"Authority refused {decision.Kind} for contract {decision.ContractId}: {answer.Reason}"
+        {
+            // Only a late confirmation can be refused: another player took the offer after this reservation
+            // expired. The intent stays for an operator and for the next start.
+            Console.WriteLine(
+                $"[ClusterPlugin] contract_grant_refused id={decision.ContractId} kind={decision.Kind}"
+                    + $" reason={answer.Reason} intent={path}"
             );
+            return;
+        }
         ForgetIntent(path);
     }
 
@@ -303,15 +331,19 @@ internal static partial class ContractLedger
                 {
                     try
                     {
-                        if (!uncertain && File.Exists(path))
+                        // An activation that failed before its commit decides from the journal, like a restart.
+                        if (uncertain)
+                            await RecoverIntent(path, StorePaymentJournal.ContractOperations());
+                        else if (File.Exists(path))
                             await ResolveIntent(intent, path, confirm);
                     }
                     catch (Exception error)
                     {
-                        result = MyContractResults.Fail_NotPossible;
+                        // The player's result stands: a granted contract is theirs, a refused one stays refused.
                         Console.WriteLine(
-                            $"[ClusterPlugin] leaving unresolved contract intent {path}: {error}"
+                            $"[ClusterPlugin] contract intent {path} failed, retrying: {error}"
                         );
+                        _ = RecoverIntent(path, StorePaymentJournal.ContractOperations());
                     }
                     game.Invoke(
                         () =>

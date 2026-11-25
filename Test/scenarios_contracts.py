@@ -41,7 +41,7 @@ import time
 from cluster import wait_until
 from scenarios import _all_partitions, _force_handover
 from scenarios_blocks import _identity
-from scenarios_core import CLIENT_ID, HANDOVER_TIMEOUT, _handover_url, _partitions
+from scenarios_core import CLIENT_ID, HANDOVER_TIMEOUT, _handover_url, _nodes, _partitions
 from scenarios_ext import _wait_arrival, _wait_partition
 from scenarios_recovery import RECOVERY_TIMEOUT
 from scenarios_redeliver import CLIENT2_ID, CLIENT2_PORT
@@ -281,11 +281,52 @@ def p3_con_ledger(bench) -> None:
         answer = ledger.node(holder, f"/contract-test-abandon?contract={lost}&identity={acceptor}", "POST")
         bench.check("lost accept: the retried contract can be abandoned", answer.get("result") == "Success", json.dumps(answer))
         expect("abandon after the lost answers", REWARD + COLLATERAL, 0)
+
+        # -- a reservation whose origin forgot it blocks the offer only until it expires --
+        stranded = ledger.post(holder, block)
+        expect("posted for the stranded reservation", -REWARD, 0)
+        reply = ledger.node(holder, f"/contract-test-strand-reservation?contract={stranded}&identity={acceptor}", "POST")
+        _require(bench, "stranded: the World Authority reserved the offer", reply.get("Success") is True, json.dumps(reply))
+        answer = ledger.node(holder, f"/contract-test-accept?contract={stranded}&identity={acceptor}&block={block}", "POST")
+        bench.check("stranded: a live reservation refuses another acceptance", not answer.get("accepted"), json.dumps(answer))
+        expect("stranded: the refused acceptance cost nothing", 0, 0)
+
+        def reservation_seconds(value: str) -> None:
+            # The World Authority decides expiry; set its config directly, the way p1_wa_heap_limit does.
+            values = dict(ledger.node(ledger.wa, "/config")["values"], **{"contracts.reservationSeconds": value})
+            bench.cluster._request("PUT", "/cluster/config", _nodes(bench)[ledger.wa].control, 30, values)
+            wait_until(
+                lambda: ledger.node(ledger.wa, "/config")["values"]["contracts.reservationSeconds"] == value,
+                30,
+                f"the World Authority to apply a {value} s reservation lifetime",
+            )
+
+        reservation_seconds("5")
+        try:
+            taken = _poll(
+                lambda: ledger.node(
+                    holder, f"/contract-test-accept?contract={stranded}&identity={acceptor}&block={block}", "POST"
+                ).get("accepted") or None,
+                30,
+                interval=2,
+            )
+        finally:
+            reservation_seconds("900")
+        bench.check("stranded: the expired reservation gave way to a new acceptance", taken is not None)
+        bench.check(
+            "stranded: the World Authority logged the expiry",
+            _node_line(bench, ledger.wa, f"contract reservation expired id={stranded} ", 10) is not None,
+        )
+        expect("accepted after the reservation expired", 0, -COLLATERAL)
+        ledger.wait_listed("stranded: the new acceptance is listed everywhere", stranded, acceptor, True)
+        answer = ledger.node(holder, f"/contract-test-abandon?contract={stranded}&identity={acceptor}", "POST")
+        bench.check("stranded: the contract can be abandoned", answer.get("result") == "Success", json.dumps(answer))
+        expect("abandon after the expiry", REWARD + COLLATERAL, 0)
     finally:
         _try(lambda: bench.cluster.post("/automatic/resume"))
-    bench.exercised(block=block, contracts=[finished, timed, restarted, failover, lost],
+    bench.exercised(block=block, contracts=[finished, timed, restarted, failover, lost, stranded],
                     legs="accept, timeout at the WA, finish on the other node, replay, node restart, WA failover, "
-                         "lost acceptance answers")
+                         "lost acceptance answers, expired reservation")
 
 
 def _node_line(bench, node: str, pattern: str, timeout: float = 5) -> str | None:
@@ -735,6 +776,39 @@ def p3_con_clients(bench) -> None:
             and active["owners"] == [a]
             and ledger.balance(a) == opening,
             json.dumps(active),
+        )
+
+        # A abandons while the origin's confirmation is still on its way. The World Authority installs the grant
+        # for the settlement, and the late confirmation then finds the contract settled.
+        early = ledger.node(node_b, f"/contract-test-post?block={start}&reward={REWARD}", "POST")
+        _require(bench, "the second acquisition contract was posted", early["success"])
+        early_id = early["contractId"]
+        confirm = "/contract-test-hold-confirm"
+        ledger.node(node_b, f"{confirm}?contract={early_id}", "POST")
+        try:
+            ledger.node(
+                node_b,
+                f"/contract-test-rpc?op=queue-accept&userId={CLIENT_ID}&block={start}&contract={early_id}",
+                "POST",
+            )
+            _require(
+                bench,
+                "the grant is waiting for its confirmation",
+                _poll(lambda: ledger.node(node_b, confirm)["held"] > 0 or None, HANDOVER_TIMEOUT) is not None,
+            )
+            answer = ledger.node(node_b, f"/contract-test-abandon?contract={early_id}&identity={a}", "POST")
+            bench.record("abandon-before-confirm", answer)
+            bench.check(
+                "A can abandon the contract before its confirmation lands",
+                answer.get("result") == "Success",
+                json.dumps(answer),
+            )
+        finally:
+            ledger.node(node_b, confirm + "?contract=0", "POST")
+        ledger.wait_listed("the contract abandoned before its confirmation is listed nowhere", early_id, a, False)
+        bench.check(
+            "the late confirmation of the settled contract succeeds",
+            _node_line(bench, ledger.wa, f"kind=Confirm id={early_id} origin={node_b} success=True", 60) is not None,
         )
     finally:
         _try(lambda: bench.cluster.post("/automatic/resume"))
