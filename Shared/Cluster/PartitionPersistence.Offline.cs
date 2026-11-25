@@ -11,6 +11,7 @@ using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Character;
 using Sandbox.Game.Multiplayer;
 using Sandbox.Game.World;
+using SpaceEngineers.Game.EntityComponents.GameLogic;
 using VRage.Game.Components;
 using VRage.Game.Entity;
 using VRage.ModAPI;
@@ -560,8 +561,25 @@ internal sealed partial class PartitionPersistence
             return "type:" + entity.GetType().Name;
         if (entity.MarkedForClose || !entity.InScene)
             return "closing";
-        if (entity is MyCubeGrid grid && ClusterConfig.GetBool("offline.velocityReadiness"))
-            return OfflineCompensation.Readiness(grid);
+        if (entity is MyCubeGrid grid)
+        {
+            // Unloading the last grid unregisters the encounter and deletes the marker that
+            // players would need to find it. Its vanilla removal timer runs on the owning node.
+            if (
+                grid.Components.TryGet<MyGlobalEncounterComponent>(out var encounter)
+                && encounter.RegisteredAsEncounter
+            )
+                return "global-encounter";
+            if (
+                grid.IsNpcSpawnedGrid
+                && grid.BigOwners.Count == 0
+                && ClusterConfig.GetBool("drops.strongOnly")
+                && DropContainerRemovalService.DropComponent(grid)?.Competetive == true
+            )
+                return "strong-signal";
+            if (ClusterConfig.GetBool("offline.velocityReadiness"))
+                return OfflineCompensation.Readiness(grid);
+        }
         MyPhysicsComponentBase physics = entity.Physics;
         if (physics == null || physics.IsStatic)
             return null;
