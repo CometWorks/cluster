@@ -25,6 +25,12 @@ namespace ClusterPlugin;
 /// <summary>
 /// SE1-0247, WorldAuthority.md §6.3: the World Authority keeps the accepted contracts.
 /// <para>
+/// A player accepting at a block first reserves the offer and a contract slot at the World Authority. While its
+/// save is pending the node keeps simulating. Vanilla validates the offer and grants it on the game thread once
+/// the reservation is durable. The origin confirms or releases the reservation in the background. After a restart
+/// the deposit journal identifies the grants to confirm, including those with zero collateral.
+/// </para>
+/// <para>
 /// Its own <see cref="MySessionComponentContractSystem"/> is the ledger: activation on a regular node hands the
 /// contract over (<c>Accept</c>, refused for a contract already accepted or over the player's limit), and the
 /// global save keeps it with the rest of the checkpoint, so it outlives the node it was accepted on and a World
@@ -61,7 +67,7 @@ namespace ClusterPlugin;
 /// (<c>ClusterEntityContractUpdates</c>), and regular nodes run no contract updates.
 /// </para>
 /// </summary>
-internal static class ContractLedger
+internal static partial class ContractLedger
 {
     private const string Subsystem = "contracts";
     private const string AlreadySettled = "already settled";
@@ -131,7 +137,15 @@ internal static class ContractLedger
 
     private sealed record Snapshot(string Contracts, Settlement[] Settled);
 
-    private sealed record Record(Acceptance[] Accepted, long[] Settled);
+    private sealed record Reservation(string Origin, Request Offer, long[] Owners);
+
+    private static readonly Dictionary<long, Reservation> Reservations = new();
+
+    private sealed record Record(
+        Acceptance[] Accepted,
+        long[] Settled,
+        Reservation[] Reserved = null
+    );
 
     private sealed record Unanswered(string Kind, Guid Operation, string Payload, bool PunishOwner);
 
@@ -175,6 +189,17 @@ internal static class ContractLedger
             (MyEntities.GetEntityById(contract.StartBlock) as MyCubeBlock)?.OwnerId ?? 0;
         if (ClusterRuntime.IsWorldAuthority)
         {
+            lock (Sync)
+                if (
+                    Reservations.ContainsKey(contract.Id)
+                    || contract
+                        .Owners.Append(playerId)
+                        .Any(owner =>
+                            MySession.Static.Players.TryGetIdentity(owner) is MyIdentity identity
+                            && AtLimit(identity)
+                        )
+                )
+                    return false;
             // The World Authority's own activation (a station contract a mod accepts there) is vanilla already.
             lock (Sync)
                 Accepted[contract.Id] = new Acceptance(
@@ -186,21 +211,7 @@ internal static class ContractLedger
                 );
             return true;
         }
-        MyObjectBuilder_Contract builder = contract.GetObjectBuilder();
-        builder.State = MyContractStateEnum.Active;
-        builder.Owners = new MySerializableList<long>(contract.Owners.Append(playerId));
-        Result result = Send(
-            new Request(
-                "Accept",
-                contract.Id,
-                Serialize(new[] { builder }),
-                playerId,
-                contract.StartBlock,
-                blockOwner,
-                AcceptanceOperation: operation
-            ),
-            operation
-        );
+        Result result = Send(AcceptRequest(contract, playerId, blockOwner, operation), operation);
         if (result?.Success != true)
         {
             Console.WriteLine(
@@ -226,6 +237,27 @@ internal static class ContractLedger
         lock (Sync)
             AcceptedHere[contract.Id] = ClusterRuntime.LocalMilliseconds;
         return true;
+    }
+
+    private static Request AcceptRequest(
+        MyContract contract,
+        long playerId,
+        long blockOwner,
+        Guid operation
+    )
+    {
+        MyObjectBuilder_Contract builder = contract.GetObjectBuilder();
+        builder.State = MyContractStateEnum.Active;
+        builder.Owners = new MySerializableList<long>(contract.Owners.Append(playerId));
+        return new Request(
+            "Accept",
+            contract.Id,
+            Serialize(new[] { builder }),
+            playerId,
+            contract.StartBlock,
+            blockOwner,
+            AcceptanceOperation: operation
+        );
     }
 
     private static void Withdraw(long contractId, Guid operation)
@@ -498,7 +530,8 @@ internal static class ContractLedger
             throw new InvalidOperationException("Invalid contract ledger request");
         Result result = request.Kind switch
         {
-            "Accept" => AcceptHere(request),
+            "Accept" or "Reserve" => AcceptHere(origin, request),
+            "Confirm" or "Release" => FinishReservation(origin, request),
             "Withdraw" => WithdrawHere(request.ContractId, request.AcceptanceOperation),
             "Update" => UpdateHere(request),
             "Finish" or "Fail" => Settle(request, origin, ranHere: false),
@@ -521,7 +554,7 @@ internal static class ContractLedger
         return result;
     }
 
-    private static Result AcceptHere(Request request)
+    private static Result AcceptHere(string origin, Request request)
     {
         MySessionComponentContractSystem system =
             System ?? throw new InvalidOperationException("No contract system");
@@ -534,6 +567,14 @@ internal static class ContractLedger
             || builder.Owners.Count == 0
         )
             throw new InvalidOperationException("Invalid accepted contract");
+        lock (Sync)
+            if (Reservations.TryGetValue(builder.Id, out var existing))
+                return new Result(
+                    request.Kind == "Reserve"
+                        && existing.Origin == origin
+                        && existing.Offer.AcceptanceOperation == request.AcceptanceOperation,
+                    "offer reserved"
+                );
         if (system.m_activeContracts.ContainsKey(builder.Id))
             return new Result(false, "already accepted");
         lock (Sync)
@@ -547,16 +588,63 @@ internal static class ContractLedger
             .ToArray();
         if (identities.Any(identity => identity == null))
             return new Result(false, "unknown owner");
-        if (
-            identities.Any(identity =>
-                system.GetContractLimitPerPlayer() <= identity.ActiveContracts.Count
-            )
-        )
+        if (identities.Any(AtLimit))
             return new Result(false, "contract limit");
+        if (request.Kind == "Reserve")
+        {
+            if (request.AcceptanceOperation == Guid.Empty)
+                return new Result(false, "missing reservation operation");
+            lock (Sync)
+                Reservations.Add(
+                    builder.Id,
+                    new Reservation(origin, request, builder.Owners.ToArray())
+                );
+            return new Result(true);
+        }
+        InstallAcceptance(request, builder);
+        return new Result(true);
+    }
+
+    private static bool AtLimit(MyIdentity identity) =>
+        identity.ActiveContracts.Count
+            + Reservations.Values.Count(r => r.Owners.Contains(identity.IdentityId))
+        >= System.GetContractLimitPerPlayer();
+
+    private static Result FinishReservation(string origin, Request request)
+    {
+        Reservation reserved;
+        lock (Sync)
+        {
+            if (!Reservations.TryGetValue(request.ContractId, out reserved))
+                return new Result(
+                    request.Kind == "Release"
+                        || SettledIds.Contains(request.ContractId)
+                        || Accepted.TryGetValue(request.ContractId, out var accepted)
+                            && accepted.Operation == request.AcceptanceOperation
+                );
+            if (
+                reserved.Origin != origin
+                || reserved.Offer.AcceptanceOperation != request.AcceptanceOperation
+            )
+                return new Result(request.Kind == "Release", "different reservation");
+        }
+        if (request.Kind == "Confirm")
+            InstallAcceptance(reserved.Offer, Parse(reserved.Offer.Contract).Single());
+        lock (Sync)
+            Reservations.Remove(request.ContractId);
+        return new Result(true);
+    }
+
+    private static void InstallAcceptance(Request request, MyObjectBuilder_Contract builder)
+    {
+        var system = System;
         system.RemoveInactiveContract(builder.Id); // the offer this World Authority loaded with the world
         system.AddContract(MyContractFactory.CreateInstance(builder));
-        foreach (MyIdentity identity in identities)
-            if (!identity.ActiveContracts.Contains(builder.Id))
+        foreach (long owner in builder.Owners)
+            if (
+                MySession.Static.Players.TryGetIdentity(owner) is MyIdentity identity
+                && !identity.ActiveContracts.Contains(builder.Id)
+            )
                 identity.ActiveContracts.Add(builder.Id);
         lock (Sync)
             Accepted[builder.Id] = new Acceptance(
@@ -566,7 +654,6 @@ internal static class ContractLedger
                 request.Player,
                 request.AcceptanceOperation
             );
-        return new Result(true);
     }
 
     private static Result WithdrawHere(long contractId, Guid operation)
@@ -608,6 +695,7 @@ internal static class ContractLedger
     private static Result BlockGoneHere(long blockId)
     {
         lock (Sync)
+        {
             foreach (
                 Acceptance acceptance in Accepted
                     .Values.Where(acceptance =>
@@ -616,6 +704,16 @@ internal static class ContractLedger
                     .ToArray()
             )
                 Accepted[acceptance.Id] = acceptance with { BlockOwner = 0 };
+            foreach (
+                var reserved in Reservations
+                    .Values.Where(r => r.Offer.Block == blockId && r.Offer.BlockOwner != 0)
+                    .ToArray()
+            )
+                Reservations[reserved.Offer.ContractId] = reserved with
+                {
+                    Offer = reserved.Offer with { BlockOwner = 0 },
+                };
+        }
         return new Result(true);
     }
 
@@ -829,7 +927,8 @@ internal static class ContractLedger
             return JsonSerializer.Serialize(
                 new Record(
                     Accepted.Values.OrderBy(acceptance => acceptance.Id).ToArray(),
-                    SettledOrder.ToArray()
+                    SettledOrder.ToArray(),
+                    Reservations.Values.ToArray()
                 )
             );
     }
@@ -844,6 +943,9 @@ internal static class ContractLedger
             : JsonSerializer.Deserialize<Record>(payload);
         lock (Sync)
         {
+            Reservations.Clear();
+            foreach (var reservation in restored?.Reserved ?? Array.Empty<Reservation>())
+                Reservations.Add(reservation.Offer.ContractId, reservation);
             Accepted.Clear();
             foreach (Acceptance acceptance in restored?.Accepted ?? Array.Empty<Acceptance>())
                 Accepted[acceptance.Id] = acceptance;
@@ -973,7 +1075,9 @@ internal static class ContractLedger
             foreach (
                 long id in AcceptedHere
                     .Keys.Where(id =>
-                        wanted.ContainsKey(id) || now - AcceptedHere[id] > AcceptGraceMilliseconds
+                        wanted.ContainsKey(id)
+                        || !PlayerAccepts.ContainsKey(id)
+                            && now - AcceptedHere[id] > AcceptGraceMilliseconds
                     )
                     .ToArray()
             )

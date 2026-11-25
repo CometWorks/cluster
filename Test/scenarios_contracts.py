@@ -446,6 +446,115 @@ def _client_partition(bench, user: int) -> tuple[str, int] | None:
     return None
 
 
+def _accept_while_save_held(
+    bench, ledger, node: str, block: int, contract: int, identity: int, competitor: int
+) -> dict:
+    query = f"&userId={CLIENT_ID}&block={block}&contract={contract}"
+    hold = "/global-save-register-hold"
+    before = ledger.node(ledger.wa, hold)
+
+    def pending() -> dict | None:
+        status = ledger.node(ledger.wa, hold)
+        if (
+            status["heldSaves"] <= before["heldSaves"]
+            or not status["channel"]["heldResponses"]
+        ):
+            return None
+        active = ledger.active(ledger.wa, contract, identity)
+        return status if active.get("reserved") and not active["active"] else None
+
+    drop = "/test-drop-command-responses"
+    copy = ledger.node(node, f"/contract-test-offer-copy?contract={contract}")["offer"]
+    other = _other(node)
+    ledger.node(other, f"/contract-test-reoffer?offer={copy}", "POST")
+    ledger.node(node, drop + "?subsystem=contracts&count=100", "POST")
+    ledger.node(ledger.wa, hold + "?ms=20000", "POST")
+    try:
+        queued = ledger.node(node, "/contract-test-rpc?op=queue-accept" + query, "POST")
+        _require(
+            bench,
+            "the node queued the player's acceptance",
+            queued.get("queued") == contract,
+        )
+        held = _poll(pending, 3, interval=0.1)
+        _require(
+            bench,
+            "the WA reserves the offer without activating it while the save is held",
+            held is not None,
+        )
+        # This route dispatches to the node's game thread. A blocked activation cannot answer it.
+        started = time.monotonic()
+        clock = _try(lambda: bench.cluster.node(node, "/plugin-clock", timeout=1))
+        elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+        bench.record(
+            "accept-during-held-save",
+            {"wa": held, "clock": clock, "roundTripMs": elapsed_ms},
+        )
+        bench.check(
+            "the accepting node serves a game-thread read while the WA holds its reply",
+            clock.get("node") == node and pending() is not None,
+            f"{elapsed_ms} ms, {json.dumps(clock)}",
+        )
+        if clock.get("node") == node:
+            state = ledger.node(node, "/contract-test-rpc?op=status" + query, "POST")
+            bench.check(
+                "the courier receives no package before the durable reply",
+                state.get("packagesAfter") == 0 and pending() is not None,
+                json.dumps(state),
+            )
+    finally:
+        ledger.node(ledger.wa, hold + "?ms=0", "POST")
+
+    _require(
+        bench,
+        "the origin lost the response after the reservation became durable",
+        _poll(lambda: ledger.node(node, drop)["dropped"] > 0 or None, 30, interval=0.2)
+        is not None,
+    )
+    race = ledger.node(
+        other,
+        f"/contract-test-accept?contract={contract}&block={block}&identity={competitor}",
+        "POST",
+    )
+    _require(
+        bench,
+        "the other player cannot win the reserved offer",
+        race.get("accepted") is False,
+        json.dumps(race),
+    )
+    _require(
+        bench,
+        "the authority refused the competing operation because the offer was reserved",
+        _node_line(
+            bench,
+            ledger.wa,
+            f"kind=Accept id={contract} origin={other} success=False reason=offer reserved",
+        )
+        is not None,
+    )
+    generation = int(bench.cluster.get("/registry/world-authority")["Generation"])
+    _wa_failover(bench, generation, fresh=True)
+    ledger.wa = "wa-2"
+    restored = ledger.active(ledger.wa, contract, identity)
+    _require(
+        bench,
+        "the replacement restored the reservation without activating it",
+        restored.get("reserved") and not restored["active"],
+        json.dumps(restored),
+    )
+    ledger.node(node, drop + "?subsystem=contracts&count=0", "POST")
+
+    def delivered() -> dict | None:
+        state = ledger.node(node, "/contract-test-rpc?op=status" + query, "POST")
+        return (
+            state
+            if state["contract"]["active"] and state["packagesAfter"] == 1
+            else None
+        )
+
+    return _poll(delivered, HANDOVER_TIMEOUT) or {}
+
+
 def p3_con_clients(bench) -> None:
     """SE1-0247 - accepted at a block on one node by an attached player, delivered at a block on another."""
     bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
@@ -493,7 +602,7 @@ def p3_con_clients(bench) -> None:
         contract = int(posted["contractId"])
         ledger.wait_balance("posted: B paid the reward in", b, paid[b] - REWARD)
 
-        accepted = ledger.node(node_a, f"/contract-test-rpc?op=accept&userId={CLIENT_ID}&block={start}&contract={contract}", "POST")
+        accepted = _accept_while_save_held(bench, ledger, node_a, start, contract, a, b)
         bench.record("accept", accepted)
         bench.check(f"accept: A accepted at the start block on {node_a} and got the package",
                     (accepted.get("contract") or {}).get("active") is True and accepted.get("packagesAfter") == 1,

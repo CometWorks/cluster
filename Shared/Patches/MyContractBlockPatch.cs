@@ -14,6 +14,14 @@ namespace Shared.Patches;
 /// </summary>
 public static class MyContractBlockPatch
 {
+    [HarmonyPatch(typeof(MyContractBlock), "AcceptContract", typeof(long), typeof(long))]
+    private static class AcceptOffer
+    {
+        [HarmonyPrefix]
+        private static bool Prefix(MyContractBlock __instance, long identityId, long contractId) =>
+            !ContractLedger.TryStartPlayerAccept(__instance, identityId, contractId);
+    }
+
     [HarmonyPatch(
         typeof(MyContractBlock),
         nameof(MyContractBlock.Init),

@@ -42,6 +42,9 @@ public static class MyContractPatch
     private static IDisposable s_deposit;
 
     [ThreadStatic]
+    private static (long Contract, Guid Operation) s_playerReservation;
+
+    [ThreadStatic]
     private static (long Contract, Guid Operation) s_accepted;
 
     private static readonly MethodInfo CanActivateInternal = EconomyIl.Required(
@@ -130,6 +133,7 @@ public static class MyContractPatch
         {
             IDisposable scope = s_deposit;
             var accepted = s_accepted;
+            s_playerReservation = default;
             s_deposit = null;
             s_accepted = default;
             scope?.Dispose();
@@ -232,6 +236,8 @@ public static class MyContractPatch
     /// <summary>Called from the injected IL of Activate. Returns false when the deposit was refused.</summary>
     public static bool BeginDeposit(MyContract self, long playerId)
     {
+        if (!ContractLedger.AllowActivation(self, playerId, out Guid approvedOperation))
+            return false;
         var seam = MyContractSeams.ClusterBeginDeposit;
         if (seam == null)
             return true;
@@ -248,6 +254,11 @@ public static class MyContractPatch
             return false;
         // A refused acceptance leaves the reserved deposit to the finalizer, which refunds it.
         var accept = MyContractSeams.ClusterAccept;
+        if (approvedOperation != Guid.Empty)
+        {
+            s_playerReservation = (self.Id, approvedOperation);
+            return true;
+        }
         if (accept != null)
         {
             Guid operation = Guid.NewGuid();
@@ -264,7 +275,14 @@ public static class MyContractPatch
         s_accepted = default;
         IDisposable scope = s_deposit;
         if (scope != null)
-            MyContractSeams.ClusterCommitDeposit?.Invoke(scope);
+        {
+            MyContractSeams.ClusterCommitDeposit?.Invoke(scope, s_playerReservation.Operation);
+            if (s_playerReservation.Operation != Guid.Empty)
+                ContractLedger.PlayerDepositCommitted(
+                    s_playerReservation.Contract,
+                    s_playerReservation.Operation
+                );
+        }
     }
 
     /// <summary>Called from the injected IL of Finish/Fail. Returns false when another node settled first.</summary>

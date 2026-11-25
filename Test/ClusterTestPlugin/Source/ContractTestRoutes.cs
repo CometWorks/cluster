@@ -6,6 +6,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Text.Json;
 using ClusterPlugin;
+using Sandbox;
 using Sandbox.Common.ObjectBuilders;
 using Sandbox.Common.ObjectBuilders.Definitions;
 using Sandbox.Definitions;
@@ -390,7 +391,7 @@ internal static class ContractTestRoutes
                 TestRoutes.Text(context, 200, GlobalStateChannel.SendCommand("contracts", payload));
             }
         );
-        // POST /contract-test-rpc?op=accept|finish|abandon&userId=&block=&contract= - the contract block's own server
+        // POST /contract-test-rpc?op=accept|queue-accept|finish|abandon|status&userId=&block=&contract= - the contract block's own server
         // request handler for an attached player, as if the player's client had sent it (the client has no contract
         // screen to drive headless). Finish names the player's character as the delivering entity.
         TestRoutes.Add(
@@ -405,6 +406,26 @@ internal static class ContractTestRoutes
                 );
                 long block = TestRoutes.Long(context, "block"),
                     contract = TestRoutes.Long(context, "contract");
+                if (op == "queue-accept")
+                {
+                    // The listener must remain free to serve an independent game-thread probe.
+                    MySandboxGame.Static.Invoke(
+                        () =>
+                        {
+                            try
+                            {
+                                Request("accept", user, block, contract);
+                            }
+                            catch (Exception error)
+                            {
+                                Plugin.Log($"Queued acceptance of {contract} failed: {error}");
+                            }
+                        },
+                        "ClusterTestPlugin queue contract acceptance"
+                    );
+                    TestRoutes.Json(context, 202, new { queued = contract });
+                    return;
+                }
                 TestRoutes.Json(
                     context,
                     200,
@@ -647,6 +668,7 @@ internal static class ContractTestRoutes
         return new
         {
             contract = contractId,
+            reserved = ContractLedger.Reservations.ContainsKey(contractId),
             active = system.IsContractActive(contractId),
             offered = system.IsContractInInactive(contractId),
             state = contract?.State.ToString(),
@@ -696,6 +718,8 @@ internal static class ContractTestRoutes
                     break;
                 case "abandon":
                     block.AbandonContract(identity, contractId);
+                    break;
+                case "status":
                     break;
                 default:
                     throw new ArgumentException("Unknown op " + op);
