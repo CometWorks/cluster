@@ -446,6 +446,25 @@ def _client_partition(bench, user: int) -> tuple[str, int] | None:
     return None
 
 
+def _disable_contract_fixture_trash(ledger):
+    # Four-block unpowered grids need to survive a World Authority replacement.
+    settings = ledger.node("node-1", "/admin-sync-trash")
+    ledger.node(
+        "node-1",
+        f"/admin-sync-trash-upload?enable=false&blockCount={settings['BlockCountThreshold']}"
+        f"&voxelAge={settings['VoxelAgeThreshold']}",
+        "POST",
+    )
+    wait_until(
+        lambda: all(
+            ledger.node(node, "/admin-sync-trash")["TrashRemovalEnabled"] is False
+            for node in (*REGULAR, ledger.wa)
+        ),
+        20,
+        "cluster-wide trash removal disabled for the contract grids",
+    )
+
+
 def _accept_while_save_held(
     bench, ledger, node: str, block: int, contract: int, identity: int, competitor: int
 ) -> dict:
@@ -575,9 +594,7 @@ def p3_con_clients(bench) -> None:
     bench.cluster.post("/automatic/pause")
     contract = 0
     try:
-        # The contract blocks are small unpowered grids far from both players: vanilla's trash removal takes them.
-        for node in REGULAR:
-            ledger.node(node, "/contract-test-trash?enabled=0", "POST")
+        _disable_contract_fixture_trash(ledger)
         node_a = where["a"][0]
         node_b = _other(node_a)
         _hand_over(bench, where["b"][1], node_b, client=CLIENT2_ID)
@@ -604,7 +621,7 @@ def p3_con_clients(bench) -> None:
 
         accepted = _accept_while_save_held(bench, ledger, node_a, start, contract, a, b)
         bench.record("accept", accepted)
-        bench.check(f"accept: A accepted at the start block on {node_a} and got the package",
+        _require(bench, f"accept: A accepted at the start block on {node_a} and got the package",
                     (accepted.get("contract") or {}).get("active") is True and accepted.get("packagesAfter") == 1,
                     json.dumps(accepted)[:500])
         ledger.wait_balance("accept: A paid the collateral", a, paid[a] - COLLATERAL)

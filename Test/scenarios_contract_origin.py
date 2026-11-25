@@ -12,6 +12,7 @@ from scenarios_contracts import (
     REGULAR,
     REWARD,
     _block_grid,
+    _disable_contract_fixture_trash,
     _client_node,
     _client_partition,
     _Ledger,
@@ -86,8 +87,7 @@ def _run(bench, committed):
     )
     bench.cluster.post("/automatic/pause")
     try:
-        for node in (ledger.wa, *REGULAR):
-            ledger.node(node, "/contract-test-trash?enabled=0", "POST")
+        _disable_contract_fixture_trash(ledger)
         payer = int(
             ledger.node(origin, f"/respawn-test-player?userId={CLIENT_ID}")[
                 "identityId"
