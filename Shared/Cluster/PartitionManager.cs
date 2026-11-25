@@ -933,7 +933,7 @@ internal sealed class PartitionManager
         // is valid for ordering. See findings/threadload-is-aggregate-worker-time-not-a-percentage.md.
         return string.Format(
             CultureInfo.InvariantCulture,
-            "{{\"entityIdRange\":{0},\"syncDistance\":{1:R},\"margin\":{2:R},\"splitDistance\":{7:R},\"refusedMerges\":{8},\"heldMerges\":{9},\"heldMergePairs\":{10},\"deferredSplits\":{11},\"hysteresisHeld\":{12},\"hysteresisHeldTotal\":{13},\"hysteresisTransferred\":{14},\"hysteresisExpired\":{15},\"hysteresisReleased\":{16},\"simulationRatio\":{5:R},\"threadLoad\":{6:R},\"simLoadSupported\":true,\"partitions\":[{3}],\"evaluatedAt\":{4:R}}}",
+            "{{\"entityIdRange\":{0},\"syncDistance\":{1:R},\"margin\":{2:R},\"splitDistance\":{7:R},\"refusedMerges\":{8},\"heldMerges\":{9},\"heldMergePairs\":{10},\"deferredSplits\":{11},\"hysteresisHeld\":{12},\"hysteresisHeldTotal\":{13},\"hysteresisTransferred\":{14},\"hysteresisExpired\":{15},\"hysteresisReleased\":{16},\"simulationRatio\":{5:R},\"threadLoad\":{6:R},\"simLoadSupported\":true,\"encounters\":{{{17}}},\"partitions\":[{3}],\"evaluatedAt\":{4:R}}}",
             m_rangeIndex(),
             MyLayers.GetSyncDistance(),
             Margin,
@@ -950,7 +950,20 @@ internal sealed class PartitionManager
             m_membership.HysteresisHeldTotal,
             m_membership.HysteresisTransferred,
             m_membership.HysteresisExpired,
-            m_membership.HysteresisReleased
+            m_membership.HysteresisReleased,
+            string.Join(
+                ',',
+                EncounterDirectorService
+                    .ActiveDeadlines()
+                    .Select(pair =>
+                        string.Format(
+                            CultureInfo.InvariantCulture,
+                            "\"{0}\":{1}",
+                            pair.Key,
+                            pair.Value
+                        )
+                    )
+            )
         );
     }
 

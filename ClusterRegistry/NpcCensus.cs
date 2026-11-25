@@ -36,7 +36,12 @@ internal sealed record NpcGrid(
         JsonPropertyName("e"),
         JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)
     ]
-        long Expires = 0
+        long Expires = 0,
+    [property:
+        JsonPropertyName("f"),
+        JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)
+    ]
+        long FrozenAt = 0
 )
 {
     [JsonIgnore]
@@ -56,7 +61,8 @@ internal sealed record NpcCensus(
     [property:
         JsonPropertyName("backupAt"),
         JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)
-    ] long? BackupAt = null
+    ] long? BackupAt = null,
+    [property: JsonPropertyName("encounters")] Dictionary<long, long>? Encounters = null
 );
 
 internal sealed partial class DirectGateway
@@ -96,7 +102,11 @@ internal sealed partial class DirectGateway
                     out int online,
                     out int offlineNpc
                 );
-                _npcCensus = new NpcCensus(0, online, offlineNpc, grids);
+                var encounters = MergeEncounters(
+                    reports.Reports.Select(x => x.Report),
+                    _npcCensusOfflineRows
+                );
+                _npcCensus = new NpcCensus(0, online, offlineNpc, grids, Encounters: encounters);
                 _npcCensusReportsAt = reports.At;
             }
             return _npcCensus with
@@ -108,6 +118,38 @@ internal sealed partial class DirectGateway
                 ),
             };
         }
+    }
+
+    // The grid and its sub-encounters share one encounter id. It can appear on several nodes or in a frozen partition,
+    // each with the removal deadline its timer had there; the earliest one counts (0 = no removal timer). The World
+    // Authority stops counting an encounter whose deadline passed, so one frozen at a cluster stop frees its slot.
+    // An older node cannot report its encounters yet.
+    internal static Dictionary<long, long>? MergeEncounters(
+        IEnumerable<PartitionReport> reports,
+        IEnumerable<OfflinePartition> offline
+    )
+    {
+        var merged = new Dictionary<long, long>();
+        void Add(Dictionary<long, long> encounters)
+        {
+            foreach ((long id, long deadline) in encounters)
+                merged[id] =
+                    merged.TryGetValue(id, out long known)
+                    && known != 0
+                    && (deadline == 0 || known < deadline)
+                        ? known
+                        : deadline;
+        }
+        foreach (PartitionReport report in reports)
+        {
+            if (report.Encounters == null)
+                return null;
+            Add(report.Encounters);
+        }
+        foreach (OfflinePartition partition in offline)
+            if (partition.Encounters != null)
+                Add(partition.Encounters);
+        return merged;
     }
 
     /// <summary>
@@ -137,7 +179,15 @@ internal sealed partial class DirectGateway
         foreach (NpcGrid grid in row.Npc)
             if (!grids.ContainsKey(grid.Id))
             {
-                grids[grid.Id] = grid with { Offline = true };
+                grids[grid.Id] = grid with
+                {
+                    Offline = true,
+                    // Older offline saves can hold a drop that froze before its timer was registered.
+                    FrozenAt =
+                        grid.Drop && grid.Expires == 0 && row.OfflineAt != default
+                            ? row.OfflineAt.ToUnixTimeSeconds()
+                            : 0,
+                };
                 if (grid.IsNpc)
                     offlineNpc++;
             }

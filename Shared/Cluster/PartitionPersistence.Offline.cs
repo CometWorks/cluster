@@ -11,6 +11,7 @@ using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Character;
 using Sandbox.Game.Multiplayer;
 using Sandbox.Game.World;
+using SpaceEngineers.Game.EntityComponents.GameLogic;
 using VRage.Game.Components;
 using VRage.Game.Entity;
 using VRage.ModAPI;
@@ -76,6 +77,7 @@ internal sealed partial class PartitionPersistence
 
         /// <summary>#1354: the NPC grids among the members, for the registry's NPC census.</summary>
         public object[] Npc;
+        public Dictionary<long, long> Encounters;
         public object[] Grids;
         public VRageMath.BoundingSphereD Sphere;
         public long EstimatedSnapshotBytes;
@@ -98,7 +100,12 @@ internal sealed partial class PartitionPersistence
 
     /// <summary>SE-1892: holds a just-recovered partition online when its newest save (the offline Final) is younger
     /// than offline.rewakeWindowSeconds. Returns the hold's end, or null when none applies.</summary>
-    internal static DateTime? RewakeHold(DateTime now, DateTimeOffset? saveCreated, int windowSeconds, int holdSeconds)
+    internal static DateTime? RewakeHold(
+        DateTime now,
+        DateTimeOffset? saveCreated,
+        int windowSeconds,
+        int holdSeconds
+    )
     {
         if (holdSeconds <= 0 || saveCreated is not { } saved)
             return null;
@@ -130,6 +137,7 @@ internal sealed partial class PartitionPersistence
                 + "Z (SE-1892)"
         );
     }
+
     private DateTime m_nextOfflineSweep;
     private DateTime m_nextGridBackfill;
     private Task m_gridBackfill;
@@ -553,8 +561,25 @@ internal sealed partial class PartitionPersistence
             return "type:" + entity.GetType().Name;
         if (entity.MarkedForClose || !entity.InScene)
             return "closing";
-        if (entity is MyCubeGrid grid && ClusterConfig.GetBool("offline.velocityReadiness"))
-            return OfflineCompensation.Readiness(grid);
+        if (entity is MyCubeGrid grid)
+        {
+            // Unloading the last grid unregisters the encounter and deletes the marker that
+            // players would need to find it. Its vanilla removal timer runs on the owning node.
+            if (
+                grid.Components.TryGet<MyGlobalEncounterComponent>(out var encounter)
+                && encounter.RegisteredAsEncounter
+            )
+                return "global-encounter";
+            if (
+                grid.IsNpcSpawnedGrid
+                && grid.BigOwners.Count == 0
+                && ClusterConfig.GetBool("drops.strongOnly")
+                && DropContainerRemovalService.DropComponent(grid)?.Competetive == true
+            )
+                return "strong-signal";
+            if (ClusterConfig.GetBool("offline.velocityReadiness"))
+                return OfflineCompensation.Readiness(grid);
+        }
         MyPhysicsComponentBase physics = entity.Physics;
         if (physics == null || physics.IsStatic)
             return null;
@@ -727,6 +752,7 @@ internal sealed partial class PartitionPersistence
             .ToArray();
         long[] ids = entities.Select(entity => entity.EntityId).ToArray();
         object[] npc = NpcCensusService.Rows(entities);
+        Dictionary<long, long> encounters = EncounterDirectorService.DeadlinesIn(entities);
         object[] grids = ClusterConfig.GetBool("offline.offerGrids")
             ? OfflineGridRows.Rows(entities)
             : null;
@@ -750,6 +776,7 @@ internal sealed partial class PartitionPersistence
             Antennas = JsonSerializer.Serialize(antennas),
             RespawnPoints = JsonSerializer.Serialize(respawns),
             Npc = npc,
+            Encounters = encounters,
             Grids = grids,
             OfflineGameFrame = OfflineCompensation.FrozenFrame(save.Profiles),
             ProfileSummary = OfflineCompensation.Summary(save.Profiles),
@@ -871,6 +898,7 @@ internal sealed partial class PartitionPersistence
                 MemberIds = entities.Select(entity => entity.EntityId).ToArray(),
                 MemberSpheres = spheres,
                 Npc = NpcCensusService.Rows(entities),
+                Encounters = EncounterDirectorService.DeadlinesIn(entities),
                 Grids = grids,
                 Sphere = partition.Sphere,
                 EstimatedSnapshotBytes = bytes,
@@ -1015,6 +1043,7 @@ internal sealed partial class PartitionPersistence
             Antennas = JsonSerializer.Serialize(transition.Antennas),
             RespawnPoints = JsonSerializer.Serialize(transition.RespawnPoints),
             transition.Npc,
+            transition.Encounters,
             transition.Grids,
             OfflineGameFrame = OfflineCompensation.FrozenFrame(transition.Save.Profiles),
             ProfileSummary = OfflineCompensation.Summary(transition.Save.Profiles),

@@ -39,9 +39,11 @@ public static class MyGlobalEncountersGeneratorSeams
     // the planets and the player really are and vanilla's own position pickers work unchanged.
     public static bool ClusterSpawnGlobalEncounter(
         this MyGlobalEncountersGenerator self,
-        string spawnGroupSubtype
+        string spawnGroupSubtype,
+        out long encounterId
     )
     {
+        encounterId = 0;
         if (MySession.Static == null || string.IsNullOrEmpty(spawnGroupSubtype))
         {
             return false;
@@ -82,7 +84,7 @@ public static class MyGlobalEncountersGeneratorSeams
         {
             return false;
         }
-        long encounterId = MyEntityIdentifier.AllocateId(
+        encounterId = MyEntityIdentifier.AllocateId(
             MyEntityIdentifier.ID_OBJECT_TYPE.GLOBAL_ENCOUNTER
         );
         self.SpawnVoxels(encounterId, spawnGroupDefinition, spawnPosition);

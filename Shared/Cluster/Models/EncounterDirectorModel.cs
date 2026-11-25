@@ -35,7 +35,8 @@ public sealed record ClusterEncounterResult(
     string SpawnGroup,
     int EncountersBefore,
     int EncountersAfter,
-    string Error
+    string Error,
+    long EncounterId = 0
 );
 
 public static class EncounterDirectorCodec

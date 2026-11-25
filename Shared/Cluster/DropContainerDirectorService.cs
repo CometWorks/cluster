@@ -318,7 +318,7 @@ public static class DropContainerDirectorService
                     null,
                     player.IdentityId,
                     player.ClientId,
-                    Competitive: false
+                    Competitive: ClusterConfig.GetBool("drops.strongOnly")
                 )
             );
         }

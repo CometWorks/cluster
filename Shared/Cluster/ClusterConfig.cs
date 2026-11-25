@@ -420,6 +420,8 @@ public static class ClusterConfig
         // unknown (none yet, or older than 60 s) every due drop is skipped. Read per sweep (5 s). SE-1146: default 5 (was 3), and
         // the WA deletes the oldest drop GPS markers over it (ContainerGpsSweep).
         ["drops.maxActive"] = "5",
+        // Spawn the shared competitive kind even if the target is alone on its physical node.
+        ["drops.strongOnly"] = "false",
         // SE-1146: seconds a NEW container drop stays in the world before vanilla removes it (and the World Authority's drop GPS
         // markers last this long plus up to a minute); 0 = vanilla's (the drop system definition's 15 min). Read by the node at
         // each spawn and by the WA's marker sweep (5 s). A bench sets a few seconds so drops come and go within a lane.

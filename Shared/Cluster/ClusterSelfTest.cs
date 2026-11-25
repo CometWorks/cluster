@@ -110,6 +110,7 @@ internal static partial class ClusterSelfTest
         ("meteor-lifetime", MeteorLifetimeRules),
         ("bot-ship-cleanup", BotShipCleanupRules),
         ("drop-cap", DropCapRules),
+        ("encounter-cap", EncounterCapRules),
         ("mod-message-to-server", ModMessageToServer),
         ("ledger-replay", LedgerReplay),
         ("handover-diff-budget", HandoverDiffBudget),
