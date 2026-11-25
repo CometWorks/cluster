@@ -300,7 +300,7 @@ internal static class StorePaymentJournal
                 // Include directory creation, open, serialization and the buffered write.
                 long writeEnded = flushStarted != 0 ? flushStarted : ended;
                 HitchRecorder.AddTicks(
-                    HitchRecorder.Bucket.StoreJournalWrite,
+                    HitchRecorder.Bucket.StoreJournalAppend,
                     writeEnded - acquired
                 );
             }

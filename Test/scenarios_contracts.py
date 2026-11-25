@@ -260,10 +260,32 @@ def p3_con_ledger(bench) -> None:
         # The block is elsewhere: the restored World Authority refunds its owner from the record of the acceptance.
         expect("abandon after the failover", REWARD + COLLATERAL, 0)
         ledger.wait_listed("failover: no node lists the abandoned contract any more", failover, acceptor, False)
+
+        # -- both answers to an acceptance lost: that attempt withdraws its own acceptance, and a retry wins --
+        holder = _all_partitions(bench).get(partition) or "node-1"
+        lost = ledger.post(holder, block)
+        expect("posted for the lost acceptance", -REWARD, 0)
+        ledger.node(holder, "/test-drop-command-responses?subsystem=contracts&count=2", "POST")
+        answer = ledger.node(holder, f"/contract-test-accept?contract={lost}&identity={acceptor}&block={block}", "POST")
+        bench.record("accept-lost-replies", answer)
+        dropped = ledger.node(holder, "/test-drop-command-responses")
+        _require(bench, "lost accept: both answers to the acceptance were dropped", dropped.get("dropped") == 2,
+                 json.dumps(dropped))
+        bench.check("lost accept: the node refused the unanswered acceptance", not answer.get("accepted"),
+                    json.dumps(answer))
+        expect("lost accept: the collateral came back", 0, 0)
+        ledger.wait_listed("lost accept: the winning attempt withdrew its own acceptance everywhere", lost, acceptor, False)
+        ledger.accept(holder, lost, acceptor, block)
+        expect("accepted after the lost answers", 0, -COLLATERAL)
+        ledger.wait_listed("lost accept: the retried acceptance is listed everywhere", lost, acceptor, True)
+        answer = ledger.node(holder, f"/contract-test-abandon?contract={lost}&identity={acceptor}", "POST")
+        bench.check("lost accept: the retried contract can be abandoned", answer.get("result") == "Success", json.dumps(answer))
+        expect("abandon after the lost answers", REWARD + COLLATERAL, 0)
     finally:
         _try(lambda: bench.cluster.post("/automatic/resume"))
-    bench.exercised(block=block, contracts=[finished, timed, restarted, failover],
-                    legs="accept, timeout at the WA, finish on the other node, replay, node restart, WA failover")
+    bench.exercised(block=block, contracts=[finished, timed, restarted, failover, lost],
+                    legs="accept, timeout at the WA, finish on the other node, replay, node restart, WA failover, "
+                         "lost acceptance answers")
 
 
 def _node_line(bench, node: str, pattern: str, timeout: float = 5) -> str | None:
