@@ -150,9 +150,14 @@ public static class GpsAuthorityPatch
     /// <summary>
     /// SE-1146: vanilla deletes a drop container's GPS (identity 0 = every identity) only on the node holding the drop, so the
     /// World Authority kept it and its next table put the marker back everywhere: a Strong Unknown Signal outlived its drop.
+    /// SE-1921: a cluster close (handover release, offline unload) unregisters a global encounter's last component on the
+    /// node it leaves, and vanilla then deleted the encounter's marker for everyone. The encounter lives on, on the next
+    /// node or in a save, so a delete inside <see cref="ClusterCloseScope"/> is dropped. Vanilla's real removals close
+    /// outside the scope and still delete the marker.
     /// </summary>
     public static bool DeleteContainerPrefix(long entityId, long identityId) =>
-        Forward(
+        !(ClusterCloseScope.Active && !ClusterRuntime.IsWorldAuthority)
+        && Forward(
             new GpsAuthorityRequest(
                 "DeleteContainer",
                 Empty(identityId) with

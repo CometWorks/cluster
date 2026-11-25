@@ -54,7 +54,9 @@ internal sealed class OfflinePartition
 
     /// <summary>#1354: the NPC grids among the members at the freeze, for the NPC census (NpcCensus.cs).</summary>
     public NpcGrid[] Npc { get; set; } = [];
-    public long[]? Encounters { get; set; }
+
+    /// <summary>SE-1921: the global encounters among the members at the freeze, id -> removal deadline (unix s, 0 = none).</summary>
+    public Dictionary<long, long>? Encounters { get; set; }
 
     /// <summary>SE-810: every grid among the members at the freeze (OfflineGrids.cs). Null while not known: the row came from a
     /// node that predates the field, and a node is to read it from the Final. Never in the table the nodes poll.</summary>
@@ -88,7 +90,7 @@ internal sealed record OfflineRequest(
 
     /// <summary>#1354: the NPC grids among the members. Null from a node that predates the field.</summary>
     public NpcGrid[]? Npc { get; init; }
-    public long[]? Encounters { get; init; }
+    public Dictionary<long, long>? Encounters { get; init; }
 
     /// <summary>SE-810: the grids among the members. Null from a node that predates the field.</summary>
     public OfflineGrid[]? Grids { get; init; }

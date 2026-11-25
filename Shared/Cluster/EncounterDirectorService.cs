@@ -36,8 +36,10 @@ public static class EncounterDirectorService
     private static readonly string Node =
         Environment.GetEnvironmentVariable("CLUSTER_NODE_ID") ?? string.Empty;
 
-    // Give a new prefab time to enter a node report and a handed-over encounter time to reappear.
-    private const double CensusGraceMs = 60_000;
+    // Give a new prefab time to enter a node report and a handed-over encounter time to reappear. A big encounter
+    // grid can be between nodes for over a minute; holding a removed one's slot a little longer costs nothing
+    // against a spawn timer of minutes.
+    private const double CensusGraceMs = 180_000;
     private static readonly Dictionary<long, double> RecentEncounters = new();
     private static NpcCensusService.Snapshot m_lastEncounterCensus;
     private static double m_nextSweep;
@@ -117,7 +119,11 @@ public static class EncounterDirectorService
             if (census?.Encounters != null && census != m_lastEncounterCensus)
             {
                 m_lastEncounterCensus = census;
-                RefreshEncounters(RecentEncounters, census.Encounters, now);
+                RefreshEncounters(
+                    RecentEncounters,
+                    Counted(census.Encounters, DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
+                    now
+                );
             }
             if (now < m_nextSweep)
                 return;
@@ -179,9 +185,16 @@ public static class EncounterDirectorService
         });
     }
 
+    /// <summary>
+    /// SE-1921: the encounters that hold a slot. One whose removal deadline passed no longer does: it sits in a
+    /// partition frozen at a cluster stop, where vanilla's timer cannot run, and its node removes it on the wake.
+    /// </summary>
+    internal static IEnumerable<long> Counted(Dictionary<long, long> encounters, long nowUnix) =>
+        encounters.Where(pair => pair.Value == 0 || pair.Value > nowUnix).Select(pair => pair.Key);
+
     internal static void RefreshEncounters(
         Dictionary<long, double> recent,
-        long[] reported,
+        IEnumerable<long> reported,
         double now
     )
     {
@@ -432,20 +445,59 @@ public static class EncounterDirectorService
         );
     }
 
-    internal static long[] ActiveIds() =>
-        MySession
-            .Static?.GetComponent<MyGlobalEncountersGenerator>()
-            ?.m_encounterComponents.Keys.ToArray()
-        ?? [];
-
-    internal static long[] IdsIn(IEnumerable<MyEntity> entities)
+    /// <summary>SE-1921: this node's encounters, id -> the unix second vanilla's removal timer runs out (0 = none).</summary>
+    internal static Dictionary<long, long> ActiveDeadlines()
     {
-        var ids = new HashSet<long>();
-        foreach (var entity in entities)
-            if (entity.Components.TryGet<MyGlobalEncounterComponent>(out var component))
-                ids.Add(component.EncounterId);
-        return ids.ToArray();
+        var generator = MySession.Static?.GetComponent<MyGlobalEncountersGenerator>();
+        var deadlines = new Dictionary<long, long>();
+        if (generator != null)
+            foreach (long id in generator.m_encounterComponents.Keys)
+                deadlines[id] = Deadline(generator, id);
+        return deadlines;
     }
+
+    /// <summary>SE-1921: the encounters among the members of a partition going offline, with their deadlines.</summary>
+    internal static Dictionary<long, long> DeadlinesIn(IEnumerable<MyEntity> entities)
+    {
+        var generator = MySession.Static?.GetComponent<MyGlobalEncountersGenerator>();
+        var deadlines = new Dictionary<long, long>();
+        if (generator != null)
+            foreach (var entity in entities)
+                if (entity.Components.TryGet<MyGlobalEncounterComponent>(out var component))
+                    deadlines[component.EncounterId] = Deadline(generator, component.EncounterId);
+        return deadlines;
+    }
+
+    // Vanilla counts the timer down in whole minutes, so the deadline is good to a minute.
+    private static long Deadline(MyGlobalEncountersGenerator generator, long id) =>
+        generator.m_encountersTimer.TryGetValue(id, out int minutes)
+            ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() + Math.Max(0, minutes) * 60L
+            : 0;
+
+    /// <summary>
+    /// SE-1921: vanilla starts a fresh random removal timer (GlobalEncounterMin/MaxRemovalTimer) whenever an encounter
+    /// registers on a node, which a handover or an offline wake does, so an encounter that moved lived on. The
+    /// cluster census carries the deadline the encounter had on its last node or at its freeze; the registering
+    /// node keeps that instead, never a later one. An encounter overdue after a long sleep goes at the next minute.
+    /// </summary>
+    internal static void KeepDeadline(MyGlobalEncountersGenerator generator, long id)
+    {
+        if (
+            !ClusterRuntime.IsClustered
+            || ClusterRuntime.IsWorldAuthority
+            || NpcCensusService.Current?.Encounters is not { } known
+            || !known.TryGetValue(id, out long deadline)
+            || deadline == 0
+            || !generator.m_encountersTimer.TryGetValue(id, out int minutes)
+        )
+            return;
+        int left = RemainingMinutes(deadline, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        if (left < minutes)
+            generator.m_encountersTimer[id] = left;
+    }
+
+    internal static int RemainingMinutes(long deadline, long nowUnix) =>
+        (int)Math.Min(int.MaxValue, Math.Max(0, (deadline - nowUnix + 59) / 60));
 
     /// <summary>Reports the executing node's encounter grids so a lane can probe their partitions.</summary>
     public static object EncounterGrids()

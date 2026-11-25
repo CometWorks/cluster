@@ -152,17 +152,60 @@ internal static partial class SelfTest
             "#1443: a drop row writes d, and e only when known: " + dropWire
         );
 
-        var encounters = DirectGateway.MergeEncounterIds(
-            [Report() with { Encounters = [10, 20] }, Report() with { Encounters = [20] }],
-            [new OfflinePartition { Encounters = [20, 30] }]
+        var encounters = DirectGateway.MergeEncounters(
+            [
+                Report() with
+                {
+                    Encounters = new() { [10] = 0, [20] = 5000 },
+                },
+                Report() with
+                {
+                    Encounters = new() { [20] = 4000 },
+                },
+            ],
+            [
+                new OfflinePartition
+                {
+                    Encounters = new() { [20] = 4500, [30] = 3000 },
+                },
+            ]
         );
         Check(
-            encounters != null && encounters.ToHashSet().SetEquals([10L, 20L, 30L]),
-            "encounters shared by nodes and frozen partitions count once"
+            encounters != null
+                && encounters.Count == 3
+                && encounters[10] == 0
+                && encounters[20] == 4000
+                && encounters[30] == 3000,
+            "SE-1921: an encounter on several nodes or frozen counts once, with its earliest removal deadline"
         );
         Check(
-            DirectGateway.MergeEncounterIds([Report()], []) == null,
-            "a node without encounter reports leaves the cluster count unknown"
+            DirectGateway.MergeEncounters([Report()], []) == null,
+            "SE-1921: a node without encounter reports leaves the cluster count unknown"
+        );
+        // The node writes both by hand or as anonymous objects (PartitionManager.ReportJson, PartitionPersistence.Offline).
+        PartitionReport wireReport = JsonSerializer.Deserialize<PartitionReport>(
+            "{\"syncDistance\":1,\"margin\":1,\"partitions\":[],\"evaluatedAt\":0,\"encounters\":{\"77\":1761000000,\"78\":0}}",
+            nodeJson
+        )!;
+        OfflineRequest encounterOffer = JsonSerializer.Deserialize<OfflineRequest>(
+            JsonSerializer.Serialize(
+                new { Encounters = new Dictionary<long, long> { [77] = 1761000000 } }
+            ),
+            nodeJson
+        )!;
+        Check(
+            wireReport.Encounters is { Count: 2 }
+                && wireReport.Encounters[77] == 1761000000
+                && encounterOffer.Encounters is { Count: 1 }
+                && encounterOffer.Encounters[77] == 1761000000,
+            "SE-1921: encounter deadlines bind from a node report and an offline offer"
+        );
+        string censusWire = JsonSerializer.Serialize(
+            new NpcCensus(0, 0, 0, [], Encounters: encounters)
+        );
+        Check(
+            censusWire.Contains("\"encounters\":{") && censusWire.Contains("\"20\":4000"),
+            "SE-1921: the census writes encounters as id -> deadline: " + censusWire
         );
 
         // The node's offline offer (PartitionPersistence.Offline: anonymous objects, default System.Text.Json naming).

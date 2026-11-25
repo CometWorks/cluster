@@ -73,7 +73,9 @@ public static class NpcCensusService
 
         /// <summary>#1443: the unopened container drops, online and offline.</summary>
         public DropRow[] Drops;
-        public long[] Encounters;
+
+        /// <summary>SE-1921: the cluster's global encounters, id -> removal deadline (unix s, 0 = none); null = unknown.</summary>
+        public Dictionary<long, long> Encounters;
 
         /// <summary>The registry's age of the census when it answered, and the local time of the answer.</summary>
         public double AgeAtAnswer,
@@ -270,9 +272,9 @@ public static class NpcCensusService
             AgeAtAnswer = root.GetProperty("ageSeconds").GetDouble(),
             AnsweredAt = answeredAt,
             Encounters =
-                root.TryGetProperty("encounters", out JsonElement ids)
-                && ids.ValueKind == JsonValueKind.Array
-                    ? JsonSerializer.Deserialize<long[]>(ids)
+                root.TryGetProperty("encounters", out JsonElement encounters)
+                && encounters.ValueKind == JsonValueKind.Object
+                    ? JsonSerializer.Deserialize<Dictionary<long, long>>(encounters)
                     : null,
             BackupAt =
                 root.TryGetProperty("backupAt", out JsonElement backupAt)

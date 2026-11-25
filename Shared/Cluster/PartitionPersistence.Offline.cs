@@ -77,7 +77,7 @@ internal sealed partial class PartitionPersistence
 
         /// <summary>#1354: the NPC grids among the members, for the registry's NPC census.</summary>
         public object[] Npc;
-        public long[] Encounters;
+        public Dictionary<long, long> Encounters;
         public object[] Grids;
         public VRageMath.BoundingSphereD Sphere;
         public long EstimatedSnapshotBytes;
@@ -752,7 +752,7 @@ internal sealed partial class PartitionPersistence
             .ToArray();
         long[] ids = entities.Select(entity => entity.EntityId).ToArray();
         object[] npc = NpcCensusService.Rows(entities);
-        long[] encounters = EncounterDirectorService.IdsIn(entities);
+        Dictionary<long, long> encounters = EncounterDirectorService.DeadlinesIn(entities);
         object[] grids = ClusterConfig.GetBool("offline.offerGrids")
             ? OfflineGridRows.Rows(entities)
             : null;
@@ -898,7 +898,7 @@ internal sealed partial class PartitionPersistence
                 MemberIds = entities.Select(entity => entity.EntityId).ToArray(),
                 MemberSpheres = spheres,
                 Npc = NpcCensusService.Rows(entities),
-                Encounters = EncounterDirectorService.IdsIn(entities),
+                Encounters = EncounterDirectorService.DeadlinesIn(entities),
                 Grids = grids,
                 Sphere = partition.Sphere,
                 EstimatedSnapshotBytes = bytes,

@@ -29,7 +29,8 @@ internal sealed record PartitionReport(
     // cost only when EVERY node in a pass reports true - the two units are not commensurable, so a
     // mixed fleet keeps comparing in PCU.
     [property: JsonPropertyName("simLoadSupported")] bool SimLoadSupported = false,
-    [property: JsonPropertyName("encounters")] long[]? Encounters = null
+    // SE-1921: each active global encounter id -> the unix second its removal timer runs out, 0 = no timer.
+    [property: JsonPropertyName("encounters")] Dictionary<long, long>? Encounters = null
 );
 
 internal sealed record PartitionInfo(
