@@ -350,6 +350,9 @@ def p3_con_old_authority(bench):
             state = player("status")
             return state if state["acceptReplies"] >= count else None
 
+        def granted(state):
+            return state if state and state["contract"].get("active") else None
+
         player("watch-accept-replies")
         intents = (
             bench.cluster.config.node_data(_nodes(bench)[origin])
@@ -400,9 +403,7 @@ def p3_con_old_authority(bench):
 
         player("queue-accept")
         accepted = wait_until(
-            lambda: (lambda s: s if s["contract"]["active"] else None)(
-                replies(2) or {"contract": {}}
-            ),
+            lambda: granted(replies(2)),
             RECOVERY_TIMEOUT,
             "the same player takes the offer once the authority knows Reserve",
         )
