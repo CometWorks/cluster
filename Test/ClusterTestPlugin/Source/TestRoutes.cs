@@ -100,6 +100,7 @@ internal static class TestRoutes
         NpcCensusRoutes.Register(); // #1354 the NPC census slot as mod-mes calls it, and a stand-in gap band
         MeteorRoutes.Register(); // #1381 a meteor probe and its carried lifetime
         BagTestRoutes.Register(); // SE-1313 inventory bags for the parallel staged build
+        HandDrillTestRoutes.Register(); // SE-1940 a character holding a hand drill across a handover
         JumpTestRoutes.Register(); // SE-1871 a jump started on the server, no client
         OfflineTestRoutes.Register(); // SE-347 shared LoadRecovery apply/crash boundary and real production
         RespawnFaultRoutes.Register(); // SE-1124 a split or a refusal at a respawn switch target
