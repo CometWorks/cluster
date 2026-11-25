@@ -273,15 +273,14 @@ public static class MyContractPatch
     public static void CommitDeposit()
     {
         s_accepted = default;
+        var reservation = s_playerReservation;
+        s_playerReservation = default;
         IDisposable scope = s_deposit;
         if (scope != null)
         {
-            MyContractSeams.ClusterCommitDeposit?.Invoke(scope, s_playerReservation.Operation);
-            if (s_playerReservation.Operation != Guid.Empty)
-                ContractLedger.PlayerDepositCommitted(
-                    s_playerReservation.Contract,
-                    s_playerReservation.Operation
-                );
+            MyContractSeams.ClusterCommitDeposit?.Invoke(scope, reservation.Operation);
+            if (reservation.Operation != Guid.Empty)
+                ContractLedger.PlayerDepositCommitted(reservation.Contract, reservation.Operation);
         }
     }
 

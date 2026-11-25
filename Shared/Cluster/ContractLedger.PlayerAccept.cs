@@ -20,7 +20,7 @@ internal static partial class ContractLedger
         public readonly MyContract Offer = offer;
         public readonly long Player = player;
         public readonly Guid Operation = Guid.NewGuid();
-        public bool Completing;
+        public bool AllowGrant;
         public bool Committed;
     }
 
@@ -36,10 +36,9 @@ internal static partial class ContractLedger
         approved = Guid.Empty;
         if (!PlayerAccepts.TryGetValue(offer.Id, out var pending))
             return true;
-        if (pending.Offer != offer || pending.Player != player)
+        if (pending.Offer != offer || pending.Player != player || !pending.AllowGrant)
             return false;
-        if (!pending.Completing)
-            return false;
+        pending.AllowGrant = false;
         approved = pending.Operation;
         return true;
     }
@@ -61,11 +60,7 @@ internal static partial class ContractLedger
             }
             m_intents = folder;
         }
-        catch (IOException error)
-        {
-            Console.WriteLine($"[ClusterPlugin] contract reservations unavailable: {error}");
-        }
-        catch (UnauthorizedAccessException error)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
             Console.WriteLine($"[ClusterPlugin] contract reservations unavailable: {error}");
         }
@@ -225,6 +220,7 @@ internal static partial class ContractLedger
         {
             var result = MyContractResults.Fail_NotPossible;
             bool uncertain = false;
+            bool activating = false;
             try
             {
                 if (
@@ -245,7 +241,8 @@ internal static partial class ContractLedger
                     && (block.AnyoneCanUse || block.HasPlayerAccess(player))
                 )
                 {
-                    pending.Completing = true;
+                    activating = true;
+                    pending.AllowGrant = true;
                     result = system.ActivateContract(player, contract, Station(), block.EntityId);
                     if (result == MyContractResults.Success)
                     {
@@ -267,13 +264,14 @@ internal static partial class ContractLedger
             {
                 // A mod callback or a journal write may have failed during vanilla activation.
                 // Recovery reads the durable payment decision before releasing the reservation.
-                uncertain = pending.Completing && !pending.Committed;
+                uncertain = activating && !pending.Committed;
                 Console.WriteLine(
                     $"[ClusterPlugin] player activation failed for {contract}: {error}"
                 );
             }
             finally
             {
+                pending.AllowGrant = false;
                 bool confirm = pending.Committed;
                 _ = Task.Run(async () =>
                 {
