@@ -302,17 +302,23 @@ A pass requires full repair on that grid while the disabled grid retains its
 measured damage. The test world shortens nanite travel using the mod's config.
 This case covers same-grid repair in creative mode.
 
-### Grid references after handover
+### Entity references across handover and deletion
 
 From `Test/`, run `python grid_reference_lifetime.py /path/to/new-results` with the
-usual bench environment, test plugin and a claimed slot. The source node spawns
-two ordinary 27-block armor grids in one partition. It holds one grid strongly
-and tracks both grid instances, a sample block from each, and their physics
-wrappers weakly. The cluster transfers the whole partition to the other node.
+usual bench environment, test plugin and a claimed slot. Use `--case grid`,
+`--case battery` or `--case safe-zone` for one scenario.
 
-The report records process IDs, live lookups and the retired source objects.
-It drains the normal game callback queue and forces collections before and
-after releasing the strong reference. Surviving weak witnesses have other
-possible roots. The grid retention verdict stays inconclusive when the weak-only
-grid survives or the held grid survives release. The sampled block and physics
-observations describe those individual objects. They do not measure heap size.
+| Entity | Lifecycle under test |
+| --- | --- |
+| Grid | Two 27-block armor grids move together from node 1 to node 2. Weak witnesses also track one slim armor block and the physics wrapper of each original grid. |
+| Battery fat block | Two matching grids each carry one battery. The test looks up and caches each battery's own entity ID before moving the parent grids. |
+| Blockless admin safe zone | Two admin-created zones replicate to both ordinary nodes. The test deletes them and checks both local copies disappear. A block-owned zone restored with a moving generator has a different lifecycle. |
+
+For each pair the source holds one object strongly and keeps only a weak witness
+to the other. A static handler counts source-side ModAPI `OnClose` events by ID.
+The report records entity types, process IDs, current lookups, retired objects
+and closure counts. It flushes the normal game callback queue and forces
+collections before and after releasing the strong reference. The reachability
+result stays inconclusive when a weak-only or released object survives. The
+sampled block and physics observations describe individual objects. Neither
+process RSS nor retained heap bytes are measured.

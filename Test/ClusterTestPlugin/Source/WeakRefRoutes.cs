@@ -23,6 +23,15 @@ internal static class WeakRefRoutes
     private static readonly Dictionary<long, (WeakReference Block, WeakReference Physics)> Parts =
         new();
 
+    private static readonly Dictionary<long, int> ClosedEvents = new();
+
+    private static void Closed(VRage.ModAPI.IMyEntity target)
+    {
+        lock (Tracked)
+            ClosedEvents[target.EntityId]++;
+        target.OnClose -= Closed;
+    }
+
     public static void Register()
     {
         // Track the looked-up instance; a handover probe can also retain an explicit strong root.
@@ -47,6 +56,13 @@ internal static class WeakRefRoutes
                         lock (Tracked)
                         {
                             Tracked[entity] = new WeakReference(root);
+                            if (parts)
+                            {
+                                ClosedEvents[entity] = 0;
+                                var modEntity = (VRage.ModAPI.IMyEntity)root;
+                                modEntity.OnClose -= Closed;
+                                modEntity.OnClose += Closed;
+                            }
                             if (hold)
                                 Held[entity] = root;
                             if (parts && root is MyCubeGrid grid)
@@ -100,9 +116,16 @@ internal static class WeakRefRoutes
                                     entity,
                                     found,
                                     localId = local?.EntityId,
+                                    localType = local?.GetType().Name,
+                                    fatBlocks = (local as MyCubeGrid)
+                                        ?.GetBlocks()
+                                        .Where(block => block.FatBlock != null)
+                                        .Select(block => block.FatBlock.EntityId)
+                                        .ToArray(),
                                     localClosed = local?.Closed,
                                     localBlocks = (local as MyCubeGrid)?.BlocksCount,
                                     cachedId = cached?.EntityId,
+                                    cachedType = cached?.GetType().Name,
                                     cachedClosed = cached?.Closed,
                                     cachedBlocks = (cached as MyCubeGrid)?.BlocksCount,
                                     sampledBlockAlive = parts.Block?.IsAlive,
@@ -111,6 +134,12 @@ internal static class WeakRefRoutes
                                         && cached != null
                                         && ReferenceEquals(local, cached),
                                     held = Held.ContainsKey(entity),
+                                    sourceCloseEvents = ClosedEvents.TryGetValue(
+                                        entity,
+                                        out var count
+                                    )
+                                        ? (int?)count
+                                        : null,
                                 };
                         }
                     })
