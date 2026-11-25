@@ -16,8 +16,8 @@ public static class MyContractSeams
     // Activate, after the deposit: the World Authority takes the contract into its ledger of accepted contracts
     // (contract, accepting player). False refuses the activation. Withdraw (contract id) undoes it when Activate
     // does not get as far as the commit.
-    public static Func<MyContract, long, bool> ClusterAccept;
-    public static Action<long> ClusterWithdraw;
+    public static Func<MyContract, long, Guid, bool> ClusterAccept;
+    public static Action<long, Guid> ClusterWithdraw;
 
     // Finish/Fail: every node holding a copy of a contract could reach a terminal state on its own - a player
     // finishing here while the World Authority's timeout fails it there - and each would settle the reward and

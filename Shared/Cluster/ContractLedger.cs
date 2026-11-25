@@ -102,7 +102,13 @@ internal static class ContractLedger
     private static readonly Dictionary<long, Unanswered> UnansweredSettlements = new();
     private static double m_nextUnansweredRetry;
 
-    internal sealed record Acceptance(long Id, long Block, long BlockOwner, long Player);
+    internal sealed record Acceptance(
+        long Id,
+        long Block,
+        long BlockOwner,
+        long Player,
+        Guid Operation = default
+    );
 
     internal sealed record Settlement(long Id, string Kind, long Player);
 
@@ -117,7 +123,8 @@ internal static class ContractLedger
         bool PunishOwner = true,
         long FirstOwner = 0,
         long[] Owners = null,
-        bool ConditionFinished = false
+        bool ConditionFinished = false,
+        Guid AcceptanceOperation = default
     );
 
     private sealed record Result(bool Success, string Reason = null);
@@ -160,7 +167,7 @@ internal static class ContractLedger
 
     // ---- seams, on the node running the vanilla code (game thread) ----
 
-    private static bool Accept(MyContract contract, long playerId)
+    private static bool Accept(MyContract contract, long playerId, Guid operation)
     {
         if (!ClusterRuntime.IsClustered || contract.Id <= 0)
             return true;
@@ -174,7 +181,8 @@ internal static class ContractLedger
                     contract.Id,
                     contract.StartBlock,
                     blockOwner,
-                    playerId
+                    playerId,
+                    operation
                 );
             return true;
         }
@@ -188,8 +196,10 @@ internal static class ContractLedger
                 Serialize(new[] { builder }),
                 playerId,
                 contract.StartBlock,
-                blockOwner
-            )
+                blockOwner,
+                AcceptanceOperation: operation
+            ),
+            operation
         );
         if (result?.Success != true)
         {
@@ -203,7 +213,7 @@ internal static class ContractLedger
             );
             // Unanswered, the World Authority may have taken it all the same.
             if (result == null)
-                Send(new Request("Withdraw", contract.Id));
+                Send(new Request("Withdraw", contract.Id, AcceptanceOperation: operation));
             // A stale offer: the block's entry stops carrying it at the next save (ContractOffers.Saving).
             else if (result.Reason == AlreadySettled)
             {
@@ -218,19 +228,23 @@ internal static class ContractLedger
         return true;
     }
 
-    private static void Withdraw(long contractId)
+    private static void Withdraw(long contractId, Guid operation)
     {
         if (!ClusterRuntime.IsClustered || contractId <= 0)
             return;
         if (ClusterRuntime.IsWorldAuthority)
         {
             lock (Sync)
-                Accepted.Remove(contractId);
+                if (
+                    Accepted.TryGetValue(contractId, out var accepted)
+                    && accepted.Operation == operation
+                )
+                    Accepted.Remove(contractId);
             return;
         }
         lock (Sync)
             AcceptedHere.Remove(contractId);
-        Send(new Request("Withdraw", contractId));
+        Send(new Request("Withdraw", contractId, AcceptanceOperation: operation));
     }
 
     private static bool TrySettle(MyContract contract, string kind, bool punishOwner)
@@ -485,7 +499,7 @@ internal static class ContractLedger
         Result result = request.Kind switch
         {
             "Accept" => AcceptHere(request),
-            "Withdraw" => WithdrawHere(request.ContractId),
+            "Withdraw" => WithdrawHere(request.ContractId, request.AcceptanceOperation),
             "Update" => UpdateHere(request),
             "Finish" or "Fail" => Settle(request, origin, ranHere: false),
             "BlockGone" => BlockGoneHere(request.Block),
@@ -549,13 +563,21 @@ internal static class ContractLedger
                 builder.Id,
                 request.Block,
                 request.BlockOwner,
-                request.Player
+                request.Player,
+                request.AcceptanceOperation
             );
         return new Result(true);
     }
 
-    private static Result WithdrawHere(long contractId)
+    private static Result WithdrawHere(long contractId, Guid operation)
     {
+        // Both the acceptance and its refusal may lose their replies. Only the winning attempt can undo it.
+        lock (Sync)
+            if (
+                !Accepted.TryGetValue(contractId, out var accepted)
+                || accepted.Operation != operation
+            )
+                return new Result(false, "different acceptance");
         MySessionComponentContractSystem system =
             System ?? throw new InvalidOperationException("No contract system");
         if (

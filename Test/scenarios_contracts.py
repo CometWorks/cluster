@@ -244,6 +244,16 @@ def p3_con_ledger(bench) -> None:
         ledger.wa = "wa-2"
         ledger.wait_listed("failover: after the World Authority failover every node and wa-2 list the contract", failover, acceptor, True)
         away = _other(_all_partitions(bench).get(partition) or "node-1")
+        # A competing accept that lost both replies may try to undo the winner after failover.
+        rollback = ledger.node(
+            away, f"/contract-test-withdraw-other-attempt?contract={failover}", "POST"
+        )
+        _require(
+            bench,
+            "a different acceptance attempt cannot withdraw the winner after failover",
+            rollback.get("Success") is False,
+            json.dumps(rollback),
+        )
         answer = ledger.node(away, f"/contract-test-abandon?contract={failover}&identity={acceptor}", "POST")
         bench.record("abandon-after-failover", answer)
         bench.check(f"failover: {away}, away from the block, abandoned the contract", answer.get("result") == "Success", json.dumps(answer))
