@@ -580,11 +580,26 @@ internal sealed partial class PartitionPersistence
                     + " ms (#1286)"
             );
         }
+        // Requeued losses get another chance on the next update, after other partitions have been handled.
+        int pendingDiscards = m_lostOwnership.Count;
         while (
             DateTime.UtcNow >= m_discardHeldUntil
+            && pendingDiscards-- > 0
             && m_lostOwnership.TryDequeue(out (ulong Partition, uint Generation) lost)
         )
         {
+            // The target owns this generation's successor before the source finishes its sliced release.
+            // Let that release close its remaining members in order. A failed release clears Releasing,
+            // so the next update can still discard the stale copy. A fenced node must discard immediately.
+            if (
+                !m_fenced
+                && !m_exitRequested
+                && ClusterControlServer.IsReleasing(lost.Partition, lost.Generation)
+            )
+            {
+                m_lostOwnership.Enqueue(lost);
+                continue;
+            }
             // The loss was detected against ownership as it stood at the heartbeat; by the time the
             // game thread drains it, the partition may already be on its way back in (fast ping-pong
             // handover: seen in P3-HND-02, the return import landed 2 ms before this purge and lost
@@ -864,7 +879,7 @@ internal sealed partial class PartitionPersistence
         if (stillInitializing != null)
             foreach (ulong orphan in stillInitializing)
                 m_fencedOrphans.Enqueue(orphan);
-        if (m_exitRequested && DateTime.UtcNow >= m_discardHeldUntil) // bench seam DiscardDelayMs holds the fenced exit too
+        if (m_exitRequested && m_lostOwnership.IsEmpty && DateTime.UtcNow >= m_discardHeldUntil) // bench seam DiscardDelayMs holds the fenced exit too
         {
             m_exitRequested = false;
             MyLog.Default?.WriteLineAndConsole("[ClusterPlugin] empty node termination requested");
