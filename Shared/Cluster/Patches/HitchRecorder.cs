@@ -93,7 +93,7 @@ public static class HitchRecorder
 
         // These three parts are included in StoreJournal.
         public const int StoreJournalLock = 8;
-        public const int StoreJournalWrite = 9;
+        public const int StoreJournalAppend = 9;
         public const int StoreJournalFsync = 10;
         public const int Count = 11;
         public static readonly string[] Names =
@@ -107,7 +107,7 @@ public static class HitchRecorder
             "store_journal",
             "wa_wait",
             "store_journal_lock",
-            "store_journal_write",
+            "store_journal_append",
             "store_journal_fsync",
         };
     }

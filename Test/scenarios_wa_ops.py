@@ -1833,10 +1833,10 @@ def p2_store_burst(bench) -> None:
         total, calls = parts.get("store_journal", (0, 0))
         children = [
             parts.get("store_journal_" + name, (0, 0))
-            for name in ("lock", "write", "fsync")
+            for name in ("lock", "append", "fsync")
         ]
         bench.check(
-            f"{label}: each game-thread journal append reports lock, write and fsync time",
+            f"{label}: each game-thread journal append reports lock, append and fsync time",
             calls > 0
             and all(n == calls for _, n in children)
             and sum(ms for ms, _ in children) <= total + 0.21,
