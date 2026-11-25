@@ -102,6 +102,12 @@ internal static partial class ContractLedger
     // Regular node: contracts accepted here that no snapshot listed yet.
     private static readonly Dictionary<long, double> AcceptedHere = new();
 
+    // Regular node, game thread: offers that an active copy from a snapshot replaced, until the contract settles.
+    private static readonly Dictionary<
+        long,
+        (MySessionComponentContractSystem System, MyContract Offer)
+    > Displaced = new();
+
     // Regular node: settlements sent from here that got no answer, by contract (#1271). The World Authority may have
     // admitted one, so the contract is kept here and the transition runs again under the same operation, whose
     // stored result the World Authority's command ledger replays.
@@ -721,11 +727,9 @@ internal static partial class ContractLedger
     private static Result WithdrawHere(long contractId, Guid operation)
     {
         // Both the acceptance and its refusal may lose their replies. Only the winning attempt can undo it.
+        Acceptance accepted;
         lock (Sync)
-            if (
-                !Accepted.TryGetValue(contractId, out var accepted)
-                || accepted.Operation != operation
-            )
+            if (!Accepted.TryGetValue(contractId, out accepted) || accepted.Operation != operation)
                 return new Result(false, "different acceptance");
         MySessionComponentContractSystem system =
             System ?? throw new InvalidOperationException("No contract system");
@@ -735,6 +739,14 @@ internal static partial class ContractLedger
         )
             return new Result(false, "not an active contract");
         Forget(system, contract);
+        // SE-1925: nothing was settled, so the offer comes back as it was before the acceptance. The regular
+        // nodes restore theirs in Apply.
+        MyObjectBuilder_Contract offer = contract.GetObjectBuilder();
+        offer.State = MyContractStateEnum.Inactive;
+        int acceptor = offer.Owners.LastIndexOf(accepted.Player);
+        if (acceptor >= 0)
+            offer.Owners.RemoveAt(acceptor);
+        system.AddContract(MyContractFactory.CreateInstance(offer));
         return new Result(true);
     }
 
@@ -1129,6 +1141,7 @@ internal static partial class ContractLedger
         {
             lock (Sync)
                 Remember(settlement.Id);
+            Displaced.Remove(settlement.Id);
             // An offer of a settled contract is stale (adopted from an old block entry before this node knew).
             if (!system.m_inactiveContracts.ContainsKey(settlement.Id))
                 continue;
@@ -1168,6 +1181,20 @@ internal static partial class ContractLedger
                     continue;
             system.RemoveActiveContract(id);
             removed++;
+            // Gone unsettled: its acceptance was withdrawn (SE-1925), so the offer it replaced comes back.
+            if (
+                Displaced.TryGetValue(id, out var displaced)
+                && Displaced.Remove(id)
+                && displaced.System == system
+                && !IsSettled(id)
+                && !system.m_inactiveContracts.ContainsKey(id)
+            )
+            {
+                system.AddContract(displaced.Offer);
+                Console.WriteLine(
+                    "[ClusterPlugin] contract offer restored after a withdrawal: contract=" + id
+                );
+            }
         }
         foreach (MyObjectBuilder_Contract builder in wanted.Values)
         {
@@ -1178,7 +1205,13 @@ internal static partial class ContractLedger
                     Refresh(local, builder);
                 continue;
             }
-            system.RemoveInactiveContract(builder.Id); // the offer, where the block was before
+            // The offer, where the block was before. Kept until the contract settles: a withdrawn acceptance
+            // drops the active copy unsettled, and the offer has to come back (SE-1925).
+            if (system.m_inactiveContracts.TryGetValue(builder.Id, out MyContract offer))
+            {
+                Displaced[builder.Id] = (system, offer);
+                system.RemoveInactiveContract(builder.Id);
+            }
             system.AddContract(MyContractFactory.CreateInstance(builder));
             added++;
         }
