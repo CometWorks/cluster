@@ -6478,6 +6478,13 @@ internal sealed partial class ClusterControlServer
             && transfer.CommittedGeneration == 0
         );
 
+    internal static bool IsReleasing(ulong partitionId, uint generation) =>
+        m_sourceTransfers.Values.Any(transfer =>
+            transfer.Releasing
+            && transfer.Partition == partitionId
+            && transfer.Generation == generation
+        );
+
     private static Transfer Get(
         Dictionary<Guid, Transfer> transfers,
         Guid id,

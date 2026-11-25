@@ -886,6 +886,54 @@ def p3_hnd_release_slices(bench) -> None:
         bench.cluster.post("/automatic/resume")
 
 
+def p3_hnd_release_ownership(bench) -> None:
+    """A heartbeat that sees the commit while the source is releasing must leave its slices intact."""
+    from scenarios import _force_handover
+
+    bench.start_cluster()
+    bench.cluster.post("/automatic/pause")
+    try:
+        bench.cluster.handover_config({"release.closePerFrame": "1", "diag.importAddTimers": "true"})
+        wait_until(
+            lambda: bench.cluster.node("node-1", "/config")["values"]["release.closePerFrame"] == "1",
+            30,
+            "source to apply release slicing",
+        )
+        # At one root per frame the release spans two registry heartbeats. The grids share a partition
+        # and have enough space between them to avoid welding or colliding.
+        grids = set()
+        for i in range(144):
+            x, z = 900000 + (i % 12) * 25, (i // 12) * 25
+            reply = bench.cluster.node("node-1", f"/rich-test-spawn?kind=targetdummy&x={x}&y=0&z={z}", "POST")
+            grids.add(reply["grids"][0]["grid"])
+
+        def partition_on(node):
+            return next(
+                (
+                    p
+                    for p in bench.cluster.node(node, "/partitions")["partitions"]
+                    if not p["fenced"] and grids.issubset(m["id"] for m in p["members"])
+                ),
+                None,
+            )
+
+        source = wait_until(lambda: partition_on("node-1"), 60, "all fixture grids to share a source partition")
+        partition = source["id"]
+        _force_handover(bench, "node-1", "node-2", partition)
+        wait_until(lambda: partition_on("node-2"), 60, "all fixture grids to reach the destination")
+        game_log = next((bench.run_root / "node-1-data").glob("SpaceEngineersDedicated_*.log"))
+        close = re.compile(rf"partition={partition} phase=release_close .*? relN=(\d+)")
+        frames = [int(count) for count in close.findall(game_log.read_text(errors="replace"))]
+        bench.record("source-close-counts", frames)
+        bench.check(
+            "the source release closed every transferred grid under the cap",
+            len(grids) == 144 and len(frames) >= len(grids) and all(count == 1 for count in frames),
+            f"{len(grids)} grids transferred, {sum(frames)} roots closed in {len(frames)} slices",
+        )
+    finally:
+        bench.cluster.post("/automatic/resume")
+
+
 def _assert_normalizer_committed(bench) -> None:
     """The normalizer the PACKAGE was built from: its source at the manifest's commit, read from
     the checkout the suite runs in (the package ships binaries only)."""
@@ -1978,6 +2026,7 @@ SCENARIOS_EXT = {
     "T0266-HVK-03": (t0266_hvk_03, "T-0266 harness: cluster release/offline paths in a procedural world", "1"),
     "T0266-HVK-01": (t0266_hvk_01, "closing an entity with an already-destroyed native body does not crash", "1"),
     "P3-HND-RELEASE-SLICES": (p3_hnd_release_slices, "SE-1908: chunked release only schedules surviving world entities", "3"),
+    "P3-HND-RELEASE-OWNERSHIP": (p3_hnd_release_ownership, "SE-1908: heartbeats preserve source release slices", "3"),
     "P3-HND-01": (p3_hnd_01, "round-trip fidelity on rich content, both directions, both modes", "3"),
     "P3-HND-02": (p3_hnd_02, "transient interaction-state matrix", "3"),
     "P3-HND-DUMMY": (p3_hnd_dummy, "SE1-0225: a target dummy round-trips the gate, intact and destroyed", "3"),
