@@ -692,7 +692,8 @@ internal static class ContractTestRoutes
             ?? throw new InvalidOperationException(
                 "Player " + user + " is not attached to this node"
             );
-        if (MyEntities.GetEntityById(blockId) is not MyContractBlock block)
+        var block = MyEntities.GetEntityById(blockId) as MyContractBlock;
+        if (block == null && op != "status")
             throw new ArgumentException("No contract block " + blockId + " on this node");
         long identity = player.Identity.IdentityId;
         MyCharacter character = player.Character;
