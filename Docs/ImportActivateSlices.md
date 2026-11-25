@@ -184,6 +184,11 @@ hierarchy, game logic, update unregistration, render, `OnEntityDelete`, id table
 someone else queued for delete before this frame's `DeleteRememberedEntities`. Read them as the `add*`
 fields.
 
+When the source slices a release, it closes the partition members first. The `release_descendants`
+phase then reports how many child IDs the source captured (`capturedDescendants`) and how many
+survived grid teardown as live world entities (`entities`). Those survivors, including detached
+pilots, close under the same per-frame limit.
+
 ### Node-age tags (T-0401, same knob)
 
 The bench put the first import on a fresh node at 3.70 ms/entity, the second at 1.45, warm 0.86 (live 1.8 p50).

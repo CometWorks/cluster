@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -841,6 +842,48 @@ def _verified_round_trip(bench, grid: int, partition: int, home: str, client: in
         bench.check(f"the fixture arrives intact on {target}",
                     state.get("exists") and state.get("blocks") == before.get("blocks"),
                     f"blocks {before.get('blocks')} -> {state.get('blocks')}")
+
+
+def p3_hnd_release_slices(bench) -> None:
+    """SE-1908: closing a grid with many fat blocks spends slices only on live roots."""
+    from scenarios import _force_handover
+
+    bench.start_cluster()
+    bench.cluster.post("/automatic/pause")
+    try:
+        bench.cluster.handover_config({"release.closePerFrame": "1", "diag.importAddTimers": "true"})
+        wait_until(
+            lambda: bench.cluster.node("node-1", "/config")["values"]["release.closePerFrame"] == "1",
+            30,
+            "source to apply release slicing",
+        )
+        started = bench.cluster.node("node-1", "/rich-test-spawn?kind=rich&x=900000&y=0&z=0", "POST")["grids"][0]
+        grid = started["grid"]
+        partition = _wait_partition(bench, "node-1", grid)
+        _force_handover(bench, "node-1", "node-2", partition)
+        _wait_arrival(bench, partition, "node-2")
+        after = _settled_state(bench, "node-2", grid)
+        bench.check(
+            "the transfer preserves the rich grid",
+            started["blocks"] >= 45 and after["blocks"] == started["blocks"],
+            f"{started['blocks']} -> {after['blocks']} blocks",
+        )
+        game_log = next((bench.run_root / "node-1-data").glob("SpaceEngineersDedicated_*.log"))
+        finish = f"partition={partition} phase=release_finish "
+        wait_until(lambda: finish in game_log.read_text(errors="replace"), 15, "source release to be logged")
+        close = re.compile(rf"partition={partition} phase=release_close .*? relN=(\d+).*? relFatBlocksSum=(\d+)")
+        frames = [(int(roots), int(blocks)) for roots, blocks in close.findall(game_log.read_text(errors="replace"))]
+        bench.record("release-slices", frames)
+        bench.check(
+            "the source closed the grid and its fat blocks", sum(blocks for _, blocks in frames) >= 10, str(frames)
+        )
+        bench.check(
+            "every close frame closed one live root",
+            bool(frames) and all(roots == 1 for roots, _ in frames),
+            f"close frames={len(frames)}, roots closed={sum(roots for roots, _ in frames)}",
+        )
+    finally:
+        bench.cluster.post("/automatic/resume")
 
 
 def _assert_normalizer_committed(bench) -> None:
@@ -1934,6 +1977,7 @@ SCENARIOS_EXT = {
     "T0266-HVK-02": (t0266_hvk_02, "T-0266 harness: real release paths under the Havok body audit", "1"),
     "T0266-HVK-03": (t0266_hvk_03, "T-0266 harness: cluster release/offline paths in a procedural world", "1"),
     "T0266-HVK-01": (t0266_hvk_01, "closing an entity with an already-destroyed native body does not crash", "1"),
+    "P3-HND-RELEASE-SLICES": (p3_hnd_release_slices, "SE-1908: chunked release only schedules surviving world entities", "3"),
     "P3-HND-01": (p3_hnd_01, "round-trip fidelity on rich content, both directions, both modes", "3"),
     "P3-HND-02": (p3_hnd_02, "transient interaction-state matrix", "3"),
     "P3-HND-DUMMY": (p3_hnd_dummy, "SE1-0225: a target dummy round-trips the gate, intact and destroyed", "3"),
