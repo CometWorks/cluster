@@ -37,17 +37,26 @@ internal static class Tool
                             or "to-clientless"
                             or "to-counters"
                             or "to-fidelity"
+                            or "sector-to-b5"
+                            or "b5-to-sector"
                             or "mps-to-sector"
                             or "global-to-checkpoint"
                 )
                 || (args.Length >= 3 && args[0] is "to-vanilla" or "catalog-scan")
-                || (args.Length == 4 && args[0] is "materialize" or "semantic-diff")
+                || (
+                    args.Length == 4
+                    && args[0]
+                        is "materialize"
+                            or "semantic-diff"
+                            or "patch-b5-poses"
+                            or "patch-mps-poses"
+                )
                 || (args.Length == 6 && args[0] is "sector-to-mps")
             )
         )
         {
             Console.Error.WriteLine(
-                "usage: MagnetarWorld verify-mps FILE | verify-fidelity XML | mps-to-sector FILE OUTPUT_XML | sector-to-mps XML OUTPUT_MPS PARTITION GENERATION SEQUENCE | global-to-checkpoint FILE OUTPUT_XML | semantic-diff BEFORE_XML AFTER_XML ENTITY_IDS | to-fidelity VANILLA OUTPUT | to-handover VANILLA SPLIT | to-split VANILLA SPLIT | to-proximity VANILLA SPLIT | to-clientless VANILLA SPLIT | to-counters VANILLA SPLIT | materialize SPLIT SLOT OUTPUT | to-vanilla SPLIT VANILLA [DATA_ROOT...] | catalog-scan OUTPUT_JSON NODE=DATA_ROOT [NODE=DATA_ROOT...] [--prefer-newest]"
+                "usage: MagnetarWorld patch-b5-poses B5 EDIT_XML NEW_B5 | patch-mps-poses MPS EDIT_XML NEW_MPS | b5-to-sector B5 NEW_XML | sector-to-b5 XML NEW_B5 | verify-mps FILE | verify-fidelity XML | mps-to-sector FILE OUTPUT_XML | sector-to-mps XML OUTPUT_MPS PARTITION GENERATION SEQUENCE | global-to-checkpoint FILE OUTPUT_XML | semantic-diff BEFORE_XML AFTER_XML ENTITY_IDS | to-fidelity VANILLA OUTPUT | to-handover VANILLA SPLIT | to-split VANILLA SPLIT | to-proximity VANILLA SPLIT | to-clientless VANILLA SPLIT | to-counters VANILLA SPLIT | materialize SPLIT SLOT OUTPUT | to-vanilla SPLIT VANILLA [DATA_ROOT...] | catalog-scan OUTPUT_JSON NODE=DATA_ROOT [NODE=DATA_ROOT...] [--prefer-newest]"
             );
             return 2;
         }
@@ -56,6 +65,118 @@ internal static class Tool
         int exitCode = 0;
         switch (args[0])
         {
+            case "patch-b5-poses":
+            case "patch-mps-poses":
+            {
+                if (File.Exists(args[3]))
+                    throw new IOException("Output already exists");
+                if (
+                    !MyObjectBuilderSerializerKeen.DeserializeXML(
+                        args[2],
+                        out MyObjectBuilder_Sector edits
+                    )
+                )
+                    throw new IOException("Cannot read pose edits");
+                var changes = edits.SectorObjects.ToDictionary(e => e.EntityId);
+                void Apply(IEnumerable<MyObjectBuilder_EntityBase> entities)
+                {
+                    foreach (var original in entities)
+                        if (changes.Remove(original.EntityId, out var edit))
+                        {
+                            if (
+                                original.GetType() != edit.GetType()
+                                || edit.PositionAndOrientation == null
+                            )
+                                throw new InvalidDataException(
+                                    "Invalid edit for " + original.EntityId
+                                );
+                            original.PositionAndOrientation = edit.PositionAndOrientation;
+                            if (
+                                original is MyObjectBuilder_CubeGrid g
+                                && edit is MyObjectBuilder_CubeGrid updated
+                            )
+                            {
+                                g.LinearVelocity = updated.LinearVelocity;
+                                g.AngularVelocity = updated.AngularVelocity;
+                            }
+                        }
+                    if (changes.Count != 0)
+                        throw new InvalidDataException("Edit IDs absent from source");
+                }
+                if (args[0] == "patch-b5-poses")
+                {
+                    if (
+                        !MyObjectBuilderSerializerKeen.DeserializePB(
+                            args[1],
+                            out MyObjectBuilder_Sector original
+                        )
+                    )
+                        throw new IOException("Cannot read binary sector");
+                    Apply(original.SectorObjects);
+                    if (
+                        !MyObjectBuilderSerializerKeen.SerializePB(
+                            Path.GetFullPath(args[3]),
+                            false,
+                            original
+                        )
+                    )
+                        throw new IOException("Cannot write binary sector");
+                }
+                else
+                {
+                    var save = PartitionSaveFile.ReadFile(args[1]);
+                    var entities = PartitionSaveFile.DeserializeEntities(
+                        save.Body,
+                        save.EntityCount
+                    );
+                    Apply(entities);
+                    var file = PartitionSaveFile.Write(
+                        save.PartitionId,
+                        save.Generation,
+                        save.Sequence,
+                        save.Kind,
+                        ReadBounds(args[2]),
+                        save.Anchored,
+                        save.EntityCount,
+                        PartitionSaveFile.SerializeEntities(entities),
+                        save.ClusterTime,
+                        save.Profiles
+                    );
+                    PartitionSaveFile.WriteFile(Path.GetFullPath(args[3]), file);
+                    VerifyMps(args[3]);
+                }
+                break;
+            }
+            case "sector-to-b5":
+                if (
+                    File.Exists(args[2])
+                    || !MyObjectBuilderSerializerKeen.DeserializeXML(
+                        args[1],
+                        out MyObjectBuilder_Sector fromXml
+                    )
+                    || !MyObjectBuilderSerializerKeen.SerializePB(
+                        Path.GetFullPath(args[2]),
+                        false,
+                        fromXml
+                    )
+                )
+                    throw new IOException("Could not convert sector XML to a new B5");
+                break;
+            case "b5-to-sector":
+                if (
+                    File.Exists(args[2])
+                    || !MyObjectBuilderSerializerKeen.DeserializePB(
+                        args[1],
+                        out MyObjectBuilder_Sector fromPb
+                    )
+                    || !MyObjectBuilderSerializerKeen.SerializeXML(
+                        Path.GetFullPath(args[2]),
+                        false,
+                        fromPb
+                    )
+                )
+                    throw new IOException("Could not convert binary sector to a new XML");
+                break;
             case "verify-mps":
                 VerifyMps(args[1]);
                 break;
@@ -2157,6 +2278,19 @@ internal static class Tool
 
         static Vector3D Position(MyObjectBuilder_EntityBase entity) =>
             entity.PositionAndOrientation?.Position ?? Vector3D.Zero;
+
+        static BoundingSphereD ReadBounds(string path)
+        {
+            var root = XDocument.Load(path).Root;
+            return new BoundingSphereD(
+                new Vector3D(
+                    (double)root.Attribute("centerX"),
+                    (double)root.Attribute("centerY"),
+                    (double)root.Attribute("centerZ")
+                ),
+                (double)root.Attribute("radius")
+            );
+        }
 
         static BoundingSphereD Sphere(List<MyObjectBuilder_EntityBase> entities)
         {
