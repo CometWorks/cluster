@@ -138,6 +138,14 @@ and exactly once per operation; a node that restarts begins a new order. Every d
 `POST /cluster/mod-deliver` and owner lookups to `GET /cluster/mod-locate?entity=` (both channel N9,
 Docs/Gateway/NodeAPI.md).
 
+## Measuring entity reads and events
+
+`Test/mod_channel_latency.py RESULTS` starts a World Authority and two regular servers using the configured test host. Run it in an exclusive benchmark slot. Its mod creates eight named battery blocks on one server. It times local property reads, reads from a saved snapshot, and request/reply reads from the other server. The requester exercises `to-owner`, a previously resolved owner with `to-node`, and eight values carried in one reply. It checks every returned name and the unique grid owner.
+
+For the event measurement the mod subscribes to `IMyFunctionalBlock.EnabledChanged` on the owning server, toggles the first battery and sends the observed value to the second server through `to-node`. The run checks that all 16 local callbacks occur inside the setter and the remote node receives every alternating value in sequence. This relay is fixture code. A mod that wants other nodes to observe an entity event has to arrange delivery and renew its native subscription when the entity moves.
+
+The report retains individual timestamps plus median, nearest-rank p95 and maximum. One-way intervals use the shared host clock and include game-thread scheduling, transport and serialization. Getter times amortize 16,384 reads per sample. A cached snapshot trades freshness for a local read.
+
 ## Not built
 
 From Plan/Modding.md (clustering-plan) v1: the delegate vtable handshake (the object[] protocol above came first
