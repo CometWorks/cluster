@@ -90,7 +90,12 @@ public static class HitchRecorder
         public const int SessionComponents = 5;
         public const int StoreJournal = 6;
         public const int WorldAuthorityWait = 7;
-        public const int Count = 8;
+
+        // These three parts are included in StoreJournal.
+        public const int StoreJournalLock = 8;
+        public const int StoreJournalAppend = 9;
+        public const int StoreJournalFsync = 10;
+        public const int Count = 11;
         public static readonly string[] Names =
         {
             "physics",
@@ -101,6 +106,9 @@ public static class HitchRecorder
             "components",
             "store_journal",
             "wa_wait",
+            "store_journal_lock",
+            "store_journal_append",
+            "store_journal_fsync",
         };
     }
 
@@ -111,14 +119,14 @@ public static class HitchRecorder
     private static int[] m_bucketCalls;
 
     /// <summary>Accumulate elapsed time since <paramref name="startTimestamp"/> into one bucket.</summary>
-    public static void Add(int bucket, long startTimestamp)
+    public static void Add(int bucket, long startTimestamp) =>
+        AddTicks(bucket, System.Diagnostics.Stopwatch.GetTimestamp() - startTimestamp);
+
+    internal static void AddTicks(int bucket, long ticks)
     {
         double[] buckets = m_buckets ??= new double[Bucket.Count];
         int[] calls = m_bucketCalls ??= new int[Bucket.Count];
-        buckets[bucket] +=
-            (System.Diagnostics.Stopwatch.GetTimestamp() - startTimestamp)
-            * 1000.0
-            / System.Diagnostics.Stopwatch.Frequency;
+        buckets[bucket] += ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
         calls[bucket]++;
     }
 
@@ -131,7 +139,14 @@ public static class HitchRecorder
             return "";
         System.Text.StringBuilder text = new System.Text.StringBuilder();
         for (int i = 0; i < Bucket.Count; i++)
-            if (buckets[i] > 0.05)
+            if (
+                buckets[i] > 0.05
+                || (
+                    i is >= Bucket.StoreJournalLock and <= Bucket.StoreJournalFsync
+                    && calls[i] > 0
+                    && buckets[Bucket.StoreJournal] > 0.05
+                )
+            )
                 text.Append(' ')
                     .Append(Bucket.Names[i])
                     .Append('=')

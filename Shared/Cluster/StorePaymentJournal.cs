@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -242,40 +243,65 @@ internal static class StorePaymentJournal
     {
         if (!m_ready)
             return;
-        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        long started = Stopwatch.GetTimestamp();
+        long acquired = 0,
+            flushStarted = 0,
+            flushEnded = 0;
         try
         {
-            AppendLocked(entry);
+            lock (Sync)
+            {
+                acquired = Stopwatch.GetTimestamp();
+                Directory.CreateDirectory(Path.GetDirectoryName(m_path));
+                using FileStream stream = new FileStream(
+                    m_path,
+                    FileMode.Append,
+                    FileAccess.Write,
+                    FileShare.Read
+                );
+                using StreamWriter writer = new StreamWriter(stream);
+                writer.WriteLine(JsonSerializer.Serialize(entry));
+                writer.Flush();
+                flushStarted = Stopwatch.GetTimestamp();
+                try
+                {
+                    stream.Flush(true);
+                }
+                finally
+                {
+                    flushEnded = Stopwatch.GetTimestamp();
+                }
+            }
         }
         finally
         {
-            // SE-1883: a store trade appends on the game thread, so a slow disk shows in the hitch line as store_journal.
-            HitchRecorder.Add(HitchRecorder.Bucket.StoreJournal, started);
-            long ticks = System.Diagnostics.Stopwatch.GetTimestamp() - started;
+            long ended = Stopwatch.GetTimestamp();
+            long ticks = ended - started;
+            HitchRecorder.AddTicks(HitchRecorder.Bucket.StoreJournal, ticks);
+            HitchRecorder.AddTicks(
+                HitchRecorder.Bucket.StoreJournalLock,
+                (acquired != 0 ? acquired : ended) - started
+            );
+            if (acquired != 0)
+            {
+                // Include directory creation, open, serialization and the buffered write.
+                long writeEnded = flushStarted != 0 ? flushStarted : ended;
+                HitchRecorder.AddTicks(
+                    HitchRecorder.Bucket.StoreJournalAppend,
+                    writeEnded - acquired
+                );
+            }
+            if (flushStarted != 0)
+                HitchRecorder.AddTicks(
+                    HitchRecorder.Bucket.StoreJournalFsync,
+                    flushEnded - flushStarted
+                );
             Interlocked.Increment(ref AppendCount);
             Interlocked.Add(ref AppendTicks, ticks);
             long max;
             while ((max = Interlocked.Read(ref AppendMaxTicks)) < ticks)
                 if (Interlocked.CompareExchange(ref AppendMaxTicks, ticks, max) == max)
                     break;
-        }
-    }
-
-    private static void AppendLocked(Entry entry)
-    {
-        lock (Sync)
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(m_path));
-            using FileStream stream = new FileStream(
-                m_path,
-                FileMode.Append,
-                FileAccess.Write,
-                FileShare.Read
-            );
-            using StreamWriter writer = new StreamWriter(stream);
-            writer.WriteLine(JsonSerializer.Serialize(entry));
-            writer.Flush();
-            stream.Flush(true);
         }
     }
 
