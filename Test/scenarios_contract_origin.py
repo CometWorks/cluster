@@ -86,7 +86,7 @@ def _run(bench, committed):
     )
     bench.cluster.post("/automatic/pause")
     try:
-        for node in REGULAR:
+        for node in (ledger.wa, *REGULAR):
             ledger.node(node, "/contract-test-trash?enabled=0", "POST")
         payer = int(
             ledger.node(origin, f"/respawn-test-player?userId={CLIENT_ID}")[
