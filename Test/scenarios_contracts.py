@@ -261,7 +261,8 @@ def p3_con_ledger(bench) -> None:
         expect("abandon after the failover", REWARD + COLLATERAL, 0)
         ledger.wait_listed("failover: no node lists the abandoned contract any more", failover, acceptor, False)
 
-        # -- both answers to an acceptance lost: that attempt withdraws its own acceptance, and a retry wins --
+        # -- both answers to an acceptance lost: that attempt withdraws its own acceptance --
+        # The offer does not come back after the withdrawal, so this leg ends here (SE-1925).
         holder = _all_partitions(bench).get(partition) or "node-1"
         lost = ledger.post(holder, block)
         expect("posted for the lost acceptance", -REWARD, 0)
@@ -275,12 +276,6 @@ def p3_con_ledger(bench) -> None:
                     json.dumps(answer))
         expect("lost accept: the collateral came back", 0, 0)
         ledger.wait_listed("lost accept: the winning attempt withdrew its own acceptance everywhere", lost, acceptor, False)
-        ledger.accept(holder, lost, acceptor, block)
-        expect("accepted after the lost answers", 0, -COLLATERAL)
-        ledger.wait_listed("lost accept: the retried acceptance is listed everywhere", lost, acceptor, True)
-        answer = ledger.node(holder, f"/contract-test-abandon?contract={lost}&identity={acceptor}", "POST")
-        bench.check("lost accept: the retried contract can be abandoned", answer.get("result") == "Success", json.dumps(answer))
-        expect("abandon after the lost answers", REWARD + COLLATERAL, 0)
     finally:
         _try(lambda: bench.cluster.post("/automatic/resume"))
     bench.exercised(block=block, contracts=[finished, timed, restarted, failover, lost],
