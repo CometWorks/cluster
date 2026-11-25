@@ -5411,9 +5411,9 @@ internal sealed partial class ClusterControlServer
     }
 
     /// <summary>
-    /// Handler-thread driver. release.closePerFrame=0 (default): one game-thread Invoke as before.
-    /// N>0: the released roots are closed N per frame (hierarchy children go with their root), then
-    /// the bookkeeping runs in a final frame - the close stall of a large grid becomes short frames.
+    /// The handler closes the whole transfer in one game-thread call when release.closePerFrame is zero.
+    /// With a positive limit, each frame closes at most that many roots. A grid and its attached
+    /// blocks close together. Detached children are collected after the members close.
     /// </summary>
     private static int Release(Guid transferId, ulong partitionId, uint generation)
     {
@@ -5451,26 +5451,49 @@ internal sealed partial class ClusterControlServer
         try
         {
             int closed = 0;
-            // Roots first, then the descendants vanilla may have re-topped (see ReleaseFinish's caller
-            // history): a seated pilot closes with its grid, a detached one in its own slice.
-            long[][] slices = chunked
-                .Members.Concat(chunked.Descendants)
-                .Distinct()
-                .Chunk(perFrame)
-                .ToArray();
-            foreach (long[] slice in slices)
-                closed += InvokePhase(
-                    "release_close",
+            void CloseSlices(IEnumerable<long> ids)
+            {
+                foreach (long[] slice in ids.Chunk(perFrame))
+                    closed += InvokePhase(
+                        "release_close",
+                        transferId,
+                        partitionId,
+                        () =>
+                        {
+                            ImportAddSlice timed = ReleaseTimers();
+                            int count = CloseEntities(slice, timed);
+                            AppendReleaseFields(timed, chunkedIndex);
+                            return count;
+                        }
+                    );
+            }
+
+            CloseSlices(chunked.Members);
+            if (chunked.Descendants.Count > 0)
+            {
+                // Grid teardown closes its fat blocks. Only children that survived as world
+                // entities (such as a detached pilot) still need their own release slice.
+                long[] survivors = InvokePhase(
+                    "release_descendants",
                     transferId,
                     partitionId,
                     () =>
                     {
-                        ImportAddSlice timed = ReleaseTimers();
-                        int count = CloseEntities(slice, timed);
-                        AppendReleaseFields(timed, chunkedIndex);
-                        return count;
+                        long[] live = LiveCloseTargets(
+                                chunked.Descendants.Where(id => !chunked.Members.Contains(id))
+                            )
+                            .Select(entity => entity.EntityId)
+                            .ToArray();
+                        if (HandoverPhaseTimer.Current is HandoverPhaseTimer timer)
+                        {
+                            timer.Entities = live.Length;
+                            timer.Fields = $" capturedDescendants={chunked.Descendants.Count}";
+                        }
+                        return live;
                     }
                 );
+                CloseSlices(survivors);
+            }
             return InvokePhase(
                 "release_finish",
                 transferId,
@@ -6155,26 +6178,21 @@ internal sealed partial class ClusterControlServer
             timer.Fields += timed.ReleaseFields() + NodeAgeCounter.Releases.Fields(releaseIndex);
     }
 
+    private static IEnumerable<MyEntity> LiveCloseTargets(IEnumerable<long> ids)
+    {
+        // An id can identify a dormant incarnation outside the world entity set. Only a live
+        // world entity can be closed here. The direct lookups avoid scanning the world per slice.
+        var world = MyEntities.GetEntities();
+        return ids.Select(id => MyEntities.GetEntityByIdOrDefault(id))
+            .Where(entity => entity != null && !entity.MarkedForClose && world.Contains(entity));
+    }
+
     /// <param name="release">T-0401: when set (a source release with diag.importAddTimers), the close sequence below
     /// runs unchanged inside ImportAddDiag.RunRelease, which times it; null runs it exactly as before.</param>
     private static int CloseEntities(IEnumerable<long> ids, ImportAddSlice release = null)
     {
-        HashSet<long> selected = ids.ToHashSet();
         int count = 0;
-        // Was MyEntities.GetEntities().Where(e => selected.Contains(e.EntityId) ...), a full
-        // world scan per call - and release.closePerFrame calls this ONCE PER SLICE, so a chunked release
-        // re-scanned the whole world for every chunk. Looking each id up directly is O(ids) instead of
-        // O(world x chunks), and it stops enumerating MyConcurrentHashSet, which was 678.6 ms of contended
-        // lock wait in the one 30 s trace that happened to span a handover (n4b, 2026-08-22).
-        // The predicate is preserved EXACTLY, including the membership test: GetEntityByIdOrDefault consults
-        // MyEntityIdentifier, which can hold ids that are not in the world entity set, and closing one of
-        // those is precisely the stray-incarnation class of bug this method exists to avoid. Contains on a
-        // MyConcurrentHashSet is O(1), so keeping the test costs nothing.
-        var world = MyEntities.GetEntities();
-        MyEntity[] targets = selected
-            .Select(id => MyEntities.GetEntityByIdOrDefault(id))
-            .Where(entity => entity != null && !entity.MarkedForClose && world.Contains(entity))
-            .ToArray();
+        MyEntity[] targets = LiveCloseTargets(ids.ToHashSet()).ToArray();
         // Closing a grid ejects its seated pilot (grid close -> RemovePilot) into a live top-level
         // entity that outlives this sweep and gets adopted as a stray duplicate (partition 28,
         // 2026-08-10). Hierarchy children go down with the entity they are attached to.
