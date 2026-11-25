@@ -555,6 +555,23 @@ public static class ClusterRuntime
                 "Entity " + entityId + " is frozen by another transfer"
             );
         }
+        // Drop the entire island's sleep hold before capture. The transfer owns the body's activation state.
+        if (
+            AppDomain.CurrentDomain.GetData("Performance.ForcedSleep.ReleaseForTransfer")
+            is Action<long> release
+        )
+        {
+            try
+            {
+                release(entityId);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(
+                    $"[ClusterPlugin] Releasing forced sleep on {entityId} failed: {e}"
+                );
+            }
+        }
     }
 
     internal static void ClearFrozen(long entityId, Guid transferId)
@@ -678,6 +695,7 @@ public static class ClusterRuntime
         // Coordinate-system ids are per-process in vanilla and every node loads the same base world,
         // so without this every node issues the same first id and a handover crashes the client (T-0046).
         CoordinateSystemIdPatch.IsClustered = () => IsClustered;
+        AppDomain.CurrentDomain.SetData("CometWorks.Cluster.IsFrozen", (Func<long, bool>)IsFrozen);
         ProgrammableBlockFreezePatch.IsFrozen = IsFrozen;
         FrozenRootIncomingRpcPatch.IsFrozen = IsFrozen;
         RemoteControlGatePatch.IsFrozen = IsFrozen;
@@ -1617,7 +1635,6 @@ public static class ClusterRuntime
         UnknownOwnerGuard.Update(); // #1365: grids owned by an identity this node does not know, one walk a minute
         // Measurement only, throttled to one walk per 3600 frames. See PhysicsBodyCensus.
         PhysicsBodyCensus.Update();
-        ForcedSleepService.Update(); // Viktor 2026-09-26: stopped + supported grids sleep; off with CLUSTER_FORCED_SLEEP=0
         if (m_pendingGameLogLine != null && MyLog.Default != null)
         {
             MyLog.Default.WriteLine(m_pendingGameLogLine);

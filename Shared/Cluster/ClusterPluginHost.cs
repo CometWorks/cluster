@@ -182,6 +182,7 @@ public static class ClusterPluginHost
     {
         if (!Owns(role))
             return;
+        AppDomain.CurrentDomain.SetData("CometWorks.Cluster.IsFrozen", null);
         PluginServices.Instance?.Dispose();
     }
 
