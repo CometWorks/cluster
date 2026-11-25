@@ -47,6 +47,14 @@ Evaluate load-time rejection in an explicit strict placement profile. Record the
 
 Acceptance includes an event before transfer, during freeze, after commit or rollback, after deletion and after unload. Assert the observed sequence or explicit gap, no duplicate subscriber on return, no callback delivered to an expired registration, and collection of retired publishers and listeners after cleanup.
 
+### Measurements on the current transport
+
+On one otherwise idle Linux host, all 16 native battery `EnabledChanged` callbacks ran inside the setter. Median time from entering the setter to entering the callback was 12.95 µs. When the owner explicitly forwarded the observation to the remote process, all 16 arrived in order, with a median setter-to-receiver delay of 1.939 ms. A forwarded observation cannot participate in the setter that produced it.
+
+A live owner-local property getter took 19.24 ns per read in an amortized loop. A one-property round trip took a median 16.641 ms with owner routing and 16.645 ms using the cached node route. Reading eight properties in one request took 16.643 ms; two sequences of eight serial requests took 133.318 ms and 149.796 ms. These figures cover the existing v1 channel and game-thread scheduling on a stable owner. Inter-host latency, burst loss, failover and a production adapter require separate measurements. Prefer a versioned snapshot for related reads, keep same-tick decisions on the owner, and reject remote placement when the consumer requires synchronous semantics that the adapter cannot supply.
+
+The [lifetime test](https://github.com/CometWorks/cluster/pull/181) observed a single source close notification per tracked grid and battery during transfer and per tracked admin zone during deletion. Strongly held source objects remained reachable and closed. The weak-only controls collected, as did the held objects after releasing their explicit roots.
+
 ## One file for Workshop authors
 
 An author copies a single C# source file into the mod and registers its local implementations in the session component. The helper registers its reply handler before it sends the synchronous v1 role request. With no reply it uses the local implementations on a vanilla or Torch server. On a cluster advertising v2 it negotiates supported operations and payload versions. A v1 cluster can still handle an owner message through v1. A missing capability for a global write must surface as unsupported, since a local fallback there could execute the write on every node. An ordinary game client keeps using the mod's normal client-to-server path.
