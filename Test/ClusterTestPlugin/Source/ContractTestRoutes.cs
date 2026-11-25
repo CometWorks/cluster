@@ -671,6 +671,7 @@ internal static class ContractTestRoutes
             reserved = ContractLedger.Reservations.ContainsKey(contractId),
             active = system.IsContractActive(contractId),
             offered = system.IsContractInInactive(contractId),
+            type = contract?.GetType().Name,
             state = contract?.State.ToString(),
             owners = contract?.Owners.ToArray() ?? Array.Empty<long>(),
             conditionFinished = contract?.ContractCondition?.IsFinished,

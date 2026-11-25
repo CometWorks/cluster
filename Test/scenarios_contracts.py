@@ -647,8 +647,36 @@ def p3_con_clients(bench) -> None:
         replay = ledger.node(node_b, f"/contract-test-rpc?op=finish&userId={CLIENT_ID}&block={end}&contract={contract}", "POST")
         bench.record("finish-replay", replay)
         time.sleep(5)
-        bench.check("finish: a second delivery request pays nothing more", ledger.balance(a) == paid[a] + REWARD,
-                    f"balance {ledger.balance(a)}, expected {paid[a] + REWARD}")
+        bench.check(
+            "finish: a second delivery request pays nothing more",
+            ledger.balance(a) == paid[a] + REWARD,
+            f"balance {ledger.balance(a)}, expected {paid[a] + REWARD}",
+        )
+
+        # The Octahedron report involved item acquisition contracts. This fixture also
+        # exercises a successful payment decision for an offer with zero collateral.
+        acquisition = ledger.node(
+            node_b, f"/contract-test-post?block={start}&reward={REWARD}", "POST"
+        )
+        _require(bench, "the acquisition contract was posted", acquisition["success"])
+        acquisition_id = acquisition["contractId"]
+        opening = ledger.balance(a)
+        ledger.node(
+            node_b,
+            f"/contract-test-rpc?op=queue-accept&userId={CLIENT_ID}&block={start}&contract={acquisition_id}",
+            "POST",
+        )
+        ledger.wait_listed(
+            "all nodes list the accepted acquisition contract", acquisition_id, a, True
+        )
+        active = ledger.active(ledger.wa, acquisition_id, a)
+        bench.check(
+            "the production contract type confirms without debiting zero collateral",
+            active.get("type") == "MyContractObtainAndDeliver"
+            and active["owners"] == [a]
+            and ledger.balance(a) == opening,
+            json.dumps(active),
+        )
     finally:
         _try(lambda: bench.cluster.post("/automatic/resume"))
     bench.exercised(contract=contract, clients=[CLIENT_ID, CLIENT2_ID], where=where)
