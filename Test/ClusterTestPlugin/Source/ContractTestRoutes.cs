@@ -4,6 +4,8 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Text.Json;
+using ClusterPlugin;
 using Sandbox.Common.ObjectBuilders;
 using Sandbox.Common.ObjectBuilders.Definitions;
 using Sandbox.Definitions;
@@ -369,6 +371,23 @@ internal static class ContractTestRoutes
                     200,
                     TestRoutes.OnGameThread(() => Active(contract, identity))
                 );
+            }
+        );
+        TestRoutes.Add(
+            "POST",
+            "/contract-test-withdraw-other-attempt",
+            context =>
+            {
+                long contract = TestRoutes.Long(context, "contract");
+                string payload = JsonSerializer.Serialize(
+                    new
+                    {
+                        Kind = "Withdraw",
+                        ContractId = contract,
+                        AcceptanceOperation = Guid.NewGuid(),
+                    }
+                );
+                TestRoutes.Text(context, 200, GlobalStateChannel.SendCommand("contracts", payload));
             }
         );
         // POST /contract-test-rpc?op=accept|finish|abandon&userId=&block=&contract= - the contract block's own server

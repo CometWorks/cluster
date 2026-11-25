@@ -42,7 +42,7 @@ public static class MyContractPatch
     private static IDisposable s_deposit;
 
     [ThreadStatic]
-    private static long s_accepted;
+    private static (long Contract, Guid Operation) s_accepted;
 
     private static readonly MethodInfo CanActivateInternal = EconomyIl.Required(
         AccessTools.Method(typeof(MyContract), "CanActivate_Internal"),
@@ -129,12 +129,12 @@ public static class MyContractPatch
         private static void Finalizer()
         {
             IDisposable scope = s_deposit;
-            long accepted = s_accepted;
+            var accepted = s_accepted;
             s_deposit = null;
-            s_accepted = 0;
+            s_accepted = default;
             scope?.Dispose();
-            if (accepted != 0)
-                MyContractSeams.ClusterWithdraw?.Invoke(accepted);
+            if (accepted.Contract != 0)
+                MyContractSeams.ClusterWithdraw?.Invoke(accepted.Contract, accepted.Operation);
         }
     }
 
@@ -248,16 +248,20 @@ public static class MyContractPatch
             return false;
         // A refused acceptance leaves the reserved deposit to the finalizer, which refunds it.
         var accept = MyContractSeams.ClusterAccept;
-        if (accept != null && !accept(self, playerId))
-            return false;
-        s_accepted = self.Id;
+        if (accept != null)
+        {
+            Guid operation = Guid.NewGuid();
+            if (!accept(self, playerId, operation))
+                return false;
+            s_accepted = (self.Id, operation);
+        }
         return true;
     }
 
     /// <summary>Called from the injected IL of Activate, right after Activate_Internal.</summary>
     public static void CommitDeposit()
     {
-        s_accepted = 0;
+        s_accepted = default;
         IDisposable scope = s_deposit;
         if (scope != null)
             MyContractSeams.ClusterCommitDeposit?.Invoke(scope);

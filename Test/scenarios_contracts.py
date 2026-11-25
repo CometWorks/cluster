@@ -244,16 +244,43 @@ def p3_con_ledger(bench) -> None:
         ledger.wa = "wa-2"
         ledger.wait_listed("failover: after the World Authority failover every node and wa-2 list the contract", failover, acceptor, True)
         away = _other(_all_partitions(bench).get(partition) or "node-1")
+        # A competing accept that lost both replies may try to undo the winner after failover.
+        rollback = ledger.node(
+            away, f"/contract-test-withdraw-other-attempt?contract={failover}", "POST"
+        )
+        _require(
+            bench,
+            "a different acceptance attempt cannot withdraw the winner after failover",
+            rollback.get("Success") is False,
+            json.dumps(rollback),
+        )
         answer = ledger.node(away, f"/contract-test-abandon?contract={failover}&identity={acceptor}", "POST")
         bench.record("abandon-after-failover", answer)
         bench.check(f"failover: {away}, away from the block, abandoned the contract", answer.get("result") == "Success", json.dumps(answer))
         # The block is elsewhere: the restored World Authority refunds its owner from the record of the acceptance.
         expect("abandon after the failover", REWARD + COLLATERAL, 0)
         ledger.wait_listed("failover: no node lists the abandoned contract any more", failover, acceptor, False)
+
+        # -- both answers to an acceptance lost: that attempt withdraws its own acceptance --
+        # The offer does not come back after the withdrawal, so this leg ends here (SE-1925).
+        holder = _all_partitions(bench).get(partition) or "node-1"
+        lost = ledger.post(holder, block)
+        expect("posted for the lost acceptance", -REWARD, 0)
+        ledger.node(holder, "/test-drop-command-responses?subsystem=contracts&count=2", "POST")
+        answer = ledger.node(holder, f"/contract-test-accept?contract={lost}&identity={acceptor}&block={block}", "POST")
+        bench.record("accept-lost-replies", answer)
+        dropped = ledger.node(holder, "/test-drop-command-responses")
+        _require(bench, "lost accept: both answers to the acceptance were dropped", dropped.get("dropped") == 2,
+                 json.dumps(dropped))
+        bench.check("lost accept: the node refused the unanswered acceptance", not answer.get("accepted"),
+                    json.dumps(answer))
+        expect("lost accept: the collateral came back", 0, 0)
+        ledger.wait_listed("lost accept: the winning attempt withdrew its own acceptance everywhere", lost, acceptor, False)
     finally:
         _try(lambda: bench.cluster.post("/automatic/resume"))
-    bench.exercised(block=block, contracts=[finished, timed, restarted, failover],
-                    legs="accept, timeout at the WA, finish on the other node, replay, node restart, WA failover")
+    bench.exercised(block=block, contracts=[finished, timed, restarted, failover, lost],
+                    legs="accept, timeout at the WA, finish on the other node, replay, node restart, WA failover, "
+                         "lost acceptance answers")
 
 
 def _node_line(bench, node: str, pattern: str, timeout: float = 5) -> str | None:
