@@ -1240,6 +1240,9 @@ internal static class ImportRoundTrip
         // same grids 2-3 s before, the retry 4-5 s later clean; on one target node the stamps of two aborts lie
         // exactly the wall time apart that separates them). Every other field of the record matched. Drop only
         // that field; the rest of the record, and every other mod's storage, stays compared byte for byte.
+        // SE-1924: once MES adopts an imported grid it re-saves the record at the Add, and a record read back
+        // carries the NpcData constructor's "" in strings a spawn left null (BehaviorName, TerrainTypeName), which
+        // protobuf writes as empty fields. MES tests those with IsNullOrWhiteSpace, so empty fields go too.
         foreach (
             XElement value in document
                 .Descendants("item")
@@ -1302,8 +1305,9 @@ internal static class ImportRoundTrip
     private const int MesLastChangeToDataField = 25;
 
     /// <summary>
-    /// A base64 protobuf message without the top-level field <paramref name="field"/>. False, and the value left
-    /// alone, when the text is not a well-formed message, so a value the walk cannot read stays compared whole.
+    /// A base64 protobuf message without the top-level field <paramref name="field"/> and without empty
+    /// length-delimited fields. False, and the value left alone, when the text is not a well-formed message, so a
+    /// value the walk cannot read stays compared whole.
     /// </summary>
     internal static bool TryRemoveProtobufField(string base64, int field, out string stripped)
     {
@@ -1348,7 +1352,7 @@ internal static class ImportRoundTrip
             if (skip > (ulong)(data.Length - index))
                 return false;
             index += (int)skip;
-            if (key >> 3 != (ulong)field)
+            if (key >> 3 != (ulong)field && !((key & 7) == 2 && skip == 0))
                 kept.Write(data, start, index - start);
         }
         stripped = Convert.ToBase64String(kept.ToArray());

@@ -114,6 +114,9 @@ def round_trip(bench, report):
     stages = report["cluster"]["handover"] = []
     initial = npc_state(bench, "node-1", "initial")
     stages.append(initial)
+    # A real encounter lands where MES's placement puts it, a different point each run: its origin is
+    # compared against node-1's record of this run, the identity fields against the standalone run's.
+    origin = initial if report.get("encounter") else stock
 
     def owner(node):
         places = bench.entity_owner(bench.diag("entities"), int(grid))
@@ -124,15 +127,13 @@ def round_trip(bench, report):
             state["grid"] == grid
             and state["terminal_marker"]
             and state["npc_bytes"] > 0
+            and state["spawn_origin"]
+            == state["stored_origin"]
+            == origin["spawn_origin"]
+            and state["spawn_origin"] != [0.0, 0.0, 0.0]
             and all(
                 state[field] == stock[field]
-                for field in (
-                    "spawn_origin",
-                    "stored_origin",
-                    "spawn_group",
-                    "prefab",
-                    "spawned_by_mes",
-                )
+                for field in ("spawn_group", "prefab", "spawned_by_mes")
             )
         )
 
@@ -161,12 +162,13 @@ def round_trip(bench, report):
     return "PASS" if valid else "DIFF"
 
 
-def run(corpus, results, handover=False):
+def run(corpus, results, handover=False, encounter=None):
     os.environ["CLUSTER_TEST_PLUGIN"] = "0"
     bench = Bench("MOD-MES-SPAWN", "MES custom encounter spawn", "2", results)
     started = time.monotonic()
     report = {
         "mod": MES,
+        "encounter": encounter,
         "package": json.loads((HOST.package / "manifest.json").read_text()),
         "result": "INCONCLUSIVE",
     }
@@ -190,10 +192,25 @@ def run(corpus, results, handover=False):
             shutil.copytree(
                 Path(__file__).parent / "MesEncounterFixture", mods / f"{PROBE}.sbm"
             )
+            ids = [MES, PROBE]
+            if encounter:
+                # A real encounter mod's spawn group, requested as a random encounter owned by SPRT like the fixture
+                mod, group = encounter.split(":", 1)
+                stage(corpus / "244850" / mod, mods)
+                (mods / f"{PROBE}.sbm/encounter.txt").write_text(
+                    f"{group} SPRT RandomEncounter\n"
+                )
+                ids.insert(1, mod)
+                revision = hashlib.sha256()
+                for path in sorted((mods / f"{mod}.sbm").rglob("*")):
+                    if path.is_file():
+                        revision.update(
+                            path.relative_to(mods).as_posix().encode() + b"\0"
+                        )
+                        revision.update(hashlib.sha256(path.read_bytes()).digest())
+                report["encounter_sha256"] = revision.hexdigest()
             world = work / "EncounterWorld"
-            world_with_mods(
-                HOST.package / "examples/Cluster-Simple", world, [MES, PROBE]
-            )
+            world_with_mods(HOST.package / "examples/Cluster-Simple", world, ids)
             config = bench.cluster.config
             config.world_template = world
             bench.cluster.prepare(wipe=True)
@@ -212,10 +229,20 @@ def run(corpus, results, handover=False):
                 if handover and report["standalone"]["spawned_once"]:
                     baseline = npc_state(bench, "stock", "initial")
                     report["standalone"]["initial"] = baseline
+                    group, prefab = (
+                        (encounter.split(":", 1)[1], baseline["prefab"])
+                        if encounter
+                        else ("ClusterProbe-Encounter", "ClusterProbe-Ship")
+                    )
                     if (
-                        baseline["spawn_origin"] != [120.0, 70.0, 110.0]
-                        or baseline["spawn_group"] != "ClusterProbe-Encounter"
-                        or baseline["prefab"] != "ClusterProbe-Ship"
+                        (
+                            baseline["spawn_origin"] == [0.0, 0.0, 0.0]
+                            if encounter
+                            else baseline["spawn_origin"] != [120.0, 70.0, 110.0]
+                        )
+                        or baseline["spawn_group"] != group
+                        or baseline["prefab"] in ("-", "")
+                        or baseline["prefab"] != prefab
                         or baseline["stored_origin"] != baseline["spawn_origin"]
                         or not baseline["spawned_by_mes"]
                         or baseline["npc_bytes"] == 0
@@ -267,8 +294,13 @@ if __name__ == "__main__":
         action="store_true",
         help="move the encounter and its MES state across both nodes and back",
     )
+    parser.add_argument(
+        "--encounter",
+        metavar="MOD:GROUP",
+        help="request this spawn group of a Workshop encounter mod instead of the fixture's",
+    )
     args = parser.parse_args()
     args.results.mkdir(parents=True)
-    verdict = run(args.corpus, args.results, args.handover)
+    verdict = run(args.corpus, args.results, args.handover, args.encounter)
     print(verdict)
     raise SystemExit(0 if verdict == "PASS" else 1)
