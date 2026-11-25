@@ -6,6 +6,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Text.Json;
 using ClusterPlugin;
+using HarmonyLib;
 using Sandbox;
 using Sandbox.Common.ObjectBuilders;
 using Sandbox.Common.ObjectBuilders.Definitions;
@@ -49,6 +50,45 @@ internal static class ContractTestRoutes
     }
 
     private static readonly Dictionary<long, Received> Callbacks = new();
+
+    private static ulong m_watchedUser;
+    private static int m_acceptReplies;
+    private static bool m_watchingReplies;
+
+    private static void WatchAcceptReplies(ulong user)
+    {
+        if (!m_watchingReplies)
+        {
+            var dispatch = AccessTools.DeclaredMethod(
+                typeof(MyReplicationServer),
+                "DispatchEvent",
+                [
+                    typeof(IPacketData),
+                    typeof(CallSite),
+                    typeof(EndpointId),
+                    typeof(IMyNetObject),
+                    typeof(Vector3D?),
+                ]
+            );
+            new Harmony("ClusterTestPlugin.ContractReplies").Patch(
+                dispatch,
+                prefix: new HarmonyMethod(typeof(ContractTestRoutes), nameof(CountAcceptReply))
+            );
+            m_watchingReplies = true;
+        }
+        m_watchedUser = user;
+        m_acceptReplies = 0;
+    }
+
+    private static void CountAcceptReply(CallSite site, EndpointId target)
+    {
+        if (
+            target.Value == m_watchedUser
+            && site.MethodInfo.DeclaringType == typeof(MyContractBlock)
+            && site.MethodInfo.Name == nameof(MyContractBlock.ReceiveAcceptContract)
+        )
+            m_acceptReplies++;
+    }
 
     public static void Register()
     {
@@ -712,6 +752,9 @@ internal static class ContractTestRoutes
         {
             switch (op)
             {
+                case "watch-accept-replies":
+                    WatchAcceptReplies(user);
+                    break;
                 case "accept":
                     block.AcceptContract(identity, contractId);
                     break;
@@ -734,6 +777,7 @@ internal static class ContractTestRoutes
             identity,
             block = blockId,
             character = character?.EntityId ?? 0,
+            acceptReplies = user == m_watchedUser ? (int?)m_acceptReplies : null,
             packagesBefore = before,
             packagesAfter = Packages(),
             contract = Active(contractId, identity),

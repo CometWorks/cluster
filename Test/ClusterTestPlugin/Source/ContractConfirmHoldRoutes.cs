@@ -4,7 +4,7 @@ using HarmonyLib;
 
 namespace ClusterTestPlugin;
 
-/// <summary>Hold one outbound confirmation until the origin process is killed. Its replacement sends normally.</summary>
+/// <summary>Hold one outbound confirmation until released or the origin process exits.</summary>
 internal static class ContractConfirmHoldRoutes
 {
     private static long m_contract;
@@ -19,7 +19,7 @@ internal static class ContractConfirmHoldRoutes
             context =>
             {
                 long contract = TestRoutes.Long(context, "contract");
-                if (contract <= 0)
+                if (contract < 0)
                     throw new ArgumentOutOfRangeException(nameof(contract));
                 if (!m_patched)
                 {
@@ -56,7 +56,7 @@ internal static class ContractConfirmHoldRoutes
             || fields.Property("ContractId").GetValue<long>() != Interlocked.Read(ref m_contract)
         )
             return true;
-        // Send returns null for a missing answer. The normal worker retries until the origin dies.
+        // Send returns null for a missing answer. The normal worker retries.
         Interlocked.Increment(ref m_held);
         return false;
     }

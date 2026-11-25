@@ -482,6 +482,10 @@ def _accept_while_save_held(
         active = ledger.active(ledger.wa, contract, identity)
         return status if active.get("reserved") and not active["active"] else None
 
+    def player_request(op: str) -> dict:
+        return ledger.node(node, f"/contract-test-rpc?op={op}" + query, "POST")
+
+    player_request("watch-accept-replies")
     drop = "/test-drop-command-responses"
     copy = ledger.node(node, f"/contract-test-offer-copy?contract={contract}")["offer"]
     other = _other(node)
@@ -500,6 +504,12 @@ def _accept_while_save_held(
             bench,
             "the WA reserves the offer without activating it while the save is held",
             held is not None,
+        )
+        duplicate = player_request("accept")
+        bench.check(
+            "a repeat click while reserving leaves the player's result callback pending",
+            duplicate["acceptReplies"] == 0,
+            json.dumps(duplicate),
         )
         # This route dispatches to the node's game thread. A blocked activation cannot answer it.
         started = time.monotonic()
@@ -561,7 +571,26 @@ def _accept_while_save_held(
         restored.get("reserved") and not restored["active"],
         json.dumps(restored),
     )
-    ledger.node(node, drop + "?subsystem=contracts&count=0", "POST")
+    confirm = "/contract-test-hold-confirm"
+    ledger.node(node, f"{confirm}?contract={contract}", "POST")
+    try:
+        ledger.node(node, drop + "?subsystem=contracts&count=0", "POST")
+        _require(
+            bench,
+            "the courier has activated locally and is waiting for confirmation",
+            _poll(
+                lambda: ledger.node(node, confirm)["held"] > 0 or None, HANDOVER_TIMEOUT
+            )
+            is not None,
+        )
+        duplicate = player_request("accept")
+        bench.check(
+            "a repeat click after the grant leaves the player's result callback pending",
+            duplicate["packagesAfter"] == 1 and duplicate["acceptReplies"] == 0,
+            json.dumps(duplicate),
+        )
+    finally:
+        ledger.node(node, confirm + "?contract=0", "POST")
 
     def delivered() -> dict | None:
         state = ledger.node(node, "/contract-test-rpc?op=status" + query, "POST")
@@ -571,7 +600,15 @@ def _accept_while_save_held(
             else None
         )
 
-    return _poll(delivered, HANDOVER_TIMEOUT) or {}
+    delivered_state = _poll(delivered, HANDOVER_TIMEOUT) or {}
+    bench.check(
+        "the server sends one acceptance reply to the player for the three clicks",
+        _poll(
+            lambda: player_request("status")["acceptReplies"] or None, HANDOVER_TIMEOUT
+        )
+        == 1,
+    )
+    return delivered_state
 
 
 def p3_con_clients(bench) -> None:

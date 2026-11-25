@@ -15,10 +15,19 @@ namespace ClusterPlugin;
 
 internal static partial class ContractLedger
 {
-    private sealed class PlayerAccept(MyContract offer, long player)
+    private sealed class PlayerAccept(
+        MyContract offer,
+        long player,
+        MyContractBlock block,
+        EndpointId sender
+    )
     {
         public readonly MyContract Offer = offer;
         public readonly long Player = player;
+
+        public bool IsSameClick(MyContractBlock source, long identity, EndpointId endpoint) =>
+            block == source && Player == identity && sender == endpoint;
+
         public readonly Guid Operation = Guid.NewGuid();
         public bool AllowGrant;
         public bool Committed;
@@ -157,12 +166,7 @@ internal static partial class ContractLedger
             || contract <= 0
             || system == null
             || !block.HasAccess()
-            || !system.m_inactiveContracts.TryGetValue(contract, out var offer)
         )
-            return false;
-        long Station() =>
-            MySession.Static.Factions.GetStationByGridId(block.CubeGrid.EntityId)?.Id ?? 0;
-        if (offer.StartStation != Station() && offer.StartBlock != block.EntityId)
             return false;
         var sender = MyEventContext.Current.Sender;
         void Reply(MyContractResults result) =>
@@ -172,13 +176,25 @@ internal static partial class ContractLedger
             Reply(MyContractResults.Fail_CannotAccess);
             return true;
         }
-        var pending = new PlayerAccept(offer, player);
-        if (!PlayerAccepts.TryAdd(contract, pending))
+        // The client keeps a single callback on this block. An early duplicate reply
+        // would consume it even after local activation, while confirmation is pending.
+        PlayerAccepts.TryGetValue(contract, out var existing);
+        if (existing?.IsSameClick(block, player, sender) == true)
+            return true;
+        if (!system.m_inactiveContracts.TryGetValue(contract, out var offer))
+            return false;
+        long Station() =>
+            MySession.Static.Factions.GetStationByGridId(block.CubeGrid.EntityId)?.Id ?? 0;
+        if (offer.StartStation != Station() && offer.StartBlock != block.EntityId)
+            return false;
+        if (existing != null)
         {
             Reply(MyContractResults.Fail_NotPossible);
             return true;
         }
 
+        var pending = new PlayerAccept(offer, player, block, sender);
+        PlayerAccepts.Add(contract, pending);
         var session = MySession.Static;
         var game = MySandboxGame.Static;
         try
