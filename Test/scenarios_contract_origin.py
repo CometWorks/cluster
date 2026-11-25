@@ -70,6 +70,11 @@ def _commits(journal, operation):
 
 def _run(bench, committed):
     bench.start_cluster(nodes=[*REGULAR, "wa-1"])
+    if committed:
+        bench.record(
+            "config-sync-deposit",
+            bench.cluster.handover_config({"store.asyncPayments": "false"}),
+        )
     ledger = _Ledger(bench)
     poster = _identity(bench, "ContractRestartPoster")
     bench.start_client(CLIENT_ID)
@@ -111,7 +116,9 @@ def _run(bench, committed):
         path = "/contract-test-rpc?op="
 
         def inventory(node):
-            return ledger.node(node, path + "status" + query + "&block=0", "POST")
+            return ledger.node(
+                node, path + "status" + query + f"&block={start}", "POST"
+            )
 
         def authority(reserved, active):
             row = ledger.active(ledger.wa, contract, payer)
@@ -177,6 +184,15 @@ def _run(bench, committed):
             "durable origin intent",
         )
         journal = data / "store-payments.jsonl"
+        if committed:
+            records = _commits(journal, operation)
+            _require(
+                bench,
+                "the synchronous payment journal durably closed the collateral reserve",
+                [row["Op"] for row in records] == ["closed"]
+                and records[0]["ReserveId"] != "00000000-0000-0000-0000-000000000000",
+                str(records),
+            )
         local = inventory(origin)
         expected_packages = int(committed)
         expected_balance = balance - (COLLATERAL if committed else 0)
