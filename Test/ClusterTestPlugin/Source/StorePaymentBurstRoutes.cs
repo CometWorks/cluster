@@ -197,6 +197,7 @@ internal static class StorePaymentBurstRoutes
             paymentP90Ms = Math.Round(Percentile(0.9), 2),
             paymentMaxMs = Math.Round(sorted.LastOrDefault(), 2),
             paymentTotalMs = Math.Round(sorted.Sum(), 1),
+            frameBreakdown = HitchRecorder.Breakdown(),
             journalAppends = journalCount,
             journalTotalMs = Math.Round(journalMs, 1),
             journalMaxMs = Math.Round(

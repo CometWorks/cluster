@@ -1822,6 +1822,26 @@ def p2_store_burst(bench) -> None:
                     result["paymentP90Ms"] < STORE_BURST_P90_MS, json.dumps(result))
         bench.check(f"{label}: a payment journal append took under {STORE_JOURNAL_MEAN_MS} ms on average",
                     result["journalTotalMs"] < STORE_JOURNAL_MEAN_MS * max(1, result["journalAppends"]), json.dumps(result))
+        # Read the same frame breakdown the node writes to its hitch log.
+        parts = {
+            name: (float(ms), int(calls))
+            for name, ms, calls in re.findall(
+                r" (store_journal(?:_\w+)?)=([\d.]+)/(\d+)",
+                result.get("frameBreakdown", ""),
+            )
+        }
+        total, calls = parts.get("store_journal", (0, 0))
+        children = [
+            parts.get("store_journal_" + name, (0, 0))
+            for name in ("lock", "write", "fsync")
+        ]
+        bench.check(
+            f"{label}: each game-thread journal append reports lock, write and fsync time",
+            calls > 0
+            and all(n == calls for _, n in children)
+            and sum(ms for ms, _ in children) <= total + 0.21,
+            result.get("frameBreakdown", ""),
+        )
     paid = quiet["payments"] + busy["payments"]
     started = time.monotonic()
     settled = _poll(lambda: _wa_money(bench, payer) == 1_000_000 - paid and _wa_money(bench, payee) == paid, STORE_SETTLE_TIMEOUT)
