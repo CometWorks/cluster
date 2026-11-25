@@ -235,7 +235,7 @@ def _run(bench, committed):
             "WA recovered the origin's decision",
         )
         wait_until(
-            lambda: not intent.exists(),
+            lambda: not intent.exists() and not intent.with_suffix(".release").exists(),
             RECOVERY_TIMEOUT,
             "origin removed the resolved intent",
         )

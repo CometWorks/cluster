@@ -51,7 +51,7 @@ internal static partial class ContractLedger
         try
         {
             Directory.CreateDirectory(folder);
-            string[] files = Directory.GetFiles(folder, "*.intent");
+            string[] files = ContractAcceptIntentFile.Pending(folder);
             if (files.Length != 0)
             {
                 var commits = new HashSet<Guid>(commitOperations);
@@ -73,7 +73,10 @@ internal static partial class ContractLedger
             var intent =
                 JsonSerializer.Deserialize<Intent>(File.ReadAllText(path))
                 ?? throw new InvalidDataException("Empty contract acceptance intent");
-            await ResolveIntent(intent, path, committed.Contains(intent.Offer.AcceptanceOperation));
+            bool confirm =
+                !ContractAcceptIntentFile.IsReleasing(path)
+                && committed.Contains(intent.Offer.AcceptanceOperation);
+            await ResolveIntent(intent, path, confirm);
         }
         catch (Exception error)
         {
@@ -102,11 +105,18 @@ internal static partial class ContractLedger
 
     private static async Task ResolveIntent(Intent intent, string path, bool confirm)
     {
-        // A release cannot overtake an unanswered Reserve on another connection.
-        if (!confirm && !(await AwaitReservation(intent)).Success)
+        if (!confirm)
         {
-            ForgetIntent(path);
-            return;
+            string release = await ContractAcceptIntentFile.PrepareRelease(
+                path,
+                async () => (await AwaitReservation(intent)).Success
+            );
+            if (release == null)
+            {
+                ForgetIntent(path);
+                return;
+            }
+            path = release;
         }
         var decision = new Request(
             confirm ? "Confirm" : "Release",
