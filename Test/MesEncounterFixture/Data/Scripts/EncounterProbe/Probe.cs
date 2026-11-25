@@ -34,9 +34,25 @@ namespace ClusterMesEncounterProbe
         private const string Marker = "ClusterProbe encounter marker";
         private const string Tag = "ClusterProbe-NPC";
 
-        // encounter.txt, when present: "<spawn group> <faction>" of a real encounter to request instead
+        // encounter.txt, when present: "<spawn group> <faction> <spawn type>" of a real encounter to request
+        // instead, through ApiSpawnRequest as MES's own spawner would (CustomSpawnRequest takes RivalAI groups only)
         private string group = "ClusterProbe-Encounter";
         private string faction = "SPRT";
+        private string spawnType;
+        private Func<
+            Vector3D,
+            string,
+            string,
+            bool,
+            bool,
+            List<string>,
+            string,
+            MatrixD,
+            Vector3D,
+            bool,
+            long,
+            bool
+        > typedSpawn;
         private long tracked;
         private Func<List<string>, MatrixD, Vector3, bool, string, string, bool> spawn;
         private Action<Action<IMyCubeGrid>, bool> subscribe;
@@ -62,6 +78,22 @@ namespace ClusterMesEncounterProbe
             spawn =
                 (Func<List<string>, MatrixD, Vector3, bool, string, string, bool>)
                     api["CustomSpawnRequest"];
+            typedSpawn =
+                (Func<
+                    Vector3D,
+                    string,
+                    string,
+                    bool,
+                    bool,
+                    List<string>,
+                    string,
+                    MatrixD,
+                    Vector3D,
+                    bool,
+                    long,
+                    bool
+                >)
+                    api["ApiSpawnRequest"];
             subscribe = (Action<Action<IMyCubeGrid>, bool>)api["RegisterSuccessfulSpawnAction"];
             npcStart = (Func<IMyCubeGrid, Vector3D>)api["GetNpcStartCoordinates"];
             subscribe(Spawned, true);
@@ -117,6 +149,7 @@ namespace ClusterMesEncounterProbe
                         .Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
                     group = words[0];
                     faction = words[1];
+                    spawnType = words[2];
                 }
                 var pose = MatrixD.CreateWorld(
                     new Vector3D(120, 70, 110),
@@ -124,15 +157,30 @@ namespace ClusterMesEncounterProbe
                     Vector3D.Up
                 );
                 bool accepted =
-                    spawn != null
-                    && spawn(
-                        new List<string> { group },
-                        pose,
-                        Vector3.Zero,
-                        true,
-                        faction,
-                        "ClusterProbe"
-                    );
+                    spawnType != null
+                        ? typedSpawn != null
+                            && typedSpawn(
+                                pose.Translation,
+                                "ClusterProbe",
+                                spawnType,
+                                true,
+                                true,
+                                new List<string> { group },
+                                faction,
+                                pose,
+                                Vector3D.Zero,
+                                true,
+                                -1
+                            )
+                        : spawn != null
+                            && spawn(
+                                new List<string> { group },
+                                pose,
+                                Vector3.Zero,
+                                true,
+                                faction,
+                                "ClusterProbe"
+                            );
                 Log("accepted=" + accepted);
             }
             if (before && !after && Command("after"))

@@ -193,10 +193,12 @@ def run(corpus, results, handover=False, encounter=None):
             )
             ids = [MES, PROBE]
             if encounter:
-                # A real encounter mod's spawn group, requested as SPRT like the fixture's
+                # A real encounter mod's spawn group, requested as a random encounter owned by SPRT like the fixture
                 mod, group = encounter.split(":", 1)
                 stage(corpus / "244850" / mod, mods)
-                (mods / f"{PROBE}.sbm/encounter.txt").write_text(f"{group} SPRT\n")
+                (mods / f"{PROBE}.sbm/encounter.txt").write_text(
+                    f"{group} SPRT RandomEncounter\n"
+                )
                 ids.insert(1, mod)
                 revision = hashlib.sha256()
                 for path in sorted((mods / f"{mod}.sbm").rglob("*")):
