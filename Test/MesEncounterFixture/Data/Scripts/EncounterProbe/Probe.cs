@@ -32,6 +32,12 @@ namespace ClusterMesEncounterProbe
     {
         private const long MesChannel = 1521905890;
         private const string Marker = "ClusterProbe encounter marker";
+        private const string Tag = "ClusterProbe-NPC";
+
+        // encounter.txt, when present: "<spawn group> <faction>" of a real encounter to request instead
+        private string group = "ClusterProbe-Encounter";
+        private string faction = "SPRT";
+        private long tracked;
         private Func<List<string>, MatrixD, Vector3, bool, string, string, bool> spawn;
         private Action<Action<IMyCubeGrid>, bool> subscribe;
         private Func<IMyCubeGrid, Vector3D> npcStart;
@@ -70,8 +76,25 @@ namespace ClusterMesEncounterProbe
 
         private void Spawned(IMyCubeGrid grid)
         {
-            if (grid != null && Marked(grid))
+            if (grid == null)
+                return;
+            if (requested && tracked == 0 && group != "ClusterProbe-Encounter")
+                tracked = grid.EntityId;
+            if (Marked(grid) || grid.EntityId == tracked)
                 Log("callback=" + grid.EntityId);
+        }
+
+        // The tracked encounter: the marker block, the spawn callback's grid, or the terminal tagged at "initial".
+        private bool Ours(IMyCubeGrid grid)
+        {
+            return grid.EntityId == tracked || Marked(grid) || Tagged(grid) != null;
+        }
+
+        private static IMyTerminalBlock Tagged(IMyCubeGrid grid)
+        {
+            var blocks = new List<IMySlimBlock>();
+            grid.GetBlocks(blocks, b => (b.FatBlock as IMyTerminalBlock)?.CustomData == Tag);
+            return blocks.Count > 0 ? (IMyTerminalBlock)blocks[0].FatBlock : null;
         }
 
         public override void UpdateAfterSimulation()
@@ -86,6 +109,15 @@ namespace ClusterMesEncounterProbe
             if (before && !requested && Command("spawn"))
             {
                 requested = true;
+                if (Command("encounter"))
+                {
+                    var words = MyAPIGateway
+                        .Utilities.ReadFileInModLocation("encounter.txt", ModContext.ModItem)
+                        .ReadToEnd()
+                        .Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+                    group = words[0];
+                    faction = words[1];
+                }
                 var pose = MatrixD.CreateWorld(
                     new Vector3D(120, 70, 110),
                     Vector3D.Forward,
@@ -94,11 +126,11 @@ namespace ClusterMesEncounterProbe
                 bool accepted =
                     spawn != null
                     && spawn(
-                        new List<string> { "ClusterProbe-Encounter" },
+                        new List<string> { group },
                         pose,
                         Vector3.Zero,
                         true,
-                        "SPRT",
+                        faction,
                         "ClusterProbe"
                     );
                 Log("accepted=" + accepted);
@@ -126,13 +158,25 @@ namespace ClusterMesEncounterProbe
             foreach (var entity in entities)
             {
                 var grid = (IMyCubeGrid)entity;
-                var blocks = new List<IMySlimBlock>();
-                grid.GetBlocks(blocks, b => (b.FatBlock as IMyTerminalBlock)?.CustomName == Marker);
-                if (blocks.Count != 1)
+                if (!Ours(grid))
                     continue;
-                var terminal = (IMyTerminalBlock)blocks[0].FatBlock;
-                if (phase == "initial")
-                    terminal.CustomData = "ClusterProbe-NPC";
+                var terminal = Tagged(grid);
+                if (phase == "initial" && terminal == null)
+                {
+                    var blocks = new List<IMySlimBlock>();
+                    grid.GetBlocks(
+                        blocks,
+                        b =>
+                            b.FatBlock is IMyTerminalBlock
+                            && (
+                                group != "ClusterProbe-Encounter"
+                                || ((IMyTerminalBlock)b.FatBlock).CustomName == Marker
+                            )
+                    );
+                    terminal = blocks.Count > 0 ? (IMyTerminalBlock)blocks[0].FatBlock : null;
+                    if (terminal != null)
+                        terminal.CustomData = Tag;
+                }
                 var origin = npcStart == null ? Vector3D.Zero : npcStart(grid);
                 string data = null;
                 if (grid.Storage != null)
@@ -155,7 +199,7 @@ namespace ClusterMesEncounterProbe
                         + ","
                         + origin.Z
                         + " terminal="
-                        + (terminal.CustomData == "ClusterProbe-NPC")
+                        + (terminal?.CustomData == Tag)
                         + " group="
                         + (string.IsNullOrEmpty(identity?.SpawnGroup) ? "-" : identity.SpawnGroup)
                         + " prefab="
@@ -199,7 +243,7 @@ namespace ClusterMesEncounterProbe
             var ids = new List<string>();
             foreach (var e in entities)
             {
-                if (Marked((IMyCubeGrid)e))
+                if (Ours((IMyCubeGrid)e))
                     ids.Add(e.EntityId.ToString());
             }
             ids.Sort();
