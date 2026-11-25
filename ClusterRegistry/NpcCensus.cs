@@ -36,7 +36,12 @@ internal sealed record NpcGrid(
         JsonPropertyName("e"),
         JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)
     ]
-        long Expires = 0
+        long Expires = 0,
+    [property:
+        JsonPropertyName("f"),
+        JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)
+    ]
+        long FrozenAt = 0
 )
 {
     [JsonIgnore]
@@ -137,7 +142,15 @@ internal sealed partial class DirectGateway
         foreach (NpcGrid grid in row.Npc)
             if (!grids.ContainsKey(grid.Id))
             {
-                grids[grid.Id] = grid with { Offline = true };
+                grids[grid.Id] = grid with
+                {
+                    Offline = true,
+                    // Older offline saves can hold a drop that froze before its timer was registered.
+                    FrozenAt =
+                        grid.Drop && grid.Expires == 0 && row.OfflineAt != default
+                            ? row.OfflineAt.ToUnixTimeSeconds()
+                            : 0,
+                };
                 if (grid.IsNpc)
                     offlineNpc++;
             }

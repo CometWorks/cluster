@@ -124,19 +124,31 @@ internal static partial class SelfTest
             frozenDrop = new(11, 0, 0, 0, 0, "unowned", Drop: true);
         NpcGrid[] drops = DirectGateway.MergeNpcCensus(
             [Report((7, [liveDrop]))],
-            [new OfflinePartition { Partition = 9, Npc = [frozenDrop] }],
+            [
+                new OfflinePartition
+                {
+                    Partition = 9,
+                    OfflineAt = DateTimeOffset.FromUnixTimeSeconds(1761000000),
+                    Npc = [frozenDrop],
+                },
+            ],
             out _,
             out _
         );
         Check(
             drops.Single(x => x.Id == 10) == liveDrop
-                && drops.Single(x => x.Id == 11) == frozenDrop with { Offline = true },
+                && drops.Single(x => x.Id == 11)
+                    == frozenDrop with
+                    {
+                        Offline = true,
+                        FrozenAt = 1761000000,
+                    },
             "#1443: drop rows keep d and e through the merge, the offline one marked offline"
         );
         string dropWire = JsonSerializer.Serialize(new NpcCensus(0, 0, 0, drops));
         Check(
             dropWire.Contains("\"k\":\"unowned\",\"d\":true,\"e\":1761200000}")
-                && dropWire.Contains("\"o\":true,\"d\":true}"),
+                && dropWire.Contains("\"o\":true,\"d\":true,\"f\":1761000000}"),
             "#1443: a drop row writes d, and e only when known: " + dropWire
         );
 

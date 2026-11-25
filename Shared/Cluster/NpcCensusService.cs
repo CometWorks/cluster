@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Sandbox.Engine.Physics;
 using Sandbox.Game.Entities;
+using Sandbox.Game.SessionComponents;
 using Sandbox.Game.World;
 using VRage.Game.Entity;
 using VRage.Game.ModAPI;
@@ -199,10 +200,19 @@ public static class NpcCensusService
         if (now < m_nextPoll || Interlocked.CompareExchange(ref m_pollInFlight, 1, 0) != 0)
             return;
         m_nextPoll = now + PollMilliseconds;
-        Task.Run(Poll);
+        var definition = MySession
+            .Static.GetComponent<MySessionComponentContainerDropSystem>()
+            ?.m_definition;
+        int lifetime = ClusterConfig.GetInt("drops.lifetimeSeconds");
+        if (lifetime <= 0 && definition != null)
+            lifetime = Math.Max(
+                definition.PersonalContainerGridTimeOut,
+                definition.CompetetiveContainerGridTimeOut
+            );
+        Task.Run(() => Poll(lifetime));
     }
 
-    private static void Poll()
+    private static void Poll(int maxDropLifetime)
     {
         try
         {
@@ -213,7 +223,7 @@ public static class NpcCensusService
             byte[] payload = response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
             // 503 before the registry's first complete report pass: no census yet, the old snapshot ages out.
             response.EnsureSuccessStatusCode();
-            Snapshot snapshot = Parse(payload, ClusterRuntime.LocalMilliseconds);
+            Snapshot snapshot = Parse(payload, ClusterRuntime.LocalMilliseconds, maxDropLifetime);
             Interlocked.Increment(ref m_polls);
             Interlocked.Exchange(ref m_lastBytes, payload.Length);
             Snapshot previous = Interlocked.Exchange(ref m_snapshot, snapshot);
@@ -238,7 +248,7 @@ public static class NpcCensusService
         }
     }
 
-    internal static Snapshot Parse(byte[] payload, double answeredAt)
+    internal static Snapshot Parse(byte[] payload, double answeredAt, int maxDropLifetime = 0)
     {
         using JsonDocument document = JsonDocument.Parse(payload);
         JsonElement root = document.RootElement;
@@ -274,14 +284,25 @@ public static class NpcCensusService
                 grid.TryGetProperty("d", out JsonElement drop)
                 && drop.ValueKind == JsonValueKind.True
             )
+            {
+                long deadline = grid.TryGetProperty("e", out JsonElement expires)
+                    ? expires.GetInt64()
+                    : 0;
+                if (
+                    deadline == 0
+                    && maxDropLifetime > 0
+                    && grid.TryGetProperty("f", out JsonElement frozenAt)
+                )
+                    deadline = frozenAt.GetInt64() + maxDropLifetime;
                 drops.Add(
                     new DropRow(
                         grid.GetProperty("id").GetInt64(),
                         grid.TryGetProperty("o", out JsonElement offline)
                             && offline.ValueKind == JsonValueKind.True,
-                        grid.TryGetProperty("e", out JsonElement expires) ? expires.GetInt64() : 0
+                        deadline
                     )
                 );
+            }
             if (IsUnownedRow(grid))
                 continue;
             snapshot.X[i] = grid.GetProperty("x").GetDouble();

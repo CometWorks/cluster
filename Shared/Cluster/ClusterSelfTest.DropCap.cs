@@ -20,16 +20,20 @@ internal static partial class ClusterSelfTest
         byte[] answer = Encoding.UTF8.GetBytes(
             "{\"ageSeconds\":2,\"online\":0,\"offline\":0,\"grids\":["
                 + "{\"id\":144115188075855873,\"x\":0,\"y\":0,\"z\":0,\"u\":10,\"k\":\"unowned\",\"d\":true,\"e\":1761200000},"
-                + "{\"id\":2,\"x\":0,\"y\":0,\"z\":0,\"u\":10,\"k\":\"unowned\",\"o\":true,\"d\":true},"
+                + "{\"id\":2,\"x\":0,\"y\":0,\"z\":0,\"u\":10,\"k\":\"unowned\",\"o\":true,\"d\":true,\"f\":1761000000},"
                 + "{\"id\":3,\"x\":0,\"y\":0,\"z\":0,\"u\":10,\"k\":\"unowned\"},"
                 + "{\"id\":4,\"x\":0,\"y\":0,\"z\":0,\"u\":10,\"k\":\"npc\"}]}"
         );
-        NpcCensusService.Snapshot snapshot = NpcCensusService.Parse(answer, answeredAt: 1000);
+        NpcCensusService.Snapshot snapshot = NpcCensusService.Parse(
+            answer,
+            answeredAt: 1000,
+            maxDropLifetime: 900
+        );
         Check(
             snapshot.Drops
                 is [
                     { Id: 144115188075855873, Offline: false, Expires: 1761200000 },
-                    { Id: 2, Offline: true, Expires: 0 },
+                    { Id: 2, Offline: true, Expires: 1761000900 },
                 ],
             "the drop rows parse: exact 64-bit id, offline flag, deadline or none; plain unowned and NPC rows are no drops"
         );
