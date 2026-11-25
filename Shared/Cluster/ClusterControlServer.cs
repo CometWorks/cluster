@@ -6043,6 +6043,7 @@ internal sealed partial class ClusterControlServer
                     if (child is MyEntity member && !transfer.Frozen.ContainsKey(member.EntityId))
                         hierarchy.Add(member);
             }
+            AddHandItems(transfer, hierarchy);
             foreach (MyEntity member in hierarchy)
             {
                 ClusterRuntime.MarkFrozen(member.EntityId, transfer.Id);
@@ -6071,6 +6072,33 @@ internal sealed partial class ClusterControlServer
                 if (member.Physics != null)
                     member.Physics.Enabled = false;
             }
+        }
+    }
+
+    /// <summary>
+    /// SE-1940: a character's hand items are top-level entities of their own, not hierarchy children.
+    /// MyCharacter.OnAddedToScene adds the weapon its Init built to the scene, but only the character's
+    /// first UpdateOnceBeforeFrame equips it (OnControlAcquired sets the tool's owner), and the freeze
+    /// holds that update until the thaw. A tool left running meanwhile updates without an owner:
+    /// MyHandDrill.UpdateBeforeSimulation100 dereferences Owner and stopped node-0's game loop
+    /// (2026-11-25, partition 3890). Freeze the hand items with their character.
+    /// </summary>
+    private static void AddHandItems(Transfer transfer, List<MyEntity> hierarchy)
+    {
+        for (int index = hierarchy.Count - 1; index >= 0; index--)
+        {
+            if (hierarchy[index] is not MyCharacter character)
+                continue;
+            foreach (
+                object item in new object[] { character.CurrentWeapon, character.LeftHandItem }
+            )
+                if (
+                    item is MyEntity tool
+                    && tool.EntityId != 0
+                    && !transfer.Frozen.ContainsKey(tool.EntityId)
+                    && !hierarchy.Contains(tool)
+                )
+                    hierarchy.Add(tool);
         }
     }
 
