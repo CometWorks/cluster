@@ -71,6 +71,7 @@ internal static partial class ContractLedger
 {
     private const string Subsystem = "contracts";
     private const string AlreadySettled = "already settled";
+    private const string Unsupported = "unsupported by the World Authority";
     private const int SettlementsKept = 256;
     private const int SettledIdsKept = 16384;
     private const double PublishCheckMilliseconds = 1000;
@@ -446,6 +447,19 @@ internal static partial class ContractLedger
                 return JsonSerializer.Deserialize<Result>(
                         GlobalStateChannel.SendCommand(Subsystem, payload, operation)
                     ) ?? throw new InvalidOperationException("Invalid contract ledger result");
+            }
+            catch (InvalidOperationException exception)
+                when (exception.Message == "Invalid contract ledger request " + request.Kind)
+            {
+                // An older World Authority, during a mixed-version deploy, does not know this kind. Asking again
+                // gets the same answer, so a player reservation would wait forever.
+                Console.WriteLine(
+                    "[ClusterPlugin] contract_ledger_unsupported kind="
+                        + request.Kind
+                        + " id="
+                        + request.ContractId
+                );
+                return new Result(false, Unsupported);
             }
             catch (Exception exception)
             {

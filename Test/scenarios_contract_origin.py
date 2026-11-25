@@ -5,6 +5,7 @@ from uuid import UUID
 
 from cluster import ClusterHttpError, wait_until
 from scenarios_blocks import _identity
+import scenarios_contracts
 from scenarios_contracts import (
     CLIENT_ID,
     COLLATERAL,
@@ -16,6 +17,7 @@ from scenarios_contracts import (
     _client_node,
     _client_partition,
     _Ledger,
+    _node_line,
     _restart,
 )
 from scenarios_recovery import RECOVERY_TIMEOUT, _nodes
@@ -295,6 +297,137 @@ def p3_con_origin_confirm(bench):
     _run(bench, committed=True)
 
 
+def p3_con_old_authority(bench):
+    """SE-1909: a World Authority that does not know Reserve (a mixed-version deploy) answers a player's acceptance.
+
+    The origin must give up on the reservation at once, tell the player, leave no intent behind and keep the offer
+    open, so the same player can take it once the authority understands the request.
+    """
+    # Read at call time: a rig may set the slot's client id after import.
+    client = scenarios_contracts.CLIENT_ID
+    bench.start_cluster(nodes=[*REGULAR, "wa-1"])
+    ledger = _Ledger(bench)
+    poster = _identity(bench, "ContractOldAuthorityPoster")
+    bench.start_client(client)
+    bench.wait_spawned(client)
+    origin, _ = wait_until(
+        lambda: _client_partition(bench, client),
+        RECOVERY_TIMEOUT,
+        "player partition",
+    )
+    bench.cluster.post("/automatic/pause")
+    refuse = "/contract-test-refuse-kind"
+    try:
+        _disable_contract_fixture_trash(ledger)
+        payer = int(
+            ledger.node(origin, f"/respawn-test-player?userId={client}")["identityId"]
+        )
+        starting = ledger.balance(payer)
+        _require(bench, "payer's opening balance is known", isinstance(starting, int))
+        ledger.node(
+            origin, f"/banking-test-change?ownerId={payer}&amount={FUNDS}", "POST"
+        )
+        balance = starting + FUNDS
+        wait_until(
+            lambda: ledger.balance(payer) == balance, RECOVERY_TIMEOUT, "funded payer"
+        )
+        _, start, _ = _block_grid(bench, ledger, poster, 900000, origin, anyone=True)
+        _, end, _ = _block_grid(bench, ledger, poster, 930000, origin, anyone=True)
+        posted = ledger.node(
+            origin,
+            f"/contract-test-post-hauling?block={start}&end={end}&reward={REWARD}"
+            f"&collateral={COLLATERAL}&minutes=60",
+            "POST",
+        )
+        _require(bench, "courier posted", posted.get("success") is True, str(posted))
+        contract = int(posted["contractId"])
+        query = f"&userId={client}&contract={contract}&block={start}"
+
+        def player(op):
+            return ledger.node(origin, "/contract-test-rpc?op=" + op + query, "POST")
+
+        def replies(count):
+            state = player("status")
+            return state if state["acceptReplies"] >= count else None
+
+        def granted(state):
+            return state if state and state["contract"].get("active") else None
+
+        player("watch-accept-replies")
+        intents = (
+            bench.cluster.config.node_data(_nodes(bench)[origin])
+            / "cluster"
+            / "contract-accepts"
+        )
+        ledger.node(ledger.wa, refuse + "?kind=Reserve", "POST")
+        try:
+            player("queue-accept")
+            refused = wait_until(
+                lambda: replies(1),
+                60,
+                "the player hears back from the refused reservation",
+            )
+            _require(
+                bench,
+                "the player gets one refusal and no package",
+                refused["acceptReplies"] == 1
+                and refused["packagesAfter"] == 0
+                and not refused["contract"]["active"],
+                str(refused),
+            )
+            _require(
+                bench,
+                "the origin named the unsupported request",
+                _node_line(
+                    bench,
+                    origin,
+                    f"contract_ledger_unsupported kind=Reserve id={contract}",
+                )
+                is not None,
+            )
+            wait_until(
+                lambda: not any(intents.glob("*.intent"))
+                and not any(intents.glob("*.release")),
+                RECOVERY_TIMEOUT,
+                "the origin removed the refused intent",
+            )
+            row = ledger.active(ledger.wa, contract, payer)
+            _require(
+                bench,
+                "the authority neither reserved nor activated the offer",
+                not row.get("reserved") and not row.get("active"),
+                str(row),
+            )
+        finally:
+            ledger.node(ledger.wa, refuse + "?kind=", "POST")
+
+        player("queue-accept")
+        accepted = wait_until(
+            lambda: granted(replies(2)),
+            RECOVERY_TIMEOUT,
+            "the same player takes the offer once the authority knows Reserve",
+        )
+        _require(
+            bench,
+            "the second click wins the offer with one package",
+            accepted["acceptReplies"] == 2 and accepted["packagesAfter"] == 1,
+            str(accepted),
+        )
+        wait_until(
+            lambda: ledger.active(ledger.wa, contract, payer).get("active") is True,
+            RECOVERY_TIMEOUT,
+            "the authority lists the accepted contract",
+        )
+        wait_until(
+            lambda: ledger.balance(payer) == balance - COLLATERAL,
+            RECOVERY_TIMEOUT,
+            "the collateral was charged once",
+        )
+        bench.exercised(contract=contract, origin=origin)
+    finally:
+        bench.cluster.post("/automatic/resume")
+
+
 SCENARIOS_CONTRACT_ORIGIN = {
     "P3-CON-ORIGIN-RELEASE": (
         p3_con_origin_release,
@@ -304,6 +437,11 @@ SCENARIOS_CONTRACT_ORIGIN = {
     "P3-CON-ORIGIN-CONFIRM": (
         p3_con_origin_confirm,
         "Confirm a committed courier after an origin crash",
+        "3",
+    ),
+    "P3-CON-OLD-AUTHORITY": (
+        p3_con_old_authority,
+        "SE-1909: a player acceptance refused by an authority without Reserve",
         "3",
     ),
 }
