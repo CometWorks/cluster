@@ -23,7 +23,10 @@ internal static class GlobalSaveHoldRoutes
             "/global-save-register-hold",
             context =>
             {
-                long ms = TestRoutes.Long(context, "ms");
+                long ms = long.Parse(
+                    TestRoutes.Query(context, "ms"),
+                    System.Globalization.CultureInfo.InvariantCulture
+                );
                 if (ms is < 0 or > 600000)
                     throw new ArgumentOutOfRangeException("ms");
                 Interlocked.Exchange(

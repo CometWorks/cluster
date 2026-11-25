@@ -56,7 +56,11 @@ internal static class StorePaymentJournal
         Guid CreditId = default,
         long Payee = 0,
         long Credit = 0,
-        bool Async = false
+        bool Async = false,
+        [property: System.Text.Json.Serialization.JsonIgnore(
+            Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault
+        )]
+            Guid ContractOperation = default
     );
 
     /// <summary><paramref name="Reserved"/>: the reserve leg is known to have applied, so only the refund is left.</summary>
@@ -86,8 +90,13 @@ internal static class StorePaymentJournal
     internal static void Reserve(Guid reserveId, Guid refundId, long payer, long amount) =>
         Append(new Entry("reserve", reserveId, refundId, payer, amount));
 
-    internal static void Close(Guid reserveId) =>
-        Append(new Entry("closed", reserveId, Guid.Empty, 0, 0));
+    internal static void Close(Guid reserveId, Guid contractOperation = default) =>
+        Append(
+            new Entry("closed", reserveId, Guid.Empty, 0, 0, ContractOperation: contractOperation)
+        );
+
+    internal static void CommitWithoutDeposit(Guid operation) =>
+        Append(new Entry("contract", Guid.Empty, Guid.Empty, 0, 0, ContractOperation: operation));
 
     /// <summary>
     /// The payment did not commit: the reserve was refused, unanswered or applied without a settlement. Settles in the
@@ -120,7 +129,8 @@ internal static class StorePaymentJournal
         long amount,
         Guid creditId,
         long payee,
-        long credit
+        long credit,
+        Guid contractOperation = default
     )
     {
         var commit = new Entry(
@@ -131,7 +141,8 @@ internal static class StorePaymentJournal
             amount,
             creditId,
             payee,
-            credit
+            credit,
+            ContractOperation: contractOperation
         );
         Append(commit);
         Enqueue(
@@ -157,7 +168,8 @@ internal static class StorePaymentJournal
         long amount,
         Guid creditId,
         long payee,
-        long credit
+        long credit,
+        Guid contractOperation = default
     )
     {
         var entry = new Entry(
@@ -169,7 +181,8 @@ internal static class StorePaymentJournal
             creditId,
             payee,
             credit,
-            Async: true
+            Async: true,
+            ContractOperation: contractOperation
         );
         Append(entry);
         Enqueue(new Work(null, entry, entry, false, "settled", command));
@@ -318,24 +331,15 @@ internal static class StorePaymentJournal
             return;
         m_reconciled = true;
         if (!File.Exists(m_path))
+        {
+            ContractLedger.RecoverPlayerAccepts(Path.GetDirectoryName(m_path), Array.Empty<Guid>());
             return;
-        List<Entry> entries;
-        lock (Sync)
-            entries = File.ReadAllLines(m_path)
-                .Where(line => !string.IsNullOrWhiteSpace(line))
-                .Select(line =>
-                {
-                    try
-                    {
-                        return JsonSerializer.Deserialize<Entry>(line);
-                    }
-                    catch
-                    {
-                        return null;
-                    }
-                })
-                .Where(entry => entry != null)
-                .ToList();
+        }
+        List<Entry> entries = ReadEntries();
+        ContractLedger.RecoverPlayerAccepts(
+            Path.GetDirectoryName(m_path),
+            ContractOperations(entries)
+        );
         HashSet<Guid> closed = entries
             .Where(entry => entry.Op == "closed")
             .Select(entry => entry.ReserveId)
@@ -361,6 +365,39 @@ internal static class StorePaymentJournal
         )
             Enqueue(new Work(null, entry, entry, false, "reconciled", command));
     }
+
+    private static List<Entry> ReadEntries()
+    {
+        lock (Sync)
+            return !File.Exists(m_path)
+                ? new List<Entry>()
+                : File.ReadAllLines(m_path)
+                    .Where(line => !string.IsNullOrWhiteSpace(line))
+                    .Select(line =>
+                    {
+                        try
+                        {
+                            return JsonSerializer.Deserialize<Entry>(line);
+                        }
+                        catch
+                        {
+                            return null;
+                        }
+                    })
+                    .Where(entry => entry != null)
+                    .ToList();
+    }
+
+    private static HashSet<Guid> ContractOperations(IEnumerable<Entry> entries) =>
+        entries
+            .Where(entry => entry.ContractOperation != Guid.Empty)
+            .Select(entry => entry.ContractOperation)
+            .ToHashSet();
+
+    /// <summary>The contract grants whose payment decision is in the journal. Reads the file, so callers run it off
+    /// the game thread.</summary>
+    internal static HashSet<Guid> ContractOperations() =>
+        m_ready ? ContractOperations(ReadEntries()) : new HashSet<Guid>();
 
     private static void Enqueue(Work work)
     {

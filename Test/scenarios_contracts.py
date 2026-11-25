@@ -41,7 +41,7 @@ import time
 from cluster import wait_until
 from scenarios import _all_partitions, _force_handover
 from scenarios_blocks import _identity
-from scenarios_core import CLIENT_ID, HANDOVER_TIMEOUT, _handover_url, _partitions
+from scenarios_core import CLIENT_ID, HANDOVER_TIMEOUT, _handover_url, _nodes, _partitions
 from scenarios_ext import _wait_arrival, _wait_partition
 from scenarios_recovery import RECOVERY_TIMEOUT
 from scenarios_redeliver import CLIENT2_ID, CLIENT2_PORT
@@ -276,11 +276,52 @@ def p3_con_ledger(bench) -> None:
                     json.dumps(answer))
         expect("lost accept: the collateral came back", 0, 0)
         ledger.wait_listed("lost accept: the winning attempt withdrew its own acceptance everywhere", lost, acceptor, False)
+
+        # -- a reservation whose origin forgot it blocks the offer only until it expires --
+        stranded = ledger.post(holder, block)
+        expect("posted for the stranded reservation", -REWARD, 0)
+        reply = ledger.node(holder, f"/contract-test-strand-reservation?contract={stranded}&identity={acceptor}", "POST")
+        _require(bench, "stranded: the World Authority reserved the offer", reply.get("Success") is True, json.dumps(reply))
+        answer = ledger.node(holder, f"/contract-test-accept?contract={stranded}&identity={acceptor}&block={block}", "POST")
+        bench.check("stranded: a live reservation refuses another acceptance", not answer.get("accepted"), json.dumps(answer))
+        expect("stranded: the refused acceptance cost nothing", 0, 0)
+
+        def reservation_seconds(value: str) -> None:
+            # The World Authority decides expiry; set its config directly, the way p1_wa_heap_limit does.
+            values = dict(ledger.node(ledger.wa, "/config")["values"], **{"contracts.reservationSeconds": value})
+            bench.cluster._request("PUT", "/cluster/config", _nodes(bench)[ledger.wa].control, 30, values)
+            wait_until(
+                lambda: ledger.node(ledger.wa, "/config")["values"]["contracts.reservationSeconds"] == value,
+                30,
+                f"the World Authority to apply a {value} s reservation lifetime",
+            )
+
+        reservation_seconds("5")
+        try:
+            taken = _poll(
+                lambda: ledger.node(
+                    holder, f"/contract-test-accept?contract={stranded}&identity={acceptor}&block={block}", "POST"
+                ).get("accepted") or None,
+                30,
+                interval=2,
+            )
+        finally:
+            reservation_seconds("900")
+        bench.check("stranded: the expired reservation gave way to a new acceptance", taken is not None)
+        bench.check(
+            "stranded: the World Authority logged the expiry",
+            _node_line(bench, ledger.wa, f"contract reservation expired id={stranded} ", 10) is not None,
+        )
+        expect("accepted after the reservation expired", 0, -COLLATERAL)
+        ledger.wait_listed("stranded: the new acceptance is listed everywhere", stranded, acceptor, True)
+        answer = ledger.node(holder, f"/contract-test-abandon?contract={stranded}&identity={acceptor}", "POST")
+        bench.check("stranded: the contract can be abandoned", answer.get("result") == "Success", json.dumps(answer))
+        expect("abandon after the expiry", REWARD + COLLATERAL, 0)
     finally:
         _try(lambda: bench.cluster.post("/automatic/resume"))
-    bench.exercised(block=block, contracts=[finished, timed, restarted, failover, lost],
+    bench.exercised(block=block, contracts=[finished, timed, restarted, failover, lost, stranded],
                     legs="accept, timeout at the WA, finish on the other node, replay, node restart, WA failover, "
-                         "lost acceptance answers")
+                         "lost acceptance answers, expired reservation")
 
 
 def _node_line(bench, node: str, pattern: str, timeout: float = 5) -> str | None:
@@ -463,6 +504,171 @@ def _client_partition(bench, user: int) -> tuple[str, int] | None:
     return None
 
 
+def _disable_contract_fixture_trash(ledger):
+    # Four-block unpowered grids need to survive a World Authority replacement.
+    settings = ledger.node("node-1", "/admin-sync-trash")
+    ledger.node(
+        "node-1",
+        f"/admin-sync-trash-upload?enable=false&blockCount={settings['BlockCountThreshold']}"
+        f"&voxelAge={settings['VoxelAgeThreshold']}",
+        "POST",
+    )
+    wait_until(
+        lambda: all(
+            ledger.node(node, "/admin-sync-trash")["TrashRemovalEnabled"] is False
+            for node in (*REGULAR, ledger.wa)
+        ),
+        20,
+        "cluster-wide trash removal disabled for the contract grids",
+    )
+
+
+def _accept_while_save_held(
+    bench, ledger, node: str, block: int, contract: int, identity: int, competitor: int
+) -> dict:
+    query = f"&userId={CLIENT_ID}&block={block}&contract={contract}"
+    hold = "/global-save-register-hold"
+    before = ledger.node(ledger.wa, hold)
+
+    def pending() -> dict | None:
+        status = ledger.node(ledger.wa, hold)
+        if (
+            status["heldSaves"] <= before["heldSaves"]
+            or not status["channel"]["heldResponses"]
+        ):
+            return None
+        active = ledger.active(ledger.wa, contract, identity)
+        return status if active.get("reserved") and not active["active"] else None
+
+    def player_request(op: str) -> dict:
+        return ledger.node(node, f"/contract-test-rpc?op={op}" + query, "POST")
+
+    player_request("watch-accept-replies")
+    drop = "/test-drop-command-responses"
+    copy = ledger.node(node, f"/contract-test-offer-copy?contract={contract}")["offer"]
+    other = _other(node)
+    ledger.node(other, f"/contract-test-reoffer?offer={copy}", "POST")
+    ledger.node(node, drop + "?subsystem=contracts&count=100", "POST")
+    ledger.node(ledger.wa, hold + "?ms=20000", "POST")
+    try:
+        queued = ledger.node(node, "/contract-test-rpc?op=queue-accept" + query, "POST")
+        _require(
+            bench,
+            "the node queued the player's acceptance",
+            queued.get("queued") == contract,
+        )
+        held = _poll(pending, 3, interval=0.1)
+        _require(
+            bench,
+            "the WA reserves the offer without activating it while the save is held",
+            held is not None,
+        )
+        duplicate = player_request("accept")
+        bench.check(
+            "a repeat click while reserving leaves the player's result callback pending",
+            duplicate["acceptReplies"] == 0,
+            json.dumps(duplicate),
+        )
+        # This route dispatches to the node's game thread. A blocked activation cannot answer it.
+        started = time.monotonic()
+        clock = _try(lambda: bench.cluster.node(node, "/plugin-clock", timeout=1))
+        elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+        bench.record(
+            "accept-during-held-save",
+            {"wa": held, "clock": clock, "roundTripMs": elapsed_ms},
+        )
+        bench.check(
+            "the accepting node serves a game-thread read while the WA holds its reply",
+            clock.get("node") == node and pending() is not None,
+            f"{elapsed_ms} ms, {json.dumps(clock)}",
+        )
+        if clock.get("node") == node:
+            state = ledger.node(node, "/contract-test-rpc?op=status" + query, "POST")
+            bench.check(
+                "the courier receives no package before the durable reply",
+                state.get("packagesAfter") == 0 and pending() is not None,
+                json.dumps(state),
+            )
+    finally:
+        ledger.node(ledger.wa, hold + "?ms=0", "POST")
+
+    _require(
+        bench,
+        "the origin lost the response after the reservation became durable",
+        _poll(lambda: ledger.node(node, drop)["dropped"] > 0 or None, 30, interval=0.2)
+        is not None,
+    )
+    race = ledger.node(
+        other,
+        f"/contract-test-accept?contract={contract}&block={block}&identity={competitor}",
+        "POST",
+    )
+    _require(
+        bench,
+        "the other player cannot win the reserved offer",
+        race.get("accepted") is False,
+        json.dumps(race),
+    )
+    _require(
+        bench,
+        "the authority refused the competing operation because the offer was reserved",
+        _node_line(
+            bench,
+            ledger.wa,
+            f"kind=Accept id={contract} origin={other} success=False reason=offer reserved",
+        )
+        is not None,
+    )
+    generation = int(bench.cluster.get("/registry/world-authority")["Generation"])
+    _wa_failover(bench, generation, fresh=True)
+    ledger.wa = "wa-2"
+    restored = ledger.active(ledger.wa, contract, identity)
+    _require(
+        bench,
+        "the replacement restored the reservation without activating it",
+        restored.get("reserved") and not restored["active"],
+        json.dumps(restored),
+    )
+    confirm = "/contract-test-hold-confirm"
+    ledger.node(node, f"{confirm}?contract={contract}", "POST")
+    try:
+        ledger.node(node, drop + "?subsystem=contracts&count=0", "POST")
+        _require(
+            bench,
+            "the courier has activated locally and is waiting for confirmation",
+            _poll(
+                lambda: ledger.node(node, confirm)["held"] > 0 or None, HANDOVER_TIMEOUT
+            )
+            is not None,
+        )
+        duplicate = player_request("accept")
+        bench.check(
+            "a repeat click after the grant leaves the player's result callback pending",
+            duplicate["packagesAfter"] == 1 and duplicate["acceptReplies"] == 0,
+            json.dumps(duplicate),
+        )
+    finally:
+        ledger.node(node, confirm + "?contract=0", "POST")
+
+    def delivered() -> dict | None:
+        state = ledger.node(node, "/contract-test-rpc?op=status" + query, "POST")
+        return (
+            state
+            if state["contract"]["active"] and state["packagesAfter"] == 1
+            else None
+        )
+
+    delivered_state = _poll(delivered, HANDOVER_TIMEOUT) or {}
+    bench.check(
+        "the server sends one acceptance reply to the player for the three clicks",
+        _poll(
+            lambda: player_request("status")["acceptReplies"] or None, HANDOVER_TIMEOUT
+        )
+        == 1,
+    )
+    return delivered_state
+
+
 def p3_con_clients(bench) -> None:
     """SE1-0247 - accepted at a block on one node by an attached player, delivered at a block on another."""
     bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
@@ -483,9 +689,7 @@ def p3_con_clients(bench) -> None:
     bench.cluster.post("/automatic/pause")
     contract = 0
     try:
-        # The contract blocks are small unpowered grids far from both players: vanilla's trash removal takes them.
-        for node in REGULAR:
-            ledger.node(node, "/contract-test-trash?enabled=0", "POST")
+        _disable_contract_fixture_trash(ledger)
         node_a = where["a"][0]
         node_b = _other(node_a)
         _hand_over(bench, where["b"][1], node_b, client=CLIENT2_ID)
@@ -510,9 +714,9 @@ def p3_con_clients(bench) -> None:
         contract = int(posted["contractId"])
         ledger.wait_balance("posted: B paid the reward in", b, paid[b] - REWARD)
 
-        accepted = ledger.node(node_a, f"/contract-test-rpc?op=accept&userId={CLIENT_ID}&block={start}&contract={contract}", "POST")
+        accepted = _accept_while_save_held(bench, ledger, node_a, start, contract, a, b)
         bench.record("accept", accepted)
-        bench.check(f"accept: A accepted at the start block on {node_a} and got the package",
+        _require(bench, f"accept: A accepted at the start block on {node_a} and got the package",
                     (accepted.get("contract") or {}).get("active") is True and accepted.get("packagesAfter") == 1,
                     json.dumps(accepted)[:500])
         ledger.wait_balance("accept: A paid the collateral", a, paid[a] - COLLATERAL)
@@ -538,8 +742,69 @@ def p3_con_clients(bench) -> None:
         replay = ledger.node(node_b, f"/contract-test-rpc?op=finish&userId={CLIENT_ID}&block={end}&contract={contract}", "POST")
         bench.record("finish-replay", replay)
         time.sleep(5)
-        bench.check("finish: a second delivery request pays nothing more", ledger.balance(a) == paid[a] + REWARD,
-                    f"balance {ledger.balance(a)}, expected {paid[a] + REWARD}")
+        bench.check(
+            "finish: a second delivery request pays nothing more",
+            ledger.balance(a) == paid[a] + REWARD,
+            f"balance {ledger.balance(a)}, expected {paid[a] + REWARD}",
+        )
+
+        # The Octahedron report involved item acquisition contracts. This fixture also
+        # exercises a successful payment decision for an offer with zero collateral.
+        acquisition = ledger.node(
+            node_b, f"/contract-test-post?block={start}&reward={REWARD}", "POST"
+        )
+        _require(bench, "the acquisition contract was posted", acquisition["success"])
+        acquisition_id = acquisition["contractId"]
+        opening = ledger.balance(a)
+        ledger.node(
+            node_b,
+            f"/contract-test-rpc?op=queue-accept&userId={CLIENT_ID}&block={start}&contract={acquisition_id}",
+            "POST",
+        )
+        ledger.wait_listed(
+            "all nodes list the accepted acquisition contract", acquisition_id, a, True
+        )
+        active = ledger.active(ledger.wa, acquisition_id, a)
+        bench.check(
+            "the production contract type confirms without debiting zero collateral",
+            active.get("type") == "MyContractObtainAndDeliver"
+            and active["owners"] == [a]
+            and ledger.balance(a) == opening,
+            json.dumps(active),
+        )
+
+        # A abandons while the origin's confirmation is still on its way. The World Authority installs the grant
+        # for the settlement, and the late confirmation then finds the contract settled.
+        early = ledger.node(node_b, f"/contract-test-post?block={start}&reward={REWARD}", "POST")
+        _require(bench, "the second acquisition contract was posted", early["success"])
+        early_id = early["contractId"]
+        confirm = "/contract-test-hold-confirm"
+        ledger.node(node_b, f"{confirm}?contract={early_id}", "POST")
+        try:
+            ledger.node(
+                node_b,
+                f"/contract-test-rpc?op=queue-accept&userId={CLIENT_ID}&block={start}&contract={early_id}",
+                "POST",
+            )
+            _require(
+                bench,
+                "the grant is waiting for its confirmation",
+                _poll(lambda: ledger.node(node_b, confirm)["held"] > 0 or None, HANDOVER_TIMEOUT) is not None,
+            )
+            answer = ledger.node(node_b, f"/contract-test-abandon?contract={early_id}&identity={a}", "POST")
+            bench.record("abandon-before-confirm", answer)
+            bench.check(
+                "A can abandon the contract before its confirmation lands",
+                answer.get("result") == "Success",
+                json.dumps(answer),
+            )
+        finally:
+            ledger.node(node_b, confirm + "?contract=0", "POST")
+        ledger.wait_listed("the contract abandoned before its confirmation is listed nowhere", early_id, a, False)
+        bench.check(
+            "the late confirmation of the settled contract succeeds",
+            _node_line(bench, ledger.wa, f"kind=Confirm id={early_id} origin={node_b} success=True", 60) is not None,
+        )
     finally:
         _try(lambda: bench.cluster.post("/automatic/resume"))
     bench.exercised(contract=contract, clients=[CLIENT_ID, CLIENT2_ID], where=where)

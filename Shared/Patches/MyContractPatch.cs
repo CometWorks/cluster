@@ -38,12 +38,6 @@ namespace Shared.Patches;
 /// </summary>
 public static class MyContractPatch
 {
-    [ThreadStatic]
-    private static IDisposable s_deposit;
-
-    [ThreadStatic]
-    private static (long Contract, Guid Operation) s_accepted;
-
     private static readonly MethodInfo CanActivateInternal = EconomyIl.Required(
         AccessTools.Method(typeof(MyContract), "CanActivate_Internal"),
         "MyContract.CanActivate_Internal"
@@ -73,6 +67,11 @@ public static class MyContractPatch
     [HarmonyPatch(typeof(MyContract), nameof(MyContract.Activate))]
     private static class Activate
     {
+        // A custom contract may activate another contract inside its callback.
+        [HarmonyPrefix]
+        private static void Prefix(out ContractActivation __state) =>
+            __state = ContractActivation.Enter();
+
         [HarmonyTranspiler]
         private static IEnumerable<CodeInstruction> Transpiler(
             IEnumerable<CodeInstruction> instructions,
@@ -126,16 +125,8 @@ public static class MyContractPatch
 
         // Stands in for a `using` scope: refund on every exit after the reservation.
         [HarmonyFinalizer]
-        private static void Finalizer()
-        {
-            IDisposable scope = s_deposit;
-            var accepted = s_accepted;
-            s_deposit = null;
-            s_accepted = default;
-            scope?.Dispose();
-            if (accepted.Contract != 0)
-                MyContractSeams.ClusterWithdraw?.Invoke(accepted.Contract, accepted.Operation);
-        }
+        private static void Finalizer(ContractActivation __state) =>
+            __state?.Close(MyContractSeams.ClusterWithdraw);
     }
 
     // ClusterPlugin seam: Finish - arbitrate the terminal transition once, cluster-wide.
@@ -232,6 +223,11 @@ public static class MyContractPatch
     /// <summary>Called from the injected IL of Activate. Returns false when the deposit was refused.</summary>
     public static bool BeginDeposit(MyContract self, long playerId)
     {
+        if (!ContractLedger.AllowActivation(self, playerId, out Guid approvedOperation))
+            return false;
+        // Recorded before any early return, so the commit below always reports a granted reservation.
+        if (approvedOperation != Guid.Empty)
+            ContractActivation.Current.PlayerReservation = (self.Id, approvedOperation);
         var seam = MyContractSeams.ClusterBeginDeposit;
         if (seam == null)
             return true;
@@ -243,17 +239,19 @@ public static class MyContractPatch
             clusterDepositPayer,
             self.StartingDeposit > 0 ? self.StartingDeposit : 0
         );
-        s_deposit = scope;
+        ContractActivation.Current.Deposit = scope;
         if (!approved)
             return false;
         // A refused acceptance leaves the reserved deposit to the finalizer, which refunds it.
         var accept = MyContractSeams.ClusterAccept;
+        if (approvedOperation != Guid.Empty)
+            return true;
         if (accept != null)
         {
             Guid operation = Guid.NewGuid();
             if (!accept(self, playerId, operation))
                 return false;
-            s_accepted = (self.Id, operation);
+            ContractActivation.Current.Accepted = (self.Id, operation);
         }
         return true;
     }
@@ -261,10 +259,14 @@ public static class MyContractPatch
     /// <summary>Called from the injected IL of Activate, right after Activate_Internal.</summary>
     public static void CommitDeposit()
     {
-        s_accepted = default;
-        IDisposable scope = s_deposit;
+        ContractActivation.Current.Accepted = default;
+        var reservation = ContractActivation.Current.PlayerReservation;
+        ContractActivation.Current.PlayerReservation = default;
+        IDisposable scope = ContractActivation.Current.Deposit;
         if (scope != null)
-            MyContractSeams.ClusterCommitDeposit?.Invoke(scope);
+            MyContractSeams.ClusterCommitDeposit?.Invoke(scope, reservation.Operation);
+        if (reservation.Operation != Guid.Empty)
+            ContractLedger.PlayerDepositCommitted(reservation.Contract, reservation.Operation);
     }
 
     /// <summary>Called from the injected IL of Finish/Fail. Returns false when another node settled first.</summary>

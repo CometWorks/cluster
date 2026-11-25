@@ -224,15 +224,24 @@ public static class MyStoreBlockPatch
             );
         }
 
-        public void Commit()
+        public void Commit() => Commit(Guid.Empty);
+
+        internal void Commit(Guid contractOperation)
         {
             if (m_async)
             {
-                CommitAsync();
+                CommitAsync(contractOperation);
                 return;
             }
-            if (!Approved || m_committed || m_change == null)
+            if (!Approved || m_committed)
                 return;
+            if (m_change == null)
+            {
+                if (contractOperation != Guid.Empty)
+                    StorePaymentJournal.CommitWithoutDeposit(contractOperation);
+                m_committed = true;
+                return;
+            }
             if (!m_debitObserved)
                 throw new InvalidOperationException(
                     "Store payment did not apply its prepared debit"
@@ -249,13 +258,14 @@ public static class MyStoreBlockPatch
                     m_amount,
                     m_creditOperation,
                     m_payeeId,
-                    m_credit
+                    m_credit,
+                    contractOperation
                 );
             else
-                StorePaymentJournal.Close(m_reserveOperation);
+                StorePaymentJournal.Close(m_reserveOperation, contractOperation);
         }
 
-        private void CommitAsync()
+        private void CommitAsync(Guid contractOperation)
         {
             if (!Approved || m_committed)
                 return;
@@ -272,7 +282,8 @@ public static class MyStoreBlockPatch
                 m_amount,
                 m_creditOperation,
                 m_payeeId,
-                m_credit
+                m_credit,
+                contractOperation
             );
         }
 

@@ -9,13 +9,11 @@ namespace ClusterPlugin;
 /// </summary>
 public static class MyContractSeams
 {
-    // Activate: reserve the starting deposit at the World Authority before any contract state changes.
+    // Reserve the deposit before activation. A player reservation passes its operation ID into the payment commit.
     public static Func<long, long, (IDisposable Scope, bool Approved)> ClusterBeginDeposit;
-    public static Action<IDisposable> ClusterCommitDeposit;
+    public static Action<IDisposable, Guid> ClusterCommitDeposit;
 
-    // Activate, after the deposit: the World Authority takes the contract into its ledger of accepted contracts
-    // (contract, accepting player). False refuses the activation. Withdraw (contract id) undoes it when Activate
-    // does not get as far as the commit.
+    // Synchronous activation and rollback carry the same operation ID so only the winning attempt can undo its grant.
     public static Func<MyContract, long, Guid, bool> ClusterAccept;
     public static Action<long, Guid> ClusterWithdraw;
 

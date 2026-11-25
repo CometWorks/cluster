@@ -88,6 +88,7 @@ internal static class TestRoutes
         BotShipTestRoutes.Register(); // SE-1316 bot identities and a seated pilot for the bot ship cleanup
         BlueprintTestRoutes.Register(); // T-0401 parked ship pastes (Visitor Ion) for the Add bench
         BlockCoverageHarness.Register(); // SE1-0163 one fixture per vanilla functional block type
+        ContractConfirmHoldRoutes.Register();
         ContractTestRoutes.Register(); // SE1-0232 contract offers across handover and restart
         GridDeleteFaultRoutes.Register(); // #1295 a grid whose BeforeDelete throws in a cluster close
         CollisionFilterFaultRoutes.Register(); // SE-1491 a stale collision filter refresh left by a drain's close

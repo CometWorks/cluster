@@ -29,6 +29,6 @@ public static class MyContractPatch
         return (deposit, deposit.Approved);
     }
 
-    private static void SeamCommitDeposit(IDisposable scope) =>
-        ((MyStoreBlockPatch.StorePaymentScope)scope).Commit();
+    private static void SeamCommitDeposit(IDisposable scope, Guid operation) =>
+        ((MyStoreBlockPatch.StorePaymentScope)scope).Commit(operation);
 }

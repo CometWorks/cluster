@@ -26,7 +26,11 @@ internal static class CommandResponseDropRoutes
             context =>
             {
                 string subsystem = TestRoutes.Query(context, "subsystem");
-                long count = TestRoutes.Long(context, "count");
+                long count = long.Parse(
+                    TestRoutes.Query(context, "count"),
+                    System.Globalization.CultureInfo.InvariantCulture
+                );
+                ArgumentOutOfRangeException.ThrowIfNegative(count);
                 lock (typeof(CommandResponseDropRoutes))
                 {
                     EnsurePatched();

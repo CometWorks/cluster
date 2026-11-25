@@ -6,6 +6,8 @@ using System.IO.Compression;
 using System.Linq;
 using System.Text.Json;
 using ClusterPlugin;
+using HarmonyLib;
+using Sandbox;
 using Sandbox.Common.ObjectBuilders;
 using Sandbox.Common.ObjectBuilders.Definitions;
 using Sandbox.Definitions;
@@ -48,6 +50,45 @@ internal static class ContractTestRoutes
     }
 
     private static readonly Dictionary<long, Received> Callbacks = new();
+
+    private static ulong m_watchedUser;
+    private static int m_acceptReplies;
+    private static bool m_watchingReplies;
+
+    private static void WatchAcceptReplies(ulong user)
+    {
+        if (!m_watchingReplies)
+        {
+            var dispatch = AccessTools.DeclaredMethod(
+                typeof(MyReplicationServer),
+                "DispatchEvent",
+                [
+                    typeof(IPacketData),
+                    typeof(CallSite),
+                    typeof(EndpointId),
+                    typeof(IMyNetObject),
+                    typeof(Vector3D?),
+                ]
+            );
+            new Harmony("ClusterTestPlugin.ContractReplies").Patch(
+                dispatch,
+                prefix: new HarmonyMethod(typeof(ContractTestRoutes), nameof(CountAcceptReply))
+            );
+            m_watchingReplies = true;
+        }
+        m_watchedUser = user;
+        m_acceptReplies = 0;
+    }
+
+    private static void CountAcceptReply(CallSite site, EndpointId target)
+    {
+        if (
+            target.Value == m_watchedUser
+            && site.MethodInfo.DeclaringType == typeof(MyContractBlock)
+            && site.MethodInfo.Name == nameof(MyContractBlock.ReceiveAcceptContract)
+        )
+            m_acceptReplies++;
+    }
 
     public static void Register()
     {
@@ -390,7 +431,31 @@ internal static class ContractTestRoutes
                 TestRoutes.Text(context, 200, GlobalStateChannel.SendCommand("contracts", payload));
             }
         );
-        // POST /contract-test-rpc?op=accept|finish|abandon&userId=&block=&contract= - the contract block's own server
+        // POST /contract-test-strand-reservation?contract=&identity= - reserves the offer at the World Authority for
+        // the identity without writing an intent, as if its origin had lost its contract-accepts folder.
+        TestRoutes.Add(
+            "POST",
+            "/contract-test-strand-reservation",
+            context =>
+            {
+                long contract = TestRoutes.Long(context, "contract"),
+                    identity = TestRoutes.Long(context, "identity");
+                string payload = TestRoutes.OnGameThread(() =>
+                    JsonSerializer
+                        .Serialize(
+                            ContractLedger.AcceptRequest(
+                                System().m_inactiveContracts[contract],
+                                identity,
+                                0,
+                                Guid.NewGuid()
+                            )
+                        )
+                        .Replace("\"Kind\":\"Accept\"", "\"Kind\":\"Reserve\"")
+                );
+                TestRoutes.Text(context, 200, GlobalStateChannel.SendCommand("contracts", payload));
+            }
+        );
+        // POST /contract-test-rpc?op=accept|queue-accept|finish|abandon|status&userId=&block=&contract= - the contract block's own server
         // request handler for an attached player, as if the player's client had sent it (the client has no contract
         // screen to drive headless). Finish names the player's character as the delivering entity.
         TestRoutes.Add(
@@ -405,6 +470,26 @@ internal static class ContractTestRoutes
                 );
                 long block = TestRoutes.Long(context, "block"),
                     contract = TestRoutes.Long(context, "contract");
+                if (op == "queue-accept")
+                {
+                    // The listener must remain free to serve an independent game-thread probe.
+                    MySandboxGame.Static.Invoke(
+                        () =>
+                        {
+                            try
+                            {
+                                Request("accept", user, block, contract);
+                            }
+                            catch (Exception error)
+                            {
+                                Plugin.Log($"Queued acceptance of {contract} failed: {error}");
+                            }
+                        },
+                        "ClusterTestPlugin queue contract acceptance"
+                    );
+                    TestRoutes.Json(context, 202, new { queued = contract });
+                    return;
+                }
                 TestRoutes.Json(
                     context,
                     200,
@@ -647,8 +732,10 @@ internal static class ContractTestRoutes
         return new
         {
             contract = contractId,
+            reserved = ContractLedger.Reservations.ContainsKey(contractId),
             active = system.IsContractActive(contractId),
             offered = system.IsContractInInactive(contractId),
+            type = contract?.GetType().Name,
             state = contract?.State.ToString(),
             owners = contract?.Owners.ToArray() ?? Array.Empty<long>(),
             conditionFinished = contract?.ContractCondition?.IsFinished,
@@ -670,7 +757,8 @@ internal static class ContractTestRoutes
             ?? throw new InvalidOperationException(
                 "Player " + user + " is not attached to this node"
             );
-        if (MyEntities.GetEntityById(blockId) is not MyContractBlock block)
+        var block = MyEntities.GetEntityById(blockId) as MyContractBlock;
+        if (block == null && op != "status")
             throw new ArgumentException("No contract block " + blockId + " on this node");
         long identity = player.Identity.IdentityId;
         MyCharacter character = player.Character;
@@ -688,6 +776,9 @@ internal static class ContractTestRoutes
         {
             switch (op)
             {
+                case "watch-accept-replies":
+                    WatchAcceptReplies(user);
+                    break;
                 case "accept":
                     block.AcceptContract(identity, contractId);
                     break;
@@ -696,6 +787,8 @@ internal static class ContractTestRoutes
                     break;
                 case "abandon":
                     block.AbandonContract(identity, contractId);
+                    break;
+                case "status":
                     break;
                 default:
                     throw new ArgumentException("Unknown op " + op);
@@ -708,6 +801,7 @@ internal static class ContractTestRoutes
             identity,
             block = blockId,
             character = character?.EntityId ?? 0,
+            acceptReplies = user == m_watchedUser ? (int?)m_acceptReplies : null,
             packagesBefore = before,
             packagesAfter = Packages(),
             contract = Active(contractId, identity),
