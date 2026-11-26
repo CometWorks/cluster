@@ -33,6 +33,11 @@ namespace ClusterPlugin;
 /// block maps' clears). MyEntity.Delete itself goes on: the grid leaves the scene, its physics and its updates.
 /// The content is not lost: a cluster close only runs on content that lives on in a save or on another node.
 /// Only closes the cluster makes (<see cref="ClusterCloseScope"/>) are guarded; a vanilla close fails as before.
+///
+/// SE-1964: skipping the grid systems' unregister was not harmless. The live faults throw in BeforeDelete's
+/// MyEntities.Remove, before UnregisterBlocksBeforeClose, so MyGridGyroSystem kept its gyros, and MyEntity.Delete's
+/// RaisePhysicsChanged (after Physics = null) threw a NullReferenceException in GridOnOnPhysicsChanged that ended
+/// the node anyway. <see cref="Finish"/> runs that unregister after a fault.
 /// </summary>
 [HarmonyPatch(typeof(MyCubeGrid), "BeforeDelete")]
 internal static class GridDeleteFaultGuard
@@ -45,6 +50,10 @@ internal static class GridDeleteFaultGuard
     [HarmonyPrepare]
     private static bool Prepare() =>
         Environment.GetEnvironmentVariable("CLUSTER_GRID_DELETE_GUARD") != "0";
+
+    /// <summary>CLUSTER_GRID_DELETE_FINISH=0 swallows the fault without <see cref="Finish"/> (SE-1964's red arm).</summary>
+    private static readonly bool s_finish =
+        Environment.GetEnvironmentVariable("CLUSTER_GRID_DELETE_FINISH") != "0";
 
     [HarmonyFinalizer]
     [HarmonyPriority(Priority.Last)]
@@ -66,7 +75,52 @@ internal static class GridDeleteFaultGuard
                 + "; "
                 + __exception
         );
+        if (s_finish && __instance != null)
+            Finish(__instance);
         return null;
+    }
+
+    /// <summary>
+    /// Unregisters the grid's blocks from its grid systems, the step of BeforeDelete that matters after the fault:
+    /// a system that still holds blocks reacts to the deleted grid's events (SE-1964). Block by block if the whole
+    /// call throws too, so one bad block does not keep the others registered.
+    /// </summary>
+    internal static void Finish(MyCubeGrid grid)
+    {
+        try
+        {
+            grid.UnregisterBlocksBeforeClose();
+            return;
+        }
+        catch (Exception e)
+        {
+            MyLog.Default?.WriteLineAndConsole(
+                "[ClusterPlugin] grid delete fault: unregistering grid "
+                    + grid.EntityId
+                    + " from its grid systems threw, unregistering block by block (SE-1964): "
+                    + e
+            );
+        }
+        int failed = 0;
+        foreach (MyCubeBlock block in grid.m_fatBlocks.ToArray())
+        {
+            try
+            {
+                grid.GridSystems.UnregisterFromSystems(block);
+            }
+            catch (Exception)
+            {
+                failed++;
+            }
+        }
+        if (failed > 0)
+            MyLog.Default?.WriteLineAndConsole(
+                "[ClusterPlugin] grid delete fault: "
+                    + failed
+                    + " blocks of grid "
+                    + grid.EntityId
+                    + " could not be unregistered from the grid systems (SE-1964)"
+            );
     }
 
     /// <summary>Every receiver BeforeDelete and its small callees dereference without a frame of their own.</summary>

@@ -23,6 +23,17 @@ collision filter refresh queue at the grid's delete (/test-collision-filter-faul
   drains to Empty, nothing is dirty, every process exits 0.
 * ``P2-SAV-FILTER-RED`` - the same with CLUSTER_COLLISION_FILTER_GUARD=0: node-1 dies with the live stack and the
   shutdown lists node:node-1 dirty.
+
+SE-1964, the SE-1953 rehearsal 2026-11-26 and live since 11-18: the guarded fault threw in BeforeDelete's
+MyEntities.Remove, which skips the grid systems' unregister, and the grid had gyros. MyEntity.Delete's
+RaisePhysicsChanged then threw in MyGridGyroSystem.GridOnOnPhysicsChanged and ended the node after all. The
+fixture adds a gyro and throws from a MyEntities.OnEntityRemove handler (at=remove):
+
+* ``P2-SAV-REMOVE``     - the guard finishes the unregister: node-1 drains to Empty, nothing is dirty, every
+  process exits 0, no NullReferenceException in the gyro system, and the guard's line keeps the frame that
+  threw (the T-0404 timer finalizer on MyEntities.Remove used to cut it to "MyEntities.Remove_Patch1").
+* ``P2-SAV-REMOVE-RED`` - the same with CLUSTER_GRID_DELETE_FINISH=0 (the guard as before SE-1964): node-1 dies
+  in MyGridGyroSystem.GridOnOnPhysicsChanged and the shutdown lists node:node-1 dirty.
 """
 
 from __future__ import annotations
@@ -39,6 +50,7 @@ NODE = "node-1"
 STARTED = [NODE, "wa-1"]
 PROCESSES = (NODE, "wa-1", "gateway")
 FAR = 600_000.0
+GYRO_NRE = r"at Sandbox\.Game\.GameSystems\.MyGridGyroSystem\.GridOnOnPhysicsChanged"
 
 
 def _require(bench, label: str, passed, detail: str = "") -> None:
@@ -68,6 +80,12 @@ FAULTS = {
         r"test fault in MyCubeGrid.BeforeDelete of grid {grid}\b",
         r"grid delete fault: BeforeDelete of grid {grid}\b",
     ),
+    "remove": (
+        "/test-grid-delete-fault",
+        "CLUSTER_GRID_DELETE_FINISH",
+        r"test fault in MyEntities.Remove of grid {grid}\b",
+        r"grid delete fault: BeforeDelete of grid {grid}\b",
+    ),
     "filter": (
         "/test-collision-filter-fault",
         "CLUSTER_COLLISION_FILTER_GUARD",
@@ -90,7 +108,12 @@ def _fault_run(bench, guard_on: bool, fault: str = "delete") -> dict:
     except ClusterError:
         partition = None
     _require(bench, f"setup: grid {grid} is in a partition {NODE} owns", partition)
-    bench.record("armed", bench.cluster.node(NODE, f"{route}?entity={grid}", "POST"))
+    arm = "&at=remove&gyro=true" if fault == "remove" else ""
+    armed = bench.cluster.node(NODE, f"{route}?entity={grid}{arm}", "POST")
+    bench.record("armed", armed)
+    if fault == "remove":
+        _require(bench, "setup: the grid has a gyro", (armed or {}).get("gyros") == 1, json.dumps(armed))
+        time.sleep(2)  # a few frames: the idle gyro system deschedules, as the live grids' had
 
     shutdown = bench.cluster.post(
         f"/registry/shutdown/graceful?timeoutSeconds={RECOVERY_TIMEOUT}&forceAfterSeconds=0",
@@ -117,6 +140,8 @@ def _fault_run(bench, guard_on: bool, fault: str = "delete") -> dict:
         "crashed": bool(
             _lines(bench, NODE, r"at Sandbox\.Engine\.Physics\.MyPhysics\.ProcessCollisionFilterRefreshes")
         ),
+        "gyro_nre": bool(_lines(bench, NODE, GYRO_NRE)),
+        "thrower_frame": bool(_lines(bench, NODE, r"at ClusterTestPlugin\.GridDeleteFaultRoutes\.")),
         "unloaded": bool(_lines(bench, NODE, rf"drain final registered and partition unloaded: {partition}\b")),
         "empty": bool(_lines(bench, NODE, r"drain finals registered; node Empty")),
     }
@@ -181,6 +206,36 @@ def p2_sav_fault_red(bench) -> None:
     bench.exercised(guard="off", grid=r["grid"], partition=r["partition"], dirty=r["dirty"])
 
 
+def p2_sav_remove(bench) -> None:
+    r = _fault_run(bench, guard_on=True, fault="remove")
+    bench.check("the guard logged the fault", bool(r["guarded"]), "no guard line")
+    bench.check(
+        "the logged trace keeps the frame that threw, below MyEntities.Remove", r["thrower_frame"], json.dumps(r)[:300]
+    )
+    bench.check("no NullReferenceException in MyGridGyroSystem.GridOnOnPhysicsChanged", not r["gyro_nre"])
+    bench.check(
+        f"{NODE} unloaded the faulted partition and drained to Empty", r["unloaded"] and r["empty"], json.dumps(r)[:300]
+    )
+    bench.check("the shutdown left nothing dirty", r["dirty"] == [], json.dumps(r["dirty"]))
+    for name, code in r["codes"].items():
+        bench.check(f"{name} exited 0", code == 0, f"exit {code}")
+    bench.exercised(finish="on", fault="remove", grid=r["grid"], partition=r["partition"], dirty=r["dirty"])
+
+
+def p2_sav_remove_red(bench) -> None:
+    """The earned red: without the finish the gyro system ends node-1 with the live stack and leaves it dirty."""
+    r = _fault_run(bench, guard_on=False, fault="remove")
+    bench.check("finish OFF: the guard still logged the fault", bool(r["guarded"]), "no guard line")
+    bench.check("finish OFF: node-1 died in MyGridGyroSystem.GridOnOnPhysicsChanged (the live stack)", r["gyro_nre"])
+    bench.check(f"finish OFF: {NODE} never drained to Empty", not r["empty"])
+    bench.check(
+        f"finish OFF: the shutdown lists node:{NODE} dirty",
+        f"node:{NODE}" in (r["dirty"] or []),
+        json.dumps(r["dirty"]),
+    )
+    bench.exercised(finish="off", fault="remove", grid=r["grid"], partition=r["partition"], dirty=r["dirty"])
+
+
 SCENARIOS_DELETE_FAULT = {
     "P2-SAV-FAULT": (
         p2_sav_fault,
@@ -194,4 +249,14 @@ SCENARIOS_DELETE_FAULT = {
         "3",
     ),
     "P2-SAV-FILTER-RED": (p2_sav_filter_red, "SE-1491: the same with the guard off leaves the node dirty", "3"),
+    "P2-SAV-REMOVE": (
+        p2_sav_remove,
+        "SE-1964: a graceful stop ends clean although a gyro grid's delete fault skips the grid systems' unregister",
+        "3",
+    ),
+    "P2-SAV-REMOVE-RED": (
+        p2_sav_remove_red,
+        "SE-1964: the same without the guard's finish leaves the node dead in the gyro system",
+        "3",
+    ),
 }
