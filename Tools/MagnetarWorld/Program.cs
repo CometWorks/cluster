@@ -272,6 +272,13 @@ internal static class Tool
                         kind = save.Kind,
                         entities = save.EntityCount,
                         entityIds = entities.Select(entity => entity.EntityId).Order().ToArray(),
+                        sphere = new[]
+                        {
+                            save.Sphere.Center.X,
+                            save.Sphere.Center.Y,
+                            save.Sphere.Center.Z,
+                            save.Sphere.Radius,
+                        },
                         checksum = save.BodyChecksum.ToString("X16"),
                     }
                 )
