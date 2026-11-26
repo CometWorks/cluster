@@ -3431,6 +3431,7 @@ internal sealed partial class ClusterControlServer
             MySession.Static.VoxelMaps.TryGetVoxelMapByName(storage)
             ?? throw new KeyNotFoundException(storage);
         Vector3I max = min + size - 1;
+        RequireInsideStorage(voxel, min, max);
         MyStorageData data = new(
             max - min + 1,
             Enumerable.Repeat(content, size * size * size).Select(value => (byte)value).ToArray(),
@@ -3699,6 +3700,28 @@ internal sealed partial class ClusterControlServer
         );
     }
 
+    /// <summary>
+    /// SE-1950: a test write past the storage's edge is dropped without an error and a read there answers empty
+    /// voxels, so a rig that compared such cubes saw matches that meant nothing: an asteroid of
+    /// /voxel-test-spawn-asteroid radius=100 is a 128^3 storage, and P2-VOX-CATCHUP wrote cubes up to 199.
+    /// </summary>
+    internal static void RequireInsideStorage(MyVoxelBase voxel, Vector3I min, Vector3I max)
+    {
+        Vector3I size = voxel.Storage.Size;
+        if (
+            min.X < 0
+            || min.Y < 0
+            || min.Z < 0
+            || max.X >= size.X
+            || max.Y >= size.Y
+            || max.Z >= size.Z
+        )
+            throw new ArgumentOutOfRangeException(
+                nameof(max),
+                "Range " + min + ".." + max + " is outside the storage of size " + size
+            );
+    }
+
     private static string VoxelRangeHash(string storage, Vector3I min, int size)
     {
         if (size < 1 || size > 64)
@@ -3707,6 +3730,7 @@ internal sealed partial class ClusterControlServer
             MySession.Static.VoxelMaps.TryGetVoxelMapByName(storage)
             ?? throw new KeyNotFoundException(storage);
         Vector3I max = min + size - 1;
+        RequireInsideStorage(voxel, min, max);
         MyStorageData data = new(MyStorageDataTypeFlags.ContentAndMaterial);
         data.Resize(min, max);
         voxel.Storage.ReadRange(data, MyStorageDataTypeFlags.ContentAndMaterial, 0, min, max);

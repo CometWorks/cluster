@@ -2945,6 +2945,70 @@ internal static class MovedRoutes
                 return;
             }
         );
+        // SE-1950: the raw content and material of a box (inclusive max), base64, so a rig can compare voxel by
+        // voxel what the origin, the World Authority and a journal entry hold.
+        TestRoutes.Add(
+            "GET",
+            "/voxel-test-dump",
+            (context, path) =>
+            {
+                string storage =
+                    context.Request.QueryString["storage"]
+                    ?? throw new ArgumentException("Missing storage query parameter");
+                Vector3I min = QueryVector(context);
+                Vector3I max = new(
+                    int.Parse(context.Request.QueryString["mx"], CultureInfo.InvariantCulture),
+                    int.Parse(context.Request.QueryString["my"], CultureInfo.InvariantCulture),
+                    int.Parse(context.Request.QueryString["mz"], CultureInfo.InvariantCulture)
+                );
+                if (
+                    Vector3I.Max(max - min + 1, new Vector3I(129)) != new Vector3I(129)
+                    || (max - min + 1).Size < 1
+                )
+                    throw new ArgumentOutOfRangeException(nameof(max));
+                Write(
+                    context,
+                    200,
+                    "application/json",
+                    Encoding.UTF8.GetBytes(
+                        Invoke(() =>
+                        {
+                            MyVoxelBase voxel =
+                                MySession.Static.VoxelMaps.TryGetVoxelMapByName(storage)
+                                ?? throw new KeyNotFoundException(storage);
+                            RequireInsideStorage(voxel, min, max);
+                            MyStorageData data = new(MyStorageDataTypeFlags.ContentAndMaterial);
+                            data.Resize(min, max);
+                            voxel.Storage.ReadRange(
+                                data,
+                                MyStorageDataTypeFlags.ContentAndMaterial,
+                                0,
+                                min,
+                                max
+                            );
+                            int count = data.Size3D.Size;
+                            return JsonSerializer.Serialize(
+                                new
+                                {
+                                    size = voxel.Storage.Size.X,
+                                    content = Convert.ToBase64String(
+                                        data[MyStorageDataTypeEnum.Content],
+                                        0,
+                                        count
+                                    ),
+                                    material = Convert.ToBase64String(
+                                        data[MyStorageDataTypeEnum.Material],
+                                        0,
+                                        count
+                                    ),
+                                }
+                            );
+                        })
+                    )
+                );
+                return;
+            }
+        );
         TestRoutes.Add(
             "POST",
             "/conceal-test-teleport",
