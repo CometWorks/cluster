@@ -942,6 +942,13 @@ internal sealed class VoxelJournalService
                         sequence = entry.Sequence,
                         operationId = entry.OperationId,
                         kind = entry.Kind.ToString(),
+                        min = new[] { entry.Min.X, entry.Min.Y, entry.Min.Z },
+                        max = new[] { entry.Max.X, entry.Max.Y, entry.Max.Z },
+                        hash = entry.Kind == VoxelJournalCodec.EntryKind.Range
+                            ? Convert.ToHexString(
+                                SHA256.HashData([.. entry.Content, .. entry.Material])
+                            )
+                            : null,
                     })
                     .ToList()
             );

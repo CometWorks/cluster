@@ -4,8 +4,8 @@ Live Octahedron, 2026-11-25 (SE-1941): every new node logged 15-20 s of 260-540 
 while it caught up on the voxel journal. Update applied up to 64 entries every 250 ms, a count with no time
 budget, and one range write costs a few ms.
 
-WA + one regular node, Cluster-Simple, no client. The WA dispatches an asteroid, node-1 writes 125 32^3 cubes
-into it ``SE1946_PASSES`` times with different content, and node-1 is then replaced by a fresh node on an empty
+WA + one regular node, Cluster-Simple, no client. The WA dispatches an asteroid (radius=200, a 256^3 storage),
+node-1 writes 125 32^3 cubes inside it ``SE1946_PASSES`` times with different content, and node-1 is then replaced by a fresh node on an empty
 data root, which replays the whole journal from sequence 0. Overwrites stay in the journal, as in one that is
 never compacted. node-1's dirty-range capture unions nearby cubes, so 5,000 writes make about 400 entries of up
 to 64^3 voxels, each a heavier write than a live hand-drill entry. Two legs:
@@ -19,7 +19,8 @@ whether the fresh node's hash of every cube matches the WA's. The materializing 
 start-up (SE-1952) and recorded apart. With the fix no catch-up frame reaches 100 ms; run it on a package without
 the fix for the before numbers (the convergence checks pass on both).
 
-Knobs (environment): ``SE1946_RADIUS`` (asteroid radius, m, default 100), ``SE1946_PASSES`` (default 40).
+Knobs (environment): ``SE1946_RADIUS`` (the spawn's radius, which is the vanilla asteroid size: the storage is the
+next power of two, default 200), ``SE1946_PASSES`` (default 40).
 """
 from __future__ import annotations
 
@@ -35,11 +36,11 @@ from cluster import ClusterError, wait_until
 NODE = "node-1"
 STARTED = ["wa-1", NODE]
 ORIGIN = 2_000_000
-RADIUS = int(os.environ.get("SE1946_RADIUS", "100"))
+RADIUS = int(os.environ.get("SE1946_RADIUS", "200"))
 PASSES = int(os.environ.get("SE1946_PASSES", "40"))
 CUBE = 32
 EDGE = int(os.environ.get("SE1946_EDGE", "0"))  # first cube's offset from the storage corner
-STEP = 40  # 8 voxels between cubes, so no two dirty ranges touch and merge into one entry
+STEP = 48  # 16 voxels between cubes: 5 per axis in a 256^3 storage
 WRITERS = 4
 CATCH_UP_TIMEOUT = 1200
 SLOW_MS = 100
@@ -157,11 +158,15 @@ def p2_vox_catchup(bench) -> None:
     bench.record("config", bench.cluster.handover_config({**hitches, "dormant.enabled": "false"}))
     storage = _node(bench, "wa-1", f"/voxel-test-spawn-asteroid?x={ORIGIN}&y={ORIGIN}&z={ORIGIN}"
                                    f"&radius={RADIUS}&seed=19", "POST")["name"]
-    per_axis = max(1, (2 * RADIUS - CUBE - 2 * EDGE) // STEP + 1)
+    held = _try(lambda: wait_until(lambda: _try(lambda: _node(bench, NODE, f"/voxel-test-dump?storage={storage}"
+                                                                    "&x=0&y=0&z=0&mx=0&my=0&mz=0")),
+                                   180, "asteroid on node-1"))
+    _require(bench, f"setup: {NODE} holds the dispatched asteroid {storage}", held)
+    # SE-1950: every cube inside the storage. A write past its edge is refused; before that it was dropped, and
+    # the cubes there matched as empty voxels.
+    per_axis = max(1, (held["size"] - CUBE - EDGE) // STEP + 1)
     cubes = [(EDGE + x * STEP, EDGE + y * STEP, EDGE + z * STEP)
              for x in range(per_axis) for y in range(per_axis) for z in range(per_axis)]
-    _require(bench, f"setup: {NODE} holds the dispatched asteroid {storage}",
-             _try(lambda: wait_until(lambda: _hash(bench, NODE, storage, cubes[0]), 180, "asteroid on node-1")))
 
     want = {}
     with ThreadPoolExecutor(WRITERS) as pool:
@@ -175,8 +180,7 @@ def p2_vox_catchup(bench) -> None:
             want.update(zip(cubes, pool.map(write, cubes)))
             time.sleep(1.5)  # the pass's dirty ranges settle and publish before the same cubes are written again
 
-    # The fresh node must end where the WA is. node-1's own writes are recorded against the WA as information only:
-    # in octant (0..127)^3 of this asteroid the WA ends on other content than node-1 holds (SE-1950).
+    # The fresh node must end where the WA is, and the WA where node-1's last write left each cube (SE-1950).
     def settled():
         status = _try(lambda: _node(bench, NODE, "/voxel-journal-status"), {}) or {}
         if status.get("outboundQueued") != 0 or status.get("dirtyRanges") != 0:
@@ -193,8 +197,8 @@ def p2_vox_catchup(bench) -> None:
     differ = [list(cube) for cube in cubes if wa[cube] != want[cube]]
     bench.record("journal", {"entries": entries, "tail": tail, "cubes": len(cubes), "writes": len(cubes) * PASSES,
                              "originDiffers": differ})
-    bench.check(f"[INFO] setup: {entries} journal entries from {len(cubes) * PASSES} writes; "
-                f"{len(differ)} of {len(cubes)} cubes on the WA differ from node-1's last write", True, json.dumps(differ)[:1500])
+    bench.check(f"setup: {entries} journal entries from {len(cubes) * PASSES} writes; "
+                f"{len(differ)} of {len(cubes)} cubes on the WA differ from node-1's last write", not differ, json.dumps(differ)[:1500])
     want = wa
 
     bench.cluster.handover_config({**hitches, "dormant.enabled": "true"})
