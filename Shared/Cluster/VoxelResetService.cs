@@ -437,6 +437,7 @@ internal static class VoxelResetService
                 continue;
             }
             long lastEdit = 0;
+            int superseded = 0;
             bool reset = journal.ResetCube(
                 voxel,
                 cube,
@@ -452,7 +453,8 @@ internal static class VoxelResetService
                             DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                             age
                         );
-                }
+                },
+                out superseded
             );
             if (!reset)
             {
@@ -476,13 +478,14 @@ internal static class VoxelResetService
             Console.WriteLine(
                 string.Format(
                     CultureInfo.InvariantCulture,
-                    "[ClusterPlugin] voxel_reset storage={0} cube={1},{2},{3} edited_hours_ago={4:0.0} remaining_edited_cubes={5}",
+                    "[ClusterPlugin] voxel_reset storage={0} cube={1},{2},{3} edited_hours_ago={4:0.0} remaining_edited_cubes={5} superseded={6}",
                     storage,
                     x,
                     y,
                     z,
                     (DateTimeOffset.UtcNow.ToUnixTimeSeconds() - lastEdit) / 3600.0,
-                    journal.Ledger.EditedCubes()
+                    journal.Ledger.EditedCubes(),
+                    superseded
                 )
             );
         }

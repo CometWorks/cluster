@@ -333,6 +333,7 @@ internal static partial class SelfTest
         ("replica-budget", TestReplicaBudget),
         ("voxel-carry-policy", TestVoxelCarryPolicy),
         ("voxel-reset", TestVoxelReset),
+        ("voxel-compaction", TestVoxelCompaction),
         ("redeliver-policy", TestRedeliverPolicy),
         ("save-sequence-after-rollback", TestSaveSequenceAfterRollback),
         ("global-save-stale", TestGlobalSaveStale),

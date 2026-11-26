@@ -32,6 +32,8 @@
     <Compile Include="../Shared/Cluster/VoxelCarryPolicy.cs" Link="Protocol/VoxelCarryPolicy.cs" />
     <!-- SE-1595: the World Authority's voxel reset rules and edit ledger, run in the registry self-test. -->
     <Compile Include="../Shared/Cluster/VoxelResetPolicy.cs" Link="Protocol/VoxelResetPolicy.cs" />
+    <!-- SE-1893: the voxel journal compaction schedule, cut and supersede rules, run in the registry self-test. -->
+    <Compile Include="../Shared/Cluster/VoxelCompactionPolicy.cs" Link="Protocol/VoxelCompactionPolicy.cs" />
     <!-- T-0396: what a client-view adopt destroys before it re-delivers a replicable still on its way. -->
     <Compile Include="../Shared/Cluster/RedeliverPolicy.cs" Link="Protocol/RedeliverPolicy.cs" />
     <!-- T-0340: the per-host save store's paths and no-replace install, shared with both plugins. -->

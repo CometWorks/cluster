@@ -121,6 +121,49 @@ internal sealed class VoxelJournalService
     private long m_unknownStorageSkips;
 
     /// <summary>
+    /// SE-1893, World Authority, under <see cref="m_lock"/>: the sequence of each 64-voxel cube's newest reset entry
+    /// this process wrote, per storage. A retained entry whose every cube was reset after it is superseded.
+    /// </summary>
+    private readonly Dictionary<string, Dictionary<long, long>> m_resetAt = new(
+        StringComparer.Ordinal
+    );
+    private long m_supersededEntries;
+    private readonly ConcurrentQueue<VoxelJournalCodec.Entry> m_stubWrites = new();
+    private int m_stubWriting;
+
+    /// <summary>
+    /// SE-1893: a superseded entry keeps its sequence and operation id but no content, so a replica's journal stays
+    /// contiguous and its gap check holds. It is a cutout relay far from any voxel: a node of this build applies it
+    /// as nothing, and an older one relays a 1 m carve at 1,000,000 km on each axis to its clients, which touches no voxel.
+    /// </summary>
+    private const string SupersededOrigin = "~superseded";
+    private static readonly Vector3D SupersededCenter = new(1e9, 1e9, 1e9);
+
+    private static bool IsSuperseded(VoxelJournalCodec.Entry entry) =>
+        entry.Kind == VoxelJournalCodec.EntryKind.CutoutSphere
+        && entry.OriginNode == SupersededOrigin;
+
+    private static VoxelJournalCodec.Entry Stub(VoxelJournalCodec.Entry entry) =>
+        new(
+            entry.OperationId,
+            entry.AuthorityGeneration,
+            entry.Sequence,
+            entry.StorageName,
+            default,
+            default,
+            default,
+            Array.Empty<byte>(),
+            Array.Empty<byte>(),
+            VoxelJournalCodec.EntryKind.CutoutSphere,
+            SupersededOrigin,
+            SupersededCenter,
+            1f
+        );
+
+    private static long PayloadBytes(VoxelJournalCodec.Entry entry) =>
+        (entry.Content?.LongLength ?? 0) + (entry.Material?.LongLength ?? 0);
+
+    /// <summary>
     /// The voxel maps whose RangeChanged this service observes, by INSTANCE. It was keyed by entity id, but a stock
     /// procedural asteroid gets the same id every time it is generated (GetAsteroidEntityId hashes the storage name):
     /// once an unmodified asteroid was unloaded and generated again, the new instance was never subscribed and no
@@ -682,7 +725,10 @@ internal sealed class VoxelJournalService
             ReplayAppearedStorages();
         }
         if (ClusterRuntime.IsWorldAuthority)
+        {
             VoxelResetService.Update(this, m_root);
+            CompactionTick();
+        }
     }
 
     /// <summary>
@@ -842,15 +888,33 @@ internal sealed class VoxelJournalService
 
     public string Status()
     {
-        int retainedCutouts;
+        int retainedCutouts,
+            retainedEntries,
+            retainedStubs;
+        long retainedBytes;
         lock (m_lock)
-            retainedCutouts = m_entries
+        {
+            VoxelJournalCodec.Entry[] all = m_entries
                 .Values.SelectMany(entries => entries.Values)
-                .Count(entry => entry.Kind == VoxelJournalCodec.EntryKind.CutoutSphere);
+                .ToArray();
+            retainedCutouts = all.Count(entry =>
+                entry.Kind == VoxelJournalCodec.EntryKind.CutoutSphere && !IsSuperseded(entry)
+            );
+            retainedEntries = all.Length;
+            retainedStubs = all.Count(IsSuperseded);
+            retainedBytes = all.Sum(PayloadBytes);
+        }
         return JsonSerializer.Serialize(
             new
             {
                 cutoutRelays = Interlocked.Read(ref m_cutoutRelays),
+                // SE-1893, World Authority: the retained journal (stubs included), its payload bytes, and the
+                // superseded stubs among the entries.
+                retainedEntries,
+                retainedBytes,
+                retainedStubs,
+                supersededEntries = Interlocked.Read(ref m_supersededEntries),
+                compaction = CompactionStatus(),
                 retainedCutouts,
                 // A lane asserting convergence needs to tell "not replicated yet" from "never will be": anything but
                 // zero drops means this node holds an edit the cluster will never see.
@@ -1099,121 +1163,152 @@ internal sealed class VoxelJournalService
         }
     }
 
+    /// <summary>
+    /// The admin trigger: compacts every voxel map of the session at once, on the game thread, and answers each
+    /// storage's base and how many entries it cut. The nightly run (<see cref="CompactionTick"/>) does the same work
+    /// one storage per frame, with the file writes and registry calls off the game thread.
+    /// </summary>
     public string Compact()
     {
         if (!ClusterRuntime.IsWorldAuthority)
             throw new InvalidOperationException("This node is not the World Authority");
-        List<object> bases = new();
-        foreach (
-            MyVoxelBase planet in MySession
-                .Static.VoxelMaps.Instances.Where(voxel =>
-                    (voxel is MyPlanet || voxel is MyVoxelMap)
-                    && voxel == voxel.RootVoxel
-                    && !string.IsNullOrWhiteSpace(voxel.StorageName)
-                )
-                .GroupBy(voxel => voxel.StorageName, StringComparer.Ordinal)
-                .Select(group => group.First())
-        )
+        if (m_compaction != null)
+            throw new InvalidOperationException("A scheduled voxel compaction is running");
+        List<(Snapshot Snapshot, BaseState Basis)> persisted = MySession
+            .Static.VoxelMaps.Instances.Where(IsCompactable)
+            .GroupBy(voxel => voxel.StorageName, StringComparer.Ordinal)
+            .Select(group => TakeSnapshot(group.First()))
+            .Select(snapshot => (snapshot, Persist(snapshot)))
+            .ToList();
+        // After every base is catalogued: see FinishCompaction.
+        Watermarks watermarks = FetchWatermarks();
+        return JsonSerializer.Serialize(
+            persisted.Select(item => new
+            {
+                storage = item.Snapshot.Storage,
+                baseVersion = item.Basis.BaseVersion,
+                tailSequence = item.Snapshot.Sequence,
+                path = item.Basis.Path,
+                bytes = item.Basis.SizeBytes,
+                checksum = item.Basis.Checksum,
+                truncated = TruncateJournal(
+                    item.Snapshot.Storage,
+                    item.Snapshot.Sequence,
+                    watermarks
+                ).Removed,
+            })
+        );
+    }
+
+    private static bool IsCompactable(MyVoxelBase voxel) =>
+        (voxel is MyPlanet || voxel is MyVoxelMap)
+        && voxel == voxel.RootVoxel
+        && !string.IsNullOrWhiteSpace(voxel.StorageName);
+
+    /// <summary>A storage's tail on the World Authority and its saved content at that tail, or the base that already holds it.</summary>
+    private sealed record Snapshot(
+        string Storage,
+        long Sequence,
+        byte[] Bytes,
+        BaseState Reused,
+        double SaveMs
+    );
+
+    /// <summary>Game thread: the storage's applied tail and its content there. A base at that tail is reused, without a save.</summary>
+    private Snapshot TakeSnapshot(MyVoxelBase voxel)
+    {
+        long start = Stopwatch.GetTimestamp();
+        lock (m_lock)
         {
-            long sequence;
-            byte[] bytes;
-            BaseState reused = null;
-            lock (m_lock)
-            {
-                sequence = m_applied.GetValueOrDefault(planet.StorageName);
-                if (
-                    m_bases.TryGetValue(planet.StorageName, out BaseState current)
-                    && current.TailSequence == sequence
-                )
-                {
-                    m_pendingWatermarks[planet.StorageName] = 0;
-                    reused = current;
-                    bytes = null;
-                }
-                else
-                    planet.Storage.Save(out bytes);
-            }
-            if (reused != null)
-            {
-                bases.Add(
-                    new
-                    {
-                        storage = planet.StorageName,
-                        baseVersion = reused.BaseVersion,
-                        tailSequence = sequence,
-                        path = reused.Path,
-                        bytes = new FileInfo(reused.Path).Length,
-                        checksum = reused.Checksum,
-                        truncated = TruncateJournal(planet.StorageName, sequence),
-                    }
-                );
-                continue;
-            }
-            string map = Convert.ToHexString(
-                SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(planet.StorageName))
-            );
-            string directory = Path.Combine(m_root, "base", map);
-            Directory.CreateDirectory(directory);
-            // The directory name is a hash, so a catalog rebuild scanning surviving roots cannot recover
-            // the storage name from the path alone; the manifest is its only name source.
-            string manifest = Path.Combine(directory, "storage-name.txt");
-            if (!File.Exists(manifest))
-                File.WriteAllText(manifest, planet.StorageName);
-            string path = Path.Combine(
-                directory,
-                "base-" + sequence.ToString("D20", CultureInfo.InvariantCulture) + ".vx2"
-            );
-            string temporary = path + ".tmp";
-            using (
-                FileStream stream = new(
-                    temporary,
-                    FileMode.Create,
-                    FileAccess.Write,
-                    FileShare.None
-                )
+            long sequence = m_applied.GetValueOrDefault(voxel.StorageName);
+            if (
+                m_bases.TryGetValue(voxel.StorageName, out BaseState current)
+                && current.TailSequence == sequence
             )
             {
-                stream.Write(bytes);
-                stream.Flush(true);
+                m_pendingWatermarks[voxel.StorageName] = 0;
+                return new Snapshot(voxel.StorageName, sequence, null, current, 0);
             }
-            File.Move(temporary, path, overwrite: true);
-            string checksum = Convert.ToHexString(SHA256.HashData(bytes));
-            RegisterBase(planet.StorageName, sequence, sequence, path, bytes.Length, checksum);
-            m_bases[planet.StorageName] = new BaseState(
+            voxel.Storage.Save(out byte[] bytes);
+            return new Snapshot(
+                voxel.StorageName,
                 sequence,
-                sequence,
-                path,
-                bytes.Length,
-                checksum
-            );
-            bases.Add(
-                new
-                {
-                    storage = planet.StorageName,
-                    baseVersion = sequence,
-                    tailSequence = sequence,
-                    path,
-                    bytes = bytes.Length,
-                    checksum,
-                    truncated = TruncateJournal(planet.StorageName, sequence),
-                }
+                bytes,
+                null,
+                (Stopwatch.GetTimestamp() - start) * 1000.0 / Stopwatch.Frequency
             );
         }
-        return JsonSerializer.Serialize(bases);
     }
 
     /// <summary>
-    /// Deletes journal entries no consumer can still need after a compaction catalogued a base at
-    /// <paramref name="tail"/>. The cut is the minimum of the tail and every active regular node's reported
-    /// applied watermark, with an unreported node counting as zero: a node that has not said where it is might
-    /// still need everything, so it blocks truncation rather than being truncated past. New consumers always
-    /// start from the newest catalogued base, whose tail is at or above any cut taken here. Operation ids of
-    /// truncated entries stay in the durable operation log, so a re-sent ancient edit still deduplicates instead
-    /// of re-appending old content under a fresh sequence.
+    /// Any thread: writes a snapshot as the storage's newest base and registers it in the catalog. The base before it
+    /// stays, for a node that started before this one was catalogued; older ones are deleted, as nothing selects them.
     /// </summary>
-    private long TruncateJournal(string storage, long tail)
+    private BaseState Persist(Snapshot snapshot)
     {
-        long cut = tail;
+        if (snapshot.Reused != null)
+            return snapshot.Reused;
+        string storage = snapshot.Storage;
+        long sequence = snapshot.Sequence;
+        byte[] bytes = snapshot.Bytes;
+        string directory = Path.Combine(m_root, "base", StorageMap(storage));
+        Directory.CreateDirectory(directory);
+        // The directory name is a hash, so a catalog rebuild scanning surviving roots cannot recover
+        // the storage name from the path alone; the manifest is its only name source.
+        string manifest = Path.Combine(directory, "storage-name.txt");
+        if (!File.Exists(manifest))
+            File.WriteAllText(manifest, storage);
+        string path = Path.Combine(
+            directory,
+            "base-" + sequence.ToString("D20", CultureInfo.InvariantCulture) + ".vx2"
+        );
+        string temporary = path + ".tmp";
+        using (
+            FileStream stream = new(temporary, FileMode.Create, FileAccess.Write, FileShare.None)
+        )
+        {
+            stream.Write(bytes);
+            stream.Flush(true);
+        }
+        File.Move(temporary, path, overwrite: true);
+        string checksum = Convert.ToHexString(SHA256.HashData(bytes));
+        RegisterBase(storage, sequence, sequence, path, bytes.Length, checksum);
+        BaseState basis = new(sequence, sequence, path, bytes.Length, checksum);
+        m_bases[storage] = basis;
+        foreach (
+            string old in Directory
+                .EnumerateFiles(directory, "base-*.vx2")
+                .OrderByDescending(value => value, StringComparer.Ordinal)
+                .Skip(2)
+        )
+            try
+            {
+                File.Delete(old);
+            }
+            catch (Exception exception)
+            {
+                Console.WriteLine(
+                    "[ClusterPlugin] voxel_compact old_base_delete_failed=true path="
+                        + old
+                        + " error="
+                        + exception.Message
+                );
+            }
+        return basis;
+    }
+
+    private static string StorageMap(string storage) =>
+        Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(storage)));
+
+    /// <summary>The Gateway's nodes and the voxel watermarks they reported in their current epoch, at one moment.</summary>
+    private sealed record Watermarks(
+        List<VoxelCompactionPolicy.Consumer> Nodes,
+        Dictionary<string, Dictionary<string, (long Epoch, long Applied)>> Reported
+    );
+
+    /// <summary>Off the game thread; null when the Gateway can't be read, and then nothing is truncated.</summary>
+    private Watermarks FetchWatermarks()
+    {
         try
         {
             using JsonDocument nodes = ClusterRuntime.Get(m_http, m_gateway + "/registry/nodes");
@@ -1221,30 +1316,30 @@ internal sealed class VoxelJournalService
                 m_http,
                 m_gateway + "/registry/voxel-replicas"
             );
-            Dictionary<string, long> applied = new(StringComparer.Ordinal);
+            Dictionary<string, Dictionary<string, (long, long)>> reported = new(
+                StringComparer.Ordinal
+            );
             foreach (JsonElement row in replicas.RootElement.EnumerateArray())
-                if (
-                    string.Equals(
-                        row.GetProperty("StorageName").GetString(),
-                        storage,
-                        StringComparison.Ordinal
-                    )
-                )
-                    applied[row.GetProperty("Node").GetString()] = row.GetProperty("Applied")
-                        .GetInt64();
-            foreach (JsonElement node in nodes.RootElement.EnumerateArray())
             {
-                // The registry serializes enums as numbers: Role 0 is Regular, State 0 is Active.
-                if (
-                    node.GetProperty("Role").GetInt32() != 0
-                    || node.GetProperty("State").GetInt32() != 0
-                )
-                    continue;
-                cut = Math.Min(
-                    cut,
-                    applied.GetValueOrDefault(node.GetProperty("Node").GetString(), 0L)
+                string storage = row.GetProperty("StorageName").GetString();
+                if (!reported.TryGetValue(storage, out Dictionary<string, (long, long)> rows))
+                    reported[storage] = rows = new(StringComparer.Ordinal);
+                rows[row.GetProperty("Node").GetString()] = (
+                    row.GetProperty("Epoch").GetInt64(),
+                    row.GetProperty("Applied").GetInt64()
                 );
             }
+            // The registry serializes enums as numbers: Role 0 is Regular, State 0 is Active.
+            List<VoxelCompactionPolicy.Consumer> consumers = nodes
+                .RootElement.EnumerateArray()
+                .Select(node => new VoxelCompactionPolicy.Consumer(
+                    node.GetProperty("Node").GetString(),
+                    node.GetProperty("Epoch").GetInt64(),
+                    node.GetProperty("Role").GetInt32() == 0,
+                    node.GetProperty("State").GetInt32() == 0
+                ))
+                .ToList();
+            return new Watermarks(consumers, reported);
         }
         catch (Exception exception)
         {
@@ -1253,8 +1348,36 @@ internal sealed class VoxelJournalService
                 "[ClusterPlugin] voxel_journal truncation_skipped=true error="
                     + SecretRedactor.Redact(exception.Message)
             );
-            return 0;
+            return null;
         }
+    }
+
+    /// <summary>
+    /// Deletes journal entries no consumer can still need after a compaction catalogued a base at
+    /// <paramref name="tail"/>: up to the minimum of the tail and every active regular node's reported applied
+    /// watermark, with a node that has not reported counting as zero (<see cref="VoxelCompactionPolicy.Cut"/>).
+    /// New consumers always start from the newest catalogued base, whose tail is at or above any cut taken here.
+    /// Operation ids of truncated entries stay in the durable operation log, so a re-sent ancient edit still
+    /// deduplicates instead of re-appending old content under a fresh sequence.
+    /// </summary>
+    private (int Removed, long Bytes, long Cut, string[] Blockers) TruncateJournal(
+        string storage,
+        long tail,
+        Watermarks watermarks
+    )
+    {
+        if (watermarks == null)
+            return (0, 0, 0, Array.Empty<string>());
+        (long cut, string[] blockers) = VoxelCompactionPolicy.Cut(
+            tail,
+            watermarks.Nodes,
+            watermarks.Reported.TryGetValue(
+                storage,
+                out Dictionary<string, (long Epoch, long Applied)> rows
+            )
+                ? rows
+                : new Dictionary<string, (long Epoch, long Applied)>()
+        );
         List<VoxelJournalCodec.Entry> removed = new();
         lock (m_lock)
         {
@@ -1265,31 +1388,367 @@ internal sealed class VoxelJournalService
                     out SortedDictionary<long, VoxelJournalCodec.Entry> entries
                 )
             )
-                return 0;
-            foreach (long sequence in entries.Keys.Where(value => value <= cut).ToArray())
+                return (0, 0, cut, blockers);
+            foreach (VoxelJournalCodec.Entry entry in entries.Values)
             {
-                removed.Add(entries[sequence]);
-                entries.Remove(sequence);
+                if (entry.Sequence > cut)
+                    break;
+                removed.Add(entry);
             }
+            foreach (VoxelJournalCodec.Entry entry in removed)
+                entries.Remove(entry.Sequence);
             if (removed.Count > 0)
                 m_tailsVersion++;
         }
         foreach (VoxelJournalCodec.Entry entry in removed)
             DeleteFile(entry);
+        long bytes = removed.Sum(PayloadBytes);
         if (removed.Count > 0)
         {
             Interlocked.Add(ref m_truncatedEntries, removed.Count);
             Console.WriteLine(
                 string.Format(
                     CultureInfo.InvariantCulture,
-                    "[ClusterPlugin] voxel_journal truncated={0} storage={1} cut={2}",
+                    "[ClusterPlugin] voxel_journal truncated={0} storage={1} cut={2} bytes={3}",
                     removed.Count,
                     storage,
-                    cut
+                    cut,
+                    bytes
                 )
             );
         }
-        return removed.Count;
+        return (removed.Count, bytes, cut, blockers);
+    }
+
+    /// <summary>
+    /// SE-1893: one nightly compaction. The game thread saves its storages one per frame (<see cref="Pending"/>); the
+    /// compaction thread writes and registers each base and cuts its journal (<see cref="Saved"/>). Counters are
+    /// written by the compaction thread only, except <see cref="SaveMs"/> and <see cref="MaxSaveMs"/>.
+    /// </summary>
+    private sealed class CompactionRun
+    {
+        public readonly long StartTick = Environment.TickCount64;
+        public readonly DateTimeOffset Started = DateTimeOffset.UtcNow;
+        public readonly Queue<string> Pending;
+        public readonly int Storages;
+        public readonly int EntriesBefore;
+        public readonly long BytesBefore;
+        public readonly BlockingCollection<Snapshot> Saved = new();
+        public double SaveMs;
+        public double MaxSaveMs;
+        public string MaxSaveStorage;
+        public int Bases;
+        public int Truncated;
+        public long TruncatedBytes;
+        public int Failed;
+        public readonly Dictionary<string, long> Blocked = new(StringComparer.Ordinal);
+        public readonly Dictionary<string, int> Blockers = new(StringComparer.Ordinal);
+
+        public CompactionRun(Queue<string> pending, int entries, long bytes)
+        {
+            Pending = pending;
+            Storages = pending.Count;
+            EntriesBefore = entries;
+            BytesBefore = bytes;
+        }
+    }
+
+    /// <summary>The run being saved on the game thread; null between runs. Game thread only.</summary>
+    private CompactionRun m_compaction;
+
+    /// <summary>Storages left above their cut by the last run, to cut again; compaction thread only.</summary>
+    private Dictionary<string, long> m_retry = new(StringComparer.Ordinal);
+    private DateTimeOffset m_nextCompaction = DateTimeOffset.MaxValue;
+    private string m_compactionConfig;
+    private DateTimeOffset m_lastCompactionStart = DateTimeOffset.MinValue;
+    private string m_lastCompaction;
+    private long m_compactionRuns;
+
+    private object CompactionStatus() =>
+        ClusterRuntime.IsWorldAuthority
+            ? new
+            {
+                running = m_compaction != null,
+                runs = Interlocked.Read(ref m_compactionRuns),
+                next = m_nextCompaction == DateTimeOffset.MaxValue
+                    ? null
+                    : m_nextCompaction.ToString("O", CultureInfo.InvariantCulture),
+                retrying = Volatile.Read(ref m_retry).Count,
+                last = m_lastCompaction,
+            }
+            : null;
+
+    /// <summary>
+    /// World Authority, game thread, every update: starts the nightly compaction when it is due and saves the next
+    /// storage of a running one. The schedule is read again whenever its config changes.
+    /// </summary>
+    private void CompactionTick()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        string at = ClusterConfig.Get("voxel.compactAt");
+        string zone = ClusterConfig.Get("voxel.compactTimeZone");
+        int every = ClusterConfig.GetInt("voxel.compactEverySeconds");
+        string config = at + "|" + zone + "|" + every.ToString(CultureInfo.InvariantCulture);
+        if (config != m_compactionConfig)
+        {
+            m_compactionConfig = config;
+            m_nextCompaction = NextCompaction(now, at, zone, every);
+        }
+        if (m_compaction == null)
+        {
+            if (now < m_nextCompaction)
+                return;
+            m_lastCompactionStart = now;
+            m_nextCompaction = NextCompaction(now, at, zone, every);
+            StartCompaction();
+            return;
+        }
+        SaveNextStorage();
+    }
+
+    private DateTimeOffset NextCompaction(DateTimeOffset now, string at, string zone, int every)
+    {
+        try
+        {
+            DateTimeOffset next =
+                every > 0
+                    ? (
+                        m_lastCompactionStart == DateTimeOffset.MinValue
+                            ? now
+                            : m_lastCompactionStart
+                    ).AddSeconds(every)
+                : VoxelCompactionPolicy.ParseTimeOfDay(at) is TimeSpan time
+                    ? VoxelCompactionPolicy.NextDaily(now, time, VoxelCompactionPolicy.Zone(zone))
+                : DateTimeOffset.MaxValue;
+            Console.WriteLine(
+                "[ClusterPlugin] voxel_compact next="
+                    + (
+                        next == DateTimeOffset.MaxValue
+                            ? "never"
+                            : next.ToString("O", CultureInfo.InvariantCulture)
+                    )
+                    + " at="
+                    + at
+                    + " zone="
+                    + zone
+                    + " every_s="
+                    + every.ToString(CultureInfo.InvariantCulture)
+            );
+            return next;
+        }
+        catch (Exception exception)
+        {
+            Console.WriteLine(
+                "[ClusterPlugin] voxel_compact schedule_invalid=true at="
+                    + at
+                    + " zone="
+                    + zone
+                    + " error="
+                    + exception.Message
+            );
+            return DateTimeOffset.MaxValue;
+        }
+    }
+
+    /// <summary>Game thread: queues every storage of the session that has journal entries, and starts its compaction thread.</summary>
+    private void StartCompaction()
+    {
+        HashSet<string> held = new(
+            MySession
+                .Static.VoxelMaps.Instances.Where(IsCompactable)
+                .Select(voxel => voxel.StorageName),
+            StringComparer.Ordinal
+        );
+        Queue<string> pending = new();
+        int entries = 0;
+        long bytes = 0;
+        lock (m_lock)
+            foreach (
+                KeyValuePair<
+                    string,
+                    SortedDictionary<long, VoxelJournalCodec.Entry>
+                > storage in m_entries.OrderBy(item => item.Key, StringComparer.Ordinal)
+            )
+            {
+                if (storage.Value.Count == 0 || !held.Contains(storage.Key))
+                    continue;
+                pending.Enqueue(storage.Key);
+                entries += storage.Value.Count;
+                bytes += storage.Value.Values.Sum(PayloadBytes);
+            }
+        CompactionRun run = new(pending, entries, bytes);
+        Interlocked.Increment(ref m_compactionRuns);
+        Console.WriteLine(
+            string.Format(
+                CultureInfo.InvariantCulture,
+                "[ClusterPlugin] voxel_compact start=true storages={0} entries={1} bytes={2}",
+                run.Storages,
+                entries,
+                bytes
+            )
+        );
+        m_compaction = run;
+        new Thread(() => FinishCompaction(run))
+        {
+            IsBackground = true,
+            Name = "ClusterVoxelCompact",
+        }.Start();
+    }
+
+    /// <summary>Game thread: saves the next queued storage, one per frame, and hands it to the compaction thread.</summary>
+    private void SaveNextStorage()
+    {
+        CompactionRun run = m_compaction;
+        if (run.Pending.Count == 0)
+        {
+            run.Saved.CompleteAdding();
+            m_compaction = null;
+            return;
+        }
+        string storage = run.Pending.Dequeue();
+        MyVoxelBase voxel = MySession.Static.VoxelMaps.TryGetVoxelMapByName(storage);
+        if (voxel == null || !IsCompactable(voxel) || voxel.Storage == null)
+            return;
+        long start = Stopwatch.GetTimestamp();
+        Snapshot snapshot = TakeSnapshot(voxel);
+        HitchRecorder.Add(HitchRecorder.Bucket.VoxelCompact, start);
+        run.SaveMs += snapshot.SaveMs;
+        if (snapshot.SaveMs > run.MaxSaveMs)
+            (run.MaxSaveMs, run.MaxSaveStorage) = (snapshot.SaveMs, storage);
+        run.Saved.Add(snapshot);
+    }
+
+    /// <summary>
+    /// Compaction thread: writes, registers and truncates each storage the game thread saved, then logs the run. The
+    /// storages an active node held back are cut again every <c>voxel.compactRetrySeconds</c> until their journal
+    /// reaches the base or the next run starts.
+    /// </summary>
+    private void FinishCompaction(CompactionRun run)
+    {
+        Volatile.Write(ref m_retry, new Dictionary<string, long>(StringComparer.Ordinal));
+        List<(string Storage, long Tail)> persisted = new();
+        foreach (Snapshot snapshot in run.Saved.GetConsumingEnumerable())
+        {
+            try
+            {
+                BaseState basis = Persist(snapshot);
+                if (snapshot.Reused == null)
+                    run.Bases++;
+                persisted.Add((snapshot.Storage, basis.TailSequence));
+            }
+            catch (Exception exception)
+            {
+                run.Failed++;
+                Console.WriteLine(
+                    "[ClusterPlugin] voxel_compact storage_failed=true storage="
+                        + snapshot.Storage
+                        + " error="
+                        + SecretRedactor.Redact(exception.Message)
+                );
+            }
+        }
+        // Read the watermarks only once every base of the run is catalogued. A node registers before it reads the
+        // catalog, so a node missing from this read starts from these bases, and one in it blocks until it reports.
+        // Watermarks read before a base was catalogued could cut entries that a node registering in between still
+        // needs, as it would start from the older base.
+        Watermarks watermarks = FetchWatermarks();
+        Dictionary<string, long> retry = new(StringComparer.Ordinal);
+        foreach ((string storage, long tail) in persisted)
+        {
+            (int removed, long bytes, long cut, string[] blockers) = TruncateJournal(
+                storage,
+                tail,
+                watermarks
+            );
+            run.Truncated += removed;
+            run.TruncatedBytes += bytes;
+            if (cut >= tail)
+                continue;
+            retry[storage] = tail;
+            run.Blocked[storage] = cut;
+            foreach (string blocker in blockers)
+                run.Blockers[blocker.Split(':')[0]] =
+                    run.Blockers.GetValueOrDefault(blocker.Split(':')[0]) + 1;
+        }
+        int entriesAfter;
+        long bytesAfter;
+        lock (m_lock)
+        {
+            entriesAfter = m_entries.Values.Sum(entries => entries.Count);
+            bytesAfter = m_entries.Values.Sum(entries => entries.Values.Sum(PayloadBytes));
+        }
+        m_lastCompaction = string.Format(
+            CultureInfo.InvariantCulture,
+            "storages={0} bases={1} failed={2} entries_before={3} entries_after={4} bytes_before={5} bytes_after={6} truncated={7} truncated_bytes={8} save_ms={9:F0} max_save_ms={10:F1} max_save_storage={11} wall_s={12:F1} blocked={13} blockers={14} started={15}",
+            run.Storages,
+            run.Bases,
+            run.Failed,
+            run.EntriesBefore,
+            entriesAfter,
+            run.BytesBefore,
+            bytesAfter,
+            run.Truncated,
+            run.TruncatedBytes,
+            run.SaveMs,
+            run.MaxSaveMs,
+            run.MaxSaveStorage ?? "-",
+            (Environment.TickCount64 - run.StartTick) / 1000.0,
+            run.Blocked.Count,
+            run.Blockers.Count == 0
+                ? "-"
+                : string.Join(
+                    ",",
+                    run.Blockers.OrderByDescending(item => item.Value)
+                        .Select(item => item.Key + ":" + item.Value)
+                ),
+            run.Started.ToString("O", CultureInfo.InvariantCulture)
+        );
+        Console.WriteLine("[ClusterPlugin] voxel_compact done=true " + m_lastCompaction);
+        Volatile.Write(ref m_retry, retry);
+        RetryTruncation(retry);
+    }
+
+    /// <summary>Compaction thread: cuts the held-back storages again until each reaches its base or a new run takes over.</summary>
+    private void RetryTruncation(Dictionary<string, long> retry)
+    {
+        while (retry.Count > 0 && ReferenceEquals(Volatile.Read(ref m_retry), retry))
+        {
+            Thread.Sleep(1000 * Math.Max(1, ClusterConfig.GetInt("voxel.compactRetrySeconds")));
+            if (!ReferenceEquals(Volatile.Read(ref m_retry), retry))
+                return;
+            Watermarks watermarks = FetchWatermarks();
+            int truncated = 0;
+            Dictionary<string, int> blockers = new(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, long> storage in retry.ToArray())
+            {
+                // A newer base (an admin compaction meanwhile) moves the target; the cut never passes the catalogued base.
+                long tail = m_bases.TryGetValue(storage.Key, out BaseState basis)
+                    ? basis.TailSequence
+                    : storage.Value;
+                (int removed, _, long cut, string[] held) = TruncateJournal(
+                    storage.Key,
+                    tail,
+                    watermarks
+                );
+                truncated += removed;
+                if (watermarks != null && cut >= tail)
+                    retry.Remove(storage.Key);
+                foreach (string blocker in held)
+                    blockers[blocker.Split(':')[0]] =
+                        blockers.GetValueOrDefault(blocker.Split(':')[0]) + 1;
+            }
+            Console.WriteLine(
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "[ClusterPlugin] voxel_compact retry=true truncated={0} still_blocked={1} blockers={2}",
+                    truncated,
+                    retry.Count,
+                    blockers.Count == 0
+                        ? "-"
+                        : string.Join(",", blockers.Select(item => item.Key + ":" + item.Value))
+                )
+            );
+        }
     }
 
     private VoxelJournalCodec.Entry Append(
@@ -1388,7 +1847,9 @@ internal sealed class VoxelJournalService
             if (entry.Kind == VoxelJournalCodec.EntryKind.CutoutSphere)
             {
                 if (
-                    !replaying && !string.Equals(entry.OriginNode, m_node, StringComparison.Ordinal)
+                    !replaying
+                    && !IsSuperseded(entry)
+                    && !string.Equals(entry.OriginNode, m_node, StringComparison.Ordinal)
                 )
                 {
                     // Clients attached to this node carve the sphere themselves, exactly as the origin's own clients
@@ -2321,8 +2782,9 @@ internal sealed class VoxelJournalService
     /// World Authority has not applied every accepted entry of the storage yet (the reset's sequence would
     /// make it skip them).
     /// </summary>
-    internal bool ResetCube(MyVoxelBase voxel, long cube, Func<bool> stillDue)
+    internal bool ResetCube(MyVoxelBase voxel, long cube, Func<bool> stillDue, out int superseded)
     {
+        superseded = 0;
         string storage = voxel.StorageName;
         lock (m_lock)
         {
@@ -2358,7 +2820,7 @@ internal sealed class VoxelJournalService
             data.Resize(min, max);
             voxel.Storage.ReadRange(data, MyStorageDataTypeFlags.ContentAndMaterial, 0, min, max);
             int count = data.Size3D.Size;
-            Append(
+            VoxelJournalCodec.Entry reset = Append(
                 new VoxelJournalCodec.Entry(
                     Guid.NewGuid(),
                     ClusterRuntime.AuthorityGeneration,
@@ -2374,11 +2836,125 @@ internal sealed class VoxelJournalService
                 trackEdit: false
             );
             Ledger.MarkReset(storage, cube, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            superseded = Supersede(storage, cube, reset.Sequence);
             return true;
         }
     }
 
-    private void WriteFile(VoxelJournalCodec.Entry entry)
+    /// <summary>
+    /// SE-1893, World Authority, under <see cref="m_lock"/>: after the reset entry <paramref name="sequence"/> wrote
+    /// cube <paramref name="cube"/>, every earlier range entry of the storage whose cubes have all been reset since is
+    /// overwritten for everyone and becomes a <see cref="Stub"/>. For a planet that is an entry inside the cube; an
+    /// asteroid resets all its edited cubes in a row, so by its last cube no entry before the first reset is left. The
+    /// operation ids stay in the operation log, so a re-sent old edit is still recognized. Returns the entries stubbed.
+    /// </summary>
+    private int Supersede(string storage, long cube, long sequence)
+    {
+        if (!m_resetAt.TryGetValue(storage, out Dictionary<long, long> resets))
+            m_resetAt[storage] = resets = new();
+        resets[cube] = sequence;
+        if (
+            !m_entries.TryGetValue(
+                storage,
+                out SortedDictionary<long, VoxelJournalCodec.Entry> entries
+            )
+        )
+            return 0;
+        (int cx, int cy, int cz) = VoxelResetPolicy.CubeOf(cube);
+        int size = VoxelResetPolicy.CubeSize;
+        Vector3I min = new(cx * size, cy * size, cz * size);
+        Vector3I max = min + (size - 1);
+        long? ResetAt(long key) => resets.TryGetValue(key, out long at) ? at : null;
+        List<VoxelJournalCodec.Entry> stubs = new();
+        foreach (VoxelJournalCodec.Entry entry in entries.Values)
+        {
+            if (entry.Sequence >= sequence)
+                break;
+            if (
+                entry.Kind != VoxelJournalCodec.EntryKind.Range
+                || entry.Max.X < min.X
+                || entry.Min.X > max.X
+                || entry.Max.Y < min.Y
+                || entry.Min.Y > max.Y
+                || entry.Max.Z < min.Z
+                || entry.Min.Z > max.Z
+                || !VoxelCompactionPolicy.Superseded(
+                    entry.Min.X,
+                    entry.Min.Y,
+                    entry.Min.Z,
+                    entry.Max.X,
+                    entry.Max.Y,
+                    entry.Max.Z,
+                    entry.Sequence,
+                    ResetAt
+                )
+            )
+                continue;
+            stubs.Add(Stub(entry));
+        }
+        foreach (VoxelJournalCodec.Entry stub in stubs)
+        {
+            entries[stub.Sequence] = stub;
+            m_stubWrites.Enqueue(stub);
+        }
+        if (stubs.Count > 0)
+        {
+            m_tailsVersion++;
+            Interlocked.Add(ref m_supersededEntries, stubs.Count);
+            if (Interlocked.Exchange(ref m_stubWriting, 1) == 0)
+                ThreadPool.QueueUserWorkItem(_ => WriteStubs());
+        }
+        return stubs.Count;
+    }
+
+    /// <summary>
+    /// Off the game thread: replaces the files of superseded entries with their stubs, without an fsync. A stub lost in
+    /// a crash leaves the full entry on disk, which is still correct. An entry truncated meanwhile keeps no file.
+    /// </summary>
+    private void WriteStubs()
+    {
+        while (true)
+        {
+            while (m_stubWrites.TryDequeue(out VoxelJournalCodec.Entry stub))
+            {
+                try
+                {
+                    if (!Holds(stub))
+                        continue;
+                    WriteFile(stub, durable: false);
+                    if (!Holds(stub))
+                        DeleteFile(stub);
+                }
+                catch (Exception exception)
+                {
+                    Console.WriteLine(
+                        "[ClusterPlugin] voxel_journal stub_write_failed=true storage="
+                            + stub.StorageName
+                            + " sequence="
+                            + stub.Sequence.ToString(CultureInfo.InvariantCulture)
+                            + " error="
+                            + exception.Message
+                    );
+                }
+            }
+            Volatile.Write(ref m_stubWriting, 0);
+            if (m_stubWrites.IsEmpty || Interlocked.Exchange(ref m_stubWriting, 1) != 0)
+                return;
+        }
+    }
+
+    private bool Holds(VoxelJournalCodec.Entry entry)
+    {
+        lock (m_lock)
+            return m_entries.TryGetValue(
+                    entry.StorageName,
+                    out SortedDictionary<long, VoxelJournalCodec.Entry> entries
+                )
+                && entries.TryGetValue(entry.Sequence, out VoxelJournalCodec.Entry held)
+                && ReferenceEquals(held, entry);
+    }
+
+    private void WriteFile(VoxelJournalCodec.Entry entry, bool durable = true)
     {
         string map = Convert.ToHexString(
             SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(entry.StorageName))
@@ -2395,7 +2971,7 @@ internal sealed class VoxelJournalService
         )
         {
             stream.Write(VoxelJournalCodec.Write(entry));
-            stream.Flush(true);
+            stream.Flush(durable);
         }
         File.Move(temporary, path, overwrite: true);
     }

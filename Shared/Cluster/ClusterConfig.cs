@@ -437,6 +437,17 @@ public static class ClusterConfig
         // (a dormant node runs at the full frame rate meanwhile) instead of 64 entries, 300-500 ms, twice a second.
         // Read per frame.
         ["voxel.applyMs"] = "8",
+        // SE-1893, WORLD AUTHORITY: the voxel journal compaction. Every day at compactAt (HH:mm, empty = no daily run) on
+        // the wall clock of compactTimeZone (an IANA id such as Europe/Stockholm, or UTC) the WA saves each storage that
+        // has journal entries as a base, one storage per frame, and deletes the entries every active node has applied.
+        // 04:00 Stockholm time is when a short nightly network outage drops the players of Octahedron anyway.
+        // compactEverySeconds > 0 runs it that often instead, for tests. A storage an active node holds back (it has not
+        // reported applying the entries yet, for example while it catches up after a restart) is cut again every
+        // compactRetrySeconds until its journal is down to the base or the next run starts. Read every second.
+        ["voxel.compactAt"] = "04:00",
+        ["voxel.compactTimeZone"] = "Europe/Stockholm",
+        ["voxel.compactEverySeconds"] = "0",
+        ["voxel.compactRetrySeconds"] = "600",
         ["voxelReset.enabled"] = "false",
         ["voxelReset.ageSeconds"] = "172800",
         ["voxelReset.gridMeters"] = "300",
