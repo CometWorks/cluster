@@ -1846,6 +1846,9 @@ internal sealed class VoxelJournalService
         {
             if (entry.Kind == VoxelJournalCodec.EntryKind.CutoutSphere)
             {
+                // SE-1893: the stub of this node's own edit returns in its place; the edit is settled.
+                if (IsSuperseded(entry))
+                    m_liveSelfEdits.TryRemove(entry.OperationId, out _);
                 if (
                     !replaying
                     && !IsSuperseded(entry)
