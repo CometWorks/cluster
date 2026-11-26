@@ -1867,7 +1867,16 @@ internal sealed partial class ClusterControlServer
                     context.Request.QueryString["after"] ?? "0",
                     CultureInfo.InvariantCulture
                 );
-                byte[] body = VoxelJournalService.Instance.Next(storage, after);
+                // SE-1946: a node that sends max gets a batch; one from before it still gets one entry.
+                string max = context.Request.QueryString["max"];
+                byte[] body =
+                    max == null
+                        ? VoxelJournalService.Instance.Next(storage, after)
+                        : VoxelJournalService.Instance.NextBatch(
+                            storage,
+                            after,
+                            int.Parse(max, CultureInfo.InvariantCulture)
+                        );
                 Write(
                     context,
                     body == null ? 204 : 200,

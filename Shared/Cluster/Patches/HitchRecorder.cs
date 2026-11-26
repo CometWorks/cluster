@@ -95,7 +95,10 @@ public static class HitchRecorder
         public const int StoreJournalLock = 8;
         public const int StoreJournalAppend = 9;
         public const int StoreJournalFsync = 10;
-        public const int Count = 11;
+
+        /// <summary>SE-1946: voxel journal entries applied on the game thread (a catch-up's slices).</summary>
+        public const int VoxelJournal = 11;
+        public const int Count = 12;
         public static readonly string[] Names =
         {
             "physics",
@@ -109,6 +112,7 @@ public static class HitchRecorder
             "store_journal_lock",
             "store_journal_append",
             "store_journal_fsync",
+            "voxel_journal",
         };
     }
 

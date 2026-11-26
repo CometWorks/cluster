@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -9,6 +10,7 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
+using Sandbox;
 using Sandbox.Engine.Voxels;
 using Sandbox.Engine.Voxels.Planet;
 using Sandbox.Game.Entities;
@@ -166,8 +168,35 @@ internal sealed class VoxelJournalService
     private const int MaxFetchPerPass = 512;
     private const int MaxInboundQueue = 1024;
 
-    /// <summary>Entries applied per game-thread Update (250 ms), so a long replay is a few short hitches, not one long one.</summary>
-    private const int MaxAppliesPerUpdate = 64;
+    /// <summary>
+    /// SE-1946: the inbound queue is applied in slices of at most <c>voxel.applyMs</c> of game-thread time, one slice
+    /// per frame until it is empty, and a dormant node runs at the full frame rate while it has entries left. It used
+    /// to be 64 entries per 250 ms Update, a count with no time budget: one range write costs a few ms, so every new
+    /// live node replayed its journal in 260-540 ms frames twice a second for 15-20 s (SE-1941).
+    /// </summary>
+    private bool m_applyQueued;
+
+    /// <summary>SE-1946: the catch-up being applied, logged once the queue has stayed empty for a while.</summary>
+    private CatchUpRun m_run;
+
+    private sealed class CatchUpRun
+    {
+        public readonly long StartTick = Environment.TickCount64;
+        public long LastTick = Environment.TickCount64;
+        public int Entries;
+        public double ApplyMs;
+        public int Slices;
+        public double MaxSliceMs;
+        public readonly Dictionary<string, (int Entries, double Ms)> Storages = new(
+            StringComparer.Ordinal
+        );
+    }
+
+    /// <summary>A catch-up ends when the queue has been empty this long; a live edit now and then is no catch-up.</summary>
+    private const long CatchUpQuietMs = 2000;
+
+    /// <summary>Catch-ups smaller than this are not logged: steady-state edits arrive one or two at a time.</summary>
+    private const int CatchUpLogEntries = 64;
 
     /// <summary>
     /// Set once the gateway has rejected a voxel-replica report because this node's epoch is closed.
@@ -641,15 +670,10 @@ internal sealed class VoxelJournalService
         }
         Volatile.Write(ref m_sweptReadySession, true);
         MaterializeCataloguedAsteroids();
-        int applied = 0;
-        while (
-            applied < MaxAppliesPerUpdate && m_inbound.TryDequeue(out VoxelJournalCodec.Entry entry)
-        )
-        {
-            Apply(entry);
-            applied++;
-            Interlocked.Increment(ref m_appliedSinceStart);
-        }
+        // A queued slice is already due next frame; one slice per frame.
+        if (!m_applyQueued)
+            ApplySlice();
+        LogCatchUp();
         // After the inbound applies, so a captured snapshot reflects the newest local state.
         FlushDirty();
         if (++m_replayScanTick >= 60)
@@ -659,6 +683,105 @@ internal sealed class VoxelJournalService
         }
         if (ClusterRuntime.IsWorldAuthority)
             VoxelResetService.Update(this, m_root);
+    }
+
+    /// <summary>
+    /// SE-1946, game thread: applies queued entries until the slice has used its budget (at least one entry), then,
+    /// while entries are left, queues the next slice for the next frame. A dormant node (dormant.hz, 4 Hz) would
+    /// get four slices a second, so the catch-up keeps it awake: a fresh node replays its journal before it serves
+    /// (WaitForCatchUp), and that wait is bounded.
+    /// </summary>
+    private void ApplySlice()
+    {
+        if (m_inbound.IsEmpty)
+            return;
+        double budgetMs = ClusterConfig.GetInt("voxel.applyMs");
+        long start = Stopwatch.GetTimestamp();
+        long limit = start + (long)(budgetMs * Stopwatch.Frequency / 1000);
+        long last = start;
+        CatchUpRun run = m_run ??= new CatchUpRun();
+        while (m_inbound.TryDequeue(out VoxelJournalCodec.Entry entry))
+        {
+            Apply(entry);
+            Interlocked.Increment(ref m_appliedSinceStart);
+            long now = Stopwatch.GetTimestamp();
+            double ms = (now - last) * 1000.0 / Stopwatch.Frequency;
+            last = now;
+            run.Entries++;
+            run.Storages[entry.StorageName] = run.Storages.TryGetValue(
+                entry.StorageName,
+                out (int Entries, double Ms) storage
+            )
+                ? (storage.Entries + 1, storage.Ms + ms)
+                : (1, ms);
+            if (now >= limit)
+                break;
+        }
+        HitchRecorder.Add(HitchRecorder.Bucket.VoxelJournal, start);
+        double sliceMs = (last - start) * 1000.0 / Stopwatch.Frequency;
+        run.ApplyMs += sliceMs;
+        run.Slices++;
+        run.MaxSliceMs = Math.Max(run.MaxSliceMs, sliceMs);
+        run.LastTick = Environment.TickCount64;
+        if (m_inbound.IsEmpty)
+            return;
+        ClusterRuntime.Wake(5);
+        m_applyQueued = true;
+        MySandboxGame.Static.Invoke(
+            () =>
+            {
+                m_applyQueued = false;
+                if (MySession.Static?.Ready == true)
+                    ApplySlice();
+            },
+            "VoxelJournalApply"
+        );
+    }
+
+    /// <summary>
+    /// SE-1946, game thread: one line per catch-up of at least <see cref="CatchUpLogEntries"/> entries, once the queue
+    /// has stayed empty for <see cref="CatchUpQuietMs"/>: entries, apply time, slices, and the storages that took the
+    /// most time. The old count-paced replay printed nothing, so its frame trains could not be told apart.
+    /// </summary>
+    private void LogCatchUp()
+    {
+        CatchUpRun run = m_run;
+        if (
+            run == null
+            || m_applyQueued
+            || !m_inbound.IsEmpty
+            || Environment.TickCount64 - run.LastTick < CatchUpQuietMs
+        )
+            return;
+        m_run = null;
+        if (run.Entries < CatchUpLogEntries)
+            return;
+        Console.WriteLine(
+            string.Format(
+                CultureInfo.InvariantCulture,
+                "[ClusterPlugin] voxel_journal catch_up entries={0} apply_ms={1:F0} slices={2} max_slice_ms={3:F1} wall_s={4:F1} storages={5} top={6}",
+                run.Entries,
+                run.ApplyMs,
+                run.Slices,
+                run.MaxSliceMs,
+                (run.LastTick - run.StartTick) / 1000.0,
+                run.Storages.Count,
+                string.Join(
+                    ",",
+                    run.Storages.OrderByDescending(item => item.Value.Ms)
+                        .Take(5)
+                        .Select(item =>
+                            string.Format(
+                                CultureInfo.InvariantCulture,
+                                "{0}:{1}:{2:F0}ms",
+                                item.Key,
+                                item.Value.Entries,
+                                item.Value.Ms
+                            )
+                        )
+                )
+            )
+        );
     }
 
     /// <summary>
@@ -850,6 +973,85 @@ internal sealed class VoxelJournalService
                     }
                 );
         }
+    }
+
+    /// <summary>First four bytes of a batched journal fetch (<see cref="NextBatch"/>), unlike any entry's magic.</summary>
+    private const uint BatchMagic = 0x3142_4A56; // "VJB1"
+
+    /// <summary>Bytes a batched fetch answers with at most (one entry always fits, however large).</summary>
+    private const int MaxBatchBytes = 8 * 1024 * 1024;
+
+    /// <summary>
+    /// SE-1946: up to <paramref name="max"/> entries after <paramref name="after"/>: <see cref="BatchMagic"/>, then
+    /// each entry as a little-endian int32 length and the encoded entry; null when there is none. A node fetched one entry per GET, so replaying a
+    /// journal of thousands of entries took thousands of round trips, and each one scanned the storage's entries
+    /// under the lock. A World Authority from before this answers the same GET (it ignores max) with one entry.
+    /// </summary>
+    public byte[] NextBatch(string storage, long after, int max)
+    {
+        if (!ClusterRuntime.IsWorldAuthority)
+            throw new InvalidOperationException("This node is not the World Authority");
+        VoxelJournalCodec.Entry[] batch;
+        long generation;
+        lock (m_lock)
+        {
+            if (
+                !m_entries.TryGetValue(
+                    storage,
+                    out SortedDictionary<long, VoxelJournalCodec.Entry> entries
+                )
+            )
+                return null;
+            batch = entries
+                .Values.SkipWhile(value => value.Sequence <= after)
+                .Take(Math.Max(1, max))
+                .ToArray();
+            generation = ClusterRuntime.AuthorityGeneration;
+        }
+        if (batch.Length == 0)
+            return null;
+        using MemoryStream body = new();
+        using BinaryWriter writer = new(body);
+        writer.Write(BatchMagic);
+        foreach (VoxelJournalCodec.Entry entry in batch)
+        {
+            byte[] encoded = VoxelJournalCodec.Write(
+                entry with
+                {
+                    AuthorityGeneration = generation,
+                }
+            );
+            if (body.Length > 4 && body.Length + 4 + encoded.Length > MaxBatchBytes)
+                break;
+            writer.Write(encoded.Length);
+            writer.Write(encoded);
+        }
+        writer.Flush();
+        return body.ToArray();
+    }
+
+    /// <summary>The entries of a batched fetch body, or the single entry a World Authority without batches sends.</summary>
+    internal static List<VoxelJournalCodec.Entry> ReadFetched(byte[] body)
+    {
+        List<VoxelJournalCodec.Entry> entries = new();
+        if (body.Length < 4 || BitConverter.ToUInt32(body, 0) != BatchMagic)
+        {
+            entries.Add(VoxelJournalCodec.Read(body));
+            return entries;
+        }
+        int offset = 4;
+        while (offset < body.Length)
+        {
+            if (body.Length - offset < 4)
+                throw new InvalidDataException("Truncated voxel journal batch");
+            int length = BitConverter.ToInt32(body, offset);
+            offset += 4;
+            if (length <= 0 || length > body.Length - offset)
+                throw new InvalidDataException("Truncated voxel journal batch");
+            entries.Add(VoxelJournalCodec.Read(body.AsSpan(offset, length).ToArray()));
+            offset += length;
+        }
+        return entries;
     }
 
     /// <summary>
@@ -1776,6 +1978,11 @@ internal sealed class VoxelJournalService
                     int fetched = 0;
                     while (fetched < MaxFetchPerPass && m_inbound.Count < MaxInboundQueue)
                     {
+                        // SE-1946: many entries per request; an older World Authority ignores max and sends one.
+                        int max = Math.Min(
+                            MaxFetchPerPass - fetched,
+                            MaxInboundQueue - m_inbound.Count
+                        );
                         using HttpResponseMessage response = m_http
                             .GetAsync(
                                 endpoint
@@ -1783,6 +1990,8 @@ internal sealed class VoxelJournalService
                                     + Uri.EscapeDataString(storage)
                                     + "&after="
                                     + cursor.ToString(CultureInfo.InvariantCulture)
+                                    + "&max="
+                                    + max.ToString(CultureInfo.InvariantCulture)
                             )
                             .GetAwaiter()
                             .GetResult();
@@ -1792,14 +2001,17 @@ internal sealed class VoxelJournalService
                             break;
                         }
                         response.EnsureSuccessStatusCode();
-                        VoxelJournalCodec.Entry entry = VoxelJournalCodec.Read(
+                        List<VoxelJournalCodec.Entry> entries = ReadFetched(
                             response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
                         );
-                        if (entry.AuthorityGeneration != generation)
-                            throw new InvalidDataException("Stale voxel journal generation");
-                        m_inbound.Enqueue(entry);
-                        m_fetched[storage] = cursor = entry.Sequence;
-                        fetched++;
+                        foreach (VoxelJournalCodec.Entry entry in entries)
+                        {
+                            if (entry.AuthorityGeneration != generation)
+                                throw new InvalidDataException("Stale voxel journal generation");
+                            m_inbound.Enqueue(entry);
+                            m_fetched[storage] = cursor = entry.Sequence;
+                            fetched++;
+                        }
                     }
                 }
                 // Report how far this node has applied each journal. The WA truncates only below the slowest

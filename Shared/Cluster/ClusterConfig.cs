@@ -432,6 +432,11 @@ public static class ClusterConfig
         // character, online or in an offline partition) is within gridMeters of it or an online player within playerMeters.
         // The WA judges every scanSeconds and resets at most cubesPerUpdate cubes per update (4 updates/s). Voxels without a
         // generator (prefab .vx2) and voxel maps players placed never reset. Vanilla's voxel revert stays off in a cluster.
+        // SE-1946: game-thread ms per frame a node spends applying the voxel journal entries it fetched from the World
+        // Authority, at least one entry per frame. A catch-up of thousands of entries goes over many short frames
+        // (a dormant node runs at the full frame rate meanwhile) instead of 64 entries, 300-500 ms, twice a second.
+        // Read per frame.
+        ["voxel.applyMs"] = "8",
         ["voxelReset.enabled"] = "false",
         ["voxelReset.ageSeconds"] = "172800",
         ["voxelReset.gridMeters"] = "300",
