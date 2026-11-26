@@ -67,7 +67,11 @@ def _stamp(line: str) -> float | None:
 
 
 def _config(bench, values: dict) -> dict:
-    return bench.cluster.handover_config({**HITCHES, "dormant.enabled": "false", **values})
+    answer = bench.cluster.handover_config({**HITCHES, "dormant.enabled": "false", **values})
+    refused = {node: text for node, text in ((answer.get("result") or {}).items())
+               if isinstance(text, str) and text.startswith("refused")}
+    _require(bench, f"config accepted: {sorted(values)}", not refused, json.dumps(refused))
+    return answer
 
 
 def _build_journal(bench) -> tuple[str, list, dict]:

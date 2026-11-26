@@ -785,6 +785,37 @@ public static class ClusterConfig
                         + ", got "
                         + value
                 );
+        // SE-1893: the voxel compaction's time of day (empty = no daily run) and time zone.
+        if (key == "voxel.compactAt")
+            try
+            {
+                return VoxelCompactionPolicy.ParseTimeOfDay(value) is TimeSpan time
+                    ? time.ToString(@"hh\:mm", CultureInfo.InvariantCulture)
+                    : string.Empty;
+            }
+            catch (FormatException exception)
+            {
+                throw new ArgumentException(
+                    "Config key " + key + " expects HH:mm or nothing, got " + value,
+                    exception
+                );
+            }
+        if (key == "voxel.compactTimeZone")
+        {
+            string zone = (value ?? string.Empty).Trim();
+            try
+            {
+                VoxelCompactionPolicy.Zone(zone);
+            }
+            catch (Exception exception)
+            {
+                throw new ArgumentException(
+                    "Config key " + key + " expects a time zone id, got " + value,
+                    exception
+                );
+            }
+            return zone.Length == 0 ? "UTC" : zone;
+        }
         if (fallback == "true" || fallback == "false")
             return bool.TryParse(value, out bool b)
                 ? (b ? "true" : "false")
