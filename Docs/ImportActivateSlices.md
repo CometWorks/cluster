@@ -63,23 +63,33 @@ The count cap bounds entities per frame, but the cost per entity varies widely (
 is 67-85 % of the activation, p50 3.5-5.7 ms per entity, some entities far more), so slices of 20
 still hitched 260-400 ms. With `import.activateBudgetMs=B > 0` the groups are taken one slice at a
 time (`ImportActivateSlices.Take`): a slice takes whole groups while it stays within N entities AND
-its entities x the estimated Add ms per entity stay within B. The estimate is the previous slice's
-measured `activate_add` ms divided by the entities it Added; an import's first slice uses the node's
-running average (EWMA, weight 0.2 per slice, updated by every sliced import whatever B is). A node
-that has not measured a slice yet has no estimate, and its first slice is the count cap alone.
+its cost units x the estimated Add ms per unit stay within B.
+
+A cost unit is a block; an entity counts as 75 of them on top of its blocks (`ImportActivateSlices.Cost`,
+SE-1908). Add time follows blocks, not entities: the eight slices of partition 3890 on node 5 on
+2026-11-25 (286 to 23,007 blocks per slice) took 0.50 ms per entity plus 6.6 us per block, every slice
+within 10 ms of that fit, while their ms per entity ranged from 0.55 to 11.9. Counted per entity, a
+slice of small grids priced the next slice at 3.83 ms per entity (76.5 ms planned); that slice held a
+17,373-block grid and took 238 ms.
+
+The estimate is the previous slice's measured `activate_add` ms divided by its cost units; an import's
+first slice uses the node's running average (EWMA, weight 0.2 per slice, updated by every sliced import
+whatever B is). A node that has not measured a slice yet has no estimate, and its first slice is the
+count cap alone.
 
 - B can only make a slice smaller than the count cap, never larger.
 - A slice always takes at least one whole group. A single group whose estimate alone exceeds B is
   still one frame: the knob cannot help it. Such a slice logs `overBudgetGroup=1`.
 - B budgets the Add time only; register ids, freeze, reseat and the slice's network ids come on top.
-- `B=0` (default) gives exactly the count-cap slices (self-test `activate-slices` checks this).
+- `B=0` gives exactly the count-cap slices (self-test `activate-slices` checks this).
+- Default 50 since SE-1908 (it was 0).
 - Read once per import, like `import.activatePerFrame`; ignored when that is 0.
 
 Fields on each `handover_phase phase=import_activate_slice` line (also with B=0, so both arms of an
-A/B read alike): `sliceEntities` (planned), `sliceGroups`, `budgetMs`, `estimateMsPerEntity`,
-`estimateFrom` (`slice`, `node` or `none`), `plannedAddMs` (sliceEntities x estimate),
-`overBudgetGroup` (0/1), `addMsPerEntity` (measured). `handover_import` adds `activateBudgetMs` and
-`activateOverBudgetSlices` when the activation was sliced.
+A/B read alike): `sliceEntities` (planned), `sliceGroups`, `budgetMs`, `estimateMsPerKUnit` (ms per
+1,000 cost units), `estimateFrom` (`slice`, `node` or `none`), `plannedAddMs` (slice cost units x
+estimate), `overBudgetGroup` (0/1), `addMsPerEntity` (measured), `sliceCostUnits`. `handover_import`
+adds `activateBudgetMs` and `activateOverBudgetSlices` when the activation was sliced.
 
 ### Per-second pacing (`import.activateMsPerSecond`)
 

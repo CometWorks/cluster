@@ -38,13 +38,14 @@ public static class ClusterConfig
         ["import.activatePerFrame"] = "20",
         // T-0392 cost budget, sliced activation only (import.activatePerFrame > 0; ignored at 0): a slice also
         // stops before the group that would take its estimated MyEntities.Add time past this many ms. The
-        // estimate is the previous slice's measured Add ms per entity, for an import's first slice the node's
-        // running average over earlier slices (none yet = the count cap alone). Only ever SMALLER slices than
-        // the count cap; at least one whole group per slice, so one group that alone exceeds the budget is
-        // still one frame (handover_phase overBudgetGroup=1). Budget = Add time only: init, freeze, reseat and
-        // the slice's network ids come on top. Read once per import. 0 (default) = the count cap alone, the
-        // same slices as without this knob.
-        ["import.activateBudgetMs"] = "0",
+        // estimate is the previous slice's measured Add ms per cost unit (SE-1908: a block, an entity counting
+        // as 75 blocks), for an import's first slice the node's running average over earlier slices (none yet =
+        // the count cap alone). Only ever SMALLER slices than the count cap; at least one whole group per slice,
+        // so one group that alone exceeds the budget is still one frame (handover_phase overBudgetGroup=1).
+        // Budget = Add time only: init, freeze, reseat and the slice's network ids come on top. Read once per
+        // import. 0 = the count cap alone, the same slices as without this knob. Default 50 since SE-1908: at 0
+        // a 17,373-block grid shared a 20-entity slice with 19 others live (Add 238 ms, frame 291 ms).
+        ["import.activateBudgetMs"] = "50",
         // T-0392 per-second pacing, sliced activation only (import.activatePerFrame > 0; ignored at 0): the node
         // spends at most this many ms of activation (measured game-thread ms of the slice and final frames) per
         // rolling second across all imports in flight on it; a frame that does not fit waits for a later one, a

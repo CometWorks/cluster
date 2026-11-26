@@ -654,6 +654,39 @@ internal static partial class ClusterSelfTest
             ImportActivateSlices.Take(new[] { 25 }, 0, 20, 0, 0, out takeOver) == 1 && !takeOver,
             "Take: a group larger than the cap is a slice of its own, not over budget without a budget"
         );
+
+        // SE-1908: the budget counts blocks. Live 2026-11-25 (partition 3890 on node 5) a 20-entity slice put a
+        // 17,373-block grid with 19 small ones: per entity the estimate was 3.83 ms (planned 76.5 ms), Add took
+        // 238 ms. At the previous slice's 49.4 ms for 13 entities of 5,090 blocks the unit cost is 49.4 / 6,065.
+        Assert(
+            ImportActivateSlices.Cost(Grid(1)) == ImportActivateSlices.EntityCostInBlocks
+                && ImportActivateSlices.Cost(
+                    Grid(2, new MyObjectBuilder_ShipConnector { EntityId = 21 })
+                )
+                    == ImportActivateSlices.EntityCostInBlocks + 1,
+            "Cost: an entity's share plus one unit per block"
+        );
+        int[] ones = Enumerable.Repeat(1, 20).ToArray();
+        long[] costs = Enumerable.Repeat(75L + 280, 20).ToArray();
+        costs[5] = 75 + 17373;
+        double perUnit = 49.4 / (13 * 75 + 5090);
+        List<int> takes = new List<int>();
+        List<bool> overs = new List<bool>();
+        for (int next = 0; next < ones.Length; )
+        {
+            int t = ImportActivateSlices.Take(ones, next, 20, 50, perUnit, out bool o, costs);
+            takes.Add(t);
+            overs.Add(o);
+            next += t;
+        }
+        Assert(
+            string.Join(",", takes) == "5,1,14" && string.Join(",", overs) == "False,True,False",
+            "Take by cost: the 17,373-block grid is a slice of its own: " + string.Join(",", takes)
+        );
+        Assert(
+            ImportActivateSlices.Take(ones, 0, 20, 50, 5, out _) == 10,
+            "Take without costs still counts entities"
+        );
     }
 
     /// <summary>
@@ -733,8 +766,8 @@ internal static partial class ClusterSelfTest
             "partition.oversizeMembers refused 0 (off)"
         );
         Assert(
-            ClusterConfig.DefaultOf("import.activateBudgetMs") == "0",
-            "import.activateBudgetMs defaults to 0 (off: the count cap alone)"
+            ClusterConfig.DefaultOf("import.activateBudgetMs") == "50",
+            "import.activateBudgetMs defaults to 50 (SE-1908)"
         );
         Assert(
             ClusterConfig.Normalize("import.activateBudgetMs", " 150 ") == "150",

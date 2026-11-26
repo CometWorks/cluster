@@ -91,10 +91,13 @@ internal sealed partial class ClusterControlServer
         /// first slice frame; each slice frame takes the next whole groups (ImportActivateSlices.Take).</summary>
         public List<List<int>> Groups;
         public int[] GroupSizes;
+
+        /// <summary>SE-1908: each group's Add cost units (ImportActivateSlices.Cost: blocks, plus a fixed share per entity).</summary>
+        public long[] GroupCosts;
         public int NextGroup;
 
-        /// <summary>import.activateBudgetMs: the previous slice's measured Add ms per entity (0 = none yet).</summary>
-        public double SliceMsPerEntity;
+        /// <summary>import.activateBudgetMs: the previous slice's measured Add ms per cost unit (0 = none yet).</summary>
+        public double SliceMsPerUnit;
 
         /// <summary>Slices that were one group whose estimate alone exceeded import.activateBudgetMs.</summary>
         public int OverBudgetSlices;
@@ -960,7 +963,7 @@ internal sealed partial class ClusterControlServer
     /// slice was measured, so the node's first-ever slice is the count cap alone. Updated whatever the
     /// budget, so turning the budget on starts from a measured value. Game thread only.
     /// </summary>
-    private static double s_activateMsPerEntity;
+    private static double s_activateMsPerUnit;
 
     private static int ActivateSlice(
         ImportContext context,
@@ -996,6 +999,11 @@ internal sealed partial class ClusterControlServer
                     plan.Staged.Select(x => x.Builder).ToList()
                 );
                 plan.GroupSizes = plan.Groups.Select(x => x.Count).ToArray();
+                plan.GroupCosts = plan
+                    .Groups.Select(x =>
+                        x.Sum(index => ImportActivateSlices.Cost(plan.Staged[index].Builder))
+                    )
+                    .ToArray();
                 plan.Placed = plan.Kept.Select(x => x.EntityId).ToList();
             }
             if (plan.NextGroup >= plan.Groups.Count)
@@ -1008,19 +1016,22 @@ internal sealed partial class ClusterControlServer
             // every later one from the slice before it. Budget 0 (or no estimate yet) = the count cap,
             // exactly the plan ImportActivateSlices.Plan(builders, perFrame) makes.
             string estimateFrom =
-                plan.SliceMsPerEntity > 0 ? "slice"
-                : s_activateMsPerEntity > 0 ? "node"
+                plan.SliceMsPerUnit > 0 ? "slice"
+                : s_activateMsPerUnit > 0 ? "node"
                 : "none";
-            double estimate =
-                plan.SliceMsPerEntity > 0 ? plan.SliceMsPerEntity : s_activateMsPerEntity;
+            double estimate = plan.SliceMsPerUnit > 0 ? plan.SliceMsPerUnit : s_activateMsPerUnit;
             int take = ImportActivateSlices.Take(
                 plan.GroupSizes,
                 plan.NextGroup,
                 perFrame,
                 budgetMs,
                 estimate,
-                out bool overBudget
+                out bool overBudget,
+                plan.GroupCosts
             );
+            long sliceCost = 0;
+            for (int g = plan.NextGroup; g < plan.NextGroup + take; g++)
+                sliceCost += plan.GroupCosts[g];
             StagedEntity[] slice = ImportActivateSlices
                 .Slice(plan.Groups, plan.NextGroup, take)
                 .Select(index => plan.Staged[index])
@@ -1043,27 +1054,32 @@ internal sealed partial class ClusterControlServer
             double addMsPerEntity = 0;
             if (timer != null && activated.Count > 0)
             {
-                addMsPerEntity = timer.StepMs("activate_add") / activated.Count;
-                plan.SliceMsPerEntity = addMsPerEntity;
-                s_activateMsPerEntity =
-                    s_activateMsPerEntity > 0
-                        ? s_activateMsPerEntity
-                            + ActivateEstimateWeight * (addMsPerEntity - s_activateMsPerEntity)
-                        : addMsPerEntity;
+                double addMs = timer.StepMs("activate_add");
+                addMsPerEntity = addMs / activated.Count;
+                // SE-1908: per cost unit, so a slice of small grids does not under-price the next slice's
+                // 17,000-block grid (live: estimate 3.83 ms/entity, planned 76.5 ms, Add took 238 ms).
+                double addMsPerUnit = addMs / Math.Max(1, sliceCost);
+                plan.SliceMsPerUnit = addMsPerUnit;
+                s_activateMsPerUnit =
+                    s_activateMsPerUnit > 0
+                        ? s_activateMsPerUnit
+                            + ActivateEstimateWeight * (addMsPerUnit - s_activateMsPerUnit)
+                        : addMsPerUnit;
             }
             if (timer != null)
                 timer.Fields =
                     string.Format(
                         System.Globalization.CultureInfo.InvariantCulture,
-                        " sliceEntities={0} sliceGroups={1} budgetMs={2:0.#} estimateMsPerEntity={3:F2} estimateFrom={4} plannedAddMs={5:F1} overBudgetGroup={6} addMsPerEntity={7:F2}",
+                        " sliceEntities={0} sliceGroups={1} budgetMs={2:0.#} estimateMsPerKUnit={3:F2} estimateFrom={4} plannedAddMs={5:F1} overBudgetGroup={6} addMsPerEntity={7:F2} sliceCostUnits={8}",
                         slice.Length,
                         take,
                         budgetMs,
-                        estimate,
+                        estimate * 1000,
                         estimateFrom,
-                        slice.Length * estimate,
+                        sliceCost * estimate,
                         overBudget ? 1 : 0,
-                        addMsPerEntity
+                        addMsPerEntity,
+                        sliceCost
                     )
                     + PaceFields(pace)
                     + addSlice?.Fields() // T-0401: last, so the t0392 parsers' patterns still match

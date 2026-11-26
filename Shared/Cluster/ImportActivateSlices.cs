@@ -32,8 +32,9 @@ namespace ClusterPlugin;
 /// Inside a slice the members keep their original relative order.
 ///
 /// <c>import.activateBudgetMs</c> (T-0392, cost budget): the same greedy fill, but a slice also stops
-/// before the group that would take its estimated Add time past the budget (entities x estimated ms
-/// per entity). It can only make a slice smaller than the count cap, never larger, and a slice
+/// before the group that would take its estimated Add time past the budget (cost units x estimated ms
+/// per unit, a unit being a block and an entity counting as <see cref="EntityCostInBlocks"/> of them,
+/// SE-1908; the constant-estimate <see cref="Plan"/> counts entities). It can only make a slice smaller than the count cap, never larger, and a slice
 /// always takes at least one group: a single group that alone exceeds the budget is still one slice
 /// (flagged overBudget, a group must activate in one frame). Budget 0 or no estimate = the count cap
 /// alone, i.e. exactly the plan without a budget. The live import takes one slice at a time
@@ -94,13 +95,18 @@ internal static class ImportActivateSlices
     /// <paramref name="msPerEntity"/> are both positive, within budgetMs at msPerEntity per entity.
     /// <paramref name="overBudget"/>: the budget applies and the first group alone exceeds it.
     /// </summary>
+    /// <remarks>
+    /// SE-1908: with <paramref name="groupCosts"/> the budget counts cost units (<see cref="Cost"/>) instead of
+    /// entities, and <paramref name="msPerEntity"/> is ms per cost unit. Without it a group costs its entity count.
+    /// </remarks>
     internal static int Take(
         IReadOnlyList<int> groupSizes,
         int start,
         int perFrame,
         double budgetMs,
         double msPerEntity,
-        out bool overBudget
+        out bool overBudget,
+        IReadOnlyList<long> groupCosts = null
     )
     {
         if (perFrame <= 0)
@@ -109,19 +115,39 @@ internal static class ImportActivateSlices
         if (start >= groupSizes.Count)
             return 0;
         bool budgeted = budgetMs > 0 && msPerEntity > 0 && !double.IsInfinity(msPerEntity);
+        long CostOf(int group) => groupCosts != null ? groupCosts[group] : groupSizes[group];
         int entities = groupSizes[start];
-        overBudget = budgeted && entities * msPerEntity > budgetMs;
+        long cost = CostOf(start);
+        overBudget = budgeted && cost * msPerEntity > budgetMs;
         int take = 1;
         while (start + take < groupSizes.Count)
         {
             int grown = entities + groupSizes[start + take];
-            if (grown > perFrame || (budgeted && grown * msPerEntity > budgetMs))
+            long grownCost = cost + CostOf(start + take);
+            if (grown > perFrame || (budgeted && grownCost * msPerEntity > budgetMs))
                 break;
             entities = grown;
+            cost = grownCost;
             take++;
         }
         return take;
     }
+
+    /// <summary>
+    /// SE-1908: an entity's MyEntities.Add cost counted in blocks. Live, Add took about 0.5 ms per entity plus
+    /// 6.6 us per block (eight slices of partition 3890 on 2026-11-25: 286 to 23,007 blocks, 5 to 160 ms,
+    /// every slice within 10 ms of that fit), so one entity costs as much as this many blocks.
+    /// </summary>
+    internal const int EntityCostInBlocks = 75;
+
+    /// <summary>SE-1908: the Add cost units of one builder: <see cref="EntityCostInBlocks"/> plus its blocks.</summary>
+    internal static long Cost(MyObjectBuilder_EntityBase builder) =>
+        EntityCostInBlocks
+        + (
+            builder is MyObjectBuilder_CubeGrid grid && grid.CubeBlocks != null
+                ? grid.CubeBlocks.Count
+                : 0
+        );
 
     /// <summary>
     /// The physical groups as ascending index lists into <paramref name="builders"/>, in the order of
