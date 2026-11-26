@@ -4,11 +4,12 @@ Live Octahedron, 2026-11-25 (SE-1941): every new node logged 15-20 s of 260-540 
 while it caught up on the voxel journal. Update applied up to 64 entries every 250 ms, a count with no time
 budget, and one range write costs a few ms.
 
-WA + one regular node, Cluster-Simple, no client. The WA dispatches an asteroid (radius=200, a 256^3 storage),
-node-1 writes 125 32^3 cubes inside it ``SE1946_PASSES`` times with different content, and node-1 is then replaced by a fresh node on an empty
-data root, which replays the whole journal from sequence 0. Overwrites stay in the journal, as in one that is
-never compacted. node-1's dirty-range capture unions nearby cubes, so 5,000 writes make about 400 entries of up
-to 64^3 voxels, each a heavier write than a live hand-drill entry. Two legs:
+WA + one regular node, Cluster-Simple, no client. The WA dispatches an asteroid (radius=100, a 128^3 storage),
+node-1 writes the 27 32^3 cubes of a 40-voxel lattice that fit inside it ``SE1946_PASSES`` times with different
+content, and node-1 is then replaced by a fresh node on an empty data root, which replays the whole journal from
+sequence 0. Overwrites stay in the journal, as in one that is never compacted. node-1's dirty-range capture unions
+nearby cubes into entries of up to 64^3 voxels, each a heavier write than a live hand-drill entry. Before SE-1950
+the lattice ran to 199 and most of its 125 cubes lay outside the storage. Two legs:
 
 * ``dormant``: the defaults. A fresh node with no content runs its main loop at ``dormant.hz`` (4 Hz).
 * ``awake``: ``dormant.enabled=false``, the main loop at 60 Hz, as on a node that holds partitions or clients.
@@ -20,7 +21,7 @@ start-up (SE-1952) and recorded apart. With the fix no catch-up frame reaches 10
 the fix for the before numbers (the convergence checks pass on both).
 
 Knobs (environment): ``SE1946_RADIUS`` (the spawn's radius, which is the vanilla asteroid size: the storage is the
-next power of two, default 200), ``SE1946_PASSES`` (default 40).
+next power of two, default 100), ``SE1946_PASSES`` (default 40).
 """
 from __future__ import annotations
 
@@ -36,11 +37,11 @@ from cluster import ClusterError, wait_until
 NODE = "node-1"
 STARTED = ["wa-1", NODE]
 ORIGIN = 2_000_000
-RADIUS = int(os.environ.get("SE1946_RADIUS", "200"))
+RADIUS = int(os.environ.get("SE1946_RADIUS", "100"))
 PASSES = int(os.environ.get("SE1946_PASSES", "40"))
 CUBE = 32
 EDGE = int(os.environ.get("SE1946_EDGE", "0"))  # first cube's offset from the storage corner
-STEP = 48  # 16 voxels between cubes: 5 per axis in a 256^3 storage
+STEP = 40  # 8 voxels between cubes: 3 per axis in a 128^3 storage
 WRITERS = 4
 CATCH_UP_TIMEOUT = 1200
 SLOW_MS = 100
