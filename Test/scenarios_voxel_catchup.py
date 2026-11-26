@@ -16,8 +16,9 @@ to 64^3 voxels, each a heavier write than a live hand-drill entry. Two legs:
 Each leg records the node's frames of 20 ms or more (``hitch.thresholdMs`` and ``hitch.logThresholdMs`` are 20 for
 the run) from the frame that materializes the asteroid to the first poll that sees the WA's tail applied, and
 whether the fresh node's hash of every cube matches the WA's. The materializing frame and the ones before it are
-start-up (SE-1952) and recorded apart. With the fix no catch-up frame reaches 100 ms; run it on a package without
-the fix for the before numbers (the convergence checks pass on both).
+start-up and recorded apart. With SE-1946 no catch-up frame reaches 100 ms, and with SE-1952 the materializing frame
+stays under 100 ms and no start-up frame reaches 1 s; run it on a package without them for the before numbers (the
+convergence checks pass on both).
 
 Knobs (environment): ``SE1946_RADIUS`` (asteroid radius, m, default 100), ``SE1946_PASSES`` (default 40).
 """
@@ -43,6 +44,7 @@ STEP = 40  # 8 voxels between cubes, so no two dirty ranges touch and merge into
 WRITERS = 4
 CATCH_UP_TIMEOUT = 1200
 SLOW_MS = 100
+STARTUP_SLOW_MS = 1000  # SE-1952: a fresh node's first Serving frames held a 10 s and a 3 s World Authority wait
 
 HITCH = re.compile(r"\] hitch ms=([\d.]+) ageMs=(\d+)(.*)$")
 DONE = re.compile(r"voxel_replica catch_up_done=true .*")
@@ -84,16 +86,23 @@ def _applied(bench, storage: str) -> int:
     return int((status.get("applied") or {}).get(storage, 0))
 
 
+def _stamp(line: str) -> float | None:
+    """A stamped log line's time. The node's log stamps local time; the bench runs on the same host, so timestamp()
+    reads it the same way."""
+    try:
+        return datetime.strptime(line[:23], "%Y-%m-%d %H:%M:%S.%f").timestamp()
+    except ValueError:  # the unstamped stdout copy of a line the game log stamps
+        return None
+
+
 def _frames(lines: list[str]) -> list[dict]:
     frames = []
     for line in lines:
         match = HITCH.search(line)
         if match:
             journal = re.search(r"voxel_journal=([\d.]+)/(\d+)", match.group(3))
-            # The node's log stamps local time; the bench runs on the same host, so timestamp() reads it the same way.
-            try:
-                stamp = datetime.strptime(line[:23], "%Y-%m-%d %H:%M:%S.%f").timestamp()
-            except ValueError:  # the unstamped stdout copy of a line the game log stamps
+            stamp = _stamp(line)
+            if stamp is None:
                 continue
             frames.append({"ms": float(match.group(1)), "ageMs": int(match.group(2)), "epoch": round(stamp, 3),
                            "journalMs": float(journal.group(1)) if journal else None})
@@ -103,9 +112,10 @@ def _frames(lines: list[str]) -> list[dict]:
 def _replay(bench, leg: str, storage: str, tail: int, cubes: list, want: dict) -> dict:
     """Replaces node-1 by a fresh node and measures its catch-up until it has applied the WA's tail.
 
-    The fresh node can only apply the journal once the asteroid has materialized on it, and that frame (a load
-    with a World Authority round trip, 3 s here) is not part of the replay: the catch-up frames are the ones after
-    it, until the first poll that saw the tail applied. The frames before are recorded apart."""
+    The fresh node can only apply the journal once the asteroid has materialized on it. That frame and the ones
+    before it are start-up, recorded apart (before SE-1952 the materializing frame took 3 s: the asteroid's storage
+    built in the frame, after a 1 s World Authority round trip of the ship storage registration). The catch-up
+    frames are the ones after it, until the first poll that saw the tail applied."""
     restarted = time.time()
     bench.cluster.restart_node(NODE, fresh=True)
     samples = []
@@ -119,12 +129,16 @@ def _replay(bench, leg: str, storage: str, tail: int, cubes: list, want: dict) -
     lines = _log(bench)
     done = next((match for match in map(DONE.search, lines) if match), None)
     materialized = next((index for index, line in enumerate(lines) if f"asteroid materialized name={storage}" in line), 0)
+    stamp = _stamp(lines[materialized]) if lines else None
     before, after = _frames(lines[:materialized]), _frames(lines[materialized:])
-    # The first hitch after the line is the materializing frame itself: it is logged when that frame ends.
-    materialize = after[0] if after else None
-    frames = [frame for frame in after[1:] if frame["epoch"] <= end + 1]
-    begin = materialize["epoch"] if materialize else restarted
-    startup = before + after[:1]
+    # A hitch is logged when its frame ends, so the materializing frame is the first one after the line, if that one
+    # began before the line's stamp. Since SE-1952 the line is stamped and the frame is usually under 20 ms: then no
+    # hitch is that frame. An unstamped line (before SE-1952) is always followed by its 3 s frame.
+    first = after[0] if after else None
+    materialize = first if first and (stamp is None or first["epoch"] - first["ms"] / 1000 <= stamp + 0.002) else None
+    frames = [frame for frame in (after[1:] if materialize else after) if frame["epoch"] <= end + 1]
+    begin = materialize["epoch"] if materialize else stamp or restarted
+    startup = before + ([materialize] if materialize else [])
     bench.cluster.wait_ready(nodes=[NODE], serving=True)
     seen = {}
 
@@ -137,7 +151,7 @@ def _replay(bench, leg: str, storage: str, tail: int, cubes: list, want: dict) -
     result = {
         "leg": leg, "restartToAppliedS": round(end - restarted, 1), "catchUpS": round(end - begin, 1),
         "catchUpDone": done.group(0) if done else None,
-        "materializeFrameMs": materialize["ms"] if materialize else None, "startupFrames20ms": len(startup), "startupMaxFrameMs": max((frame["ms"] for frame in startup), default=0.0),
+        "materializeFrameMs": materialize["ms"] if materialize else 0.0, "startupFrames20ms": len(startup), "startupMaxFrameMs": max((frame["ms"] for frame in startup), default=0.0),
         "converged": bool(same),
         "diverged": [list(cube) for cube in cubes if seen.get(cube) != want[cube]][:10],
         "frames20ms": len(frames), "frames100ms": len(slow), "slowMsTotal": round(sum(slow)),
@@ -208,6 +222,11 @@ def p2_vox_catchup(bench) -> None:
                     f"{leg['restartToAppliedS']:.1f} s after its restart",
                     True, json.dumps(leg)[:1500])
         bench.check(f"{name}: every cube on the fresh node matches the WA", leg["converged"], json.dumps(leg["diverged"]))
+        bench.check(f"{name}: the frame that materialized the asteroid stayed under {SLOW_MS} ms "
+                    f"({leg['materializeFrameMs']:.1f} ms; 0 is under the 20 ms hitch threshold)",
+                    leg["materializeFrameMs"] < SLOW_MS, json.dumps(leg)[:1500])
+        bench.check(f"{name}: no start-up frame reached {STARTUP_SLOW_MS} ms (max {leg['startupMaxFrameMs']:.1f} ms)",
+                    leg["startupMaxFrameMs"] < STARTUP_SLOW_MS, json.dumps(leg)[:1500])
         bench.check(f"{name}: no catch-up frame reached {SLOW_MS} ms (max {leg['maxFrameMs']:.1f} ms, "
                     f"{leg['frames100ms']} slow frames)", leg["frames100ms"] == 0, json.dumps(leg)[:1500])
     bench.exercised(entries=entries, cubes=len(cubes), passes=PASSES, radius=RADIUS,

@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using PluginSdk.Clustering;
 using Sandbox.Common.ObjectBuilders;
 using Sandbox.Game;
@@ -118,7 +119,8 @@ internal static class ShipStorageService
 
     /// <summary>#1317: the grids of a store whose answer was lost, which the sweep spares until the Unstore is through.</summary>
     private static readonly Dictionary<Guid, long[]> Unstoring = new Dictionary<Guid, long[]>();
-    private static bool s_registered;
+    private static volatile bool s_registered;
+    private static int s_registering;
     private static double s_nextRegister,
         s_nextFlush,
         s_nextSweep;
@@ -151,8 +153,15 @@ internal static class ShipStorageService
             }
             return;
         }
-        if (!s_registered && now >= s_nextRegister && ClusterRuntime.AuthorityGeneration > 0)
-            Register(now);
+        if (
+            !s_registered
+            && now >= s_nextRegister
+            && ClusterRuntime.AuthorityGeneration > 0
+            && Interlocked.Exchange(ref s_registering, 1) == 0
+        )
+            // SE-1952: off the game thread. The Hello is durable, so the World Authority answers after a global save:
+            // a second on a fresh node, 10 s when it times out, and the frame that sent it waited for all of it.
+            ThreadPool.QueueUserWorkItem(_ => Register());
         if (now >= s_nextFlush)
             Flush();
         ApplyIndex();
@@ -512,7 +521,8 @@ internal static class ShipStorageService
         );
     }
 
-    private static void Register(double now)
+    /// <summary>Hello to the World Authority, which releases the ships this node held before. Worker thread.</summary>
+    private static void Register()
     {
         try
         {
@@ -526,11 +536,15 @@ internal static class ShipStorageService
         }
         catch (Exception error)
         {
-            s_nextRegister = now + 10000;
+            s_nextRegister = ClusterRuntime.LocalMilliseconds + 10000;
             Console.WriteLine(
                 "[ClusterPlugin] ship storage registration failed: "
                     + SecretRedactor.Redact(error.Message)
             );
+        }
+        finally
+        {
+            Volatile.Write(ref s_registering, 0);
         }
     }
 

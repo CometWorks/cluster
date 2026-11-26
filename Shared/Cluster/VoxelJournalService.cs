@@ -1566,6 +1566,11 @@ internal sealed class VoxelJournalService
         });
     }
 
+    /// <summary>
+    /// Installs each catalogued asteroid base this session lacks. SE-1952: the base is read, verified and loaded off
+    /// the game thread (<see cref="StorageBuilds"/>); the frame only adds the entity, and only if the catalog still
+    /// names the base that was loaded. Game thread.
+    /// </summary>
     private void MaterializeCataloguedAsteroids()
     {
         foreach (KeyValuePair<string, BaseState> pair in m_bases)
@@ -1575,39 +1580,27 @@ internal sealed class VoxelJournalService
             if (spec == null || MySession.Static.VoxelMaps.TryGetVoxelMapByName(pair.Key) != null)
                 continue;
             BaseState basis = pair.Value;
-            if (!Path.IsPathFullyQualified(basis.Path) || !File.Exists(basis.Path))
+            if (!m_baseBuilds.IsBuilding(pair.Key))
             {
-                // T-0321: a base held on another HOST has no readable path here, ever - retrying the path every update
-                // never installed the asteroid on a remote node. Fetch it into this root off the game thread; the next
-                // update finds it local.
-                FetchBaseInBackground(pair.Key, basis);
+                if (!Path.IsPathFullyQualified(basis.Path) || !File.Exists(basis.Path))
+                {
+                    // T-0321: a base held on another HOST has no readable path here, ever - retrying the path every
+                    // update never installed the asteroid on a remote node. Fetch it into this root off the game
+                    // thread; the next update finds it local.
+                    FetchBaseInBackground(pair.Key, basis);
+                    continue;
+                }
+                m_baseLoading[pair.Key] = basis;
+            }
+            MyStorageBase loaded = m_baseBuilds.Poll(pair.Key, () => LoadBase(pair.Key, basis));
+            if (loaded == null)
                 continue;
-            }
-            byte[] bytes;
-            try
+            m_baseLoading.TryGetValue(pair.Key, out BaseState from);
+            m_baseLoading.Remove(pair.Key);
+            if (from != basis)
             {
-                bytes = File.ReadAllBytes(basis.Path);
-            }
-            catch (Exception)
-            {
-                continue;
-            }
-            if (
-                bytes.LongLength != basis.SizeBytes
-                || !Convert
-                    .ToHexString(SHA256.HashData(bytes))
-                    .Equals(basis.Checksum, StringComparison.OrdinalIgnoreCase)
-            )
-            {
-                Console.WriteLine(
-                    "[ClusterPlugin] voxel_catalog asteroid_base_corrupt=true storage=" + pair.Key
-                );
-                continue;
-            }
-            MyStorageBase loaded = MyStorageBase.Load(bytes, out bool oldFormat);
-            if (oldFormat || loaded == null)
-            {
-                loaded?.Close();
+                // The catalog moved on while it loaded; the next update loads the newer base.
+                loaded.Close();
                 continue;
             }
             if (!IsUnderRoot(basis.Path))
@@ -1634,6 +1627,44 @@ internal sealed class VoxelJournalService
                 )
             );
         }
+    }
+
+    private readonly StorageBuilds m_baseBuilds = new StorageBuilds("asteroid base");
+
+    /// <summary>The base each running base build loads (game thread).</summary>
+    private readonly Dictionary<string, BaseState> m_baseLoading = new(StringComparer.Ordinal);
+
+    /// <summary>A catalogued base read, verified and loaded; null when it is unreadable, corrupt or old. Any thread.</summary>
+    private static MyStorageBase LoadBase(string storage, BaseState basis)
+    {
+        byte[] bytes;
+        try
+        {
+            bytes = File.ReadAllBytes(basis.Path);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+        if (
+            bytes.LongLength != basis.SizeBytes
+            || !Convert
+                .ToHexString(SHA256.HashData(bytes))
+                .Equals(basis.Checksum, StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            Console.WriteLine(
+                "[ClusterPlugin] voxel_catalog asteroid_base_corrupt=true storage=" + storage
+            );
+            return null;
+        }
+        MyStorageBase loaded = MyStorageBase.Load(bytes, out bool oldFormat);
+        if (oldFormat || loaded == null)
+        {
+            loaded?.Close();
+            return null;
+        }
+        return loaded;
     }
 
     private void AsteroidRangeChanged(

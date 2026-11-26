@@ -147,6 +147,8 @@ internal static class AsteroidSpawnService
     /// Runs on the game thread. Materializes any known spec whose storage is absent from the
     /// session - unless the voxel base catalog already holds content for it, in which case the
     /// journal service installs the catalogued base instead (it is newer than a fresh shape).
+    /// SE-1952: the storage is built off the game thread (<see cref="StorageBuilds"/>); building it here loaded the
+    /// prefab storages the shape is made of, 2 s on a fresh node, and only the entity is added in the frame.
     /// </summary>
     public static void Update()
     {
@@ -162,17 +164,38 @@ internal static class AsteroidSpawnService
                 continue;
             if (Sandbox.Game.World.MySession.Static.VoxelMaps.TryGetVoxelMapByName(name) != null)
                 continue;
-            if (VoxelJournalService.Instance?.HasBase(name) == true)
+            bool catalogued = VoxelJournalService.Instance?.HasBase(name) == true;
+            if (catalogued && !Builds.IsBuilding(name))
                 continue;
-            MyStorageBase storage = new MyOctreeStorage(
-                MyCompositeShapeProvider.CreateAsteroidShape(spec.Value.Seed, spec.Value.Radius, 0),
-                MyVoxelCoordSystems.FindBestOctreeSize(spec.Value.Radius)
+            MyStorageBase storage = Builds.Poll(
+                name,
+                () =>
+                    new MyOctreeStorage(
+                        MyCompositeShapeProvider.CreateAsteroidShape(
+                            spec.Value.Seed,
+                            spec.Value.Radius,
+                            0
+                        ),
+                        MyVoxelCoordSystems.FindBestOctreeSize(spec.Value.Radius)
+                    )
             );
+            if (storage == null)
+                continue;
+            if (catalogued)
+            {
+                storage.Close();
+                continue;
+            }
             Vector3D corner =
                 spec.Value.Position
                 - new Vector3D(storage.Size.X, storage.Size.Y, storage.Size.Z) * 0.5;
             MyWorldGenerator.AddVoxelMap(name, storage, corner);
-            Console.WriteLine("[ClusterPlugin] asteroid materialized name=" + name);
+            // Stamped: P2-VOX-CATCHUP finds the frame that added it by this line's time.
+            VRage.Utils.MyLog.Default?.WriteLineAndConsole(
+                "[ClusterPlugin] asteroid materialized name=" + name
+            );
         }
     }
+
+    private static readonly StorageBuilds Builds = new StorageBuilds("asteroid");
 }
