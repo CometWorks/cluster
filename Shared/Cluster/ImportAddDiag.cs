@@ -690,11 +690,7 @@ public static class ImportAddActivatingBodyPatch
         ImportAddDiag.ActivatingEnter(__instance);
 
     [HarmonyFinalizer]
-    private static Exception Finalizer(Exception __exception)
-    {
-        ImportAddDiag.ActivatingExit();
-        return __exception;
-    }
+    private static void Finalizer() => ImportAddDiag.ActivatingExit();
 }
 
 [HarmonyPatch(typeof(MyClusterTree), "CreateCluster")]
@@ -704,11 +700,7 @@ public static class ImportAddClusterCreatePatch
     private static void Prefix() => ImportAddDiag.CreateEnter();
 
     [HarmonyFinalizer]
-    private static Exception Finalizer(Exception __exception)
-    {
-        ImportAddDiag.CreateExit();
-        return __exception;
-    }
+    private static void Finalizer() => ImportAddDiag.CreateExit();
 }
 
 /// <summary>T-0401 reorder diag (CH 17:36): ReorderClusters counted AND timed (outermost), the exit as a finalizer.</summary>
@@ -719,11 +711,7 @@ public static class ImportAddClusterReorderPatch
     private static void Prefix() => ImportAddDiag.ReorderEnter();
 
     [HarmonyFinalizer]
-    private static Exception Finalizer(Exception __exception)
-    {
-        ImportAddDiag.ReorderExit();
-        return __exception;
-    }
+    private static void Finalizer() => ImportAddDiag.ReorderExit();
 }
 
 /// <summary>T-0401 reorder diag: each object a reorder (re)assigns to a cluster - the objects it moves.</summary>
@@ -792,13 +780,13 @@ public static class ReleaseGridBeforeDeleteTimerPatch
     private static void Prefix() => ImportAddDiag.RelSubEnter(0);
 
     [HarmonyFinalizer]
-    private static Exception Finalizer(Exception __exception)
-    {
-        ImportAddDiag.RelSubExit(0);
-        return __exception;
-    }
+    private static void Finalizer() => ImportAddDiag.RelSubExit(0);
 }
 
+// The finalizers of these timers are void on purpose. A finalizer that returns __exception makes Harmony throw the
+// exception object again, which resets its stack trace to the patched method: live grid delete faults read
+// "NullReferenceException at MyEntities.Remove_Patch1" with every callee frame gone (SE-1246, SE-1964). A void
+// finalizer rethrows and keeps the trace.
 [HarmonyPatch(typeof(MyEntities), nameof(MyEntities.Remove), new[] { typeof(MyEntity) })]
 public static class ReleaseSceneRemoveTimerPatch
 {
@@ -807,11 +795,7 @@ public static class ReleaseSceneRemoveTimerPatch
     private static void Prefix() => ImportAddDiag.RelSubEnter(1);
 
     [HarmonyFinalizer]
-    private static Exception Finalizer(Exception __exception)
-    {
-        ImportAddDiag.RelSubExit(1);
-        return __exception;
-    }
+    private static void Finalizer() => ImportAddDiag.RelSubExit(1);
 }
 
 [HarmonyPatch(
@@ -825,11 +809,7 @@ public static class ReleaseSystemsTimerPatch
     private static void Prefix() => ImportAddDiag.RelSubEnter(2);
 
     [HarmonyFinalizer]
-    private static Exception Finalizer(Exception __exception)
-    {
-        ImportAddDiag.RelSubExit(2);
-        return __exception;
-    }
+    private static void Finalizer() => ImportAddDiag.RelSubExit(2);
 }
 
 [HarmonyPatch(typeof(MyEntity), "CallAndClearOnClose")]
@@ -840,11 +820,7 @@ public static class ReleaseOnCloseTimerPatch
     private static void Prefix() => ImportAddDiag.RelSubEnter(3);
 
     [HarmonyFinalizer]
-    private static Exception Finalizer(Exception __exception)
-    {
-        ImportAddDiag.RelSubExit(3);
-        return __exception;
-    }
+    private static void Finalizer() => ImportAddDiag.RelSubExit(3);
 }
 
 /// <summary>T-0404 release look (CH 01:36): MyReplicationServer.Destroy and its parts, release sub-timers 5-8. Observe-only.</summary>
@@ -859,11 +835,7 @@ public static class ReleaseReplDestroyTimerPatch
     private static void Prefix() => ImportAddDiag.RelSubEnter(5);
 
     [HarmonyFinalizer]
-    private static Exception Finalizer(Exception __exception)
-    {
-        ImportAddDiag.RelSubExit(5);
-        return __exception;
-    }
+    private static void Finalizer() => ImportAddDiag.RelSubExit(5);
 }
 
 [HarmonyPatch(typeof(VRage.Network.MyReplicationServer), "RemoveForClients")]
@@ -874,11 +846,7 @@ public static class ReleaseReplForClientsTimerPatch
     private static void Prefix() => ImportAddDiag.RelSubEnter(6);
 
     [HarmonyFinalizer]
-    private static Exception Finalizer(Exception __exception)
-    {
-        ImportAddDiag.RelSubExit(6);
-        return __exception;
-    }
+    private static void Finalizer() => ImportAddDiag.RelSubExit(6);
 }
 
 [HarmonyPatch(typeof(VRage.Network.MyReplicationServer), "RemoveStateGroups")]
@@ -889,11 +857,7 @@ public static class ReleaseReplStateGroupsTimerPatch
     private static void Prefix() => ImportAddDiag.RelSubEnter(7);
 
     [HarmonyFinalizer]
-    private static Exception Finalizer(Exception __exception)
-    {
-        ImportAddDiag.RelSubExit(7);
-        return __exception;
-    }
+    private static void Finalizer() => ImportAddDiag.RelSubExit(7);
 }
 
 [HarmonyPatch(typeof(VRage.Network.MyReplicationLayer), "RemoveNetworkedObject")]
@@ -904,9 +868,5 @@ public static class ReleaseReplNetObjTimerPatch
     private static void Prefix() => ImportAddDiag.RelSubEnter(8);
 
     [HarmonyFinalizer]
-    private static Exception Finalizer(Exception __exception)
-    {
-        ImportAddDiag.RelSubExit(8);
-        return __exception;
-    }
+    private static void Finalizer() => ImportAddDiag.RelSubExit(8);
 }
