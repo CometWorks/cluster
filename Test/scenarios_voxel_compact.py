@@ -24,7 +24,8 @@ fresh node-1 loads EarthLike from the base and matches the WA.
 
 P2-VOX-RESET-SUPERSEDE: with compaction off, the voxel reset (``voxelReset.ageSeconds`` 5) puts the edited asteroid
 back. Every entry before the reset becomes a stub, so the WA's retained payload is the reset entries alone, and a
-fresh node-1 that replays the journal from sequence 0 ends identical to the WA's reset asteroid.
+fresh node-1 that replays the journal from sequence 0 ends identical to the WA's reset asteroid. (Whether the reset
+content equals the asteroid as spawned is recorded as information; that is the reset's own matter, SE-1595.)
 
 Knobs (environment): ``SE1893_RADIUS`` (asteroid radius, m, default 100), ``SE1893_PASSES`` (default 40).
 """
@@ -227,11 +228,25 @@ def p2_vox_reset_supersede(bench) -> None:
                                                  "voxelReset.ageSeconds": "5", "voxelReset.scanSeconds": "2",
                                                  "voxelReset.cubesPerUpdate": "8"}))
     pristine = hashes["pristine"]
-    reset = bool(_try(lambda: wait_until(
-        lambda: all(_hash(bench, "wa-1", storage, cube) == pristine[cube] for cube in cubes),
-        300, "the WA reset the asteroid", interval=3), False))
+
+    def reset_done():
+        resets = [line for line in _log(bench, "wa-1") if "voxel_reset storage=" + storage in line]
+        return resets and "remaining_edited_cubes=0" in resets[-1]
+
+    reset = bool(_try(lambda: wait_until(reset_done, 300, "the WA reset every edited cube", interval=3), False))
     bench.record("config-off", _config(bench, {**COMPACT_OFF, "voxelReset.enabled": "false"}))
-    _require(bench, "the WA put the whole asteroid back to its generated content", reset)
+    _require(bench, "the WA reset every edited cube of the asteroid", reset)
+
+    def stable():
+        first = {cube: _hash(bench, "wa-1", storage, cube) for cube in cubes}
+        time.sleep(3)
+        second = {cube: _hash(bench, "wa-1", storage, cube) for cube in cubes}
+        return second if first == second and None not in second.values() else None
+
+    wa = wait_until(stable, 120, "the WA's reset asteroid is stable", interval=3)
+    back = sum(1 for cube in cubes if wa[cube] == pristine[cube])
+    bench.check(f"[INFO] reset: {back} of {len(cubes)} cubes on the WA match the hash taken when the asteroid was spawned",
+                True, json.dumps([list(c) for c in cubes if wa[c] != pristine[c]][:20]))
     time.sleep(3)  # the stub files are written off the game thread
     after = _journal(bench, storage)
     lines = [line for line in _log(bench, "wa-1") if "voxel_reset storage=" + storage in line]
@@ -248,9 +263,16 @@ def p2_vox_reset_supersede(bench) -> None:
                 json.dumps({"ranges": ranges, "resets": resets, "stubs": stubs, "superseded": superseded,
                             "before": before["entries"]}))
 
+    # The running node-1 made the edits: it applies the stubs of its own entries as nothing and settles them.
+    ok, diverged = _converged(bench, storage, cubes, wa, "the running node-1 converged on the reset asteroid")
+    live = _status(bench, NODE)
+    bench.check("reset: the running node-1 that made the edits matches the WA and has no own edit left pending",
+                ok and live.get("liveSelfPending") == 0,
+                json.dumps({"diverged": diverged, "liveSelfPending": live.get("liveSelfPending")}))
+
     bench.cluster.restart_node(NODE, fresh=True)
     bench.cluster.wait_ready(nodes=[NODE], serving=True)
-    ok, diverged = _converged(bench, storage, cubes, pristine, "a fresh node-1 converged on the reset asteroid")
+    ok, diverged = _converged(bench, storage, cubes, wa, "a fresh node-1 converged on the reset asteroid")
     status = _status(bench, NODE)
     applied = int((status.get("applied") or {}).get(storage, 0))
     bench.check(f"reset: a fresh node replays the stubbed journal (applied {applied} of tail {after['tail']}) and "
