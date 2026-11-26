@@ -263,20 +263,32 @@ def p2_vox_reset_supersede(bench) -> None:
                 json.dumps({"ranges": ranges, "resets": resets, "stubs": stubs, "superseded": superseded,
                             "before": before["entries"]}))
 
-    # The running node-1 made the edits: it applies the stubs of its own entries as nothing and settles them.
-    ok, diverged = _converged(bench, storage, cubes, wa, "the running node-1 converged on the reset asteroid")
-    live = _status(bench, NODE)
-    bench.check("reset: the running node-1 that made the edits matches the WA and has no own edit left pending",
-                ok and live.get("liveSelfPending") == 0,
-                json.dumps({"diverged": diverged, "liveSelfPending": live.get("liveSelfPending")}))
+    # The running node-1 applied the full entries it made; a fresh node-1 gets their stubs. Both then apply the same
+    # reset entries, so they must end identical: the stubs lost nothing. Each is also compared with the WA, as
+    # information: in octant (0..127)^3 of an asteroid the WA's own copy can differ from what it journals (SE-1950).
+    def node_hashes():
+        first = {cube: _hash(bench, NODE, storage, cube) for cube in cubes}
+        time.sleep(3)
+        second = {cube: _hash(bench, NODE, storage, cube) for cube in cubes}
+        return second if first == second and None not in second.values() else None
+
+    live = _try(lambda: wait_until(node_hashes, 180, "the running node-1 settled", interval=3))
+    live_status = _status(bench, NODE)
+    _require(bench, "reset: the running node-1 that made the edits settled with no own edit left pending",
+             live and live_status.get("liveSelfPending") == 0, json.dumps({"liveSelfPending": live_status.get("liveSelfPending")}))
+    bench.record("running-node", {"hashes": {str(k): v for k, v in live.items()}, "status": live_status})
 
     bench.cluster.restart_node(NODE, fresh=True)
     bench.cluster.wait_ready(nodes=[NODE], serving=True)
-    ok, diverged = _converged(bench, storage, cubes, wa, "a fresh node-1 converged on the reset asteroid")
+    ok, diverged = _converged(bench, storage, cubes, live, "a fresh node-1 converged on the running node's content")
     status = _status(bench, NODE)
     applied = int((status.get("applied") or {}).get(storage, 0))
     bench.check(f"reset: a fresh node replays the stubbed journal (applied {applied} of tail {after['tail']}) and "
-                "ends on the reset asteroid", ok and applied >= after["tail"], json.dumps(diverged))
+                "ends identical to the node that applied the full entries", ok and applied >= after["tail"],
+                json.dumps(diverged))
+    wa_differs = [list(cube) for cube in cubes if live[cube] != wa[cube]]
+    bench.check(f"[INFO] reset: {len(wa_differs)} of {len(cubes)} cubes on the nodes differ from the WA's own copy "
+                "(SE-1950, the same with or without stubs)", True, json.dumps(wa_differs[:30]))
     bench.exercised(entriesBefore=before["entries"], bytesBefore=before["retainedBytes"], resets=resets,
                     stubs=stubs, bytesAfter=after["retainedBytes"], radius=RADIUS, passes=PASSES)
 
