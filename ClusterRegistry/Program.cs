@@ -60,6 +60,21 @@ if (args.Length == 2 && args[0] == "--plugin-sdk-contract")
     return;
 }
 
+// Build/release.sh records the game version the plugins were built against (SE-1655).
+if (args.Length == 2 && args[0] == "--game-version")
+{
+    try
+    {
+        Console.WriteLine(GameVersion.Read(args[1]));
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine(error.Message);
+        Environment.ExitCode = 2;
+    }
+    return;
+}
+
 // #1304: replay the balance planner on saved /cluster/partitions reports (see DirectGateway.BalanceReplay).
 if (args.Length > 1 && args[0] == "--balance-replay")
 {
