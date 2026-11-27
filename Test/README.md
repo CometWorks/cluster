@@ -321,3 +321,17 @@ the same damage applied to their targets. Only the treatment facility is enabled
 A pass requires full repair on that grid while the disabled grid retains its
 measured damage. The test world shortens nanite travel using the mod's config.
 This case covers same-grid repair in creative mode.
+
+### Relative Top Speed governor
+
+Run `python relative_speed_differential.py /path/to/corpus /path/to/new-results`.
+Workshop item 1359618037 slows grids down to a speed that depends on their mass.
+The test world configures a flat 20 m/s cruise limit for every mass, a 100 m/s
+world limit and activation only for grids with a cockpit. The fixture spawns
+three large grids: one with a cockpit and one without, both pushed to 60 m/s,
+and a stationary one with a cockpit. 240 simulation frames later the governed
+grid must be back at 20 m/s while the other two keep their speeds. On the
+cluster, node 1 runs the same check, then the governed grid moves to node 2,
+which must own it alone, push it to 60 m/s again and see it governed back to
+20 m/s. Boosting, grid groups, character movement and client controls need
+separate cases.
