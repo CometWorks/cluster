@@ -1338,10 +1338,13 @@ internal static class Tool
             foreach (
                 System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(
                     File.ReadAllText(file),
-                    "<Subtype(?:Id|Name)>([^<]+)</Subtype(?:Id|Name)>"
+                    // Both forms: <SubtypeId>Welder2</SubtypeId> and <Id Type="..." Subtype="Welder2" />
+                    "<Subtype(?:Id|Name)>([^<]+)</Subtype(?:Id|Name)>|\\bSubtype(?:Id|Name)?=\"([^\"]+)\""
                 )
             )
-                MyStringHash.GetOrCompute(match.Groups[1].Value.Trim());
+                MyStringHash.GetOrCompute(
+                    (match.Groups[1].Success ? match.Groups[1] : match.Groups[2]).Value.Trim()
+                );
             return true;
         }
 
