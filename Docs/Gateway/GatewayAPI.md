@@ -71,6 +71,12 @@ State: `GET /registry/status` (lifecycle phase, nodes, node plan, executors).
   (never seen and unowned, recovering, owned by a node that did not report, or new since the pass). The World
   Authority's `VoxelResetService` polls it every `voxelReset.scanSeconds`, resets nothing while it is incomplete or
   the pass is over 120 s old, and logs a `voxel_reset status` line every `voxelReset.statusSeconds`.
+- **Asteroid turns** (SE-1998, `Docs/AsteroidTurns.md`): `GET /registry/asteroid-turns[?known=N]` answers
+  `{Count, Rows}`, every committed turn (none in `Rows` while `known` equals `Count`). The World Authority proposes a
+  turn with `POST /registry/asteroid-turns?node=&epoch=&generation=&gridMeters=&memberMeters=&staticMeters=&dryRun=`
+  and a turn row in the body. The answer is `{Committed, Refused, Row}`. A refusal is one of `turned`, `static:P`,
+  `online:P`, `incomplete: ...`, `uncovered:P` or `dry-run`. A recovery claim lists the turns whose pins cover its
+  saves in `AsteroidTurns`.
 - **Voxel resets** (SE-1706): `GET /registry/voxel-resets` answers `{storage: unixSeconds}`, the newest reset of any
   cube of each voxel storage (an asteroid resets whole, a planet by 64 m cubes). The World Authority posts the same
   shape from its ledger (`POST`, merged by the newest value) after its resets and every `voxelReset.statusSeconds`, so
