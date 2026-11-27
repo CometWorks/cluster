@@ -265,7 +265,10 @@ The registry now persists to `registry.db`, a SQLite database in WAL mode with `
   before. Statements are prepared once per table and reused with parameters.
 - **SQLite's write-ahead log is the append-only log.** A commit appends frames and fsyncs them.
   Checkpoints fold the log into the file. The registry checkpoints (and truncates the log) at every
-  start - the replayed state becomes the file - and at operator checkpoints. A torn final commit is
+  start - the replayed state becomes the file - and at operator checkpoints. While the cluster is
+  Down it checkpoints after every write (SE-1967). A Down Gateway stays up until its host kills
+  it, and it still writes, so this keeps `registry.db` complete without its WAL whenever the kill
+  comes, which is what a stopped backup and `ring_reset.py` read. A torn final commit is
   dropped whole by SQLite. A corrupt database refuses to open (`InvalidDataException`), never
   starts empty.
 - **Commit points are unchanged.** A plugin CAS, an offline-partition commit, a clean shutdown and

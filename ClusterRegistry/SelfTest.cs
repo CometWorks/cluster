@@ -224,6 +224,7 @@ internal static partial class SelfTest
         ("admin-auth", TestAdminAuth),
         ("admin-events", TestAdminEvents),
         ("admin-operations", TestAdminOperations),
+        ("down-wal-empty", TestDownWalEmpty),
         ("admin-fleet", TestAdminFleet),
         ("admin-lifecycle", TestAdminLifecycle),
         ("plugin-services", TestPluginServices),
@@ -1265,6 +1266,64 @@ internal static partial class SelfTest
                 Assert(emitted.Count(x => x.Type == "cluster.phase") == 3);
             }
             Directory.Delete(registryDirectory, true);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    /// <summary>
+    /// SE-1967: Quasar's Host ends a Down Gateway with a kill, and the shutdown operation's completion and
+    /// later background flushes had reached the WAL after the Down checkpoint. The ring reset and stopped
+    /// backups then found registry.db-wal non-empty and refused. While Down, every write is checkpointed.
+    /// </summary>
+    private static void TestDownWalEmpty()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "cluster-gateway-down-wal-self-test-" + Guid.NewGuid()
+        );
+        string copy = Path.Combine(directory, "killed");
+        string wal = Path.Combine(directory, RegistryStore.FileName + "-wal");
+        long WalBytes() => File.Exists(wal) ? new FileInfo(wal).Length : 0;
+        string shutdownId;
+        try
+        {
+            using (var registry = new GatewayRegistry(directory, Admission))
+            {
+                AdminOperationRecord shutdown = registry.BeginAdminOperation(
+                    "shutdown",
+                    "grace=0",
+                    "quasar",
+                    "key-1",
+                    "cluster",
+                    out _
+                );
+                shutdownId = shutdown.OperationId;
+                registry.BeginShutdown(emergency: false, TimeSpan.Zero);
+                registry.CompleteShutdown(allowDirty: true);
+                Assert(WalBytes() == 0);
+                // What AdminShutdown does after the Down commit point, then the background flush tick.
+                registry.CompleteAdminOperation(
+                    shutdown.OperationId,
+                    new Dictionary<string, string> { ["phase"] = "Down" }
+                );
+                registry.Flush();
+                Assert(WalBytes() == 0);
+
+                // The files a kill leaves behind, read without the WAL as ring_reset.py reads them.
+                Directory.CreateDirectory(copy);
+                File.Copy(
+                    Path.Combine(directory, RegistryStore.FileName),
+                    Path.Combine(copy, RegistryStore.FileName)
+                );
+            }
+            using var killed = new GatewayRegistry(copy, Admission);
+            Assert(killed.Lifecycle().LastShutdown != null);
+            Assert(
+                killed.AdminOperationView(shutdownId)?.State == Admin.AdminOperationState.Succeeded
+            );
         }
         finally
         {
