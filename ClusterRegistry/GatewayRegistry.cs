@@ -8732,6 +8732,11 @@ internal sealed partial class GatewayRegistry : IDisposable
         try
         {
             WritePendingState();
+            // SE-1967: a Down Gateway stays up until its host kills it, and it still writes (the shutdown
+            // operation's result, later passes). Folded in at once, registry.db alone holds the stopped
+            // state that backups and the ring reset read, whenever the kill comes.
+            if (_state.Phase == ClusterPhase.Down)
+                _store.Checkpoint();
         }
         catch (Exception error)
         {

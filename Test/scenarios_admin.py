@@ -13,6 +13,10 @@ address is declared internal so the Gateway accepts it.
 * P3-ADM-03 - durable operations: a mutation without ``Idempotency-Key`` is 400, a key replays the
   original operation, a key reused for a different request is 409, config writes are CAS, and
   after SIGKILL and a warm restart the replay and the ``/events`` cursor both survive.
+* P3-ADM-04 - SE-1967: a stopped registry is complete without its WAL. Quasar stops a cluster through
+  ``/shutdown``, then its Host SIGKILLs the Down Gateway. Ten times: stop, let flushes land, SIGKILL,
+  then the check ``ring_reset.py`` and stopped backups make (``registry.db-wal`` empty, CleanShutdown
+  set in ``registry.db``), then a warm start.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ import os
 import shutil
 import signal
 import socket
+import sqlite3
 import subprocess
 import time
 import urllib.error
@@ -282,8 +287,47 @@ def p3_adm_03(bench) -> None:
     _with_gateway(bench, body)
 
 
+DOWN_CYCLES = 10
+
+
+def p3_adm_04(bench) -> None:
+    def body(bench, gateway: AdminGateway) -> None:
+        registry = gateway.root / "registry"
+        cycles = []
+        for cycle in range(1, DOWN_CYCLES + 1):
+            if cycle > 1:
+                gateway.start()
+            _, _, begun = gateway.request("/shutdown", "POST", key=f"stop-{cycle}",
+                                          body={"graceSeconds": 0, "forceAfterSeconds": 0})
+            operation = begun["data"]["operationId"]
+            stop = time.time() + 60
+            state = begun["data"]["state"]
+            while state == "Running" and time.time() < stop:
+                time.sleep(0.5)
+                state = gateway.request(f"/operations/{operation}")[2]["data"]["state"]
+            # Quasar's Host kills the Gateway some time after Down: the operation's result and the
+            # background flushes after it have reached the store by then.
+            time.sleep(PERSIST_INTERVAL * 3 + 1)
+            gateway.sigkill()
+            wal = registry / "registry.db-wal"
+            wal_bytes = wal.stat().st_size if wal.exists() else 0
+            # ring_reset.py's Registry(): refuse a non-empty WAL, then read CleanShutdown from the db alone.
+            with sqlite3.connect(f"file:{registry / 'registry.db'}?mode=ro&immutable=1", uri=True) as db:
+                row = db.execute("select v from state where k = 'CleanShutdown'").fetchone()
+            marker = bool(row and row[0] and json.loads(row[0]))
+            cycles.append({"cycle": cycle, "operation": state, "walBytes": wal_bytes, "cleanShutdown": marker,
+                           "planReached": state == "Succeeded" and wal_bytes == 0 and marker})
+        bench.record("down-cycles", cycles)
+        reached = sum(1 for cycle in cycles if cycle["planReached"])
+        bench.check(f"every stop leaves registry.db complete without its WAL ({reached}/{DOWN_CYCLES} cycles)",
+                    reached == DOWN_CYCLES, json.dumps([c for c in cycles if not c["planReached"]])[:500])
+        bench.exercised(cycles=DOWN_CYCLES, reached=reached, walBytes=[c["walBytes"] for c in cycles])
+    _with_gateway(bench, body)
+
+
 SCENARIOS_ADMIN = {
     "P3-ADM-01": (p3_adm_01, "admin API parity: CLI self-test and live CLI-vs-HTTP equality", "2"),
     "P3-ADM-02": (p3_adm_02, "admin API scoped tokens, audit and redaction", "2"),
     "P3-ADM-03": (p3_adm_03, "admin API idempotent, durable operations across a Gateway SIGKILL", "2"),
+    "P3-ADM-04": (p3_adm_04, "SE-1967: a Down Gateway's registry.db is complete without its WAL when killed", "2"),
 }
