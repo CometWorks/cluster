@@ -456,6 +456,21 @@ public static class ClusterConfig
         ["voxelReset.cubesPerUpdate"] = "2",
         // SE-1706: seconds between the WA's "voxel_reset status" lines (due and blocked units, nearest blocker, resets, skip reason).
         ["voxelReset.statusSeconds"] = "300",
+        // SE-1998, WORLD AUTHORITY: turn the rotated asteroids to the identity orientation, one every intervalSeconds,
+        // while no online partition is within gridMeters of the rock and no player within playerMeters. A static grid
+        // within staticMeters keeps the rock as it is; members of offline partitions within memberMeters are turned as
+        // they load. dryRun asks the Gateway without committing anything. exclude: storage names never to turn.
+        // Every node polls the committed turns every pollSeconds, enabled or not (the WA also publishes each one).
+        ["asteroidReset.enabled"] = "false",
+        ["asteroidReset.dryRun"] = "true",
+        ["asteroidReset.intervalSeconds"] = "300",
+        ["asteroidReset.gridMeters"] = "1000",
+        ["asteroidReset.playerMeters"] = "5000",
+        ["asteroidReset.memberMeters"] = "50",
+        ["asteroidReset.staticMeters"] = "50",
+        ["asteroidReset.exclude"] = "",
+        ["asteroidReset.statusSeconds"] = "300",
+        ["asteroidReset.pollSeconds"] = "30",
         // WORLD AUTHORITY: the role a player gets on first joining the cluster when the promotion map has no entry for
         // them: None (default, vanilla), Scripter, Moderator or SpaceMaster. An explicit role, None included, is never
         // overwritten, so a demoted player stays demoted. Bots get it too.

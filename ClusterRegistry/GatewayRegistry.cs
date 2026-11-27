@@ -2577,7 +2577,9 @@ internal sealed partial class GatewayRegistry : IDisposable
                         stamps,
                         coverNewestFirst.Any(save => save.HomeStamps != null),
                         coverNewestFirst.Length == 0 ? null : cover.Max(item => item.Save.Created),
-                        coverNewestFirst.Length == 0 ? 0 : cover.Max(item => item.Save.ClusterTime)
+                        coverNewestFirst.Length == 0 ? 0 : cover.Max(item => item.Save.ClusterTime),
+                        // SE-1998: the asteroid turns this content predates; the node turns its members as it loads.
+                        AsteroidTurnsCovering(cover.Concat(fallbacks))
                     )
                 );
             }
@@ -9150,6 +9152,9 @@ internal sealed partial class GatewayRegistry : IDisposable
         public TrackedDictionary<string, SaveRegistration> Saves { get; set; } = [];
         public TrackedDictionary<string, GlobalSaveRegistration> GlobalSaves { get; set; } = [];
         public Dictionary<string, VoxelBaseRegistration> VoxelBases { get; set; } = [];
+
+        /// <summary>SE-1998: committed asteroid turns by storage name (AsteroidTurns.cs). Never removed.</summary>
+        public Dictionary<string, ClusterPlugin.AsteroidTurnRow> AsteroidTurns { get; set; } = [];
         public TrackedDictionary<ulong, long> PartitionWeights { get; set; } = [];
         public Dictionary<string, VoxelJournalRegistration> VoxelJournals { get; set; } = [];
         public Dictionary<string, VoxelReplicaRegistration> VoxelReplicas { get; set; } = [];
@@ -9612,7 +9617,8 @@ internal sealed record RecoveryClaim(
     Dictionary<long, long>? SaveHomeStamps = null,
     bool SaveStamped = false,
     DateTimeOffset? SaveCreated = null,
-    long SaveCaptured = 0
+    long SaveCaptured = 0,
+    ClusterPlugin.AsteroidTurnRow[]? AsteroidTurns = null
 );
 
 /// <summary>T-0237: a player's home in ANOTHER partition that really holds the body - so the node can drop ANY

@@ -6263,6 +6263,14 @@ internal sealed partial class PartitionPersistence
                 && saveCaptured.ValueKind == JsonValueKind.Number
                     ? saveCaptured.GetInt64()
                     : 0,
+            AsteroidTurns =
+                claim.TryGetProperty("AsteroidTurns", out JsonElement turns)
+                && turns.ValueKind == JsonValueKind.Array
+                    ? JsonSerializer.Deserialize<AsteroidTurnRow[]>(
+                        turns.GetRawText(),
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true }
+                    )
+                    : [],
         };
 
         static RecoveryFile ParseFile(JsonElement cover)
@@ -6332,6 +6340,8 @@ internal sealed partial class PartitionPersistence
         HashSet<long> created = new HashSet<long>();
         var offlineProfiles = new List<(byte[] Profiles, HashSet<long> Members)>();
         var saves = new List<(RecoveryFile File, PartitionSaveFile.Parsed Save)>();
+        // SE-1998: the save each recovered entity was read from, for the asteroid turns that pin it.
+        var sourceOf = new Dictionary<long, (ulong Partition, long Generation, long Sequence)>();
         var phase = Stopwatch.StartNew();
         // T-0207: every location this claim offered and what happened to it. The failure below used
         // to name only the partition, and ReadRecoveryFile logs a line only for a location it
@@ -6439,6 +6449,8 @@ internal sealed partial class PartitionPersistence
                 )
                 .ToArray();
             PartitionSaveFile.MergeEntities(entities, selected, null);
+            foreach (MyObjectBuilder_EntityBase entity in selected)
+                sourceOf[entity.EntityId] = (save.PartitionId, save.Generation, save.Sequence);
             if (save.Profiles != null)
                 offlineProfiles.Add((save.Profiles, selected.Select(e => e.EntityId).ToHashSet()));
         }
@@ -6518,6 +6530,15 @@ internal sealed partial class PartitionPersistence
         // Stale-member filtering must precede compensation: a partial logical group cannot spend
         // stocks carried by a grid that was removed as live elsewhere.
         long screenMs = phase.ElapsedMilliseconds;
+        // SE-1998: the rocks this node holds are turned first, then the members a turn pins are turned with their rock,
+        // all before any entity exists, so none appears next to a rock in the other pose.
+        AsteroidTurnService.EnsureReady(recovery.AsteroidTurns);
+        AsteroidTurnService.TurnBuilders(
+            recovery.Partition,
+            entities,
+            id => sourceOf.TryGetValue(id, out var source) ? source : null,
+            recovery.AsteroidTurns
+        );
         OfflineCompensation.Apply(entities, offlineProfiles, recovery.OfflineWake);
         long compensationMs = phase.ElapsedMilliseconds;
         // T-0237: a FENCE-TAINTED local copy of a recovered entity is stale by construction - an assigned seed
@@ -8823,5 +8844,8 @@ internal sealed partial class PartitionPersistence
 
         /// <summary>T-0237: cluster-clock capture time of the newest covered save (0 = older registry).</summary>
         public long SaveCaptured { get; init; }
+
+        /// <summary>SE-1998: the asteroid turns whose pins cover this claim's saves (the Gateway's AsteroidTurnsCovering).</summary>
+        public AsteroidTurnRow[] AsteroidTurns { get; init; }
     }
 }

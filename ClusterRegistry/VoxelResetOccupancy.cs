@@ -48,6 +48,8 @@ internal sealed record VoxelResetOccupancy(
         }
     }
 
+    internal static double[][] RowsOf(PartitionInfo partition) => Rows(partition);
+
     private static double[][] Rows(PartitionInfo partition)
     {
         PartitionSphere s = partition.Sphere;

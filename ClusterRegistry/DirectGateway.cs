@@ -7803,6 +7803,8 @@ internal sealed partial class DirectGateway : INetEventListener, IDisposable
                 );
                 return;
             }
+            if (HandleAsteroidTurns(context, path))
+                return;
             if (path.Equals("/registry/voxel-resets", StringComparison.OrdinalIgnoreCase))
             {
                 // SE-1706: per voxel storage, the unix seconds of its newest reset, as the World Authority posts them

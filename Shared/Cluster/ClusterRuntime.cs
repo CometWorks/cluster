@@ -747,6 +747,7 @@ public static class ClusterRuntime
         WeatherAuthorityService.Install();
         ConcealableContentService.Install();
         AsteroidSpawnService.Install();
+        AsteroidTurnService.Install();
         // The premade cluster world is the single source of the cluster-wide game rules; the per-node
         // auto-generated dedicated config must not overwrite them at load.
         MySandboxGameSeams.ClusterKeepPremadeSessionSettings = () => IsClustered;
@@ -1681,6 +1682,7 @@ public static class ClusterRuntime
         WeatherAuthorityService.Update();
         ConcealableContentService.Update();
         AsteroidSpawnService.Update();
+        AsteroidTurnService.Update(); // SE-1998: committed asteroid turns on every node; the WA proposes the next
         AsteroidStorageWarmup.Update(); // once per node process: procedural asteroid storages cached off the game thread
         SpawnDirectorService.Update();
         DropContainerDirectorService.Update();
