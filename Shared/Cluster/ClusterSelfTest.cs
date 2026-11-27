@@ -110,6 +110,7 @@ internal static partial class ClusterSelfTest
         ("meteor-lifetime", MeteorLifetimeRules),
         ("bot-ship-cleanup", BotShipCleanupRules),
         ("drop-cap", DropCapRules),
+        ("gps-name-cap", GpsNameCapRules), // SE-2000
         ("encounter-cap", EncounterCapRules),
         ("mod-message-to-server", ModMessageToServer),
         ("ledger-replay", LedgerReplay),

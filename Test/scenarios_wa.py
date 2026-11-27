@@ -3239,6 +3239,88 @@ def p2_wa_gps(bench) -> None:
     bench.exercised(identities=identities, tag=tag, ops="add x4, modify x3, delete x2, burst x50, node-2 restart, add+modify after")
 
 
+
+def p2_gps_name_cap(bench) -> None:
+    """SE-2000: the MES wreck encounters add a "Wreck Detector Ping" GPS entry per broadcast and never remove one, so
+    Octahedron players piled them up. The World Authority keeps at most gps.maxPerName entries per player of each name
+    in gps.cappedNames, deleting the oldest. Leg 1 (before): with the cap off, 8 pings from node-1 on one identity and
+    3 from node-2 on another stay on every node. Leg 2: turning the cap on at 5 trims the backlog to the 5 newest, on
+    every node; the other identity's 3 and another name's 6 stay. Leg 3: new pings from either node (a player handed
+    over or reconnected elsewhere) each push out the oldest. Leg 4: node-2 restarts (its players reconnect) and gets
+    the capped list; a ping it adds after that still pushes the oldest out. Leg 5: a ping in another letter case is the
+    same name. Every wait is seconds long: the WA sweeps every second."""
+    _wa_cluster(bench)
+    nodes = ("wa-1", "node-1", "node-2")
+    selftest = _try(bench, "wa-1", "/self-test?section=gps-name-cap") or {}
+    bench.check("WA self-test gps-name-cap (oldest first per identity and name, ties in list order, the gps.* knobs)",
+                selftest.get("ok") is True, json.dumps(selftest)[:300])
+    identities = [i for i in _gps_table(bench, "node-1")["identities"] if i > 0][:2]
+    _require(bench, "SETUP: node-1 knows two identities to hold GPS entries", len(identities) == 2, json.dumps(identities))
+    i1, i2 = identities
+    tag = f"{random.randrange(10 ** 6):06d}-"  # digits only: the upper-case ping of leg 5 starts with it too
+    ping, other = tag + "wreck ping", tag + "other"
+    bench.record("config-off", bench.cluster.handover_config({"gps.cappedNames": ping, "gps.maxPerName": "0"}))
+
+    def held(table: dict, identity: int, name: str) -> list[float]:
+        return sorted(e["x"] for e in table["entries"] if e["identity"] == identity and e["name"].lower() == name.lower())
+
+    def step(label: str, want: dict, timeout: float = 20) -> dict | None:
+        """Every node holds exactly the wanted x coordinates per (identity, name)."""
+        def same():
+            tables = {n: _gps_table(bench, n, tag) for n in nodes}
+            ok = all(held(t, i, name) == sorted(xs) for t in tables.values() for (i, name), xs in want.items())
+            return tables if ok else None
+        tables = _poll(same, timeout)
+        seen = tables or {n: _gps_table(bench, n, tag) for n in nodes}
+        bench.record("cap-" + re.sub(r"[^a-z0-9]+", "-", label.lower())[:40],
+                     {n: {f"{i}/{name}": held(t, i, name) for (i, name) in want} for n, t in seen.items()})
+        bench.check(label, tables is not None,
+                    json.dumps({n: {f"{i}/{name}": held(t, i, name) for (i, name) in want} for n, t in seen.items()}))
+        return tables
+
+    def add(node: str, identity: int, name: str, x: int) -> None:
+        _gps_op(bench, node, "add", identity, name, x=x)
+        time.sleep(1.2)  # the WA dates an entry by its sweep (every second): one ping per sweep, so the order is known
+
+    # 1. Before: no cap, the pings pile up.
+    for x in range(1, 9):
+        add("node-1", i1, ping, x)
+    for x in (101, 102, 103):
+        _gps_op(bench, "node-2", "add", i2, ping, x=x)
+    for x in range(201, 207):
+        _gps_op(bench, "node-1", "add", i1, other, x=x)
+    step("leg1: with the cap off, 8 pings stay on every node", {
+        (i1, ping): range(1, 9), (i2, ping): [101, 102, 103], (i1, other): range(201, 207)})
+
+    # 2. The cap at 5 trims the backlog: the 3 oldest go.
+    bench.record("config-cap5", bench.cluster.handover_config({"gps.maxPerName": "5"}))
+    step("leg2: the cap trims the backlog to the 5 newest on every node; other identities and names keep theirs", {
+        (i1, ping): range(4, 9), (i2, ping): [101, 102, 103], (i1, other): range(201, 207)})
+    bench.check("leg2: the WA logged the backlog clean-up",
+                bool(_lines(bench, "wa-1", r"gps name cap deleted=3 identities=1 cap=5")))
+
+    # 3. New pings from either node push out the oldest.
+    add("node-2", i1, ping, 9)
+    add("node-1", i1, ping, 10)
+    step("leg3: two new pings, from node-2 and node-1, push out the two oldest", {(i1, ping): range(6, 11)})
+
+    # 4. A node restart: its players reconnect to the capped list, and the cap still holds after.
+    bench.cluster.restart_node("node-2")
+    bench.cluster.wait_node_log("node-2", "Game ready", RECOVERY_TIMEOUT)
+    step("leg4: after its restart node-2 holds the capped list", {(i1, ping): range(6, 11)}, 120)
+    add("node-2", i1, ping, 11)
+    step("leg4: a ping from the restarted node pushes out the oldest", {(i1, ping): range(7, 12)})
+
+    # 5. Names match in any letter case.
+    add("node-1", i1, ping.upper(), 12)
+    step("leg5: an upper-case ping counts as the same name", {(i1, ping): range(8, 13), (i2, ping): [101, 102, 103],
+                                                              (i1, other): range(201, 207)})
+    bench.record("config-reset", bench.cluster.handover_config({"gps.cappedNames": "Wreck Detector Ping",
+                                                                 "gps.maxPerName": "5"}))
+    bench.exercised(identities=identities, tag=tag, legs="cap off, backlog trim, new pings from both nodes, "
+                                                           "node-2 restart, letter case")
+
+
 def p1_wa_cmd_inflight(bench) -> None:
     """SE-1561: on the live cluster a node retried a banking command while the restarted World Authority was loading.
     The first copy was queued, the retry ran on the node-link thread and its handler waited for the game thread,
@@ -3322,6 +3404,8 @@ SCENARIOS_WA = {
     "P2-WA-00": (p2_wa_00, "World Authority role, clock and replacement", "3"),
     "P2-WA-GPS": (p2_wa_gps, "#1405: GPS add, modify and delete from any node on three identities converge on every node, "
                              "also after a modify burst and a node restart", "3"),
+    "P2-GPS-NAME-CAP": (p2_gps_name_cap, "SE-2000: the WA keeps at most gps.maxPerName GPS entries per player of each "
+                                         "gps.cappedNames name (Wreck Detector Ping), oldest out, backlog trimmed", "3"),
     "P2-WA-08": (p2_wa_08, "a multi-MB global-state frame (a live-sized GPS table) reaches every node through the relay (T-0229)", "3"),
     "P2-WA-07": (p2_wa_07, "a WA killed before its newest global save replicated boots from a live replica (T-0230)", "3"),
     "P2-WA-09": (p2_wa_09, "#1318: banking and identity answers after the last global save survive a WA kill "
