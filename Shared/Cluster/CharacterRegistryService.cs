@@ -5,7 +5,9 @@ using System.Text.Json;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Character;
 using Sandbox.Game.World;
+using VRage.Game;
 using VRage.Game.Entity;
+using VRage.ObjectBuilders;
 
 namespace ClusterPlugin;
 
@@ -84,7 +86,20 @@ public static class CharacterRegistryService
 
     private const double SettleStableMilliseconds = 3000;
 
-    private sealed record SettleState(Settings Stored, double Until, double StableSince = 0);
+    private sealed record SettleState(
+        Settings Stored,
+        double Until,
+        bool KeepHelmet,
+        double StableSince = 0
+    );
+
+    // SE-1976: the bodies a handover brings in, until this node first sees them. Their builder carries
+    // the live helmet from the source node, and the owner's client keeps its own copy of the body through
+    // the transfer, so the record (a report or more behind) has nothing to correct and may be stale. A
+    // record that said "open" flipped a closed helmet in vacuum and killed the player. Game thread only;
+    // an entry whose import never produced the body expires.
+    private static readonly Dictionary<long, double> HandedOver = new();
+    private const double HandedOverMilliseconds = 120000;
 
     private static readonly List<string> Alarms = new();
 
@@ -291,6 +306,18 @@ public static class CharacterRegistryService
     private static readonly Dictionary<long, string> m_despawnLogged =
         new Dictionary<long, string>();
 
+    /// <summary>Game thread, at the start of a handover import: the characters it brings in keep their helmet.</summary>
+    internal static void NoteHandedOver(IEnumerable<MyObjectBuilder_EntityBase> entities)
+    {
+        if (entities == null)
+            return;
+        double until = ClusterRuntime.LocalMilliseconds + HandedOverMilliseconds;
+        foreach (
+            MyObjectBuilder_Character character in entities.OfType<MyObjectBuilder_Character>()
+        )
+            HandedOver[character.EntityId] = until;
+    }
+
     private static void ApplyPending()
     {
         Snapshot cluster = m_cluster;
@@ -365,8 +392,17 @@ public static class CharacterRegistryService
             );
             Settling[character.EntityId] = new SettleState(
                 record.GetValueOrDefault(identityId),
-                ClusterRuntime.LocalMilliseconds + SettleWindowMilliseconds
+                ClusterRuntime.LocalMilliseconds + SettleWindowMilliseconds,
+                HandedOver.Remove(character.EntityId)
             );
+        }
+        if (HandedOver.Count != 0)
+        {
+            double expired = ClusterRuntime.LocalMilliseconds;
+            foreach (
+                long id in HandedOver.Where(x => x.Value < expired).Select(x => x.Key).ToArray()
+            )
+                HandedOver.Remove(id);
         }
         foreach (long entityId in Settling.Keys.ToArray())
         {
@@ -386,7 +422,7 @@ public static class CharacterRegistryService
             // values first match, and stopping there leaves the default overwritten. Require the body
             // to read back what it was asked for continuously, then stop - with the window as a cap so
             // a player toggling their own radio early is not fought forever.
-            bool agrees = Settle(body, state.Stored);
+            bool agrees = Settle(body, state.Stored, state.KeepHelmet);
             double now = ClusterRuntime.LocalMilliseconds;
             if (!agrees)
                 Settling[entityId] = state with { StableSince = 0 };
@@ -403,7 +439,7 @@ public static class CharacterRegistryService
     }
 
     /// <summary>Applies the settings of record, returning true once the body already reads them back.</summary>
-    private static bool Settle(MyCharacter character, Settings stored)
+    private static bool Settle(MyCharacter character, Settings stored, bool keepHelmet)
     {
         // A closed helmet is safe everywhere, so the fresh-spawn defaults are unconditional - never derived
         // from the spawn site's atmosphere (§5.5). A returning player's stored record overrides them.
@@ -411,9 +447,13 @@ public static class CharacterRegistryService
         bool light = stored?.Flashlight ?? false;
         bool radio = stored?.Radio ?? false;
         bool settled = true;
-        if ((character.OxygenComponent?.HelmetEnabled ?? helmet) != helmet)
+        if (!keepHelmet && (character.OxygenComponent?.HelmetEnabled ?? helmet) != helmet)
         {
-            character.OxygenComponent.SwitchHelmet();
+            // SE-1976: the game's own toggle. OxygenComponent.SwitchHelmet flips only the server's copy,
+            // and since the client's helmet key also sends a toggle, the two stayed inverted for the life
+            // of the body: closed on the player's screen, open on the server, LowPressure in vacuum. The
+            // ModAPI call raises the [Broadcast] OnSwitchHelmet event, so every client flips with it.
+            ((VRage.Game.ModAPI.Interfaces.IMyControllableEntity)character).SwitchHelmet();
             settled = false;
         }
         if (character.LightEnabled != light)
@@ -433,7 +473,7 @@ public static class CharacterRegistryService
         if (settled)
             Console.WriteLine(
                 $"[ClusterPlugin] character_settled entity={character.EntityId} name='{character.DisplayName}' "
-                    + $"restored={(stored != null).ToString().ToLowerInvariant()} helmet={helmet} light={light} radio={radio}"
+                    + $"restored={(stored != null).ToString().ToLowerInvariant()} helmet={(keepHelmet ? "kept" : helmet.ToString())} light={light} radio={radio}"
             );
         return settled;
     }

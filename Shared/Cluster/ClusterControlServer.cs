@@ -4547,6 +4547,7 @@ internal sealed partial class ClusterControlServer
                 throw new InvalidOperationException("Transfer import is already in progress");
             transfer.Import = context;
             context.Transfer = transfer;
+            CharacterRegistryService.NoteHandedOver(context.Entities);
         }
         m_networkImport.Require(context.ImportId);
         context.Created = context.Transfer?.CreatedMembers ?? new HashSet<long>();
