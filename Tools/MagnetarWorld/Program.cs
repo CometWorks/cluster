@@ -21,13 +21,16 @@ using VRageMath;
 // Entry point: Bootstrap.Main registers the game-assembly resolver, then calls Tool.Run.
 internal static class Tool
 {
+    // The subtype names found in the game content (SPACE_ENGINEERS_ROOT/Content/Data).
+    static readonly HashSet<string> Subtypes = new();
+
     public static int Run(string[] args)
     {
         const double Proximity = 4000;
 
         if (
             !(
-                (args.Length == 2 && args[0] is "verify-mps" or "verify-fidelity")
+                (args.Length == 2 && args[0] is "verify-mps" or "verify-fidelity" or "subtypes")
                 || (
                     args.Length == 3
                     && args[0]
@@ -56,12 +59,13 @@ internal static class Tool
         )
         {
             Console.Error.WriteLine(
-                "usage: MagnetarWorld patch-b5-poses B5 EDIT_XML NEW_B5 | patch-mps-poses MPS EDIT_XML NEW_MPS | b5-to-sector B5 NEW_XML | sector-to-b5 XML NEW_B5 | verify-mps FILE | verify-fidelity XML | mps-to-sector FILE OUTPUT_XML | sector-to-mps XML OUTPUT_MPS PARTITION GENERATION SEQUENCE | global-to-checkpoint FILE OUTPUT_XML | semantic-diff BEFORE_XML AFTER_XML ENTITY_IDS | to-fidelity VANILLA OUTPUT | to-handover VANILLA SPLIT | to-split VANILLA SPLIT | to-proximity VANILLA SPLIT | to-clientless VANILLA SPLIT | to-counters VANILLA SPLIT | materialize SPLIT SLOT OUTPUT | to-vanilla SPLIT VANILLA [DATA_ROOT...] | catalog-scan OUTPUT_JSON NODE=DATA_ROOT [NODE=DATA_ROOT...] [--prefer-newest]"
+                "usage: MagnetarWorld patch-b5-poses B5 EDIT_XML NEW_B5 | patch-mps-poses MPS EDIT_XML NEW_MPS | b5-to-sector B5 NEW_XML | sector-to-b5 XML NEW_B5 | verify-mps FILE | verify-fidelity XML | mps-to-sector FILE OUTPUT_XML | sector-to-mps XML OUTPUT_MPS PARTITION GENERATION SEQUENCE | global-to-checkpoint FILE OUTPUT_XML | semantic-diff BEFORE_XML AFTER_XML ENTITY_IDS | to-fidelity VANILLA OUTPUT | to-handover VANILLA SPLIT | to-split VANILLA SPLIT | to-proximity VANILLA SPLIT | to-clientless VANILLA SPLIT | to-counters VANILLA SPLIT | materialize SPLIT SLOT OUTPUT | to-vanilla SPLIT VANILLA [DATA_ROOT...] | catalog-scan OUTPUT_JSON NODE=DATA_ROOT [NODE=DATA_ROOT...] [--prefer-newest] | subtypes NEW_SBC"
             );
             return 2;
         }
 
-        InitializeSerializers();
+        if (!InitializeSerializers())
+            return 4;
         int exitCode = 0;
         switch (args[0])
         {
@@ -70,6 +74,27 @@ internal static class Tool
             {
                 if (File.Exists(args[3]))
                     throw new IOException("Output already exists");
+                // The save first: parsing the edits registers their subtype strings, which would hide the
+                // save's unresolved hashes.
+                PartitionSaveFile.Parsed save = null;
+                MyObjectBuilder_EntityBase[] entities = null;
+                if (args[0] == "patch-mps-poses")
+                {
+                    save = PartitionSaveFile.ReadFile(args[1]);
+                    entities = PartitionSaveFile.DeserializeEntities(save.Body, save.EntityCount);
+                    // A subtype read back as empty would be written as empty: the block is gone on load.
+                    if (CompatPatches.UnresolvedHashes != 0)
+                    {
+                        Console.Error.WriteLine(
+                            "error: "
+                                + CompatPatches.Unresolved()
+                                + " in "
+                                + args[1]
+                                + " are not in the game content (mod content missing?), nothing written"
+                        );
+                        return 4;
+                    }
+                }
                 if (
                     !MyObjectBuilderSerializerKeen.DeserializeXML(
                         args[2],
@@ -124,11 +149,6 @@ internal static class Tool
                 }
                 else
                 {
-                    var save = PartitionSaveFile.ReadFile(args[1]);
-                    var entities = PartitionSaveFile.DeserializeEntities(
-                        save.Body,
-                        save.EntityCount
-                    );
                     Apply(entities);
                     var file = PartitionSaveFile.Write(
                         save.PartitionId,
@@ -228,7 +248,32 @@ internal static class Tool
             case "catalog-scan":
                 CatalogScan(args[1], args.Skip(2).ToArray());
                 break;
+            case "subtypes":
+                // Every subtype name in the content, as one small definitions file: a content root holding
+                // only it loads in a fraction of the time a root with all the mods takes.
+                if (File.Exists(args[1]))
+                    throw new IOException("Output already exists");
+                File.WriteAllLines(
+                    Path.GetFullPath(args[1]),
+                    Subtypes
+                        .Order(StringComparer.Ordinal)
+                        .Select(x =>
+                            "<SubtypeId>"
+                            + System.Security.SecurityElement.Escape(x)
+                            + "</SubtypeId>"
+                        )
+                        .Prepend("<Definitions>")
+                        .Append("</Definitions>")
+                );
+                Console.WriteLine(Subtypes.Count + " subtypes");
+                break;
         }
+        if (CompatPatches.UnresolvedHashes != 0)
+            Console.Error.WriteLine(
+                "warning: "
+                    + CompatPatches.Unresolved()
+                    + " read from binary saves are not in the game content; those subtypes came out empty"
+            );
         return exitCode;
 
         static void VerifyMps(string path)
@@ -1233,7 +1278,7 @@ internal static class Tool
             return container;
         }
 
-        static void InitializeSerializers()
+        static bool InitializeSerializers()
         {
             CompatPatches.Apply();
             MyLog.Default = new MyLog();
@@ -1295,32 +1340,36 @@ internal static class Tool
                         "SpaceEngineers",
                         "Content"
                     );
+            // Without it every block re-encoded loses its SubtypeName, so refuse to run (SE-1986: a
+            // warning on stderr nobody read cost a live world 36 partitions).
             string contentData = Path.Combine(contentRoot, "Data");
-            if (Directory.Exists(contentData))
-            {
-                foreach (
-                    string file in Directory.EnumerateFiles(
-                        contentData,
-                        "*.sbc",
-                        SearchOption.AllDirectories
-                    )
-                )
-                foreach (
-                    System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(
-                        File.ReadAllText(file),
-                        "<Subtype(?:Id|Name)>([^<]+)</Subtype(?:Id|Name)>"
-                    )
-                )
-                    MyStringHash.GetOrCompute(match.Groups[1].Value.Trim());
-            }
-            else
+            string[] definitions = Directory.Exists(contentData)
+                ? Directory.GetFiles(contentData, "*.sbc", SearchOption.AllDirectories)
+                : [];
+            if (definitions.Length == 0)
             {
                 Console.Error.WriteLine(
-                    "warning: no game content at "
+                    "error: no game content at "
                         + contentData
-                        + "; subtype hashes read from binary saves may not resolve and blocks would lose their SubtypeName"
+                        + "; set SPACE_ENGINEERS_ROOT to a folder with Content/Data (the DS or client root),"
+                        + " otherwise every subtype read from a binary save comes out empty"
                 );
+                return false;
             }
+            foreach (string file in definitions)
+            foreach (
+                System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(
+                    File.ReadAllText(file),
+                    // Both forms: <SubtypeId>Welder2</SubtypeId> and <Id Type="..." Subtype="Welder2" />
+                    "<Subtype(?:Id|Name)>([^<]+)</Subtype(?:Id|Name)>|\\bSubtype(?:Id|Name)?=\"([^\"]+)\""
+                )
+            )
+                Subtypes.Add(
+                    (match.Groups[1].Success ? match.Groups[1] : match.Groups[2]).Value.Trim()
+                );
+            foreach (string subtype in Subtypes)
+                MyStringHash.GetOrCompute(subtype);
+            return true;
         }
 
         static void ToSplit(string source, string output)
