@@ -1243,6 +1243,11 @@ internal static class BlockCoverageHarness
     {
         MyFactionCollection factions = MySession.Static.Factions;
         var before = factions.ToDictionary(entry => entry.Key, entry => entry.Value);
+        var byType =
+            (Dictionary<string, List<MyFaction>>)
+                typeof(MyFactionCollection)
+                    .GetField("m_factionsByType", BindingFlags.NonPublic | BindingFlags.Instance)
+                    .GetValue(factions);
         typeof(ClusterPlugin.MyFactionCollectionPatch)
             .GetMethod("ReplaceLocally", BindingFlags.NonPublic | BindingFlags.Static)
             .Invoke(null, new object[] { factions, factions.GetObjectBuilder() });
@@ -1255,9 +1260,7 @@ internal static class BlockCoverageHarness
                 && before.All(entry =>
                     ReferenceEquals(factions.TryGetFactionById(entry.Key), entry.Value)
                     && ReferenceEquals(factions.TryGetFactionByTag(entry.Value.Tag), entry.Value)
-                    && factions
-                        .GetFactionsByType(entry.Value.FactionTypeString)
-                        .Contains(entry.Value)
+                    && byType.Values.Any(list => list.Contains(entry.Value))
                 ),
         };
     }
