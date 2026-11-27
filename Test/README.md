@@ -253,3 +253,32 @@ A differing node produces DIFF. An incomplete measurement or unexpected stock
 control yields INCONCLUSIVE. The output folder contains the verdict, values and
 logs. See [Workshop definition probes](ModDefinitionProbe/README.md) for the
 mods and fields covered.
+
+### MES encounter spawn
+
+Run `python mes_encounter_differential.py /path/to/corpus /path/to/new-results`
+with the same bench environment and slot as the definition comparisons. The
+runner stages the pinned Modular Encounters Systems Workshop item (1521905890)
+and a test encounter containing a single marked battery grid.
+
+The fixture checks for the marker before issuing the request. Standalone and
+node-1 each call MES's published `CustomSpawnRequest` once at the same empty
+space coordinates. The test records the return value, the grid ID in MES's
+successful-spawn callback, and the grid IDs visible to each process after the
+request. A passing run needs exactly one live grid whose ID matches the callback.
+Automatic encounters, player-triggered spawning and NPC behavior need separate cases.
+
+Add `--handover` to move the spawned grid from node 1 to node 2 and back. The
+standalone control records the spawn coordinates from MES's public NPC API and
+decodes the spawn group, original prefab, stored start coordinates and spawned-by-MES
+flag in the grid's NPC record. The cluster repeats those reads after roughly
+30 simulation seconds on node 1 without moving, then after the same interval
+on each receiving node. Each transfer must have a sole owner, a clean handover
+gate and the original grid ID, terminal custom data and NPC identity. The
+report includes the storage size and SHA-256 for investigating differences.
+MES also writes a timestamp into this record.
+
+Add `--encounter MOD:GROUP` to request a spawn group of another pinned
+Workshop encounter mod instead of the fixture's. The fixture asks MES for it
+as a random encounter through `ApiSpawnRequest`. MES picks its position, so the
+cluster legs compare the origin with node 1's own record from the same run.
