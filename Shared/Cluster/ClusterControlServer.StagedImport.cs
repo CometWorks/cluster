@@ -859,6 +859,7 @@ internal sealed partial class ClusterControlServer
                     : null;
             // T-0401: marks the Add as an import activation (GridAddTrace skips it unless diag.gridAddTraceImports)
             // and times its parts into addSlice; the mark is cleared even when Add throws.
+            MesAdoption.BeforeAdd(entity); // SE-1924
             ImportAddDiag.Run(entity, addSlice, () => MyEntities.Add(entity, insertIntoScene));
             ImportAddDiag.CountEntity(addSlice, entity);
             slot.Entity = null; // owned by the world from here; ImportFail closes it through Created

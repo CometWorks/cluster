@@ -4179,6 +4179,21 @@ internal static partial class ClusterSelfTest
             residuals.Count == 0,
             "MES's LastChangeToData stamp was reported: " + Report(residuals)
         );
+        // SE-1924: a record MES read back and saved again carries "" where the spawn left a string null
+        string WithEmpty(string record) =>
+            Convert.ToBase64String(
+                new byte[] { 0x4A, 0x00 }
+                    .Concat(Convert.FromBase64String(record))
+                    .ToArray()
+            );
+        residuals = ImportRoundTrip.ResidualsOfXml(
+            Storage(npcData, Record("A", 2)),
+            Storage(npcData, WithEmpty(Record("A", 4)))
+        );
+        Assert(
+            residuals.Count == 0,
+            "an empty string in MES's re-saved NPC record was reported: " + Report(residuals)
+        );
         residuals = ImportRoundTrip.ResidualsOfXml(
             Storage(npcData, Record("A", 2)),
             Storage(npcData, Record("B", 2))
