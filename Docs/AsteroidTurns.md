@@ -29,7 +29,7 @@ Rows are never removed. The premade world keeps the old poses, so every node sta
 |---|---|---|
 | `asteroidReset.enabled` | false | the WA proposes turns |
 | `asteroidReset.dryRun` | true | the Gateway answers `dry-run` with the pins it would take and commits nothing |
-| `asteroidReset.intervalSeconds` | 300 | one proposal at most per interval |
+| `asteroidReset.intervalSeconds` | 60 | one proposal at most per interval |
 | `asteroidReset.gridMeters` | 1000 | an online member this close makes a rock wait |
 | `asteroidReset.playerMeters` | 5000 | an online player this close makes a rock wait |
 | `asteroidReset.memberMeters` | 50 | offline members this close turn with the rock |

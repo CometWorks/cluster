@@ -463,7 +463,7 @@ public static class ClusterConfig
         // Every node polls the committed turns every pollSeconds, enabled or not (the WA also publishes each one).
         ["asteroidReset.enabled"] = "false",
         ["asteroidReset.dryRun"] = "true",
-        ["asteroidReset.intervalSeconds"] = "300",
+        ["asteroidReset.intervalSeconds"] = "60",
         ["asteroidReset.gridMeters"] = "1000",
         ["asteroidReset.playerMeters"] = "5000",
         ["asteroidReset.memberMeters"] = "50",
