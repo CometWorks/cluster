@@ -282,3 +282,17 @@ Add `--encounter MOD:GROUP` to request a spawn group of another pinned
 Workshop encounter mod instead of the fixture's. The fixture asks MES for it
 as a random encounter through `ApiSpawnRequest`. MES picks its position, so the
 cluster legs compare the origin with node 1's own record from the same run.
+
+### Energy Shields damage absorption
+
+From `Test/`, run `python shield_damage_differential.py /path/to/corpus /path/to/new-results`
+with the bench environment and a claimed slot. The fixture creates two powered
+armor grids and adds the Workshop shield generator to one of them. After five
+simulation seconds it applies the same 20-point hit to each grid. It records the
+damage reported after the mod's handler and the resulting integrity loss,
+including damage still queued for application. The standalone control must
+show damage to the bare grid and full absorption on the shielded grid. The
+cluster repeats the test on node 1 and then on node 2, 2 km away, and each node
+must own both of its target grids alone. The World Authority owns no partitions,
+so it simulates no targets. Other damage types, upgrades, handover, and client
+effects need separate cases.
