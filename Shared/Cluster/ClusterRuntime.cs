@@ -1685,6 +1685,7 @@ public static class ClusterRuntime
         SpawnDirectorService.Update();
         DropContainerDirectorService.Update();
         ContainerGpsSweep.Update(); // SE-1146: the WA deletes drop markers past vanilla's drop lifetime or over drops.maxActive
+        GpsNameCapSweep.Update(); // SE-2000: the WA keeps at most gps.maxPerName entries per name of gps.cappedNames per player
         EncounterDirectorService.Update();
         VoxelJournalService.Instance?.Update();
         ReplicationClientViewPatch.UpdateWaitingVoxels(); // T-0368: carried asteroids a target adopts once it has generated and caught them up

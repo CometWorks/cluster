@@ -427,6 +427,12 @@ public static class ClusterConfig
         // markers last this long plus up to a minute); 0 = vanilla's (the drop system definition's 15 min). Read by the node at
         // each spawn and by the WA's marker sweep (5 s). A bench sets a few seconds so drops come and go within a lane.
         ["drops.lifetimeSeconds"] = "0",
+        // SE-2000 (GpsNameCapSweep), WORLD AUTHORITY: per player, at most maxPerName GPS entries of each name in cappedNames
+        // (a comma list, case-insensitive; empty = none). Over it, the oldest go first; the WA's first sweep after a boot
+        // also trims the backlog. The MES wreck encounters add a "Wreck Detector Ping" per broadcast and never remove it.
+        // 0 = no cap. Read every second.
+        ["gps.cappedNames"] = "Wreck Detector Ping",
+        ["gps.maxPerName"] = "5",
         // SE-1595 (VoxelResetService), WORLD AUTHORITY: voxel reset of mined voxels. A planet's 64-voxel cube, or a whole asteroid,
         // that nobody has edited for ageSeconds goes back to its generated shape and ore, unless a partition member (grid or
         // character, online or in an offline partition) is within gridMeters of it or an online player within playerMeters.
@@ -785,6 +791,26 @@ public static class ClusterConfig
                         + ", got "
                         + value
                 );
+        // SE-2000: GPS names, a comma list; a name holds no comma and is at most as long as the game allows (32).
+        if (key == "gps.cappedNames")
+        {
+            List<string> names = new List<string>();
+            foreach (string raw in (value ?? string.Empty).Split(','))
+            {
+                string name = raw.Trim();
+                if (name.Length == 0)
+                    continue;
+                if (name.Length > 32)
+                    throw new ArgumentException(
+                        "Config key "
+                            + key
+                            + " expects GPS names of at most 32 characters, got "
+                            + raw
+                    );
+                names.Add(name);
+            }
+            return string.Join(",", names);
+        }
         // SE-1893: the voxel compaction's time of day (empty = no daily run) and time zone.
         if (key == "voxel.compactAt")
             try
