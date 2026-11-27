@@ -7,17 +7,21 @@ import sys
 import tempfile
 import zipfile
 
-from corpus import classify
+from corpus import classify, read_policy
+
+failures = []
 
 
-def check(tool: Path) -> None:
+def expect(ok: bool, what: str) -> None:
+    """Records a failed check; unlike assert, python -O keeps it."""
+    if not ok:
+        failures.append(what)
+        print("FAIL " + what)
+
+
+def check(tool: Path) -> int:
     fixtures = Path(__file__).parent / "TestMods"
-    policy = {
-        row.split("\t")[0]: row.split("\t")
-        for row in subprocess.check_output(
-            ["dotnet", tool, "--policy-tsv"], text=True
-        ).splitlines()
-    }
+    policy = read_policy()
     with tempfile.TemporaryDirectory() as folder:
         archive = Path(folder) / "packed"
         archive.mkdir()
@@ -42,53 +46,111 @@ def check(tool: Path) -> None:
             text=True,
         )
         scans = {row["mod"]: row for row in map(json.loads, run.splitlines())}
-    assert all(not row["compileErrors"] for row in scans.values())
-    assert scans["direct"]["assembly"].split(",") == [
-        "direct_First.cs",
-        "direct_Second.cs",
-    ]
-    scanner = scans["fixture-d-scan"]
-    assert scanner["evidence"] == scans["packed"]["evidence"]
-    assert scanner["evidence"]["EntityCollections"] == 1
-    verdict, breaks, _, _, _ = classify(scanner, policy, True)
-    assert (
-        verdict == "D" and breaks["B1"] == 1 and breaks["B2"] == 1 and not breaks["B6"]
+    expect(
+        all(not row["compileErrors"] for row in scans.values()),
+        'all(not row["compileErrors"] for row in scans.values())',
     )
-    assert breaks["B3"] == 1
+    expect(
+        scans["direct"]["assembly"].split(",")
+        == [
+            "direct_First.cs",
+            "direct_Second.cs",
+        ],
+        'scans["direct"]["assembly"].split(",") == [ "direct_First.cs", "direct_Second.cs", ]',
+    )
+    scanner = scans["fixture-d-scan"]
+    expect(
+        scanner["evidence"] == scans["packed"]["evidence"],
+        'scanner["evidence"] == scans["packed"]["evidence"]',
+    )
+    expect(
+        scanner["evidence"]["EntityCollections"] == 1,
+        'scanner["evidence"]["EntityCollections"] == 1',
+    )
+    verdict, breaks, _, _, _ = classify(scanner, policy, True)
+    expect(
+        (
+            verdict == "D"
+            and breaks["B1"] == 1
+            and breaks["B2"] == 1
+            and not breaks["B6"]
+        ),
+        '( verdict == "D" and breaks["B1"] == 1 and breaks["B2"] == 1 and not breaks["B6"] )',
+    )
+    expect(breaks["B3"] == 1, 'breaks["B3"] == 1')
     members = scanner["evidence"]["Members"]
     evidence = scanner["evidence"]
     owner = "Sandbox.Definitions.MyCubeBlockDefinition."
     vsl = "Sandbox.Game.MyVisualScriptLogicProvider."
-    assert members[owner + "PCU"] == 1 and owner + "PCU" not in evidence["Writes"]
-    assert evidence["Writes"][owner + "MaxIntegrity"] == 1
-    assert (
-        members[owner + "GuiVisible"] == 2
-        and evidence["Writes"][owner + "GuiVisible"] == 1
+    expect(
+        members[owner + "PCU"] == 1 and owner + "PCU" not in evidence["Writes"],
+        'members[owner + "PCU"] == 1 and owner + "PCU" not in evidence["Writes"]',
     )
-    assert evidence["IndirectAccess"][owner + "IntegrityPointsPerSec"] == 1
-    assert evidence["IndirectAccess"][owner + "MountPoints"] == 1
-    assert (
-        members[vsl + "PlayerDisconnected"] == 2
-        and evidence["Writes"][vsl + "PlayerDisconnected"] == 1
+    expect(
+        evidence["Writes"][owner + "MaxIntegrity"] == 1,
+        'evidence["Writes"][owner + "MaxIntegrity"] == 1',
     )
-    assert (
-        members[vsl + "PlayerConnected"] == 1
-        and vsl + "PlayerConnected" not in evidence["Writes"]
+    expect(
+        (
+            members[owner + "GuiVisible"] == 2
+            and evidence["Writes"][owner + "GuiVisible"] == 1
+        ),
+        '( members[owner + "GuiVisible"] == 2 and evidence["Writes"][owner + "GuiVisible"] == 1 )',
     )
-    assert breaks["B7"] == 2 and breaks["B8"] == 1
+    expect(
+        evidence["IndirectAccess"][owner + "IntegrityPointsPerSec"] == 1,
+        'evidence["IndirectAccess"][owner + "IntegrityPointsPerSec"] == 1',
+    )
+    expect(
+        evidence["IndirectAccess"][owner + "MountPoints"] == 1,
+        'evidence["IndirectAccess"][owner + "MountPoints"] == 1',
+    )
+    expect(
+        (
+            members[vsl + "PlayerDisconnected"] == 2
+            and evidence["Writes"][vsl + "PlayerDisconnected"] == 1
+        ),
+        '( members[vsl + "PlayerDisconnected"] == 2 and evidence["Writes"][vsl + "PlayerDisconnected"] == 1 )',
+    )
+    expect(
+        (
+            members[vsl + "PlayerConnected"] == 1
+            and vsl + "PlayerConnected" not in evidence["Writes"]
+        ),
+        '( members[vsl + "PlayerConnected"] == 1 and vsl + "PlayerConnected" not in evidence["Writes"] )',
+    )
+    expect(
+        breaks["B7"] == 2 and breaks["B8"] == 1,
+        'breaks["B7"] == 2 and breaks["B8"] == 1',
+    )
     overload = "VRage.Game.ModAPI.IMyPlayerCollection.TryGetIdentityId"
-    assert (
-        members[overload + "(System.Int64)"]
-        == members[overload + "(System.UInt64)"]
-        == 1
+    expect(
+        (
+            members[overload + "(System.Int64)"]
+            == members[overload + "(System.UInt64)"]
+            == 1
+        ),
+        '( members[overload + "(System.Int64)"] == members[overload + "(System.UInt64)"] == 1 )',
     )
     _, breaks, _, _, _ = classify(scans["fixture-c-setvariable"], policy, True)
-    assert breaks["B6"] == 1 and breaks["B7"] == 1
+    expect(
+        breaks["B6"] == 1 and breaks["B7"] == 1,
+        'breaks["B6"] == 1 and breaks["B7"] == 1',
+    )
     _, breaks, _, _, _ = classify(scans["fixture-b-gamelogic"], policy, True)
-    assert breaks["B4"] == 1
-    assert classify(scans["fixture-a-data"], policy, False)[0] == "A"
-    assert classify(scans["fixture-a-data"], policy, True)[0] == "U"
-    assert classify(dict(scanner, compileErrors=["example"]), policy, True)[0] == "U"
+    expect(breaks["B4"] == 1, 'breaks["B4"] == 1')
+    expect(
+        classify(scans["fixture-a-data"], policy, False)[0] == "A",
+        'classify(scans["fixture-a-data"], policy, False)[0] == "A"',
+    )
+    expect(
+        classify(scans["fixture-a-data"], policy, True)[0] == "U",
+        'classify(scans["fixture-a-data"], policy, True)[0] == "U"',
+    )
+    expect(
+        classify(dict(scanner, compileErrors=["example"]), policy, True)[0] == "U",
+        'classify(dict(scanner, compileErrors=["example"]), policy, True)[0] == "U"',
+    )
     unresolved = dict(
         scanner,
         evidence=dict(
@@ -100,22 +162,30 @@ def check(tool: Path) -> None:
         ),
     )
     provisional = {
-        "example": [
-            "example",
-            "node-scoped",
-            "B1",
-            "no",
-            "-",
-            "1",
-            "UNCERTAIN: unverified",
-        ]
+        "example": {
+            "member": "example",
+            "policy": "node-scoped",
+            "breakage": "B1",
+            "shim": "no",
+            "channel": "-",
+            "on": "any",
+            "mods": "1",
+            "reason": "UNCERTAIN: unverified",
+        }
     }
     verdict, breaks, _, _, unknown = classify(unresolved, provisional, True)
-    assert verdict == "U" and not breaks and unknown == 1
-    print(
-        "PASS archive parity, overload policy, field and delegate mutation, B1/B2/B4/B6/B7/B8, incomplete IL"
+    expect(
+        verdict == "U" and not breaks and unknown == 1,
+        'verdict == "U" and not breaks and unknown == 1',
     )
+    if failures:
+        print(f"FAIL ({len(failures)} checks)")
+        return 1
+    print(
+        "PASS archive parity, root scripts, overload policy, field and delegate mutation, B1/B2/B4/B6/B7/B8, incomplete IL"
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    check(Path(sys.argv[1]))
+    sys.exit(check(Path(sys.argv[1])))

@@ -23,11 +23,6 @@ internal static class Program
                 Environment.GetEnvironmentVariable("HOME") ?? ".",
                 ".steam/steam/steamapps/common/SpaceEngineersDedicatedServer/DedicatedServer64"
             );
-        if (args.Length == 1 && args[0] == "--policy-tsv")
-        {
-            Console.WriteLine(ModApiPolicyTable.Text);
-            return 0;
-        }
         if (args.Length == 1 && args[0] == "--selftest")
             return SelfTest();
         bool json = false;
@@ -342,7 +337,7 @@ internal static class Program
                 )
             );
             using var image = new MemoryStream();
-            var emitted = compilation.Emit(image);
+            var emitted = WorkshopCompiler.WithProtoTags(compilation).Emit(image);
             if (emitted.Success)
                 return image.ToArray();
             errors ??= emitted

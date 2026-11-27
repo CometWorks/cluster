@@ -17,6 +17,7 @@ internal sealed class MemberEvidence : IModScanEvidence
     public int EntityCollections { get; private set; }
     public int MutableLogicFields { get; private set; }
     public int UnresolvedTypes { get; set; }
+    public int UnresolvedFields { get; set; }
 
     public void Field(FieldInfo field, bool sessionComponent, bool logicComponent)
     {

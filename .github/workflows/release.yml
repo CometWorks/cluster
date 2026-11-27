@@ -427,6 +427,16 @@ jobs:
           fi
           tail -n 12 policy-check.log
 
+      # ModCompatScanner ships in the plugins, so a failure here fails the release.
+      - name: Test the mod compatibility scanner and its Workshop evidence
+        env:
+          SPACE_ENGINEERS_BIN64: ${{ github.workspace }}/ds64
+        run: |
+          dotnet build Tools/ModCompatScan -c Release -p:Dedicated64="$SPACE_ENGINEERS_BIN64"
+          scanner=Tools/ModCompatScan/bin/Release/net10.0/ModCompatScan.dll
+          dotnet "$scanner" --selftest
+          python3 Tools/ModCompatScan/check_evidence.py "$scanner"
+
       - name: Test client diagnostics contract and Manager publication bridge
         run: |
           dotnet run --project Test/ClientDiagnostics/ClientDiagnostics.csproj -c Release

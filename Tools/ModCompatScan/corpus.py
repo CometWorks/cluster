@@ -8,6 +8,18 @@ import subprocess
 from collections import Counter, defaultdict
 from pathlib import Path
 
+POLICY = Path(__file__).resolve().parents[2] / "Docs" / "ModApiPolicy.tsv"
+
+# Shim candidate for each (breakage, channel) of a row whose shim is "yes".
+SHIMS = {
+    ("B5", "player-nodes + to-node / broadcast"): "client-message-relay",
+    ("B5", "player-nodes + to-node"): "client-message-relay",
+    ("B7", "request (WA)"): "wa-storage",
+    ("B7", "broadcast"): "replicate-state",
+    ("B8", "player-nodes"): "player-routing",
+    ("B1", "player-nodes"): "player-roster",
+}
+
 
 def read_tsv(path: Path) -> list[dict[str, str]]:
     with path.open(encoding="utf-8", newline="") as source:
@@ -19,6 +31,11 @@ def write_tsv(path: Path, columns: list[str], rows) -> None:
         writer = csv.writer(target, delimiter="\t", lineterminator="\n")
         writer.writerow(columns)
         writer.writerows(rows)
+
+
+def read_policy(path: Path = POLICY) -> dict[str, dict[str, str]]:
+    """Docs/ModApiPolicy.tsv by member key; the columns are described in Docs/ModCompat.md."""
+    return {row["member"]: row for row in read_tsv(path)}
 
 
 def scan(tool: Path, root: Path, ids: list[str]):
@@ -61,7 +78,7 @@ def world_action(key: str) -> bool:
     }
 
 
-def classify(row: dict, policy: dict[str, list[str]], scripted: bool):
+def classify(row: dict, policy: dict[str, dict[str, str]], scripted: bool):
     detail = row["evidence"]
     breaks, shims = Counter(), set()
     needs_adaptation = False
@@ -69,43 +86,28 @@ def classify(row: dict, policy: dict[str, list[str]], scripted: bool):
     unmapped = 0
     for key, sites in detail["Members"].items():
         rule = policy.get(key)
-        if rule is None or rule[2] == "?" or "UNCERTAIN:" in rule[6]:
+        if rule is None or rule["breakage"] == "?" or "UNCERTAIN:" in rule["reason"]:
             unmapped += sites
             continue
-        if rule[2] == "-":
+        if rule["breakage"] == "-":
             continue
-        # Definitions and settings have a B7 policy for mutations. A read of the
-        # stock scalar cannot diverge. Keep object or by-ref accesses unresolved
-        # when the scanner cannot follow what the caller does with the result.
-        if (
-            "changing shared definition data at runtime affects this process" in rule[6]
-            or "mod writes to that object are not broadcast" in rule[6]
-            or key in detail["VslDelegateFields"]
-        ):
+        # A "write" row (definition and settings fields) breaks only through a
+        # store or setter; a read of the stock value cannot diverge. Keep object
+        # or by-ref accesses unresolved when the scanner cannot follow what the
+        # caller does with the result. VSL callback fields count assignments.
+        if rule["on"] == "write" or key in detail["VslDelegateFields"]:
             sites = detail["Writes"].get(key, 0)
             if not sites or key not in detail["VslDelegateFields"]:
                 unmapped += detail["IndirectAccess"].get(key, 0)
             if not sites:
                 continue
-        breaks.update({b: sites for b in rule[2].split(",")})
-        if rule[3] == "yes":
-            shims.add(
-                {
-                    (
-                        "B5",
-                        "player-nodes + to-node / broadcast",
-                    ): "client-message-relay",
-                    ("B5", "player-nodes + to-node"): "client-message-relay",
-                    ("B7", "request (WA)"): "wa-storage",
-                    ("B7", "broadcast"): "replicate-state",
-                    ("B8", "player-nodes"): "player-routing",
-                    ("B1", "player-nodes"): "player-roster",
-                }[(rule[2], rule[4])]
-            )
+        breaks.update({b: sites for b in rule["breakage"].split(",")})
+        if rule["shim"] == "yes":
+            shims.add(SHIMS[(rule["breakage"], rule["channel"])])
         else:
             needs_adaptation = True
         # Single-authority placement can cover session state and its own storage.
-        wa_only &= rule[1] == "per-node" and rule[2] in ("B6", "B7")
+        wa_only &= rule["policy"] == "per-node" and rule["breakage"] in ("B6", "B7")
     for b, n in (
         ("B2", detail["EntityCollections"]),
         ("B4", detail["MutableLogicFields"]),
@@ -128,6 +130,7 @@ def classify(row: dict, policy: dict[str, list[str]], scripted: bool):
     incomplete = (
         len(row["compileErrors"])
         or row["unresolvedCalls"]
+        or detail["UnresolvedFields"]
         or detail["UnresolvedTypes"]
         or (scripted and row["class"] == "A")
         or (not scripted and row["class"] != "A")
@@ -162,6 +165,9 @@ def classify(row: dict, policy: dict[str, list[str]], scripted: bool):
     return verdict, breaks, shims, gates, unmapped
 
 
+# Worst first: a dependency's verdict says more about a dependent mod than its own.
+SEVERITY = ["D", "U", "S", "C", "B-state", "B", "A"]
+
 RECIPES = {
     "A": "content-load",
     "B": "script-load",
@@ -173,7 +179,7 @@ RECIPES = {
 }
 
 
-def report(catalog: Path, inventory: Path, tool: Path, scans, out: Path) -> None:
+def report(catalog: Path, inventory: Path, policy_path: Path, scans, out: Path) -> None:
     inputs = read_tsv(catalog)
     mods = {r["id"]: r for r in inputs if r["item_type"] == "mod"}
     if len(mods) != sum(r["item_type"] == "mod" for r in inputs):
@@ -184,8 +190,7 @@ def report(catalog: Path, inventory: Path, tool: Path, scans, out: Path) -> None
         raise ValueError("Duplicate Workshop ID in script inventory")
     if scripts.keys() != mods.keys():
         raise ValueError("Script inventory and mod catalog differ")
-    raw_policy = subprocess.check_output(["dotnet", tool, "--policy-tsv"], text=True)
-    policy = {r[0]: r for r in csv.reader(raw_policy.splitlines(), delimiter="\t")}
+    policy = read_policy(policy_path)
     frequency = defaultdict(Counter)
     summary = defaultdict(Counter)
     rows = {}
@@ -214,7 +219,7 @@ def report(catalog: Path, inventory: Path, tool: Path, scans, out: Path) -> None
             scan_row["class"] if not scan_row["compileErrors"] else "",
             scan_row["ilSha256"],
             len(scan_row["compileErrors"]),
-            scan_row["unresolvedCalls"],
+            scan_row["unresolvedCalls"] + scan_row["evidence"]["UnresolvedFields"],
             scan_row["evidence"]["UnresolvedTypes"],
             unmapped,
             gates,
@@ -224,6 +229,11 @@ def report(catalog: Path, inventory: Path, tool: Path, scans, out: Path) -> None
         ]
     if rows.keys() != mods.keys():
         raise ValueError(f"Missing scans for {sorted(mods.keys() - rows.keys())}")
+    # A client mod of a framework, such as an MES spawner pack, can scan clean while the framework it
+    # drives needs adaptation. Report the worst verdict among the catalog items it requires.
+    for item, row in rows.items():
+        required = [rows[r][5] for r in mods[item]["requires"].split(",") if r in rows]
+        row.append(min(required, key=SEVERITY.index) if required else "")
     out.mkdir(parents=True, exist_ok=True)
     write_tsv(
         out / "verdicts.tsv",
@@ -244,6 +254,7 @@ def report(catalog: Path, inventory: Path, tool: Path, scans, out: Path) -> None
             *(f"B{i}" for i in range(1, 9)),
             "candidate_shims",
             "test_recipe",
+            "dependency_verdict",
         ],
         (rows[key] for key in mods),
     )
@@ -253,7 +264,7 @@ def report(catalog: Path, inventory: Path, tool: Path, scans, out: Path) -> None
         (
             [
                 key,
-                policy[key][1] if key in policy else "unmapped",
+                policy[key]["policy"] if key in policy else "unmapped",
                 counts["mods"],
                 counts["sites"],
                 counts["lifetime_subscriptions"],
@@ -271,8 +282,22 @@ def report(catalog: Path, inventory: Path, tool: Path, scans, out: Path) -> None
             for key, counts in sorted(summary.items())
         ),
     )
+    verdicts = Counter(row[5] for row in rows.values())
+    masked = Counter(
+        row[5]
+        for row in rows.values()
+        if row[-1] and SEVERITY.index(row[-1]) < SEVERITY.index(row[5])
+    )
     print(
         f"{len(rows)} loadable entries; catalog SHA256 {hashlib.sha256(catalog.read_bytes()).hexdigest()}"
+    )
+    print("verdicts " + ", ".join(f"{v} {n}" for v, n in sorted(verdicts.items())))
+    print(
+        "with a worse dependency "
+        + ", ".join(f"{v} {n}" for v, n in sorted(masked.items()))
+    )
+    print(
+        f"IL member keys without a policy row: {sum(k not in policy for k in frequency)}"
     )
 
 
@@ -285,13 +310,14 @@ def main() -> None:
         help="folder containing catalogue.tsv, scripts.tsv and 244850/",
     )
     parser.add_argument("output", type=Path)
+    parser.add_argument("--policy", type=Path, default=POLICY, help="ModApiPolicy.tsv")
     args = parser.parse_args()
     catalog = args.corpus / "catalogue.tsv"
     ids = [r["id"] for r in read_tsv(catalog) if r["item_type"] == "mod"]
     report(
         catalog,
         args.corpus / "scripts.tsv",
-        args.tool,
+        args.policy,
         scan(args.tool, args.corpus / "244850", ids),
         args.output,
     )

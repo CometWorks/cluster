@@ -11,6 +11,9 @@ namespace ClusterPlugin;
 internal interface IModScanEvidence
 {
     int UnresolvedTypes { get; set; }
+
+    /// <summary>Field tokens that did not resolve; read only with evidence, so they stay out of UnresolvedCalls.</summary>
+    int UnresolvedFields { get; set; }
     void Field(FieldInfo field, bool sessionComponent, bool logicComponent);
     void Site(MemberInfo target, MethodBase caller, bool sessionComponent, OpCode code);
 }
@@ -59,6 +62,8 @@ public sealed class ModScanResult
     /// <summary>An author declaration found as a literal string field named <see cref="ModCompatScanner.AuthorConstantName"/>.</summary>
     public string AuthorConstant { get; set; }
     public string AuthorConstantSite { get; set; }
+
+    /// <summary>Call tokens (methods and constructors) that did not resolve against the loaded game.</summary>
     public int UnresolvedCalls { get; set; }
     public ModCompatClass Class { get; set; }
     public ModPlacement Placement { get; set; }
@@ -311,7 +316,7 @@ public static class ModCompatScanner
                     }
                     catch (Exception)
                     {
-                        result.UnresolvedCalls++;
+                        evidence.UnresolvedFields++;
                         break;
                     }
                     evidence.Site(field, method, sessionComponent, code);
