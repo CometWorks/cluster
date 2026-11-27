@@ -13,6 +13,8 @@ namespace Fixture
 
         public override void UpdateAfterSimulation()
         {
+            MyAPIGateway.Players.TryGetIdentityId(1L);
+            MyAPIGateway.Players.TryGetIdentityId(1UL);
             m_found.Clear();
             MyAPIGateway.Entities.GetEntities(m_found, entity => entity is IMyCubeGrid);
         }
