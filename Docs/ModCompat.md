@@ -14,7 +14,8 @@ applies overrides, enforces the placement and logs the result.
 | C | global logic in session components only, keeping world state (SetVariable, world storage writes, a session object builder) | wa-only |
 | D | needs the cluster: world scans or physics queries (grid reach), or client messaging (multiplayer sends, VSL notifications); correct only when adapted to the mod channel | everywhere, or adapted when the mod uses the channel |
 
-The scan reads the IL of every compiled mod assembly (one per `Data/Scripts` subfolder) and counts call
+The scan reads the IL of every compiled mod assembly (one per `Data/Scripts` subfolder, and one per file directly
+in that folder) and counts call
 sites per API group: `session-components`, `game-logic-components`, `session-state-persisted`,
 `entity-world-scans`, `physics-queries`, `client-messaging`, `set-variable`, `file-storage-reads`,
 `file-storage-writes`, `damage-system`, `vsl-notifications`, `mod-channel-handshake`. The rules, first match
@@ -27,34 +28,66 @@ They are reported and counted but do not make a mod C.
 
 ## Member policy table
 
-The table in `Shared/Cluster/ModApiPolicyTable.cs` covers public members in the ModAPI namespaces and
-`MyVisualScriptLogicProvider`, plus concrete game members that Workshop mods call. It keys methods by
-parameter signature. The two `IMyPlayerCollection.TryGetIdentityId` overloads illustrate why. Passing a Steam
-ID returns the World Authority’s identity binding. Passing an identity ID asks for a live player object and
-can return null when the player is on another node. A VSL GPS operation for all players similarly reaches
-only the node’s own roster.
+`Docs/ModApiPolicy.tsv` records how each mod API member behaves on a cluster. It covers the public members of
+the ModAPI namespaces (`Sandbox.ModAPI`, `VRage.ModAPI`, `VRage.Game.ModAPI`, `SpaceEngineers.Game.ModAPI` and
+their sub-namespaces) and of `MyVisualScriptLogicProvider`, plus every concrete game member the Workshop corpus
+references. Methods are keyed by signature, because overloads can differ. Passing a Steam ID to
+`IMyPlayerCollection.TryGetIdentityId` returns the World Authority's identity binding; passing an identity ID
+looks for a live player and returns null when the player is on another node. Nothing reads the table at
+runtime. It feeds the corpus verdicts and the mod channel design, so it is data, not plugin code.
 
-Each row records a policy, breakage class, possible shim, mod-channel operation, Workshop mod count, and
-reason. For a concrete member that implements a ModAPI interface, the reason names the interface contract.
-A declaration reference locates the API in DS 1.211.018. Rows marked `UNCERTAIN` need a cluster check.
-A `?` for breakage and shim means both are unknown. A downstream verdict must preserve that uncertainty. Mutable definition and settings fields have a
-per-node write policy. Reading the stock value (for example, a block definition’s PCU) is consistent across
-nodes that load the same content. A classifier should apply B7 to writes or mutations of referenced state.
+| Column | Meaning |
+|---|---|
+| `member` | XML documentation ID without its kind prefix; parameterless methods end with `()`. `Type.*` covers an enum or delegate type; `System.*` and `VRageMath.*` are the blanket BCL and math rules. |
+| `policy` | `local`: same result on a cluster (pure, or only its own entity or grid group). `replicated`: correct because the WA replicates it (factions, GPS, identities, banking, weather). `node-scoped`: works, but sees or reaches only this node. `per-node`: runs or stores once per node instead of once per world. `affinity`: tied to the node the player or entity is on now (client-to-server messages, control, spawns, jumps). `client`: does nothing on a server. |
+| `breakage` | B1 to B8 of section 4.3 of the clustering plan's `Plan/Modding.md`, or `-`. `?` in both breakage and shim marks an unverified concrete member, held at node-scoped. |
+| `shim` | `yes`: a cluster-side patch could fix it without a mod change; `no`: it needs a mod change; `-`: nothing to fix. |
+| `channel` | The mod channel operation (`Docs/ModChannel.md`) an adapted mod uses instead, or `-`. |
+| `on` | `any`: the policy applies to every call or access. `write`: only writes and mutations through the member break; a read is the same on every node (definition and session settings fields). |
+| `mods` | Scripted Workshop items in the corpus that reference the member (`Test/ModApiPolicy/CorpusUsage.tsv`). |
+| `reason` | `File.cs:line` in the decompiled dedicated server code (the implementation, or the declaration when none is found), then why. `cluster:` points into this repository. `UNCERTAIN:` marks a row the code did not settle; it keeps node-scoped or a stricter policy, and a verdict must keep that uncertainty. |
 
-`Test/ModApiPolicy/CorpusMembers.txt` pins the distinct resolved member keys from the subscription-ranked
-Workshop corpus collected on 2026-11-22. It includes the ranked items and dependencies. There were 482 scripted
-mods and 534 script groups. In 78 groups the dedicated-server compiler reported errors. The scan includes
-members Roslyn could bind in those groups. Dynamic and unresolved calls have no entry in the counts.
+A concrete member that implements a ModAPI interface member, or has its name and signature, inherits that
+row's policy and names it in the reason. Mutable definition and settings fields are per-node with `on` set to
+`write`: reading a stock value, such as a block definition's PCU, is the same on every node that loads the same
+content.
 
-The release build checks the table against the dedicated server and the pinned keys. To check it locally,
-run the project from the repository root. To also check every resolved call in a Workshop content directory,
-pass the path to the game's numbered mod directories as the last argument. The scanner reads unpacked
-scripts and legacy archives. `--scan` writes the current member keys and distinct mod counts as TSV to stdout.
+### Checking
+
+`Test/ModApiPolicy` fails when a ModAPI member or a corpus member has no row, a row names a member the game no
+longer has, a row is malformed, or a `mods` count differs from `CorpusUsage.tsv`. It also compiles a probe
+through the same path as the corpus scan, so the overload keys and the calls the compiler adds (implicit base
+constructors, conversion operators, `foreach` enumerators) keep resolving to their rows.
 
 ```bash
 dotnet run --project Test/ModApiPolicy -c Release
-dotnet run --project Test/ModApiPolicy -c Release -p:Dedicated64="$DEDICATED64" -- "$DEDICATED64" --check-corpus /mnt/hdd/se1-mod-corpus/244850
+dotnet run --project Test/ModApiPolicy -c Release -- "$DEDICATED64" --check-corpus WORKSHOP_CONTENT
 ```
+
+`--check-corpus` also scans a Workshop content folder (the numbered mod folders, loose scripts and legacy
+archives) and fails on any referenced member without a row. The release workflow runs the plain check after
+packaging. A failure there is a warning and does not stop the release: nothing ships the table, and a game
+update can add members before anyone regenerates it.
+
+### Regenerating
+
+After a game update, or to refresh the Workshop counts, regenerate the table instead of editing it. The rules
+are in `Test/ModApiPolicy/generate.py`; change them there. The facts come from the game assemblies and the
+dedicated server code decompiled with ILSpy (the `se-dev-server-code` skill prepares it, one folder per
+assembly).
+
+```bash
+# optional: new Workshop counts; the scan groups scripts the way the game compiles them
+dotnet run --project Test/ModApiPolicy -c Release -- "$DEDICATED64" --scan WORKSHOP_CONTENT > Test/ModApiPolicy/CorpusUsage.tsv
+dotnet run --project Test/ModApiPolicy -c Release -- "$DEDICATED64" --facts DECOMPILED > facts.tsv
+python3 Test/ModApiPolicy/generate.py facts.tsv
+dotnet run --project Test/ModApiPolicy -c Release
+```
+
+The generator sorts its input and output, so the same game build, decompiled code and counts give the same
+file. A member the rules do not cover stops it with an error, which is where a game update needs a decision.
+The source scan reads the corpus with the same grouping as `Tools/ModCompatScan`: one group per first path
+component below `Data/Scripts`, so a file directly in that folder is a group of its own.
 
 ## Overrides
 

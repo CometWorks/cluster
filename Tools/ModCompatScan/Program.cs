@@ -255,7 +255,8 @@ internal static class Program
         return failed == 0 ? 0 : 1;
     }
 
-    /// <summary>One assembly per Data/Scripts subfolder, as MyScriptManager.LoadScripts groups them.</summary>
+    /// <summary>One assembly per group, as MyScriptManager.LoadScripts makes them: a group is the first path
+    /// component below Data/Scripts, so a file directly in that folder is a group of its own.</summary>
     private static List<Assembly> Compile(
         string id,
         string mod,
@@ -266,15 +267,9 @@ internal static class Program
     {
         errors = new List<string>();
         var assemblies = new List<Assembly>();
-        string scripts = Path.Combine(mod, "Data", "Scripts");
-        if (!Directory.Exists(scripts))
-            return assemblies;
-        var groups = Directory
-            .GetFiles(scripts, "*.cs", SearchOption.AllDirectories)
-            .Where(file => Path.GetDirectoryName(file) != scripts)
-            .GroupBy(file =>
-                Path.GetRelativePath(scripts, file).Split(Path.DirectorySeparatorChar)[0]
-            )
+        var groups = WorkshopScripts
+            .Scripts(mod)
+            .GroupBy(file => file.Path.Split('/')[0])
             .OrderBy(group => group.Key, StringComparer.Ordinal);
         foreach (var group in groups)
         {
@@ -301,7 +296,7 @@ internal static class Program
     /// newer language version, as some plugin loaders allow, is retried with the latest one.</summary>
     private static byte[] Emit(
         string name,
-        List<string> files,
+        List<(string Path, string Text)> files,
         List<MetadataReference> references,
         CSharpParseOptions parseOptions,
         out List<string> errors
@@ -318,9 +313,9 @@ internal static class Program
             var trees = files
                 .Select(file =>
                     CSharpSyntaxTree.ParseText(
-                        ScriptReferences.UsingHeader + File.ReadAllText(file),
+                        ScriptReferences.UsingHeader + file.Text,
                         options,
-                        file
+                        file.Path
                     )
                 )
                 .ToList();

@@ -1,7 +1,7 @@
-using System.IO.Compression;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 using ModCompatScan;
 
 internal static class CorpusUsage
@@ -13,11 +13,12 @@ internal static class CorpusUsage
             partial = 0,
             scripted = 0;
         var options = ScriptReferences.ParseOptions(empty);
-        foreach (string mod in Directory.EnumerateDirectories(root).Order())
+        foreach (string mod in Directory.EnumerateDirectories(root).Order(StringComparer.Ordinal))
         {
             var used = new HashSet<string>(StringComparer.Ordinal);
             bool hasScripts = false;
-            foreach (var group in Scripts(mod).GroupBy(s => s.Path.Split('/')[0]))
+            // The groups ModCompatScan compiles: the first path component below Data/Scripts.
+            foreach (var group in WorkshopScripts.Scripts(mod).GroupBy(s => s.Path.Split('/')[0]))
             {
                 hasScripts = true;
                 groups++;
@@ -49,24 +50,80 @@ internal static class CorpusUsage
         return counts;
     }
 
+    /// <summary>
+    /// Every game member the compiled IL of this file references: names in the source, and the calls the compiler
+    /// adds (implicit base constructors, user-defined conversions and operators, collection initializer Add,
+    /// foreach GetEnumerator/MoveNext/Current/Dispose). Constants and enum values also count, although the IL
+    /// inlines them.
+    /// </summary>
     internal static IEnumerable<string> Members(SemanticModel model)
     {
-        var nodes = model
-            .SyntaxTree.GetRoot()
-            .DescendantNodes()
-            .Where(n =>
-                n
-                    is SimpleNameSyntax
-                        or ElementAccessExpressionSyntax
-                        or ObjectCreationExpressionSyntax
-                        or BinaryExpressionSyntax
-                        or PrefixUnaryExpressionSyntax
-                        or PostfixUnaryExpressionSyntax
-                        or AssignmentExpressionSyntax
-            );
-        foreach (var node in nodes)
+        var root = model.SyntaxTree.GetRoot();
+        var symbols = new List<ISymbol>();
+        foreach (
+            var node in root.DescendantNodes()
+                .Where(n =>
+                    n
+                        is SimpleNameSyntax
+                            or ElementAccessExpressionSyntax
+                            or ObjectCreationExpressionSyntax
+                            or BinaryExpressionSyntax
+                            or PrefixUnaryExpressionSyntax
+                            or PostfixUnaryExpressionSyntax
+                            or AssignmentExpressionSyntax
+                )
+        )
+            symbols.Add(model.GetSymbolInfo(node).Symbol);
+        foreach (var node in root.DescendantNodes())
         {
-            var symbol = model.GetSymbolInfo(node).Symbol;
+            switch (node)
+            {
+                case CommonForEachStatementSyntax loop:
+                    var info = model.GetForEachStatementInfo(loop);
+                    symbols.Add(info.GetEnumeratorMethod);
+                    symbols.Add(info.MoveNextMethod);
+                    symbols.Add(info.CurrentProperty);
+                    symbols.Add(info.DisposeMethod);
+                    break;
+                case TypeDeclarationSyntax type
+                    when model.GetDeclaredSymbol(type) is INamedTypeSymbol declared:
+                    // A class without a constructor gets one that calls the base constructor.
+                    if (declared.InstanceConstructors.Any(c => c.IsImplicitlyDeclared))
+                        symbols.Add(BaseConstructor(declared));
+                    break;
+                // So does a constructor without ": base(...)" or ": this(...)".
+                case ConstructorDeclarationSyntax { Initializer: null } ctor
+                    when !ctor.Modifiers.Any(SyntaxKind.StaticKeyword)
+                        && model.GetDeclaredSymbol(ctor) is IMethodSymbol declared:
+                    symbols.Add(BaseConstructor(declared.ContainingType));
+                    break;
+            }
+            // Operation roots: member bodies, initializers and constructor initializers.
+            if (
+                node
+                    is BaseMethodDeclarationSyntax
+                        or AccessorDeclarationSyntax
+                        or ArrowExpressionClauseSyntax
+                        {
+                            Parent: PropertyDeclarationSyntax or IndexerDeclarationSyntax
+                        }
+                        or EqualsValueClauseSyntax
+                        {
+                            Parent: PropertyDeclarationSyntax
+                                or VariableDeclaratorSyntax
+                                {
+                                    Parent.Parent: BaseFieldDeclarationSyntax
+                                }
+                        }
+                && model.GetOperation(node) is IOperation operation
+            )
+            {
+                foreach (var op in operation.DescendantsAndSelf())
+                    symbols.Add(Target(op));
+            }
+        }
+        foreach (var symbol in symbols)
+        {
             if (
                 symbol is not (IPropertySymbol or IFieldSymbol or IEventSymbol or IMethodSymbol)
                 || symbol.ContainingType == null
@@ -81,7 +138,10 @@ internal static class CorpusUsage
                     : key;
             }
             else if (
-                !symbol.ContainingAssembly.Equals(model.Compilation.Assembly)
+                !SymbolEqualityComparer.Default.Equals(
+                    symbol.ContainingAssembly,
+                    model.Compilation.Assembly
+                )
                 && symbol.ContainingNamespace.ToDisplayString() is string ns
                 && (ns == "System" || ns.StartsWith("System.", StringComparison.Ordinal))
             )
@@ -89,43 +149,24 @@ internal static class CorpusUsage
         }
     }
 
-    private static IEnumerable<(string Path, string Text)> Scripts(string mod)
-    {
-        foreach (
-            var data in Directory
-                .EnumerateDirectories(mod)
-                .Where(d => Path.GetFileName(d).Equals("Data", StringComparison.OrdinalIgnoreCase))
-        )
-        foreach (
-            var scripts in Directory
-                .EnumerateDirectories(data)
-                .Where(d =>
-                    Path.GetFileName(d).Equals("Scripts", StringComparison.OrdinalIgnoreCase)
-                )
-        )
-        foreach (
-            var file in Directory
-                .EnumerateFiles(scripts, "*", SearchOption.AllDirectories)
-                .Where(f => Path.GetExtension(f).Equals(".cs", StringComparison.OrdinalIgnoreCase))
-        )
-            yield return (
-                Path.GetRelativePath(scripts, file).Replace(Path.DirectorySeparatorChar, '/'),
-                File.ReadAllText(file)
-            );
-        foreach (var file in Directory.EnumerateFiles(mod, "*_legacy.bin"))
+    private static ISymbol Target(IOperation op) =>
+        op switch
         {
-            using var zip = ZipFile.OpenRead(file);
-            foreach (var entry in zip.Entries)
-            {
-                var path = entry.FullName.Replace('\\', '/');
-                if (
-                    !path.StartsWith("Data/Scripts/", StringComparison.OrdinalIgnoreCase)
-                    || !path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-                )
-                    continue;
-                using var reader = new StreamReader(entry.Open());
-                yield return (path[13..], reader.ReadToEnd());
-            }
-        }
-    }
+            IInvocationOperation call => call.TargetMethod,
+            IObjectCreationOperation create => create.Constructor,
+            IMemberReferenceOperation reference => reference.Member,
+            IConversionOperation conversion => conversion.OperatorMethod,
+            IBinaryOperation binary => binary.OperatorMethod,
+            IUnaryOperation unary => unary.OperatorMethod,
+            ICompoundAssignmentOperation compound => compound.OperatorMethod,
+            IIncrementOrDecrementOperation step => step.OperatorMethod,
+            _ => null,
+        };
+
+    private static IMethodSymbol BaseConstructor(INamedTypeSymbol type) =>
+        type.TypeKind == TypeKind.Class
+            ? type.BaseType?.InstanceConstructors.FirstOrDefault(c =>
+                c.Parameters.All(p => p.IsOptional || p.IsParams)
+            )
+            : null;
 }
