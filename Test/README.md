@@ -335,3 +335,31 @@ cluster, node 1 runs the same check, then the governed grid moves to node 2,
 which must own it alone, push it to 60 m/s again and see it governed back to
 20 m/s. Boosting, grid groups, character movement and client controls need
 separate cases.
+
+### Entity references across handover and deletion
+
+From `Test/`, run `python grid_reference_lifetime.py /path/to/new-results` with the
+usual bench environment, test plugin and a claimed slot. Use `--case grid`,
+`--case battery` or `--case safe-zone` for one scenario.
+
+| Entity | Lifecycle under test |
+| --- | --- |
+| Grid | Two 27-block armor grids move together from node 1 to node 2. Weak witnesses also track one slim armor block and the physics wrapper of each original grid. |
+| Battery fat block | Two matching grids each carry one battery. The test looks up and caches each battery's own entity ID before moving the parent grids. |
+| Blockless admin safe zone | Two admin-created zones replicate to both ordinary nodes. The test deletes them and checks both local copies disappear. A block-owned zone restored with a moving generator has a different lifecycle. |
+
+For each pair the source holds one object strongly and keeps only a weak witness
+to the other. A static handler counts source-side ModAPI `OnClose` events by ID.
+The report records entity types, process IDs, current lookups, retired objects
+and closure counts. It flushes the normal game callback queue and forces
+collections before and after releasing the strong reference. The reachability
+result stays inconclusive when a weak-only or released object survives. The
+sampled block and physics observations describe individual objects. Neither
+process RSS nor retained heap bytes are measured.
+
+### Mod channel latency
+
+`python mod_channel_latency.py /path/to/new-results` times entity reads and an
+event relay through the v1 mod channel. It is a benchmark, so run it alone in
+its game's benchmark lock. [Measuring entity reads and events](../Docs/ModChannel.md#measuring-entity-reads-and-events)
+describes what it measures.
