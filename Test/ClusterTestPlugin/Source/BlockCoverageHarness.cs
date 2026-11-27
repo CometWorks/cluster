@@ -2,13 +2,16 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
+using ClusterPlugin;
 using Sandbox.Common.ObjectBuilders;
 using Sandbox.Definitions;
 using Sandbox.Game;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Blocks;
 using Sandbox.Game.Entities.Cube;
+using Sandbox.Game.Multiplayer;
 using Sandbox.Game.Screens.Helpers;
 using Sandbox.Game.World;
 using Sandbox.ModAPI.Ingame;
@@ -139,6 +142,35 @@ internal static class BlockCoverageHarness
                     TestRoutes.OnGameThread(() => AdminSafeZone(op, id, position, radius, allowed))
                 );
             }
+        );
+        // SE-1997: the settings of a block's zone through what re-creates it.
+        //   POST /block-test-safezone-set?block=       - the settings a player would set, non-default in every list
+        //   GET  /block-test-safezone-state?block=     - the live settings, the faction match, the kept settings entry
+        //   POST /block-test-safezone-recreate?block=  - vanilla's remove and create, beside a zone it collides with
+        //   POST /block-test-safezone-tamper?block=    - a settings change no client asked for
+        //   POST /faction-test-replace                 - what a World Authority faction snapshot does to this node
+        foreach (
+            var (verb, route, action) in new (string, string, Func<long, object>)[]
+            {
+                ("POST", "/block-test-safezone-set", SafeZoneSet),
+                ("GET", "/block-test-safezone-state", SafeZoneState),
+                ("POST", "/block-test-safezone-recreate", SafeZoneRecreate),
+                ("POST", "/block-test-safezone-tamper", SafeZoneTamper),
+            }
+        )
+            TestRoutes.Add(
+                verb,
+                route,
+                context =>
+                {
+                    long block = TestRoutes.Long(context, "block");
+                    TestRoutes.Json(context, 200, TestRoutes.OnGameThread(() => action(block)));
+                }
+            );
+        TestRoutes.Add(
+            "POST",
+            "/faction-test-replace",
+            context => TestRoutes.Json(context, 200, TestRoutes.OnGameThread(ReplaceFactions))
         );
         TestRoutes.Add(
             "POST",
@@ -1060,7 +1092,8 @@ internal static class BlockCoverageHarness
             var settings = (MyObjectBuilder_SafeZone)zone.GetObjectBuilder();
             settings.Radius = 25;
             settings.AllowedActions ^= MySafeZoneAction.Welding;
-            MySessionComponentSafeZones.UpdateSafeZone(settings, sync: true);
+            // The server handler of a client's request, as the settings a player sets arrive (SE-1997).
+            MySessionComponentSafeZones.UpdateSafeZone_Implementation(settings);
         }
         return new
         {
@@ -1068,6 +1101,151 @@ internal static class BlockCoverageHarness
             zone = component.SafeZoneEntityId,
             enabled = component.IsSafeZoneEnabled(),
         };
+    }
+
+    /// <summary>A faction id no node knows: vanilla drops it from a zone's list, the cluster keeps it (SE-1997).</summary>
+    private const long UnknownFaction = 199700000001;
+
+    /// <summary>The entry of BlockSafeZones.SettingsKey, by value: the plugin also builds against a package without it.</summary>
+    private static readonly Guid SafeZoneSettingsKey = new Guid(
+        "5c1a1997-5afe-4a2e-9d0e-b10c25afe200"
+    );
+
+    private static (MySafeZoneBlock, MySafeZoneComponent, MySafeZone) SafeZoneOf(long blockId)
+    {
+        if (
+            !MyEntities.TryGetEntityById(blockId, out MyEntity entity)
+            || entity is not MySafeZoneBlock block
+        )
+            throw new KeyNotFoundException("No safe zone block " + blockId + " on this node");
+        MySafeZoneComponent component = block.Components.Get<MySafeZoneComponent>();
+        MyEntities.TryGetEntityById(component.SafeZoneEntityId, out MySafeZone zone);
+        return (block, component, zone);
+    }
+
+    private static object SafeZoneSet(long blockId)
+    {
+        var (block, _, zone) = SafeZoneOf(blockId);
+        if (zone == null)
+            throw new InvalidOperationException("The block has no safe zone");
+        MyFaction faction = MySession
+            .Static.Factions.Select(entry => entry.Value)
+            .OrderBy(entry => entry.FactionId)
+            .FirstOrDefault();
+        if (faction == null)
+            throw new InvalidOperationException("The world has no faction");
+        var settings = (MyObjectBuilder_SafeZone)zone.GetObjectBuilder();
+        settings.AccessTypePlayers = MySafeZoneAccess.Whitelist;
+        settings.AccessTypeFactions = MySafeZoneAccess.Whitelist;
+        settings.AccessTypeGrids = MySafeZoneAccess.Blacklist;
+        settings.AccessTypeFloatingObjects = MySafeZoneAccess.Blacklist;
+        settings.AllowedActions = MySafeZoneAction.Drilling | MySafeZoneAction.Building;
+        settings.Players = new[] { block.OwnerId };
+        settings.Factions = new[] { faction.FactionId, UnknownFaction };
+        settings.Entities = new[] { block.CubeGrid.EntityId };
+        settings.ModelColor = new Vector3(0.2f, 0.4f, 0.6f);
+        MySessionComponentSafeZones.UpdateSafeZone_Implementation(settings);
+        return new
+        {
+            block = blockId,
+            faction = faction.FactionId,
+            unknown = UnknownFaction,
+        };
+    }
+
+    private static object SafeZoneState(long blockId)
+    {
+        var (block, _, zone) = SafeZoneOf(blockId);
+        string kept = BlockBuilderEntry.Read(
+            block.GetObjectBuilderCubeBlock(),
+            SafeZoneSettingsKey
+        );
+        if (zone == null)
+            return new
+            {
+                block = blockId,
+                zone = 0L,
+                kept,
+            };
+        var settings = (MyObjectBuilder_SafeZone)zone.GetObjectBuilder();
+        return new
+        {
+            block = blockId,
+            zone = zone.EntityId,
+            enabled = zone.Enabled,
+            kept,
+            factions = settings.Factions.OrderBy(id => id).ToArray(),
+            // How MySafeZone.IsSafe and IsSubGridSafe match a faction: the object the collection holds, by reference.
+            factionsMatch = zone.Factions.Count > 0
+                && zone.Factions.All(faction =>
+                    ReferenceEquals(
+                        MySession.Static.Factions.TryGetFactionById(faction.FactionId),
+                        faction
+                    )
+                ),
+            settings = string.Join(
+                ";",
+                settings.AccessTypePlayers,
+                settings.AccessTypeFactions,
+                settings.AccessTypeGrids,
+                settings.AccessTypeFloatingObjects,
+                settings.AllowedActions,
+                settings.Shape,
+                settings.Radius,
+                new Color((Vector3)settings.ModelColor).PackedValue,
+                settings.Texture,
+                settings.IsVisible,
+                string.Join(",", settings.Players.OrderBy(id => id)),
+                string.Join(",", settings.Entities.OrderBy(id => id))
+            ),
+        };
+    }
+
+    private static object SafeZoneRecreate(long blockId)
+    {
+        var (block, component, zone) = SafeZoneOf(blockId);
+        if (zone == null)
+            throw new InvalidOperationException("The block has no safe zone");
+        var blocker = (MyObjectBuilder_SafeZone)zone.GetObjectBuilder();
+        component.SafeZoneRemove_Server();
+        // A zone of this node only, in the way while vanilla puts the kept settings on the new zone: its
+        // UpdateSafeZone skips them when the zone would collide. Not through CrateSafeZone, which would make it
+        // an admin zone of the World Authority.
+        blocker.EntityId = 0;
+        blocker.Name = null;
+        blocker.SafeZoneBlockId = 0;
+        blocker.Enabled = false;
+        blocker.PositionAndOrientation = new MyPositionAndOrientation(block.WorldMatrix);
+        MyEntity other = MyEntities.CreateFromObjectBuilderAndAdd(blocker, fadeIn: false);
+        try
+        {
+            component.SafeZoneCreate_Server(skipActivationTimer: true);
+        }
+        finally
+        {
+            other.Close();
+        }
+        return SafeZoneState(blockId);
+    }
+
+    private static object SafeZoneTamper(long blockId)
+    {
+        var (_, _, zone) = SafeZoneOf(blockId);
+        if (zone == null)
+            throw new InvalidOperationException("The block has no safe zone");
+        var settings = (MyObjectBuilder_SafeZone)zone.GetObjectBuilder();
+        settings.AllowedActions ^= MySafeZoneAction.Shooting;
+        MySessionComponentSafeZones.UpdateSafeZone(settings, sync: true);
+        return SafeZoneState(blockId);
+    }
+
+    private static object ReplaceFactions()
+    {
+        MyFactionCollection factions = MySession.Static.Factions;
+        typeof(ClusterPlugin.MyFactionCollectionPatch)
+            .GetMethod("ReplaceLocally", BindingFlags.NonPublic | BindingFlags.Static)
+            .Invoke(null, new object[] { factions, factions.GetObjectBuilder() });
+        return new { factions = factions.Count() };
     }
 
     /// <summary>SE1-0252: what an admin's client asks the server for in the admin menu's safe zone page, run
