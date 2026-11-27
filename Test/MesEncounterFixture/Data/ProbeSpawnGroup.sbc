@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<Definitions>
+  <SpawnGroups>
+    <SpawnGroup>
+      <Id><TypeId>SpawnGroupDefinition</TypeId><SubtypeId>ClusterProbe-Encounter</SubtypeId></Id>
+      <Description>
+        [Modular Encounters SpawnGroup]
+        [RivalAiSpaceSpawn:true]
+        [FactionOwner:SPRT]
+      </Description>
+      <IsPirate>true</IsPirate>
+      <Frequency>1.0</Frequency>
+      <Prefabs>
+        <Prefab SubtypeId="ClusterProbe-Ship">
+          <Position><X>0</X><Y>0</Y><Z>0</Z></Position>
+          <Speed>0</Speed>
+        </Prefab>
+      </Prefabs>
+    </SpawnGroup>
+  </SpawnGroups>
+</Definitions>
