@@ -56,8 +56,8 @@ public static class ClusterModChannelService
     public const int MaxPayloadLength = 16 * 1024;
 
     /// <summary>Token bucket per channel: this many sends in <see cref="QuotaWindowMilliseconds"/>.</summary>
-    public const int QuotaMessages = 30;
-    public const int QuotaWindowMilliseconds = 10_000;
+    public static int QuotaMessages => ClusterConfig.GetInt("modChannel.quotaMessages");
+    public static int QuotaWindowMilliseconds => ClusterConfig.GetInt("modChannel.quotaWindowMs");
 
     /// <summary>How long <c>to-owner</c> and <c>owner-of</c> keep looking while the entity is in a handover.</summary>
     public const int OwnerSearchMilliseconds = 10_000;
@@ -480,15 +480,13 @@ public static class ClusterModChannelService
                 ? existing
                 : QuotaBuckets[channel] = new Queue<double>();
             double now = ClusterRuntime.LocalMilliseconds;
-            while (bucket.Count > 0 && bucket.Peek() <= now - QuotaWindowMilliseconds)
+            int messages = QuotaMessages,
+                window = QuotaWindowMilliseconds;
+            while (bucket.Count > 0 && bucket.Peek() <= now - window)
                 bucket.Dequeue();
-            if (bucket.Count >= QuotaMessages)
+            if (bucket.Count >= messages)
                 throw new InvalidOperationException(
-                    "channel quota exceeded: "
-                        + QuotaMessages
-                        + " messages per "
-                        + QuotaWindowMilliseconds / 1000
-                        + " s"
+                    "channel quota exceeded: " + messages + " messages per " + window + " ms"
                 );
             bucket.Enqueue(now);
         }

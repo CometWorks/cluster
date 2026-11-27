@@ -423,6 +423,11 @@ public static class ClusterConfig
         ["drops.maxActive"] = "5",
         // Spawn the shared competitive kind even if the target is alone on its physical node.
         ["drops.strongOnly"] = "false",
+        // ClusterModChannelService: each node lets a mod channel send at most quotaMessages messages in any quotaWindowMs
+        // (broadcast, request, respond, to-node, to-owner, owner-of); the next one faults. Read per send. A bench sets a short
+        // window so a lane need not wait out the production one.
+        ["modChannel.quotaMessages"] = "30",
+        ["modChannel.quotaWindowMs"] = "10000",
         // SE-1146: seconds a NEW container drop stays in the world before vanilla removes it (and the World Authority's drop GPS
         // markers last this long plus up to a minute); 0 = vanilla's (the drop system definition's 15 min). Read by the node at
         // each spawn and by the WA's marker sweep (5 s). A bench sets a few seconds so drops come and go within a lane.

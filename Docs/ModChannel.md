@@ -19,7 +19,8 @@ MyAPIGateway.Utilities.SendModMessage(SendId, new object[] { "role", "my-channel
 Every message is an `object[]` whose first two items are the kind and the channel name (1 to 64 characters,
 your mod's own). Every mod's handler sees every message on `ReceiveId`, so filter on your channel first. Payloads
 are strings of at most 16 384 characters; serialize your own data. A channel takes at most 30 sends in any
-10 s on one node (broadcast, request, respond, to-node, to-owner, owner-of); the 31st faults.
+10 s on one node (broadcast, request, respond, to-node, to-owner, owner-of); the 31st faults. The config keys
+`modChannel.quotaMessages` and `modChannel.quotaWindowMs` set the two limits.
 
 `Shared/Cluster/ClusterModChannelService.cs` implements it. The reference adaptation of a class D mod is
 `Tools/ModCompatScan/TestMods/fixture-d-reference` (the world scanner `fixture-d-scan` adapted); the
@@ -137,6 +138,16 @@ and exactly once per operation; a node that restarts begins a new order. Every d
 `[ClusterPlugin] mod_channel reset channel=... reason=...`. Node to node, deliveries go to
 `POST /cluster/mod-deliver` and owner lookups to `GET /cluster/mod-locate?entity=` (both channel N9,
 Docs/Gateway/NodeAPI.md).
+
+## Measuring entity reads and events
+
+`Test/mod_channel_latency.py RESULTS` starts a World Authority and two regular servers using the configured test host. Run it in an exclusive benchmark slot. Its mod creates eight named battery blocks on one server. It times local property reads, reads from a saved snapshot, and request/reply reads from the other server. The requester exercises `to-owner`, a previously resolved owner with `to-node`, and eight values carried in one reply. It checks every returned name and the unique grid owner.
+
+For the event measurement the mod subscribes to `IMyFunctionalBlock.EnabledChanged` on the owning server, toggles the first battery and sends the observed value to the second server through `to-node`. The run checks that all 16 local callbacks occur inside the setter and the remote node receives every alternating value in sequence. This relay is fixture code. A mod that wants other nodes to observe an entity event has to arrange delivery and renew its native subscription when the entity moves.
+
+The report retains individual timestamps plus median, nearest-rank p95 and maximum. One-way intervals use the shared host clock and include game-thread scheduling, transport and serialization. Getter times amortize 16,384 reads per sample. A cached snapshot trades freshness for a local read.
+
+A remote read of one value and of eight values both measured a 16.64 ms median round trip, and about 16.6 ms equals one game tick at 60 updates per second: a mod gets the reply on a later game update, so remote reads cost whole ticks. The bench sets a 200 ms quota window so its workloads do not have to wait out the production 10 s window. All three servers run on one host, so the figures say nothing about latency between hosts.
 
 ## Not built
 
