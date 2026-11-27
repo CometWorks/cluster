@@ -49,6 +49,7 @@ building, Magnetar registration, CLI controls, release packaging and debugging.
 - [Offline compensation and call-ups](Docs/OfflinePartitions.md) — implementation draft and acceptance gaps
 - [Managed deployment preparation and executor leases](Docs/Gateway/ManagedDeployment.md)
 - [Release packages and bench archives](Docs/Gateway/DeploymentArchive.md)
+- [Safe zones of safe zone blocks](Docs/SafeZones.md)
 - [Versioning](Docs/Versioning.md)
 - [Scenario suite](Test/README.md)
 

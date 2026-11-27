@@ -31,7 +31,8 @@ comparison, then drives each block on the node that holds it now.
   a retrieval at the terminal are answered only after the save is registered; a SIGKILL of the WA right after the
   answer and a replacement neither lose nor duplicate the ship;
 * ``P3-BLK-05`` - safe zone block: the MySafeZone entity travels with its block, once, with its settings,
-  and the block keeps its zone chips;
+  and the block keeps its zone chips; SE-1997: the settings a player set also hold after a faction snapshot
+  and a re-creation beside a colliding zone, and a change no player made is logged as drift;
 * ``P3-BLK-06`` - contract block: a contract posted at the block is still offered after the same three legs.
 * ``P3-BLK-07`` - admin safe zone (no block) from the world file: every regular node holds it once, with its
   settings, after the boot and the same three legs of the partition inside it.

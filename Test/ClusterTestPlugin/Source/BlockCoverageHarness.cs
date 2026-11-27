@@ -1155,7 +1155,7 @@ internal static class BlockCoverageHarness
 
     private static object SafeZoneState(long blockId)
     {
-        var (block, component, zone) = SafeZoneOf(blockId);
+        var (block, _, zone) = SafeZoneOf(blockId);
         string kept = BlockBuilderEntry.Read(
             block.GetObjectBuilderCubeBlock(),
             SafeZoneSettingsKey

@@ -23,8 +23,8 @@ namespace ClusterPlugin;
 /// yet takes the live zone's settings.
 /// </para>
 /// <para>
-/// The live zone is compared with it when the block is saved, after the zone was restored or created again, and
-/// after a faction snapshot. A difference is logged once per node as <c>safe zone settings drift</c> and the entry
+/// The live zone is compared with it when the block is saved, after the zone was restored or created again,
+/// after a faction snapshot and before a client's request is applied. A difference is logged once per node as <c>safe zone settings drift</c> and the entry
 /// is left alone. The enabled state is not part of it: a zone that ran out of zone chips or power is not drift.
 /// </para>
 /// </summary>
