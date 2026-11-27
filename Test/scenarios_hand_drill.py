@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 
 from cluster import ClusterError
-from scenarios import _all_partitions, _force_handover
+from scenarios import _all_partitions, force_handover
 from scenarios_blocks import ORIGIN, _identity, partitions_of, spawn
 from scenarios_core import _lines
 from scenarios_wa_ops import _poll, _require
@@ -87,7 +87,7 @@ def p2_hnd_handdrill(bench) -> None:
         for source, target in (("node-1", "node-2"), ("node-2", "node-1")):
             error = None
             try:
-                _force_handover(bench, source, target, partition)
+                force_handover(bench, source, target, partition)
             except ClusterError as e:
                 error = str(e)[:300]
             _poll(lambda: _all_partitions(bench).get(partition) == target or None, 60, 1)

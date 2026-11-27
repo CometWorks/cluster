@@ -289,7 +289,7 @@ def _hub_snapshot() -> Path | None:
 def start_standalone(bench, world_dir: Path, name: str = "stock", hub_plugins: list[str] | None = None,
                      timeout: float = SERVER_TIMEOUT, ready: tuple[str, ...] = ("Game ready",),
                      local_plugins: list[Path] | None = None, extra_env: dict[str, str] | None = None,
-                     port_slot: int | None = None) -> Standalone:
+                     port_slot: int | None = None, staged_mods: Path | None = None) -> Standalone:
     """Load ``world_dir`` on a stock dedicated server: the Magnetar launcher, the host's
     DedicatedServer64, and a profile with the hub plugins only - no cluster plugin, no Direct
     Transport, no test plugin. Runs in the next free port slot after the cluster's nodes, with the
@@ -318,6 +318,9 @@ def start_standalone(bench, world_dir: Path, name: str = "stock", hub_plugins: l
     data = config.root / f"{name}-data"
     shutil.rmtree(data, ignore_errors=True)
     data.mkdir(parents=True)
+
+    if staged_mods is not None:
+        shutil.copytree(staged_mods, data / "Mods")
 
     # Sources: the cluster's hub snapshot when there is one; no local or dev-folder plugin at all.
     sources_dir = magnetar / "Sources"
@@ -386,7 +389,7 @@ def start_standalone(bench, world_dir: Path, name: str = "stock", hub_plugins: l
     env["DOTNET_DbgMiniDumpName"] = str(config.dumps / f"{name}.%p.dmp")
     process = bench.cluster._spawn(name, [
         str(config.launcher), "-config", str(magnetar), "-ds64", str(config.ds64), "-profile", name,
-        *update_args, "-multiInstance", "-noconsent", "-noconsole", "-ignorelastsession",
+        *update_args, *(["-noimplicitmod"] if staged_mods is not None else []), "-multiInstance", "-noconsent", "-noconsole", "-ignorelastsession",
         "-port", game_port, "-path", str(data)], env, cwd=magnetar)
     server = Standalone(bench, name, process, config.root / f"{name}.log", spec.control, key, data)
     for marker in ready:

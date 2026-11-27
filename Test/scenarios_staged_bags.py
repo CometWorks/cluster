@@ -25,7 +25,7 @@ from urllib.parse import quote
 
 from bench import HOST
 from cluster import ClusterError
-from scenarios import _all_partitions, _force_handover
+from scenarios import _all_partitions, force_handover
 from scenarios_core import _lines, _partitions
 from scenarios_wa_ops import _poll, _require
 
@@ -85,7 +85,7 @@ def _staged(bench, bags: int, cubes: int, ships: int) -> None:
         for source, target in (("node-1", "node-2"), ("node-2", "node-1")):
             error = None
             try:
-                _force_handover(bench, source, target, partition)
+                force_handover(bench, source, target, partition)
             except ClusterError as e:
                 error = str(e)[:300]
             _poll(lambda: _all_partitions(bench).get(partition) == target or None, 60, 1)

@@ -1045,8 +1045,8 @@ def p3_hnd_contracts(bench) -> None:
     it, and a handover to the other node. Last, deleting the grid, which is not a cluster close, drops the
     offer as vanilla does. Clientless: a dynamic grid with a contract block, the contract posted through the mod
     API (an acquisition, like P3-BLK-06's)."""
-    from scenarios import _all_partitions, _force_handover
-    from scenarios_ext import _gate_residuals, _wait_arrival, _wait_partition
+    from scenarios import _all_partitions, force_handover
+    from scenarios_ext import gate_residuals, _wait_arrival, _wait_partition
     bench.start_cluster()
     bench.quiesce()
     bench.cluster.post("/automatic/pause")
@@ -1084,12 +1084,12 @@ def p3_hnd_contracts(bench) -> None:
 
         def hand_over(name: str, source: str, target: str) -> bool:
             try:
-                _force_handover(bench, source, target, partition)
+                force_handover(bench, source, target, partition)
                 _wait_arrival(bench, partition, target)
             except ClusterError as error:
                 bench.check(f"{name}: the block's partition moved {source} -> {target}", False, str(error)[:300])
                 return False
-            residuals = _gate_residuals(bench, target, partition)
+            residuals = gate_residuals(bench, target, partition)
             bench.check(f"{name}: the gate verified the transfer with zero residuals", residuals == 0, f"residuals={residuals}")
             return True
 

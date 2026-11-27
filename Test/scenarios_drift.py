@@ -26,10 +26,10 @@ from __future__ import annotations
 import json
 
 from cluster import ClusterError
-from scenarios import _all_partitions, _force_handover
+from scenarios import _all_partitions, force_handover
 from scenarios_blocks import _identity, partitions_of, spawn
 from scenarios_core import _lines
-from scenarios_ext import _gate_residuals, node_self_test
+from scenarios_ext import gate_residuals, node_self_test
 from scenarios_wa_ops import _poll, _require
 
 FIXTURES = [
@@ -99,7 +99,7 @@ def p3_hnd_drift(bench) -> None:
              fits > 0 and float(bottles.get("oxygen") or 0) == fits + 3, json.dumps(bottles))
     for partition in partitions:
         try:
-            _force_handover(bench, "node-1", "node-2", partition)
+            force_handover(bench, "node-1", "node-2", partition)
         except ClusterError as error:  # an aborted handover answers with an error
             print(f"  [INFO] handover of {partition}: {str(error)[:300]}")
     arrived = _poll(lambda: all(_all_partitions(bench).get(partition) == "node-2" for partition in partitions) or None, 60, 2)
@@ -109,8 +109,8 @@ def p3_hnd_drift(bench) -> None:
         print(f"  [INFO] {line[-200:]}")
     bench.check("the handover gate reported no residual on node-2", not residuals, " | ".join(residuals)[:800])
     for partition in partitions:
-        bench.check(f"the gate verified partition {partition} with 0 residuals", _gate_residuals(bench, "node-2", partition) == 0,
-                    str(_gate_residuals(bench, "node-2", partition)))
+        bench.check(f"the gate verified partition {partition} with 0 residuals", gate_residuals(bench, "node-2", partition) == 0,
+                    str(gate_residuals(bench, "node-2", partition)))
     bench.check("every fixture partition committed to node-2", bool(arrived),
                 json.dumps({partition: _all_partitions(bench).get(partition) for partition in partitions}))
 

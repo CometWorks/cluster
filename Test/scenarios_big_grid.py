@@ -16,7 +16,7 @@ import time
 
 from cluster import ClusterError, wait_until
 from scenarios_core import _handover_url, _lines, _partitions
-from scenarios_ext import _gate_residuals, node_self_test
+from scenarios_ext import gate_residuals, node_self_test
 
 BLOCKS = 60_000
 FAR = 1_400_000.0  # far from the world's own grids, so the partition holds only what the scenario spawns
@@ -80,7 +80,7 @@ def _big_grid_handover(bench, count: int) -> None:
     except ClusterError:
         moved = None
     bench.check("every big grid is on node-2, once", moved is not None, str([_where(bench, g) for g in grids]))
-    residuals = _gate_residuals(bench, "node-2", partition)
+    residuals = gate_residuals(bench, "node-2", partition)
     bench.check("node-2's round-trip gate verified the import with no residuals", residuals == 0, repr(residuals))
 
     imports = _lines(bench, "node-2", rf"handover_import .*partition={partition} ")

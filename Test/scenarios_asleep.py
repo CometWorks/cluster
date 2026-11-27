@@ -20,7 +20,7 @@ import re
 import threading
 import time
 
-from scenarios import _force_handover
+from scenarios import force_handover
 from scenarios_core import _lines, _partitions
 from scenarios_ext import node_self_test
 from scenarios_offline import _put_config
@@ -81,7 +81,7 @@ def _asleep(bench, red: bool) -> None:
     sampler = _Sampler(bench, "node-2", grids)
     sampler.start()
     time.sleep(1)
-    _force_handover(bench, "node-1", "node-2", partition)
+    force_handover(bench, "node-1", "node-2", partition)
     time.sleep(10)
     sampler.stop.set()
     sampler.join()

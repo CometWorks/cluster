@@ -1026,7 +1026,7 @@ def p2_chr_helmet(bench) -> None:
     bench.cluster.post("/automatic/pause")
     try:
         bench._wait_at_rest(entity)
-        _force_handover(bench, source, target, partition, client=CLIENT_ID)
+        force_handover(bench, source, target, partition, client=CLIENT_ID)
         handed_over = time.time()
         api.key("J")
         pressed = time.time() - handed_over
@@ -1064,7 +1064,7 @@ def p2_chr_helmet(bench) -> None:
 # P3-CLU-01 - three-node coverage: every ordered node pair completes a handover
 # ---------------------------------------------------------------------------
 
-def _force_handover(bench, source: str, target: str, partition: int, client: int | None = None) -> None:
+def force_handover(bench, source: str, target: str, partition: int, client: int | None = None) -> None:
     """Drive the Gateway's forced-handover route the way the lanes do.
 
     The route resolves nodes by their registered CONTROL endpoints, never by node id - passing
@@ -1126,7 +1126,7 @@ def p3_clu_01(bench) -> None:
             if len(places) != 1:
                 return
             source, partition = places[0]
-            _force_handover(bench, source, target, partition)
+            force_handover(bench, source, target, partition)
             wait_until(lambda: target if _all_partitions(bench).get(partition) == target else None,
                        180, f"partition {partition} to arrive on {target}")
             pairs.append((source, target))
@@ -1158,7 +1158,7 @@ def p3_clu_01(bench) -> None:
                 return
             source, partition = places[0]
             bench._wait_at_rest(entity)
-            _force_handover(bench, source, target, partition, client=CLIENT_ID)
+            force_handover(bench, source, target, partition, client=CLIENT_ID)
             wait_until(lambda: target if _node_of_entity(bench, entity) == target else None,
                        300, f"the character to arrive on {target}")
             player_visits.append((source, target))
@@ -1254,7 +1254,7 @@ def p3_clu_02(bench) -> None:
                 bench._wait_at_rest(entity)
                 before_xml = bench.dir / f"trip{trip}-{leg}-before.xml"
                 before_xml.write_text(str(bench.cluster.node(source, "/export", timeout=300)))
-                _force_handover(bench, source, target, partition, client=CLIENT_ID)
+                force_handover(bench, source, target, partition, client=CLIENT_ID)
 
                 def arrived():
                     try:

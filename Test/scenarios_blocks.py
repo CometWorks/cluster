@@ -60,9 +60,9 @@ from urllib.parse import urlencode
 
 from bench import HOST
 from cluster import ClusterError
-from scenarios import _all_partitions, _force_handover
+from scenarios import _all_partitions, force_handover
 from scenarios_core import _lines, _nodes
-from scenarios_ext import _gate_residuals, _other_regular, _wait_arrival
+from scenarios_ext import gate_residuals, _other_regular, _wait_arrival
 from scenarios_offline import _put_config
 from scenarios_planet import _graceful_shutdown, _sector_objects, _wait_exited, _world_tool, start_standalone
 from scenarios_restart import SERVER_TIMEOUT
@@ -612,7 +612,7 @@ def _move_all(bench, fixtures: Fixtures, leg: str, keys: list[str], target: str)
             moved.append(key)
             continue
         try:
-            _force_handover(bench, origin, target, partition)
+            force_handover(bench, origin, target, partition)
             _wait_arrival(bench, partition, target)
         except ClusterError as error:
             fixtures.note(key, leg, [f"handover {origin}->{target} refused: {str(error)[:120]} {_residuals(bench, target, partition)}"])
@@ -621,7 +621,7 @@ def _move_all(bench, fixtures: Fixtures, leg: str, keys: list[str], target: str)
             except ClusterError:
                 pass
             continue
-        residuals = _gate_residuals(bench, target, partition)
+        residuals = gate_residuals(bench, target, partition)
         if residuals:
             fixtures.note(key, leg, [f"gate residuals={residuals}"])
         moved.append(key)

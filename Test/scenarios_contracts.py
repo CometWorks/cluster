@@ -39,7 +39,7 @@ import random
 import time
 
 from cluster import wait_until
-from scenarios import _all_partitions, _force_handover
+from scenarios import _all_partitions, force_handover
 from scenarios_blocks import _identity
 from scenarios_core import CLIENT_ID, HANDOVER_TIMEOUT, _handover_url, _nodes, _partitions
 from scenarios_ext import _wait_arrival, _wait_partition
@@ -130,7 +130,7 @@ def _hand_over(bench, partition: int, target: str, client: int | None = None) ->
     if source == target:
         return
     if client is None:
-        _force_handover(bench, source, target, partition)
+        force_handover(bench, source, target, partition)
     else:
         bench.cluster.post(_handover_url(bench, partition, source=source, target=target, client=client), timeout=300)
     _wait_arrival(bench, partition, target)

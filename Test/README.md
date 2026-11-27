@@ -229,3 +229,27 @@ checks the actual World Authority lease overlay, manual and default baselines,
 forgetting a player, replica and replacement-authority expiry, and origin fencing
 without a game process.
 The Cluster CLI `--self-test` checks the new policy verb against contract parity.
+
+### Workshop mod tests
+
+The Workshop mod tests share `mod_staging.py`. It stages pinned Workshop items
+from the corpus, lists them in a copy of the package's example world and gives
+fixture mods their commands as files in their staged folder. Its `run_staged`
+runs a measurement on a standalone server first and, when that passes, on the
+three cluster processes. Standalone servers load the `ModStaging` test plugin,
+which applies the cluster's own local-folder patch so the staged files load
+instead of a Workshop download, and nothing else.
+
+### Workshop definition comparisons
+
+With the standard bench environment, a claimed slot and its RAM guard, run
+`python mod_definition_differential.py /path/to/corpus /path/to/new-results --case sound`
+from `Test/`. Use `--case speed` for Midspace's Ship Speed Unlimited, the default.
+
+Each case records the Workshop script hashes and live game values from two
+standalone controls and a three-process cluster. The unmodded and modded stock
+controls must show the expected change before cluster agreement earns a PASS.
+A differing node produces DIFF. An incomplete measurement or unexpected stock
+control yields INCONCLUSIVE. The output folder contains the verdict, values and
+logs. See [Workshop definition probes](ModDefinitionProbe/README.md) for the
+mods and fields covered.
