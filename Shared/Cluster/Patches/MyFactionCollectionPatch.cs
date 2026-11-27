@@ -1139,18 +1139,50 @@ public static class MyFactionCollectionPatch
         {
             MyBankingSystemPatch.ApplyLocally(() =>
             {
+                var known = new Dictionary<long, MyFaction>(factions.m_factions);
                 factions.Clear();
                 ((Dictionary<string, List<MyFaction>>)FactionsByType.GetValue(factions)).Clear();
                 factions.Init(snapshot);
+                KeepObjects(factions, known);
             });
         }
         finally
         {
             m_applying = false;
         }
-        // SE-1997: every MyFaction is a new object now, and safe zones match their faction lists by reference.
+        // SE-1997: a zone may wait for a faction this snapshot brought.
         SafeZoneFactions.Rebind();
         BlockSafeZones.CheckAllSettings("factions");
+    }
+
+    private static readonly FieldInfo[] FactionFields = typeof(MyFaction).GetFields(
+        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+    );
+
+    /// <summary>
+    /// SE-2006: a faction this node already had keeps its <see cref="MyFaction"/> object. Vanilla's Init makes a
+    /// new object for every faction, and game code and mods that hold one (safe zone lists, bot anchors,
+    /// <c>IMyFaction</c> in a mod) match it by reference or keep reading it. The known object takes over the
+    /// state of the new one and goes back into the collection's maps in its place.
+    /// </summary>
+    private static void KeepObjects(MyFactionCollection factions, Dictionary<long, MyFaction> known)
+    {
+        var byType = (Dictionary<string, List<MyFaction>>)FactionsByType.GetValue(factions);
+        foreach (MyFaction fresh in factions.m_factions.Values.ToList())
+        {
+            if (!known.TryGetValue(fresh.FactionId, out MyFaction kept))
+                continue;
+            foreach (FieldInfo field in FactionFields)
+                field.SetValue(kept, field.GetValue(fresh));
+            factions.m_factions[kept.FactionId] = kept;
+            foreach (string tag in factions.m_factionsByTag.Keys.ToList())
+                if (ReferenceEquals(factions.m_factionsByTag[tag], fresh))
+                    factions.m_factionsByTag[tag] = kept;
+            foreach (List<MyFaction> list in byType.Values)
+                for (int i = 0; i < list.Count; i++)
+                    if (ReferenceEquals(list[i], fresh))
+                        list[i] = kept;
+        }
     }
 
     private static long Founder(MyObjectBuilder_Faction faction) =>

@@ -14,9 +14,10 @@ namespace ClusterPlugin;
 /// SE-1997: a safe zone's faction list survives the faction collection being rebuilt and factions arriving late.
 /// <para>
 /// Vanilla keeps the list as <see cref="MyFaction"/> objects and matches them by reference
-/// (<c>MySafeZone.IsSafe</c>, <c>IsSubGridSafe</c>). The World Authority's faction snapshot rebuilds every faction
-/// object of a node (<c>MyFactionCollectionPatch.ReplaceLocally</c>), so after it no zone's faction rule matched
-/// anyone until the zone was created again. <see cref="Rebind"/> points every list at the current objects.
+/// (<c>MySafeZone.IsSafe</c>, <c>IsSubGridSafe</c>). The World Authority's faction snapshot used to rebuild every
+/// faction object of a node, so after it no zone's faction rule matched anyone until the zone was created again.
+/// Since SE-2006 a known faction keeps its object (<c>MyFactionCollectionPatch.KeepObjects</c>);
+/// <see cref="Rebind"/> still points every list at the current objects, as a guard and for late factions.
 /// </para>
 /// <para>
 /// Vanilla also drops a faction id it cannot resolve when the zone is initialized, and the next save then loses
