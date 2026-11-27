@@ -62,6 +62,7 @@ internal static class TestRoutes
                 )
         );
         TrashRoutes.Register();
+        AsteroidTurnRoutes.Register(); // SE-1998 asteroid and entity poses
         ShipAntennaTestRoutes.Register();
         MovedRoutes.Register();
         PbTestHarness.Register();
