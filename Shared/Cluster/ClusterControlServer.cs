@@ -4585,10 +4585,22 @@ internal sealed partial class ClusterControlServer
                     && ImportKeepExisting(context, entity, existingEntity, liveControlled)
                 )
                     continue;
-                MyEntity createdEntity = MyEntities.CreateFromObjectBuilderAndAdd(
-                    entity,
-                    fadeIn: false
-                );
+                // CreateFromObjectBuilderAndAdd split in two, for MesAdoption between them (SE-1924). The split
+                // leaves out only its MyFakes.ENABLE_LARGE_OFFSET branch, a debug fake MyFakes keeps false.
+                MyEntity createdEntity = MyEntities.CreateFromObjectBuilder(entity, fadeIn: false);
+                if (createdEntity?.EntityId == 0)
+                    createdEntity = null;
+                if (createdEntity != null)
+                {
+                    MesAdoption.BeforeAdd(createdEntity);
+                    MyEntities.Add(
+                        createdEntity,
+                        (
+                            entity.PersistentFlags
+                            & VRage.ObjectBuilders.MyPersistentEntityFlags2.InScene
+                        ) != 0
+                    );
+                }
                 created.Add(entity.EntityId);
                 MySessionComponentTrashPatch.ProtectArrival(entity.EntityId); // T-0254: no trash sweep mid-import
                 if (transfer != null)
