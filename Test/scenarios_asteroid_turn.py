@@ -261,7 +261,7 @@ def p2_ast_turn(bench) -> None:
 def _try_pose(bench, node: str):
     try:
         poses = {r: _aligned(_rock_matrix(bench, node, r)) for r in ROCKS}
-    except ClusterError:
+    except (ClusterError, OSError):  # node-2 is down or still starting
         return None
     expected = {"TurnRock-A": True, "TurnRock-B": True, "TurnRock-C": False, "TurnRock-D": True}
     return poses if poses == expected else None
