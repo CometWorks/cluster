@@ -1036,8 +1036,13 @@ def p2_chr_helmet(bench) -> None:
         time.sleep(SETTLE_SECONDS)
         toggled = helmet(target)
         api.key("J")
-        back = wait_until(lambda: helmet(target) if helmet(target) == start else None, 10,
-                          "the second press to reach the server") if toggled == (not start) else helmet(target)
+        # Either way the press reaches the server: in sync it brings the start value back, inverted it
+        # moves the server's copy off it.
+        try:
+            back = wait_until(lambda: helmet(target) if helmet(target) == start else None, 10,
+                              "the second press to bring the start value back")
+        except ClusterError:
+            back = helmet(target)
     except ClusterError as error:
         back = None
         bench.record("error", str(error))
