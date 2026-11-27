@@ -45,7 +45,9 @@ plugin services for every node, including unmanaged clusters. Release packaging 
 launch/preparation paths verify PluginSdk metadata. `cli/deployment-capabilities.json`
 records the PluginSdk the plugins were built against: `pluginSdkContract` (when that SDK
 declares a contract version) and `pluginSdkSha256`. Quasar accepts any Magnetar whose
-PluginSdk contract has the same major and an equal or higher minor. This requires Magnetar PR #57 and
+PluginSdk contract has the same major and an equal or higher minor. It also records
+`spaceEngineersVersion`, the Space Engineers version the plugins were built against; Quasar
+refuses a Dedicated Server of another version. This requires Magnetar PR #57 and
 a compatible release; older launchers cannot run these plugins. Magnetar must be fixed,
 merged and released before the public cluster release. Pull-request review packages may
 compile against the exact public Magnetar source commit in

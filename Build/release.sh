@@ -137,13 +137,19 @@ dotnet "$REGISTRY_OUT/ClusterRegistry.dll" --check-plugin-sdk "${SDK_DIRECTORY}P
 # exact-file hash is its fallback when either side declares no contract (Magnetar before the contract,
 # Quasar before the contract check).
 SDK_CONTRACT="$(dotnet "$REGISTRY_OUT/ClusterRegistry.dll" --plugin-sdk-contract "${SDK_DIRECTORY}PluginSdk.dll")"
-python3 - "$STAGING/cli/deployment-capabilities.json" "${SDK_DIRECTORY}PluginSdk.dll" "$SDK_CONTRACT" <<'SDKPIN'
+# The plugins patch game code, so a release only runs on the game version it was built against.
+# Quasar compares spaceEngineersVersion (x.yyy.zzz) with the Dedicated Server it deploys (SE-1655).
+SE_VERSION="$(dotnet "$REGISTRY_OUT/ClusterRegistry.dll" --game-version "$GAME_DIRECTORY")"
+[[ "$SE_VERSION" =~ ^[0-9]+\.[0-9]{3}\.[0-9]{3}$ ]] || { echo "could not read SE_VERSION from $GAME_DIRECTORY" >&2; exit 1; }
+echo "== Built for Space Engineers $SE_VERSION"
+python3 - "$STAGING/cli/deployment-capabilities.json" "${SDK_DIRECTORY}PluginSdk.dll" "$SDK_CONTRACT" "$SE_VERSION" <<'SDKPIN'
 import hashlib, json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 data = json.loads(path.read_text())
 data["pluginSdkSha256"] = hashlib.sha256(pathlib.Path(sys.argv[2]).read_bytes()).hexdigest()
 if sys.argv[3]:
     data["pluginSdkContract"] = sys.argv[3]
+data["spaceEngineersVersion"] = sys.argv[4]
 path.write_text(json.dumps(data, separators=(",", ":")) + "\n")
 SDKPIN
 chmod +x "$STAGING/cli/cluster" "$STAGING/cli/cluster-status" "$STAGING/cli/gateway-admin"

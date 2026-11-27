@@ -269,6 +269,11 @@ one, and `pluginSdkSha256`, the hash of the file. Dependency preparation accepts
 Magnetar whose PluginSdk contract has the same major and an equal or higher minor. When
 either side declares no contract, the frozen PluginSdk must match those bytes.
 
+Packaging also records `spaceEngineersVersion`, the game version (x.yyy.zzz, from
+`SpaceEngineersGame.SE_VERSION`) of the DedicatedServer64 the plugins were compiled
+against. The plugins patch game code, so the release runs only on that game version.
+Quasar refuses guided setup on a Dedicated Server of another version.
+
 Bundles declare `storageFormats` for world, Registry and plugin records. Host activation
 and restore require equal nonempty format maps. Format changes require an explicit
 migration before activation; rollback never silently rolls data back.
