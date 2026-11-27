@@ -1276,6 +1276,16 @@ def concrete(key, t, m, kind, tk, static, readonly, faces, rows):
         return local(
             "object-builder data carried by this instance; changes take effect only through the code that applies the builder"
         )
+    # Calls the compiler adds for a mod's own code (base constructors, conversions, foreach) and the
+    # operators they come with act on the values at hand.
+    if m == ".ctor" and not static:
+        return local(
+            "constructs an object in this process; what the mod then does with it has its own row"
+        )
+    if m.startswith("op_"):
+        return local("operator or conversion on the supplied values")
+    if m in ("GetEnumerator", "MoveNext", "Current", "Reset") and not static:
+        return local("enumerates the collection it is called on")
     if (
         t.startswith("Sandbox.Definitions.")
         or "Definition" in short
