@@ -296,3 +296,28 @@ cluster repeats the test on node 1 and then on node 2, 2 km away, and each node
 must own both of its target grids alone. The World Authority owns no partitions,
 so it simulates no targets. Other damage types, upgrades, handover, and client
 effects need separate cases.
+
+### Advanced Welding pad merge
+
+`weld_pad_differential.py CORPUS RESULTS` loads Workshop item 510790477 and a
+fixture mod in standalone and clustered worlds. The issuing server spawns two
+separate grids with named batteries and opposing large weld pads. It samples
+both grids while apart, moves the dynamic grid into pad contact and samples
+again after 120 simulation ticks. A merge must preserve both original battery
+IDs on one of the original grids, consume both pads and leave no duplicate on
+the other cluster roles. The raw role snapshots are saved in
+`MOD-WELD-PADS/observations.json`. This scenario exercises pad welding. Detaching
+a block with a player's hand grinder requires a separate case.
+
+### Nanite Control Facility v2.2 repair
+
+Run `python nanite_repair_differential.py /path/to/corpus /path/to/new-results`.
+Workshop item 219757726 uses its construction nanites to repair damaged armor.
+The fixture creates two powered, static grids 2 km apart. Their armor targets
+are at least 35 m from the factory, outside the block's 4 m native welder
+radius. Each grid carries a remote control so the mod can find its power
+distributor. Both factories start disabled, receive 100 steel plates and have
+the same damage applied to their targets. Only the treatment facility is enabled.
+A pass requires full repair on that grid while the disabled grid retains its
+measured damage. The test world shortens nanite travel using the mod's config.
+This case covers same-grid repair in creative mode.
