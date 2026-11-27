@@ -1242,10 +1242,24 @@ internal static class BlockCoverageHarness
     private static object ReplaceFactions()
     {
         MyFactionCollection factions = MySession.Static.Factions;
+        var before = factions.ToDictionary(entry => entry.Key, entry => entry.Value);
         typeof(ClusterPlugin.MyFactionCollectionPatch)
             .GetMethod("ReplaceLocally", BindingFlags.NonPublic | BindingFlags.Static)
             .Invoke(null, new object[] { factions, factions.GetObjectBuilder() });
-        return new { factions = factions.Count() };
+        // SE-2006: a snapshot keeps the MyFaction object of every faction the node already had, in every map.
+        return new
+        {
+            factions = factions.Count(),
+            sameObjects = before.Count > 0
+                && before.Count == factions.Count()
+                && before.All(entry =>
+                    ReferenceEquals(factions.TryGetFactionById(entry.Key), entry.Value)
+                    && ReferenceEquals(factions.TryGetFactionByTag(entry.Value.Tag), entry.Value)
+                    && factions
+                        .GetFactionsByType(entry.Value.FactionTypeString)
+                        .Contains(entry.Value)
+                ),
+        };
     }
 
     /// <summary>SE1-0252: what an admin's client asks the server for in the admin menu's safe zone page, run

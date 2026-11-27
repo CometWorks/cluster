@@ -1206,7 +1206,10 @@ def p3_blk_05(bench) -> None:
     holder = _all_partitions(bench)[fixtures.partition["SafeZoneBlock"]]
     reference, unknown = after_leg.reference, settings["unknown"]
     # What a World Authority faction snapshot does: every MyFaction of the node is a new object.
-    bench.record("factions-replaced", bench.cluster.node(holder, "/faction-test-replace", "POST"))
+    replaced = bench.cluster.node(holder, "/faction-test-replace", "POST")
+    bench.record("factions-replaced", replaced)
+    bench.check("SE-2006: a faction snapshot keeps the node's faction objects", replaced.get("sameObjects") is True,
+                json.dumps(replaced))
     _zone_settings_checks(bench, "faction snapshot", holder, block, reference, unknown)
     # Vanilla's remove and create (power back, repaired, switched on) while another zone is in the way.
     bench.record("zone-recreated", bench.cluster.node(holder, f"/block-test-safezone-recreate?block={block}", "POST"))

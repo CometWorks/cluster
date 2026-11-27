@@ -20,8 +20,9 @@ pasted or blueprinted block starts a new entry.
 ## Faction lists
 
 Vanilla keeps a zone's faction list as `MyFaction` objects and matches them by reference. A World Authority
-faction snapshot rebuilds every faction object of a node, so `MyFactionCollectionPatch.ReplaceLocally` points
-every zone's list at the current objects right after (`SafeZoneFactions.Rebind`). A faction id the node cannot
+faction snapshot is applied by `MyFactionCollectionPatch.ReplaceLocally`, which keeps the object of every
+faction the node already had (`KeepObjects`, SE-2006) and then points every zone's list at the current objects
+(`SafeZoneFactions.Rebind`), for a faction that is new to the node. A faction id the node cannot
 resolve yet stays with the zone and its builder, and joins the list when the faction arrives.
 
 ## Log lines
