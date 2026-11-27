@@ -215,18 +215,19 @@ internal static partial class BlockSafeZones
     {
         State state = States.GetValue(block, _ => new State());
         string live = Settings(builder);
-        if (!SafeZoneFactions.Current(zone))
-            live += FieldSeparator + "factionObjects=stale";
-        else if (state.Settings == null)
-            state.Settings = live;
-        if (state.Settings == null || live == state.Settings)
+        // The list holds objects the faction collection no longer has: no faction rule matches then.
+        bool stale = !SafeZoneFactions.Current(zone);
+        if (!stale)
+            state.Settings ??= live;
+        string drift = live + (stale ? "!" : "");
+        if (drift == state.Settings)
         {
             state.LoggedDrift = null;
             return;
         }
-        if (live == state.LoggedDrift)
+        if (drift == state.LoggedDrift)
             return;
-        state.LoggedDrift = live;
+        state.LoggedDrift = drift;
         MyLog.Default?.WriteLineAndConsole(
             "[ClusterPlugin] safe zone settings drift block="
                 + block.EntityId
@@ -239,7 +240,16 @@ internal static partial class BlockSafeZones
                 + " at="
                 + at
                 + " fields="
-                + SettingsDiff(state.Settings, live)
+                + string.Join(
+                    " | ",
+                    new[]
+                    {
+                        state.Settings == null || state.Settings == live
+                            ? null
+                            : SettingsDiff(state.Settings, live),
+                        stale ? "factionObjects: stale" : null,
+                    }.Where(field => field != null)
+                )
         );
     }
 }
