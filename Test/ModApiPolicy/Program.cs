@@ -29,6 +29,13 @@ if (!(args.Length <= 1 || mode is "--scan" or "--check-corpus" or "--facts"))
     );
     return 2;
 }
+
+// WorkshopScripts.PrepareSource reads the game's source substitutions from Sandbox.Game.
+System.Runtime.Loader.AssemblyLoadContext.Default.Resolving += (context, name) =>
+{
+    string candidate = Path.Combine(dir, name.Name + ".dll");
+    return File.Exists(candidate) ? context.LoadFromAssemblyPath(candidate) : null;
+};
 var empty = CSharpCompilation.Create(
     "WorkshopMod",
     references: ScriptReferences.References(dir),
@@ -111,9 +118,11 @@ foreach (var assembly in empty.SourceModule.ReferencedAssemblySymbols.Where(Game
 {
     foreach (var type in GameSurface.Types(assembly.GlobalNamespace))
     {
-        if (type.DeclaredAccessibility != Accessibility.Public)
-            continue;
-        bool api = GameSurface.IsInterfaceSurface(type);
+        // A corpus key can name a member of a non-public base type: the IL of a call through a public
+        // derived type names the virtual member where it is declared.
+        bool api =
+            type.DeclaredAccessibility == Accessibility.Public
+            && GameSurface.IsInterfaceSurface(type);
         foreach (var member in type.GetMembers())
         {
             if (member is not (IPropertySymbol or IFieldSymbol or IEventSymbol or IMethodSymbol))
@@ -144,13 +153,16 @@ var probe = CSharpSyntaxTree.ParseText(
     using VRageMath;
     using Sandbox.Game.Entities;
     class Probe {
-        void Check(IMyPlayerCollection players, LineD line, ListReader<int> list) {
+        void Check(IMyPlayerCollection players, LineD line, ListReader<int> list, Sandbox.Game.MyInventory inventory) {
             players.TryGetIdentityId(1L);
             players.TryGetIdentityId(1UL);
             MyGamePruningStructure.GetAllEntitiesInRay(ref line, null);
             MyFixedPoint amount = 5;
             foreach (int item in list) { }
+            inventory.GetItemAmount(default(VRage.Game.MyDefinitionId));
+            Sandbox.Game.MyExplosions.OnExplosion += Explode;
         }
+        void Explode(ref Sandbox.Game.MyExplosionInfo info) { }
     }
     class Session : MySessionComponentBase { }
     class Logic : MyGameLogicComponent { public Logic() { } }
@@ -169,6 +181,10 @@ var expected = new Dictionary<string, string>
     ] = "node-scoped",
     ["VRage.MyFixedPoint.op_Implicit(System.Int32)~VRage.MyFixedPoint"] = "local",
     ["VRage.Collections.ListReader`1.GetEnumerator()"] = "local",
+    [
+        "VRage.Game.Entity.MyInventoryBase.GetItemAmount(VRage.Game.MyDefinitionId,VRage.Game.MyItemFlags,System.Boolean)"
+    ] = "local",
+    ["Sandbox.Game.OnExplosionDel.*"] = "local",
     ["VRage.Game.Components.MySessionComponentBase.#ctor()"] = "local",
     ["VRage.Game.Components.MyGameLogicComponent.#ctor()"] = "local",
 };

@@ -305,6 +305,7 @@ Sandbox.Definitions.MyBlueprintClassDefinition.ProgressBarSoundCue	per-node	B7	n
 Sandbox.Definitions.MyBlueprintDefinition.Postprocess()	node-scoped	?	?	-	any	1	MyBlueprintDefinition.cs:92 UNCERTAIN: behavior of this definition service on a regular cluster node has not been established
 Sandbox.Definitions.MyBlueprintDefinitionBase.Atomic	per-node	B7	no	request (WA)	write	1	MyBlueprintDefinitionBase.cs:47 reads the local loaded definition; changing shared definition data at runtime affects this process
 Sandbox.Definitions.MyBlueprintDefinitionBase.BaseProductionTimeInSeconds	per-node	B7	no	request (WA)	write	10	MyBlueprintDefinitionBase.cs:53 reads the local loaded definition; changing shared definition data at runtime affects this process
+Sandbox.Definitions.MyBlueprintDefinitionBase.GetBlueprints(System.Collections.Generic.List{Sandbox.Definitions.MyBlueprintDefinitionBase.ProductionInfo})	node-scoped	?	?	-	any	2	MyBlueprintDefinitionBase.cs:100 UNCERTAIN: behavior of this definition service on a regular cluster node has not been established
 Sandbox.Definitions.MyBlueprintDefinitionBase.IgnoreEfficiencyMultiplier	per-node	B7	no	request (WA)	write	1	MyBlueprintDefinitionBase.cs:55 reads the local loaded definition; changing shared definition data at runtime affects this process
 Sandbox.Definitions.MyBlueprintDefinitionBase.IsPrimary	per-node	B7	no	request (WA)	write	2	MyBlueprintDefinitionBase.cs:57 reads the local loaded definition; changing shared definition data at runtime affects this process
 Sandbox.Definitions.MyBlueprintDefinitionBase.Item.#ctor()	local	-	-	-	any	5	MyBlueprintDefinitionBase.cs:12 constructs an object in this process; what the mod then does with it has its own row
@@ -1528,9 +1529,11 @@ Sandbox.Engine.Physics.MyPhysicsBody.ClearSpeed()	local	-	-	-	any	3	MyPhysicsBod
 Sandbox.Engine.Physics.MyPhysicsBody.ForceActivate()	local	-	-	-	any	1	MyPhysicsBody.cs:1666 acts on the local entity, its components, or its grid group
 Sandbox.Engine.Physics.MyPhysicsBody.GetVelocityAtPoint(VRageMath.Vector3D)	local	-	-	-	any	6	MyPhysicsBody.cs:1800 acts on the local entity, its components, or its grid group
 Sandbox.Engine.Physics.MyPhysicsBody.GetVelocityAtPointLocal(VRageMath.Vector3D@,VRageMath.Vector3@)	local	-	-	-	any	2	MyPhysicsBody.cs:1810 acts on the local entity, its components, or its grid group
+Sandbox.Engine.Physics.MyPhysicsBody.Gravity	local	-	-	-	any	5	MyPhysicsBody.cs:622 acts on the local entity, its components, or its grid group
 Sandbox.Engine.Physics.MyPhysicsBody.IsMoving	local	-	-	-	any	1	MyPhysicsBody.cs:610 acts on the local entity, its components, or its grid group
 Sandbox.Engine.Physics.MyPhysicsBody.IsStatic	local	-	-	-	any	12	MyPhysicsBody.cs:325 acts on the local entity, its components, or its grid group
 Sandbox.Engine.Physics.MyPhysicsBody.LinearVelocity	local	-	-	-	any	11	MyPhysicsBody.cs:471 acts on the local entity, its components, or its grid group
+Sandbox.Engine.Physics.MyPhysicsBody.Mass	local	-	-	-	any	4	MyPhysicsBody.cs:281 acts on the local entity, its components, or its grid group
 Sandbox.Engine.Physics.MyPhysicsHelper.InitBoxPhysics(VRage.ModAPI.IMyEntity,VRage.Utils.MyStringHash,VRageMath.Vector3,VRageMath.Vector3,System.Single,System.Single,System.Single,System.UInt16,VRage.Game.Components.RigidBodyFlag)	node-scoped	?	?	-	any	2	MyPhysicsHelper.cs:38 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Engine.Physics.MyPhysicsHelper.InitModelPhysics(VRage.ModAPI.IMyEntity,VRage.Game.Components.RigidBodyFlag,System.Int32)	node-scoped	?	?	-	any	6	MyPhysicsHelper.cs:118 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.BlockDamagedEvent.*	local	-	-	-	any	3	BlockDamagedEvent.cs:5 type definition; the policy for an event or callback is on its registration or invocation
@@ -1648,12 +1651,16 @@ Sandbox.Game.Entities.MyBatteryBlock.MaxOutput	local	-	-	-	any	1	MyBatteryBlock.
 Sandbox.Game.Entities.MyBatteryBlock.MaxStoredPower	local	-	-	-	any	3	MyBatteryBlock.cs:157 implements Sandbox.ModAPI.Ingame.IMyBatteryBlock.MaxStoredPower; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 Sandbox.Game.Entities.MyBatteryBlock.SourceComp	node-scoped	?	?	-	any	1	MyBatteryBlock.cs:124 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyBlendOption.*	local	-	-	-	any	2	MyBlendOption.cs:3 type definition; the policy for an event or callback is on its registration or invocation
+Sandbox.Game.Entities.MyBlockBuilderBase.Activate(System.Nullable{VRage.Game.MyDefinitionId},System.Boolean)	node-scoped	?	?	-	any	3	MyBlockBuilderBase.cs:162 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyBlockBuilderBase.CubeBuilderDefinition	node-scoped	?	?	-	any	2	MyBlockBuilderBase.cs:135 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+Sandbox.Game.Entities.MyBlockBuilderBase.CurrentBlockDefinition	node-scoped	?	?	-	any	5	MyBlockBuilderBase.cs:64 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+Sandbox.Game.Entities.MyBlockBuilderBase.Deactivate()	node-scoped	?	?	-	any	4	MyBlockBuilderBase.cs:164 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyBlockBuilderBase.FindClosestGrid()	node-scoped	?	?	-	any	7	MyBlockBuilderBase.cs:233 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyBlockBuilderBase.FreePlacementTarget	node-scoped	?	?	-	any	1	MyBlockBuilderBase.cs:121 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyBlockBuilderBase.HitInfo	node-scoped	?	?	-	any	5	MyBlockBuilderBase.cs:66 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyBlockBuilderBase.IntersectionDistance	node-scoped	?	?	-	any	2	MyBlockBuilderBase.cs:44 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyBlockBuilderBase.IntersectionStart	node-scoped	?	?	-	any	1	MyBlockBuilderBase.cs:117 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+Sandbox.Game.Entities.MyBlockBuilderBase.IsActivated	node-scoped	?	?	-	any	8	MyBlockBuilderBase.cs:137 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyCameraBlock.ChangeZoomPrecise(System.Single)	node-scoped	?	?	-	any	2	MyCameraBlock.cs:802 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyCameraBlock.DUMMY_NAME_POSITION	node-scoped	?	?	-	any	1	MyCameraBlock.cs:147 UNCERTAIN: a readonly reference can still hold process-specific state
 Sandbox.Game.Entities.MyCameraBlock.IsActive	local	-	-	-	any	1	MyCameraBlock.cs:204 implements Sandbox.ModAPI.Ingame.IMyCameraBlock.IsActive; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
@@ -1968,6 +1975,7 @@ Sandbox.Game.Entities.MyFrameOption.*	local	-	-	-	any	2	MyFrameOption.cs:3 type 
 Sandbox.Game.Entities.MyFueledPowerProducer.BlockDefinition	local	-	-	-	any	1	MyFueledPowerProducer.cs:47 implements VRage.Game.ModAPI.Ingame.IMyCubeBlock.BlockDefinition; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 Sandbox.Game.Entities.MyFueledPowerProducer.Capacity	node-scoped	?	?	-	any	2	MyFueledPowerProducer.cs:79 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyFueledPowerProducer.CurrentOutput	local	-	-	-	any	1	MyFueledPowerProducer.cs:94 implements Sandbox.ModAPI.Ingame.IMyPowerProducer.CurrentOutput; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
+Sandbox.Game.Entities.MyFueledPowerProducer.MaxOutput	local	-	-	-	any	1	MyFueledPowerProducer.cs:96 implements Sandbox.ModAPI.Ingame.IMyPowerProducer.MaxOutput; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 Sandbox.Game.Entities.MyGamePruningStructure.AnyVoxelMapInBox(VRageMath.BoundingBoxD@)	node-scoped	B1	no	broadcast / request	any	3	MyGamePruningStructure.cs:421 queries the local spatial index; entities held on other nodes are absent
 Sandbox.Game.Entities.MyGamePruningStructure.GetAllEntitiesInBox(VRageMath.BoundingBoxD@,System.Collections.Generic.List{VRage.Game.Entity.MyEntity},Sandbox.Game.Entities.MyEntityQueryType)	node-scoped	B1	no	broadcast / request	any	1	MyGamePruningStructure.cs:212 queries the local spatial index; entities held on other nodes are absent
 Sandbox.Game.Entities.MyGamePruningStructure.GetAllEntitiesInOBB(VRageMath.MyOrientedBoundingBoxD@,System.Collections.Generic.List{VRage.Game.Entity.MyEntity},Sandbox.Game.Entities.MyEntityQueryType)	node-scoped	B1	no	broadcast / request	any	3	MyGamePruningStructure.cs:237 queries the local spatial index; entities held on other nodes are absent
@@ -1983,9 +1991,9 @@ Sandbox.Game.Entities.MyGamePruningStructure.GetTopmostEntitiesInBox(VRageMath.B
 Sandbox.Game.Entities.MyGamePruningStructure.GetTopmostEntitiesOverlappingRay(VRageMath.LineD@,System.Collections.Generic.List{VRageMath.MyLineSegmentOverlapResult{VRage.Game.Entity.MyEntity}},Sandbox.Game.Entities.MyEntityQueryType)	node-scoped	B1	no	broadcast / request	any	10	MyGamePruningStructure.cs:349 queries the local spatial index; entities held on other nodes are absent
 Sandbox.Game.Entities.MyGamePruningStructure.GetVoxelMapsOverlappingRay(VRageMath.LineD@,System.Collections.Generic.List{VRageMath.MyLineSegmentOverlapResult{Sandbox.Game.Entities.MyVoxelBase}})	node-scoped	B1	no	broadcast / request	any	20	MyGamePruningStructure.cs:366 queries the local spatial index; entities held on other nodes are absent
 Sandbox.Game.Entities.MyGamePruningStructure.Remove(VRage.Game.Entity.MyEntity)	node-scoped	?	?	-	any	4	MyGamePruningStructure.cs:111 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
-Sandbox.Game.Entities.MyGravityProviderComponent.GetGravityMultiplier(VRageMath.Vector3D)	node-scoped	?	?	-	any	5	MyGravityProviderComponent.cs:20 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+Sandbox.Game.Entities.MyGravityProviderComponent.GetGravityMultiplier(VRageMath.Vector3D)	node-scoped	?	?	-	any	7	MyGravityProviderComponent.cs:20 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyGravityProviderComponent.GetWorldGravity(VRageMath.Vector3D)	node-scoped	?	?	-	any	6	MyGravityProviderComponent.cs:14 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
-Sandbox.Game.Entities.MyGravityProviderComponent.GravityLimit	node-scoped	?	?	-	any	1	MyGravityProviderComponent.cs:10 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+Sandbox.Game.Entities.MyGravityProviderComponent.GravityLimit	node-scoped	?	?	-	any	2	MyGravityProviderComponent.cs:10 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyGravityProviderComponent.IsPositionInRange(VRageMath.Vector3D)	node-scoped	?	?	-	any	8	MyGravityProviderComponent.cs:18 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyGridPhysicalGroupData.GetGroupSharedProperties(Sandbox.Game.Entities.MyCubeGrid,System.Boolean)	node-scoped	?	?	-	any	4	MyGridPhysicalGroupData.cs:68 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyGridPhysicalGroupData.GroupSharedPxProperties.CoMWorld	node-scoped	?	?	-	any	4	MyGridPhysicalGroupData.cs:34 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
@@ -2065,7 +2073,7 @@ Sandbox.Game.Entities.MyShipController.IsMainCockpit	local	-	-	-	any	2	MyShipCon
 Sandbox.Game.Entities.MyShipController.MoveAndRotate()	local	-	-	-	any	1	MyShipController.cs:1849 acts on the local entity, its components, or its grid group
 Sandbox.Game.Entities.MyShipController.MoveAndRotate(VRageMath.Vector3,VRageMath.Vector2,System.Single)	local	-	-	-	any	1	MyShipController.cs:1819 implements VRage.Game.ModAPI.Interfaces.IMyControllableEntity.MoveAndRotate(VRageMath.Vector3,VRageMath.Vector2,System.Single); acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 Sandbox.Game.Entities.MyShipController.NeedsPerFrameUpdate	local	-	-	-	any	1	MyShipController.cs:419 acts on the local entity, its components, or its grid group
-Sandbox.Game.Entities.MyShipController.Pilot	local	-	-	-	any	1	MyShipController.cs:687 implements Sandbox.ModAPI.IMyShipController.Pilot; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
+Sandbox.Game.Entities.MyShipController.Pilot	local	-	-	-	any	5	MyShipController.cs:687 implements Sandbox.ModAPI.IMyShipController.Pilot; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 Sandbox.Game.Entities.MyShipController.RelativeDampeningEntity	local	-	-	-	any	2	MyShipController.cs:675 acts on the local entity, its components, or its grid group
 Sandbox.Game.Entities.MyShipController.SingleWeaponMode	local	-	-	-	any	2	MyShipController.cs:505 acts on the local entity, its components, or its grid group
 Sandbox.Game.Entities.MyShipController.ToolbarType	local	-	-	-	any	2	MyShipController.cs:599 acts on the local entity, its components, or its grid group
@@ -2104,21 +2112,23 @@ Sandbox.Game.Entities.MyVoxelBase.GetFilledStorageBounds(VRageMath.Vector3I@,VRa
 Sandbox.Game.Entities.MyVoxelBase.GetIntersectionWithLine(VRageMath.LineD@,System.Nullable{VRage.Game.Models.MyIntersectionResultLineTriangleEx}@,VRage.Game.Components.IntersectionFlags)	local	-	-	-	any	1	MyVoxelBase.cs:694 implements VRage.ModAPI.IMyEntity.GetIntersectionWithLine(VRageMath.LineD@,System.Nullable{VRage.Game.Models.MyIntersectionResultLineTriangleEx}@,VRage.Game.Components.IntersectionFlags); acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 Sandbox.Game.Entities.MyVoxelBase.GetIntersectionWithLine(VRageMath.LineD@,System.Nullable{VRageMath.Vector3D}@,System.Boolean,VRage.Game.Components.IntersectionFlags)	node-scoped	?	?	-	any	10	MyVoxelBase.cs:718 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyVoxelBase.GetMaterialAt(VRageMath.Vector3D@)	node-scoped	?	?	-	any	4	MyVoxelBase.cs:1573 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+Sandbox.Game.Entities.MyVoxelBase.GetObjectBuilder(System.Boolean)	local	-	-	-	any	1	MyVoxelBase.cs:572 implements VRage.ModAPI.IMyEntity.GetObjectBuilder(System.Boolean); acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 Sandbox.Game.Entities.MyVoxelBase.GetOrePriority()	node-scoped	?	?	-	any	3	MyVoxelBase.cs:967 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyVoxelBase.GetVoxelContentInBoundingBox_Fast(VRageMath.BoundingBoxD,VRageMath.MatrixD,System.Boolean,System.Single)	node-scoped	?	?	-	any	5	MyVoxelBase.cs:613 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyVoxelBase.IsAnyAabbCornerInside(VRageMath.MatrixD@,VRageMath.BoundingBoxD)	node-scoped	?	?	-	any	6	MyVoxelBase.cs:735 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyVoxelBase.OperationType.*	local	-	-	-	any	5	MyVoxelBase.cs:213 type definition; the policy for an event or callback is on its registration or invocation
 Sandbox.Game.Entities.MyVoxelBase.PerformCutOutSphereFast(VRageMath.Vector3D,System.Single,System.Boolean)	node-scoped	?	?	-	any	1	MyVoxelBase.cs:1254 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
-Sandbox.Game.Entities.MyVoxelBase.PositionLeftBottomCorner	local	-	-	-	any	29	MyVoxelBase.cs:439 implements VRage.ModAPI.IMyVoxelBase.PositionLeftBottomCorner; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
+Sandbox.Game.Entities.MyVoxelBase.PositionLeftBottomCorner	local	-	-	-	any	33	MyVoxelBase.cs:439 implements VRage.ModAPI.IMyVoxelBase.PositionLeftBottomCorner; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 Sandbox.Game.Entities.MyVoxelBase.RangeChanged	node-scoped	?	?	-	any	2	MyVoxelBase.cs:506 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyVoxelBase.RequestVoxelOperationBox(VRageMath.BoundingBoxD,VRageMath.MatrixD,System.Byte,Sandbox.Game.Entities.MyVoxelBase.OperationType)	node-scoped	?	?	-	any	3	MyVoxelBase.cs:1101 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyVoxelBase.RequestVoxelOperationElipsoid(VRageMath.Vector3,VRageMath.MatrixD,System.Byte,Sandbox.Game.Entities.MyVoxelBase.OperationType)	node-scoped	?	?	-	any	1	MyVoxelBase.cs:1200 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyVoxelBase.RequestVoxelOperationSphere(VRageMath.Vector3D,System.Single,System.Byte,Sandbox.Game.Entities.MyVoxelBase.OperationType)	node-scoped	?	?	-	any	1	MyVoxelBase.cs:1059 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
-Sandbox.Game.Entities.MyVoxelBase.RootVoxel	node-scoped	?	?	-	any	14	MyVoxelBase.cs:460 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+Sandbox.Game.Entities.MyVoxelBase.RootVoxel	node-scoped	?	?	-	any	15	MyVoxelBase.cs:460 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyVoxelBase.Size	node-scoped	?	?	-	any	7	MyVoxelBase.cs:425 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyVoxelBase.SizeInMetres	node-scoped	?	?	-	any	6	MyVoxelBase.cs:432 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyVoxelBase.SizeInMetresHalf	node-scoped	?	?	-	any	9	MyVoxelBase.cs:434 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
-Sandbox.Game.Entities.MyVoxelBase.Storage	local	-	-	-	any	19	MyVoxelBase.cs:408 implements VRage.ModAPI.IMyEntity.Storage; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
+Sandbox.Game.Entities.MyVoxelBase.Storage	local	-	-	-	any	34	MyVoxelBase.cs:408 implements VRage.ModAPI.IMyEntity.Storage; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
+Sandbox.Game.Entities.MyVoxelBase.StorageChanged.*	local	-	-	-	any	2	MyVoxelBase.cs:221 type definition; the policy for an event or callback is on its registration or invocation
 Sandbox.Game.Entities.MyVoxelBase.StorageMax	node-scoped	?	?	-	any	3	MyVoxelBase.cs:386 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyVoxelBase.StorageMin	node-scoped	?	?	-	any	18	MyVoxelBase.cs:384 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.Entities.MyVoxelBase.StorageName	local	-	-	-	any	15	MyVoxelBase.cs:388 implements VRage.ModAPI.IMyVoxelBase.StorageName; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
@@ -2129,7 +2139,7 @@ Sandbox.Game.EntityComponents.IMyMultiTextPanelComponentOwner.MultiTextPanel	nod
 Sandbox.Game.EntityComponents.MyAutopilotComponent.SelectedWaypoints	node-scoped	?	?	-	any	2	MyAutopilotComponent.cs:919 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.EntityComponents.MyCasterComponent.HitBlock	node-scoped	?	?	-	any	8	MyCasterComponent.cs:93 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.EntityComponents.MyCasterComponent.SetPointOfReference(VRageMath.Vector3D)	node-scoped	?	?	-	any	1	MyCasterComponent.cs:177 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
-Sandbox.Game.EntityComponents.MyCurrentResourceInputChangedDelegate.*	local	-	-	-	any	2	MyCurrentResourceInputChangedDelegate.cs:5 type definition; the policy for an event or callback is on its registration or invocation
+Sandbox.Game.EntityComponents.MyCurrentResourceInputChangedDelegate.*	local	-	-	-	any	4	MyCurrentResourceInputChangedDelegate.cs:5 type definition; the policy for an event or callback is on its registration or invocation
 Sandbox.Game.EntityComponents.MyEffectConstants.GenericHeal	node-scoped	?	?	-	any	2	MyEffectConstants.cs:14 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.EntityComponents.MyEffectConstants.MedRoomHeal	node-scoped	?	?	-	any	2	MyEffectConstants.cs:16 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.EntityComponents.MyEntityCapacitorComponentDefinition.Capacity	per-node	B7	no	request (WA)	write	3	MyEntityCapacitorComponentDefinition.cs:36 reads the local loaded definition; changing shared definition data at runtime affects this process
@@ -2154,6 +2164,8 @@ Sandbox.Game.EntityComponents.MyPathRecorderComponentDefinition.MaxRecordTime	pe
 Sandbox.Game.EntityComponents.MyPathRecorderComponentDefinition.MaxUpdateBetweenRecords	per-node	B7	no	request (WA)	write	2	MyPathRecorderComponentDefinition.cs:40 reads the local loaded definition; changing shared definition data at runtime affects this process
 Sandbox.Game.EntityComponents.MyPathRecorderComponentDefinition.MinDistanceBetweenRecords	per-node	B7	no	request (WA)	write	2	MyPathRecorderComponentDefinition.cs:46 reads the local loaded definition; changing shared definition data at runtime affects this process
 Sandbox.Game.EntityComponents.MyPathRecorderComponentDefinition.MinUpdateBetweenRecords	per-node	B7	no	request (WA)	write	2	MyPathRecorderComponentDefinition.cs:42 reads the local loaded definition; changing shared definition data at runtime affects this process
+Sandbox.Game.EntityComponents.MyRequiredResourceChangeDelegate.*	local	-	-	-	any	1	MyRequiredResourceChangeDelegate.cs:5 type definition; the policy for an event or callback is on its registration or invocation
+Sandbox.Game.EntityComponents.MyResourceCapacityRemainingChangedDelegate.*	local	-	-	-	any	1	MyResourceCapacityRemainingChangedDelegate.cs:5 type definition; the policy for an event or callback is on its registration or invocation
 Sandbox.Game.EntityComponents.MyResourceDistributorComponent.AddSink(Sandbox.Game.EntityComponents.MyResourceSinkComponent)	node-scoped	?	?	-	any	3	MyResourceDistributorComponent.cs:823 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.EntityComponents.MyResourceDistributorComponent.ElectricityId	node-scoped	?	?	-	any	64	MyResourceDistributorComponent.cs:586 UNCERTAIN: a readonly reference can still hold process-specific state
 Sandbox.Game.EntityComponents.MyResourceDistributorComponent.GetConveyorEndpointBlock(VRage.ModAPI.IMyEntity)	node-scoped	?	?	-	any	2	MyResourceDistributorComponent.cs:3134 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
@@ -2167,6 +2179,7 @@ Sandbox.Game.EntityComponents.MyResourceDistributorComponent.ResourceStateByType
 Sandbox.Game.EntityComponents.MyResourceDistributorComponent.SourcesEnabled	local	-	-	-	any	2	MyResourceDistributorComponent.cs:655 implements VRage.Game.ModAPI.IMyResourceDistributorComponent.SourcesEnabled; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 Sandbox.Game.EntityComponents.MyResourceDistributorComponent.SystemChanged	node-scoped	?	?	-	any	1	MyResourceDistributorComponent.cs:670 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.EntityComponents.MyResourceDistributorComponent.TotalRequiredInputByType(VRage.Game.MyDefinitionId,Sandbox.Game.Entities.MyCubeGrid)	node-scoped	?	?	-	any	7	MyResourceDistributorComponent.cs:3026 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+Sandbox.Game.EntityComponents.MyResourceOutputChangedDelegate.*	local	-	-	-	any	1	MyResourceOutputChangedDelegate.cs:5 type definition; the policy for an event or callback is on its registration or invocation
 Sandbox.Game.EntityComponents.MyResourceSinkComponent.#ctor()	local	-	-	-	any	20	MyResourceSinkComponent.cs:186 acts on the local entity, its components, or its grid group
 Sandbox.Game.EntityComponents.MyResourceSinkComponent.#ctor(System.Int32)	local	-	-	-	any	1	MyResourceSinkComponent.cs:191 acts on the local entity, its components, or its grid group
 Sandbox.Game.EntityComponents.MyResourceSinkComponent.AcceptedResources	local	-	-	-	any	8	MyResourceSinkComponent.cs:168 acts on the local entity, its components, or its grid group
@@ -2230,6 +2243,7 @@ Sandbox.Game.EntityComponents.MyTargetLockingComponent.TargetEntity	node-scoped	
 Sandbox.Game.EntityComponents.MyUpdatingEntityComponent.NeedsUpdateBeforeSimulation	node-scoped	?	?	-	any	1	MyUpdatingEntityComponent.cs:35 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.EntityComponents.MyUpdatingEntityComponent.NeedsUpdateBeforeSimulation100	node-scoped	?	?	-	any	1	MyUpdatingEntityComponent.cs:59 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.EntityComponents.MyUpdatingEntityComponent.NeedsUpdateSimulation	node-scoped	?	?	-	any	1	MyUpdatingEntityComponent.cs:83 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+Sandbox.Game.EntityComponents.MyUpdatingEntityComponent.UpdateAfterSimulation100()	node-scoped	?	?	-	any	1	MyUpdatingEntityComponent.cs:240 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 Sandbox.Game.FloatingObjectPlayerEvent.*	local	-	-	-	any	2	FloatingObjectPlayerEvent.cs:5 type definition; the policy for an event or callback is on its registration or invocation
 Sandbox.Game.GameSystems.TextSurfaceScripts.MyTSSCommon.#ctor(Sandbox.ModAPI.Ingame.IMyTextSurface,VRage.Game.ModAPI.Ingame.IMyCubeBlock,VRageMath.Vector2)	client	-	-	-	any	14	MyTSSCommon.cs:17 controls rendering, the local build tool, or screen presentation
 Sandbox.Game.GameSystems.TextSurfaceScripts.MyTSSCommon.AddBackground(VRage.Game.GUI.TextPanel.MySpriteDrawFrame,System.Nullable{VRageMath.Color})	client	-	-	-	any	3	MyTSSCommon.cs:28 controls rendering, the local build tool, or screen presentation
@@ -2245,6 +2259,7 @@ Sandbox.Game.GameSystems.TextSurfaceScripts.MyTextSurfaceScriptBase.Block	client
 Sandbox.Game.GameSystems.TextSurfaceScripts.MyTextSurfaceScriptBase.Dispose()	client	-	-	-	any	10	MyTextSurfaceScriptBase.cs:57 controls rendering, the local build tool, or screen presentation
 Sandbox.Game.GameSystems.TextSurfaceScripts.MyTextSurfaceScriptBase.FitRect(VRageMath.Vector2,VRageMath.Vector2@)	client	-	-	-	any	5	MyTextSurfaceScriptBase.cs:68 controls rendering, the local build tool, or screen presentation
 Sandbox.Game.GameSystems.TextSurfaceScripts.MyTextSurfaceScriptBase.ForegroundColor	client	-	-	-	any	2	MyTextSurfaceScriptBase.cs:38 controls rendering, the local build tool, or screen presentation
+Sandbox.Game.GameSystems.TextSurfaceScripts.MyTextSurfaceScriptBase.Run()	client	-	-	-	any	9	MyTextSurfaceScriptBase.cs:53 controls rendering, the local build tool, or screen presentation
 Sandbox.Game.GameSystems.TextSurfaceScripts.MyTextSurfaceScriptBase.Surface	client	-	-	-	any	11	MyTextSurfaceScriptBase.cs:34 controls rendering, the local build tool, or screen presentation
 Sandbox.Game.GameSystems.TextSurfaceScripts.MyTextSurfaceScriptBase.m_backgroundColor	client	-	-	-	any	2	MyTextSurfaceScriptBase.cs:30 controls rendering, the local build tool, or screen presentation
 Sandbox.Game.GameSystems.TextSurfaceScripts.MyTextSurfaceScriptBase.m_block	client	-	-	-	any	1	MyTextSurfaceScriptBase.cs:16 controls rendering, the local build tool, or screen presentation
@@ -3356,6 +3371,7 @@ Sandbox.Game.MyVisualScriptLogicProvider.WeaponBlockActivated	local	-	-	-	any	2	
 Sandbox.Game.MyVisualScriptLogicProvider.WeaponSetShooting(System.String,System.Boolean)	node-scoped	B3	no	owner-of / to-owner	any	0	MyVisualScriptLogicProvider.cs:2412 looks the entity up by name or id on this node (MyEntities.TryGetEntityByName / GetEntityById); no effect when it is on another node
 Sandbox.Game.MyVisualScriptLogicProvider.WeaponShootOnce(System.String)	node-scoped	B3	no	owner-of / to-owner	any	0	MyVisualScriptLogicProvider.cs:2402 looks the entity up by name or id on this node (MyEntities.TryGetEntityByName / GetEntityById); no effect when it is on another node
 Sandbox.Game.NewBuiltItemEvent.*	local	-	-	-	any	2	NewBuiltItemEvent.cs:5 type definition; the policy for an event or callback is on its registration or invocation
+Sandbox.Game.OnExplosionDel.*	local	-	-	-	any	4	OnExplosionDel.cs:3 type definition; the policy for an event or callback is on its registration or invocation
 Sandbox.Game.PlayerHealthRechargeEvent.*	local	-	-	-	any	2	PlayerHealthRechargeEvent.cs:6 type definition; the policy for an event or callback is on its registration or invocation
 Sandbox.Game.PlayerItemEvent.*	local	-	-	-	any	3	PlayerItemEvent.cs:5 type definition; the policy for an event or callback is on its registration or invocation
 Sandbox.Game.PlayerSuitRechargeEvent.*	local	-	-	-	any	2	PlayerSuitRechargeEvent.cs:6 type definition; the policy for an event or callback is on its registration or invocation
@@ -3548,9 +3564,9 @@ Sandbox.ModAPI.Contracts.MyContractSearch.RewardReputation	local	-	-	-	any	0	MyC
 Sandbox.ModAPI.Contracts.MyContractSearch.SearchRadius	local	-	-	-	any	0	MyContractSearch.cs:15 value, parser or helper; no world state
 Sandbox.ModAPI.Contracts.MyContractSearch.StartBlockId	local	-	-	-	any	0	MyContractSearch.cs:21 value, parser or helper; no world state
 Sandbox.ModAPI.Contracts.MyContractSearch.TargetGridId	local	-	-	-	any	0	MyContractSearch.cs:12 value, parser or helper; no world state
-Sandbox.ModAPI.CustomActionGetDelegate.*	local	-	-	-	any	0	value, parser or helper; no world state
-Sandbox.ModAPI.CustomControlGetDelegate.*	local	-	-	-	any	0	value, parser or helper; no world state
-Sandbox.ModAPI.HitInterceptor.*	local	-	-	-	any	0	value, parser or helper; no world state
+Sandbox.ModAPI.CustomActionGetDelegate.*	local	-	-	-	any	23	value, parser or helper; no world state
+Sandbox.ModAPI.CustomControlGetDelegate.*	local	-	-	-	any	53	value, parser or helper; no world state
+Sandbox.ModAPI.HitInterceptor.*	local	-	-	-	any	1	value, parser or helper; no world state
 Sandbox.ModAPI.IMyAccessAnyoneCanUse.AnyoneCanUse	local	-	-	-	any	0	MyAccessAnyoneCanUse.cs:41 acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 Sandbox.ModAPI.IMyAiBlockComponent.AiBlockType	local	-	-	-	any	0	MyAiBlockComponent.cs:70 acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 Sandbox.ModAPI.IMyAiBlockComponent.Deactivate()	local	-	-	-	any	0	MyAiBlockComponent.cs:129 acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
@@ -4697,7 +4713,7 @@ Sandbox.ModAPI.Interfaces.TerminalPropertyExtensions.SetValueBool(Sandbox.ModAPI
 Sandbox.ModAPI.Interfaces.TerminalPropertyExtensions.SetValueColor(Sandbox.ModAPI.Ingame.IMyTerminalBlock,System.String,VRageMath.Color)	local	-	-	-	any	1	TerminalPropertyExtensions.cs:145 value, parser or helper; no world state
 Sandbox.ModAPI.Interfaces.TerminalPropertyExtensions.SetValueFloat(Sandbox.ModAPI.Ingame.IMyTerminalBlock,System.String,System.Single)	local	-	-	-	any	2	TerminalPropertyExtensions.cs:101 value, parser or helper; no world state
 Sandbox.ModAPI.Interfaces.TerminalPropertyExtensions.SetValue``1(Sandbox.ModAPI.Ingame.IMyTerminalBlock,System.String,``0)	local	-	-	-	any	7	TerminalPropertyExtensions.cs:217 value, parser or helper; no world state
-Sandbox.ModAPI.MissileMoveDelegate.*	local	-	-	-	any	0	value, parser or helper; no world state
+Sandbox.ModAPI.MissileMoveDelegate.*	local	-	-	-	any	1	value, parser or helper; no world state
 Sandbox.ModAPI.MyAPIGateway.Clean()	local	-	-	-	any	0	MyAPIGateway.cs:192 process-wide registration or service; every node runs the mod and registers its own
 Sandbox.ModAPI.MyAPIGateway.ContractSystem	local	-	-	-	any	2	MyAPIGateway.cs:84 accessor of a ModAPI service; the policy is on the members of the returned interface
 Sandbox.ModAPI.MyAPIGateway.CubeBuilder	local	-	-	-	any	11	MyAPIGateway.cs:29 accessor of a ModAPI service; the policy is on the members of the returned interface
@@ -4874,7 +4890,7 @@ Sandbox.ModAPI.MyVRageIngameScriptingAdapter.GetBlacklistedIngameEntries()	local
 Sandbox.ModAPI.MyVRageIngameScriptingAdapter.GetWhitelist()	local	-	-	-	any	0	MyVRageIngameScriptingAdapter.cs:119 value, parser or helper; no world state
 Sandbox.ModAPI.MyVRageIngameScriptingAdapter.OpenIngameBlacklistBatch()	local	-	-	-	any	0	MyVRageIngameScriptingAdapter.cs:137 value, parser or helper; no world state
 Sandbox.ModAPI.MyVRageIngameScriptingAdapter.ScriptBlacklist	local	-	-	-	any	0	MyVRageIngameScriptingAdapter.cs:93 value, parser or helper; no world state
-Sandbox.ModAPI.OnProjectileAddedRemoved.*	local	-	-	-	any	0	value, parser or helper; no world state
+Sandbox.ModAPI.OnProjectileAddedRemoved.*	local	-	-	-	any	3	value, parser or helper; no world state
 Sandbox.ModAPI.RepairResult.*	local	-	-	-	any	0	value, parser or helper; no world state
 SpaceEngineers.Game.Definitions.SafeZone.MySafeZoneBlockDefinition.DefaultSafeZoneRadius	per-node	B7	no	request (WA)	write	3	MySafeZoneBlockDefinition.cs:17 reads the local loaded definition; changing shared definition data at runtime affects this process
 SpaceEngineers.Game.Definitions.SafeZone.MySafeZoneBlockDefinition.MaxSafeZonePowerDrainkW	per-node	B7	no	request (WA)	write	3	MySafeZoneBlockDefinition.cs:19 reads the local loaded definition; changing shared definition data at runtime affects this process
@@ -5221,11 +5237,12 @@ VRage.Game.Components.MyAnimationControllerComponent.BoneAbsoluteTransforms	node
 VRage.Game.Components.MyAnimationControllerComponent.FindBone(System.String,System.Int32@)	node-scoped	?	?	-	any	3	MyAnimationControllerComponent.cs:388 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Components.MyComponentBase.#ctor()	local	-	-	-	any	2	MyComponentBase.cs:6 base constructor the compiler calls when the mod constructs its own component on this node
 VRage.Game.Components.MyComponentBase.GetAs``1()	node-scoped	?	?	-	any	107	MyComponentBase.cs:45 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
-VRage.Game.Components.MyComponentBase.Init(VRage.Game.MyComponentDefinitionBase)	node-scoped	?	?	-	any	5	MyComponentBase.cs:97 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+VRage.Game.Components.MyComponentBase.Init(VRage.Game.MyComponentDefinitionBase)	node-scoped	?	?	-	any	6	MyComponentBase.cs:97 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Components.MyComponentBase.IsSerialized()	node-scoped	?	?	-	any	8	MyComponentBase.cs:105 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
-VRage.Game.Components.MyComponentBase.OnAddedToScene()	node-scoped	?	?	-	any	10	MyComponentBase.cs:67 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
-VRage.Game.Components.MyComponentBase.OnBeforeRemovedFromContainer()	node-scoped	?	?	-	any	1	MyComponentBase.cs:60 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
-VRage.Game.Components.MyComponentBase.OnRemovedFromScene()	node-scoped	?	?	-	any	22	MyComponentBase.cs:74 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+VRage.Game.Components.MyComponentBase.OnAddedToContainer()	node-scoped	?	?	-	any	25	MyComponentBase.cs:53 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+VRage.Game.Components.MyComponentBase.OnAddedToScene()	node-scoped	?	?	-	any	16	MyComponentBase.cs:67 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+VRage.Game.Components.MyComponentBase.OnBeforeRemovedFromContainer()	node-scoped	?	?	-	any	32	MyComponentBase.cs:60 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+VRage.Game.Components.MyComponentBase.OnRemovedFromScene()	node-scoped	?	?	-	any	25	MyComponentBase.cs:74 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Components.MyComponentBase.Serialize(System.Boolean)	node-scoped	?	?	-	any	1	MyComponentBase.cs:78 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Components.MyComponentBase.SetContainer(VRage.Game.Components.Interfaces.IMyComponentContainer)	node-scoped	?	?	-	any	4	MyComponentBase.cs:25 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Components.MyComponentContainer.GetEnumerator()	local	-	-	-	any	2	MyComponentContainer.cs:409 enumerates the collection it is called on
@@ -5233,8 +5250,8 @@ VRage.Game.Components.MyComponentContainer.Get``1()	node-scoped	?	?	-	any	4	MyCo
 VRage.Game.Components.MyEntityComponentBase.#ctor()	local	-	-	-	any	12	MyEntityComponentBase.cs:8 base constructor the compiler calls when the mod constructs its own component on this node
 VRage.Game.Components.MyEntityComponentBase.Container	node-scoped	?	?	-	any	26	MyEntityComponentBase.cs:11 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Components.MyEntityComponentBase.Entity	local	-	-	-	any	250	MyEntityComponentBase.cs:13 implements Sandbox.ModAPI.IMyAiBlockComponent.Entity; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
-VRage.Game.Components.MyEntityComponentBase.OnAddedToContainer()	node-scoped	?	?	-	any	24	MyEntityComponentBase.cs:26 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
-VRage.Game.Components.MyEntityComponentBase.OnBeforeRemovedFromContainer()	node-scoped	?	?	-	any	30	MyEntityComponentBase.cs:36 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+VRage.Game.Components.MyEntityComponentBase.OnAddedToContainer()	node-scoped	?	?	-	any	25	MyEntityComponentBase.cs:26 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+VRage.Game.Components.MyEntityComponentBase.OnBeforeRemovedFromContainer()	node-scoped	?	?	-	any	31	MyEntityComponentBase.cs:36 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Components.MyEntityComponentDescriptor.#ctor(System.Type,System.Boolean,System.String[])	local	-	-	-	any	220	MyEntityComponentDescriptor.cs:22 constructs an object in this process; what the mod then does with it has its own row
 VRage.Game.Components.MyEntityComponentDescriptor.#ctor(System.Type,System.String[])	local	-	-	-	any	23	MyEntityComponentDescriptor.cs:14 constructs an object in this process; what the mod then does with it has its own row
 VRage.Game.Components.MyEntityStorageComponent.#ctor()	local	-	-	-	any	1	MyEntityStorageComponent.cs:12 constructs an object in this process; what the mod then does with it has its own row
@@ -5243,21 +5260,21 @@ VRage.Game.Components.MyEntityStorageComponent.ReadStringList(System.String)	nod
 VRage.Game.Components.MyEntityStorageComponent.Write(System.String,System.Boolean)	node-scoped	?	?	-	any	1	MyEntityStorageComponent.cs:91 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Components.MyEntityStorageComponent.Write(System.String,System.Collections.Generic.List{System.String})	node-scoped	?	?	-	any	1	MyEntityStorageComponent.cs:193 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Components.MyGameLogicComponent.#ctor()	local	-	-	-	any	251	MyGameLogicComponent.cs:10 base constructor the compiler calls when the mod constructs its own component on this node
-VRage.Game.Components.MyGameLogicComponent.Close()	per-node	B4	no	to-owner	any	35	MyGameLogicComponent.cs:248 component lifecycle follows the local entity; release/import can close and initialize it during handover
+VRage.Game.Components.MyGameLogicComponent.Close()	per-node	B4	no	to-owner	any	38	MyGameLogicComponent.cs:248 component lifecycle follows the local entity; release/import can close and initialize it during handover
 VRage.Game.Components.MyGameLogicComponent.Closed	local	-	-	-	any	8	MyGameLogicComponent.cs:105 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyGameLogicComponent.GetObjectBuilder(System.Boolean)	local	-	-	-	any	2	MyGameLogicComponent.cs:239 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyGameLogicComponent.Init(VRage.ObjectBuilders.MyObjectBuilder_EntityBase)	per-node	B4	no	to-owner	any	101	MyGameLogicComponent.cs:235 component lifecycle follows the local entity; release/import can close and initialize it during handover
+VRage.Game.Components.MyGameLogicComponent.Init(VRage.ObjectBuilders.MyObjectBuilder_EntityBase)	per-node	B4	no	to-owner	any	108	MyGameLogicComponent.cs:235 component lifecycle follows the local entity; release/import can close and initialize it during handover
 VRage.Game.Components.MyGameLogicComponent.MarkForClose()	per-node	B4	no	to-owner	any	15	MyGameLogicComponent.cs:244 component lifecycle follows the local entity; release/import can close and initialize it during handover
 VRage.Game.Components.MyGameLogicComponent.MarkedForClose	local	-	-	-	any	10	MyGameLogicComponent.cs:108 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyGameLogicComponent.ModContext	local	-	-	-	any	4	MyGameLogicComponent.cs:116 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyGameLogicComponent.NeedsUpdate	local	-	-	-	any	204	MyGameLogicComponent.cs:30 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyGameLogicComponent.UpdateAfterSimulation()	local	-	-	-	any	10	MyGameLogicComponent.cs:219 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyGameLogicComponent.UpdateAfterSimulation10()	local	-	-	-	any	3	MyGameLogicComponent.cs:223 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyGameLogicComponent.UpdateAfterSimulation100()	local	-	-	-	any	9	MyGameLogicComponent.cs:227 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyGameLogicComponent.UpdateBeforeSimulation()	local	-	-	-	any	43	MyGameLogicComponent.cs:207 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyGameLogicComponent.UpdateBeforeSimulation10()	local	-	-	-	any	9	MyGameLogicComponent.cs:211 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyGameLogicComponent.UpdateBeforeSimulation100()	local	-	-	-	any	18	MyGameLogicComponent.cs:215 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyGameLogicComponent.UpdateOnceBeforeFrame()	local	-	-	-	any	38	MyGameLogicComponent.cs:203 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyGameLogicComponent.UpdateAfterSimulation()	local	-	-	-	any	14	MyGameLogicComponent.cs:219 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyGameLogicComponent.UpdateAfterSimulation10()	local	-	-	-	any	6	MyGameLogicComponent.cs:223 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyGameLogicComponent.UpdateAfterSimulation100()	local	-	-	-	any	14	MyGameLogicComponent.cs:227 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyGameLogicComponent.UpdateBeforeSimulation()	local	-	-	-	any	44	MyGameLogicComponent.cs:207 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyGameLogicComponent.UpdateBeforeSimulation10()	local	-	-	-	any	10	MyGameLogicComponent.cs:211 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyGameLogicComponent.UpdateBeforeSimulation100()	local	-	-	-	any	19	MyGameLogicComponent.cs:215 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyGameLogicComponent.UpdateOnceBeforeFrame()	local	-	-	-	any	44	MyGameLogicComponent.cs:203 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyGameLogicComponent.UpdatingStopped()	local	-	-	-	any	12	MyGameLogicComponent.cs:231 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyHierarchyComponentBase.AddChild(VRage.ModAPI.IMyEntity,System.Boolean,System.Boolean)	local	-	-	-	any	2	MyHierarchyComponentBase.cs:136 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyHierarchyComponentBase.ChildId	local	-	-	-	any	2	MyHierarchyComponentBase.cs:52 acts on the local entity, its components, or its grid group
@@ -5274,34 +5291,35 @@ VRage.Game.Components.MyModStorageComponentBase.Item(System.Guid)	local	-	-	-	an
 VRage.Game.Components.MyModStorageComponentBase.Remove(System.Guid)	local	-	-	-	any	1	MyModStorageComponentBase.cs:111 storage on the host entity; its serialized state follows that entity at handover
 VRage.Game.Components.MyModStorageComponentBase.RemoveValue(System.Guid)	local	-	-	-	any	8	MyModStorageComponentBase.cs:62 storage on the host entity; its serialized state follows that entity at handover
 VRage.Game.Components.MyModStorageComponentBase.SetValue(System.Guid,System.String)	local	-	-	-	any	15	MyModStorageComponentBase.cs:56 storage on the host entity; its serialized state follows that entity at handover
-VRage.Game.Components.MyModStorageComponentBase.TryGetValue(System.Guid,System.String@)	local	-	-	-	any	52	MyModStorageComponentBase.cs:49 storage on the host entity; its serialized state follows that entity at handover
+VRage.Game.Components.MyModStorageComponentBase.TryGetValue(System.Guid,System.String@)	local	-	-	-	any	54	MyModStorageComponentBase.cs:49 storage on the host entity; its serialized state follows that entity at handover
 VRage.Game.Components.MyPhysicsComponentBase.Activate()	local	-	-	-	any	2	MyPhysicsComponentBase.cs:344 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyPhysicsComponentBase.AddForce(VRage.Game.Components.MyPhysicsForceType,System.Nullable{VRageMath.Vector3},System.Nullable{VRageMath.Vector3D},System.Nullable{VRageMath.Vector3},System.Nullable{System.Single},System.Boolean,System.Boolean)	local	-	-	-	any	61	MyPhysicsComponentBase.cs:315 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyPhysicsComponentBase.AddForce(VRage.Game.Components.MyPhysicsForceType,System.Nullable{VRageMath.Vector3},System.Nullable{VRageMath.Vector3D},System.Nullable{VRageMath.Vector3},System.Nullable{System.Single},System.Boolean,System.Boolean)	local	-	-	-	any	67	MyPhysicsComponentBase.cs:315 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.AngularAcceleration	local	-	-	-	any	3	MyPhysicsComponentBase.cs:225 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.AngularDamping	local	-	-	-	any	3	MyPhysicsComponentBase.cs:241 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyPhysicsComponentBase.AngularVelocity	local	-	-	-	any	25	MyPhysicsComponentBase.cs:187 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyPhysicsComponentBase.AngularVelocity	local	-	-	-	any	28	MyPhysicsComponentBase.cs:187 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.AngularVelocityLocal	local	-	-	-	any	1	MyPhysicsComponentBase.cs:199 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.ApplyImpulse(VRageMath.Vector3,VRageMath.Vector3D)	local	-	-	-	any	2	MyPhysicsComponentBase.cs:322 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.CenterOfMassLocal	local	-	-	-	any	1	MyPhysicsComponentBase.cs:273 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyPhysicsComponentBase.CenterOfMassWorld	local	-	-	-	any	51	MyPhysicsComponentBase.cs:275 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyPhysicsComponentBase.ClearSpeed()	local	-	-	-	any	4	MyPhysicsComponentBase.cs:327 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyPhysicsComponentBase.CenterOfMassWorld	local	-	-	-	any	57	MyPhysicsComponentBase.cs:275 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyPhysicsComponentBase.ClearSpeed()	local	-	-	-	any	7	MyPhysicsComponentBase.cs:327 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.Close()	local	-	-	-	any	3	MyPhysicsComponentBase.cs:297 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.Deactivate()	local	-	-	-	any	3	MyPhysicsComponentBase.cs:349 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.DebugDraw()	local	-	-	-	any	1	MyPhysicsComponentBase.cs:339 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.Enabled	local	-	-	-	any	39	MyPhysicsComponentBase.cs:96 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyPhysicsComponentBase.ForceActivate()	local	-	-	-	any	1	MyPhysicsComponentBase.cs:351 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.Friction	local	-	-	-	any	3	MyPhysicsComponentBase.cs:251 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyPhysicsComponentBase.GetVelocityAtPoint(VRageMath.Vector3D)	local	-	-	-	any	16	MyPhysicsComponentBase.cs:293 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyPhysicsComponentBase.GetVelocityAtPointLocal(VRageMath.Vector3D@,VRageMath.Vector3@)	local	-	-	-	any	1	MyPhysicsComponentBase.cs:295 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyPhysicsComponentBase.Gravity	local	-	-	-	any	11	MyPhysicsComponentBase.cs:265 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyPhysicsComponentBase.GetVelocityAtPoint(VRageMath.Vector3D)	local	-	-	-	any	20	MyPhysicsComponentBase.cs:293 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyPhysicsComponentBase.GetVelocityAtPointLocal(VRageMath.Vector3D@,VRageMath.Vector3@)	local	-	-	-	any	2	MyPhysicsComponentBase.cs:295 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyPhysicsComponentBase.Gravity	local	-	-	-	any	15	MyPhysicsComponentBase.cs:265 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.HasRigidBody	local	-	-	-	any	1	MyPhysicsComponentBase.cs:271 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.IsActive	local	-	-	-	any	2	MyPhysicsComponentBase.cs:269 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.IsMoving	local	-	-	-	any	3	MyPhysicsComponentBase.cs:263 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.IsPhantom	local	-	-	-	any	4	MyPhysicsComponentBase.cs:36 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyPhysicsComponentBase.IsStatic	local	-	-	-	any	16	MyPhysicsComponentBase.cs:70 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyPhysicsComponentBase.IsStatic	local	-	-	-	any	23	MyPhysicsComponentBase.cs:70 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.LinearAcceleration	local	-	-	-	any	10	MyPhysicsComponentBase.cs:223 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.LinearDamping	local	-	-	-	any	3	MyPhysicsComponentBase.cs:233 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyPhysicsComponentBase.LinearVelocity	local	-	-	-	any	106	MyPhysicsComponentBase.cs:151 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyPhysicsComponentBase.Mass	local	-	-	-	any	33	MyPhysicsComponentBase.cs:141 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyPhysicsComponentBase.LinearVelocity	local	-	-	-	any	108	MyPhysicsComponentBase.cs:151 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyPhysicsComponentBase.Mass	local	-	-	-	any	34	MyPhysicsComponentBase.cs:141 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.MaterialType	local	-	-	-	any	1	MyPhysicsComponentBase.cs:62 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.SetSpeeds(VRageMath.Vector3,VRageMath.Vector3)	local	-	-	-	any	8	MyPhysicsComponentBase.cs:366 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPhysicsComponentBase.Speed	local	-	-	-	any	7	MyPhysicsComponentBase.cs:249 acts on the local entity, its components, or its grid group
@@ -5329,7 +5347,7 @@ VRage.Game.Components.MyPositionComponentBase.WorldMatrixInvScaled	local	-	-	-	a
 VRage.Game.Components.MyPositionComponentBase.WorldMatrixNormalizedInv	local	-	-	-	any	20	MyPositionComponentBase.cs:294 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPositionComponentBase.WorldMatrixRef	local	-	-	-	any	36	MyPositionComponentBase.cs:58 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyPositionComponentBase.WorldVolume	local	-	-	-	any	29	MyPositionComponentBase.cs:132 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyRenderComponentBase.AddRenderObjects()	client	-	-	-	any	9	MyRenderComponentBase.cs:593 controls rendering, the local build tool, or screen presentation
+VRage.Game.Components.MyRenderComponentBase.AddRenderObjects()	client	-	-	-	any	10	MyRenderComponentBase.cs:593 controls rendering, the local build tool, or screen presentation
 VRage.Game.Components.MyRenderComponentBase.CastShadows	client	-	-	-	any	13	MyRenderComponentBase.cs:219 controls rendering, the local build tool, or screen presentation
 VRage.Game.Components.MyRenderComponentBase.ColorMaskHsv	client	-	-	-	any	30	MyRenderComponentBase.cs:80 controls rendering, the local build tool, or screen presentation
 VRage.Game.Components.MyRenderComponentBase.DrawInAllCascades	client	-	-	-	any	1	MyRenderComponentBase.cs:144 controls rendering, the local build tool, or screen presentation
@@ -5356,32 +5374,38 @@ VRage.Game.Components.MyRenderComponentBase.UpdateRenderObjectLocal(VRageMath.Ma
 VRage.Game.Components.MyRenderComponentBase.UpdateRenderTextureChanges(System.Collections.Generic.Dictionary{VRage.Utils.MyStringId,VRageRender.Messages.MyTextureChange})	client	-	-	-	any	2	MyRenderComponentBase.cs:439 controls rendering, the local build tool, or screen presentation
 VRage.Game.Components.MyRenderComponentBase.UpdateTransparency()	client	-	-	-	any	7	MyRenderComponentBase.cs:636 controls rendering, the local build tool, or screen presentation
 VRage.Game.Components.MyRenderComponentBase.Visible	client	-	-	-	any	41	MyRenderComponentBase.cs:120 controls rendering, the local build tool, or screen presentation
-VRage.Game.Components.MyResourceSinkComponentBase.CurrentInputByType(VRage.Game.MyDefinitionId)	local	-	-	-	any	3	MyResourceSinkComponentBase.cs:14 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyResourceSinkComponentBase.IsPowerAvailable(VRage.Game.MyDefinitionId,System.Single)	local	-	-	-	any	2	MyResourceSinkComponentBase.cs:16 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyResourceSinkComponentBase.IsPoweredByType(VRage.Game.MyDefinitionId)	local	-	-	-	any	1	MyResourceSinkComponentBase.cs:18 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyResourceSinkComponentBase.MaxRequiredInputByType(VRage.Game.MyDefinitionId)	local	-	-	-	any	1	MyResourceSinkComponentBase.cs:20 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyResourceSinkComponentBase.RequiredInputByType(VRage.Game.MyDefinitionId)	local	-	-	-	any	3	MyResourceSinkComponentBase.cs:24 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyResourceSinkComponentBase.SetMaxRequiredInputByType(VRage.Game.MyDefinitionId,System.Single)	local	-	-	-	any	1	MyResourceSinkComponentBase.cs:22 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyResourceSinkComponentBase.SetRequiredInputFuncByType(VRage.Game.MyDefinitionId,System.Func{System.Single})	local	-	-	-	any	1	MyResourceSinkComponentBase.cs:30 acts on the local entity, its components, or its grid group
-VRage.Game.Components.MyResourceSinkComponentBase.SuppliedRatioByType(VRage.Game.MyDefinitionId)	local	-	-	-	any	3	MyResourceSinkComponentBase.cs:32 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyResourceSinkComponentBase.AcceptedResources	local	-	-	-	any	8	MyResourceSinkComponentBase.cs:10 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyResourceSinkComponentBase.CurrentInputByType(VRage.Game.MyDefinitionId)	local	-	-	-	any	28	MyResourceSinkComponentBase.cs:14 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyResourceSinkComponentBase.IsPowerAvailable(VRage.Game.MyDefinitionId,System.Single)	local	-	-	-	any	24	MyResourceSinkComponentBase.cs:16 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyResourceSinkComponentBase.IsPoweredByType(VRage.Game.MyDefinitionId)	local	-	-	-	any	12	MyResourceSinkComponentBase.cs:18 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyResourceSinkComponentBase.MaxRequiredInputByType(VRage.Game.MyDefinitionId)	local	-	-	-	any	14	MyResourceSinkComponentBase.cs:20 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyResourceSinkComponentBase.RequiredInputByType(VRage.Game.MyDefinitionId)	local	-	-	-	any	20	MyResourceSinkComponentBase.cs:24 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyResourceSinkComponentBase.SetInputFromDistributor(VRage.Game.MyDefinitionId,System.Single,System.Boolean,System.Boolean)	local	-	-	-	any	1	MyResourceSinkComponentBase.cs:26 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyResourceSinkComponentBase.SetMaxRequiredInputByType(VRage.Game.MyDefinitionId,System.Single)	local	-	-	-	any	51	MyResourceSinkComponentBase.cs:22 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyResourceSinkComponentBase.SetRequiredInputByType(VRage.Game.MyDefinitionId,System.Single)	local	-	-	-	any	27	MyResourceSinkComponentBase.cs:28 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyResourceSinkComponentBase.SetRequiredInputFuncByType(VRage.Game.MyDefinitionId,System.Func{System.Single})	local	-	-	-	any	31	MyResourceSinkComponentBase.cs:30 acts on the local entity, its components, or its grid group
+VRage.Game.Components.MyResourceSinkComponentBase.SuppliedRatioByType(VRage.Game.MyDefinitionId)	local	-	-	-	any	25	MyResourceSinkComponentBase.cs:32 acts on the local entity, its components, or its grid group
 VRage.Game.Components.MyResourceSinkInfo.#ctor()	local	-	-	-	any	35	MyResourceSinkInfo.cs:5 constructs an object in this process; what the mod then does with it has its own row
 VRage.Game.Components.MyResourceSinkInfo.MaxRequiredInput	local	-	-	-	any	33	MyResourceSinkInfo.cs:9 field on this value; persistence or replication depends on how its containing value is used
 VRage.Game.Components.MyResourceSinkInfo.RequiredInputFunc	local	-	-	-	any	32	MyResourceSinkInfo.cs:11 field on this value; persistence or replication depends on how its containing value is used
 VRage.Game.Components.MyResourceSinkInfo.ResourceTypeId	local	-	-	-	any	35	MyResourceSinkInfo.cs:7 field on this value; persistence or replication depends on how its containing value is used
+VRage.Game.Components.MyResourceSourceComponentBase.CurrentOutputByType(VRage.Game.MyDefinitionId)	node-scoped	?	?	-	any	8	MyResourceSourceComponentBase.cs:8 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+VRage.Game.Components.MyResourceSourceComponentBase.DefinedOutputByType(VRage.Game.MyDefinitionId)	node-scoped	?	?	-	any	6	MyResourceSourceComponentBase.cs:18 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+VRage.Game.Components.MyResourceSourceComponentBase.MaxOutputByType(VRage.Game.MyDefinitionId)	node-scoped	?	?	-	any	7	MyResourceSourceComponentBase.cs:13 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Components.MySessionComponentBase.#ctor()	local	-	-	-	any	401	MySessionComponentBase.cs:70 base constructor the compiler calls when the mod constructs its own component on this node
 VRage.Game.Components.MySessionComponentBase.BeforeStart()	per-node	B6	no	role (act on WA only)	any	33	MySessionComponentBase.cs:163 runs in each process that registers the mod session component; world actions can repeat
 VRage.Game.Components.MySessionComponentBase.DebugName	node-scoped	?	?	-	any	10	MySessionComponentBase.cs:12 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
-VRage.Game.Components.MySessionComponentBase.Draw()	node-scoped	?	?	-	any	24	MySessionComponentBase.cs:183 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+VRage.Game.Components.MySessionComponentBase.Draw()	node-scoped	?	?	-	any	35	MySessionComponentBase.cs:183 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Components.MySessionComponentBase.GetObjectBuilder()	node-scoped	?	?	-	any	12	MySessionComponentBase.cs:126 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Components.MySessionComponentBase.HandleInput()	node-scoped	?	?	-	any	4	MySessionComponentBase.cs:187 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
-VRage.Game.Components.MySessionComponentBase.Init(VRage.Game.MyObjectBuilder_SessionComponent)	per-node	B6	no	role (act on WA only)	any	11	MySessionComponentBase.cs:105 runs in each process that registers the mod session component; world actions can repeat
-VRage.Game.Components.MySessionComponentBase.LoadData()	per-node	B6	no	role (act on WA only)	any	54	MySessionComponentBase.cs:151 runs in each process that registers the mod session component; world actions can repeat
+VRage.Game.Components.MySessionComponentBase.Init(VRage.Game.MyObjectBuilder_SessionComponent)	per-node	B6	no	role (act on WA only)	any	21	MySessionComponentBase.cs:105 runs in each process that registers the mod session component; world actions can repeat
+VRage.Game.Components.MySessionComponentBase.LoadData()	per-node	B6	no	role (act on WA only)	any	65	MySessionComponentBase.cs:151 runs in each process that registers the mod session component; world actions can repeat
 VRage.Game.Components.MySessionComponentBase.ModContext	node-scoped	?	?	-	any	158	MySessionComponentBase.cs:26 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Components.MySessionComponentBase.SaveData()	per-node	B6	no	role (act on WA only)	any	20	MySessionComponentBase.cs:159 runs in each process that registers the mod session component; world actions can repeat
 VRage.Game.Components.MySessionComponentBase.Session	node-scoped	?	?	-	any	16	MySessionComponentBase.cs:28 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Components.MySessionComponentBase.SetUpdateOrder(VRage.Game.Components.MyUpdateOrder)	node-scoped	?	?	-	any	35	MySessionComponentBase.cs:95 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Components.MySessionComponentBase.Simulate()	per-node	B6	no	role (act on WA only)	any	2	MySessionComponentBase.cs:171 runs in each process that registers the mod session component; world actions can repeat
-VRage.Game.Components.MySessionComponentBase.UnloadData()	per-node	B6	no	role (act on WA only)	any	70	MySessionComponentBase.cs:155 runs in each process that registers the mod session component; world actions can repeat
+VRage.Game.Components.MySessionComponentBase.UnloadData()	per-node	B6	no	role (act on WA only)	any	76	MySessionComponentBase.cs:155 runs in each process that registers the mod session component; world actions can repeat
 VRage.Game.Components.MySessionComponentBase.UpdateAfterSimulation()	per-node	B6	no	role (act on WA only)	any	28	MySessionComponentBase.cs:175 runs in each process that registers the mod session component; world actions can repeat
 VRage.Game.Components.MySessionComponentBase.UpdateBeforeSimulation()	per-node	B6	no	role (act on WA only)	any	33	MySessionComponentBase.cs:167 runs in each process that registers the mod session component; world actions can repeat
 VRage.Game.Components.MySessionComponentBase.UpdateOnPause	node-scoped	?	?	-	any	1	MySessionComponentBase.cs:48 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
@@ -5430,6 +5454,7 @@ VRage.Game.Entity.MyEntity.DefinitionId	local	-	-	-	any	13	MyEntity.cs:236 opera
 VRage.Game.Entity.MyEntity.Delete()	local	-	-	-	any	1	MyEntity.cs:2204 implements VRage.ModAPI.IMyEntity.Delete(); acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 VRage.Game.Entity.MyEntity.DisplayName	local	-	-	-	any	34	MyEntity.cs:796 implements VRage.Game.ModAPI.Ingame.IMyEntity.DisplayName; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 VRage.Game.Entity.MyEntity.DisplayNameText	local	-	-	-	any	5	MyEntity.cs:856 implements VRage.Game.ModAPI.Ingame.IMyCubeBlock.DisplayNameText; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
+VRage.Game.Entity.MyEntity.DoOverlapSphereTest(System.Single,VRageMath.Vector3D)	local	-	-	-	any	3	MyEntity.cs:1785 implements VRage.ModAPI.IMyEntity.DoOverlapSphereTest(System.Single,VRageMath.Vector3D); acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 VRage.Game.Entity.MyEntity.EntityId	local	-	-	-	any	67	MyEntity.cs:376 implements VRage.Game.ModAPI.Ingame.IMyEntity.EntityId; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 VRage.Game.Entity.MyEntity.EntityStorage	node-scoped	?	?	-	any	1	MyEntity.cs:430 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Entity.MyEntity.Flags	local	-	-	-	any	22	MyEntity.cs:861 implements VRage.ModAPI.IMyEntity.Flags; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
@@ -5437,10 +5462,12 @@ VRage.Game.Entity.MyEntity.GameLogic	local	-	-	-	any	7	MyEntity.cs:361 implement
 VRage.Game.Entity.MyEntity.GetDistanceBetweenCameraAndBoundingSphere()	client	-	-	-	any	1	MyEntity.cs:1804 implements VRage.ModAPI.IMyEntity.GetDistanceBetweenCameraAndBoundingSphere(); client UI, input, camera, audio or HUD; nothing to do on a server
 VRage.Game.Entity.MyEntity.GetFriendlyName()	local	-	-	-	any	1	MyEntity.cs:1649 implements VRage.ModAPI.IMyEntity.GetFriendlyName(); acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 VRage.Game.Entity.MyEntity.GetIntersectionWithAABB(VRageMath.BoundingBoxD@)	local	-	-	-	any	1	MyEntity.cs:1775 implements VRage.ModAPI.IMyEntity.GetIntersectionWithAABB(VRageMath.BoundingBoxD@); acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
-VRage.Game.Entity.MyEntity.GetIntersectionWithLine(VRageMath.LineD@,System.Nullable{VRageMath.Vector3D}@,System.Boolean,VRage.Game.Components.IntersectionFlags)	local	-	-	-	any	1	MyEntity.cs:1712 operates on this entity or its physical or logical group
+VRage.Game.Entity.MyEntity.GetIntersectionWithLine(VRageMath.LineD@,System.Nullable{VRage.Game.Models.MyIntersectionResultLineTriangleEx}@,VRage.Game.Components.IntersectionFlags)	local	-	-	-	any	1	MyEntity.cs:1732 implements VRage.ModAPI.IMyEntity.GetIntersectionWithLine(VRageMath.LineD@,System.Nullable{VRage.Game.Models.MyIntersectionResultLineTriangleEx}@,VRage.Game.Components.IntersectionFlags); acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
+VRage.Game.Entity.MyEntity.GetIntersectionWithLine(VRageMath.LineD@,System.Nullable{VRageMath.Vector3D}@,System.Boolean,VRage.Game.Components.IntersectionFlags)	local	-	-	-	any	11	MyEntity.cs:1712 operates on this entity or its physical or logical group
+VRage.Game.Entity.MyEntity.GetIntersectionWithSphere(VRageMath.BoundingSphereD@)	local	-	-	-	any	1	MyEntity.cs:1770 implements VRage.ModAPI.IMyEntity.GetIntersectionWithSphere(VRageMath.BoundingSphereD@); acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 VRage.Game.Entity.MyEntity.GetInventoryBase()	local	-	-	-	any	8	MyEntity.cs:2432 operates on this entity or its physical or logical group
 VRage.Game.Entity.MyEntity.GetInventoryBase(System.Int32)	local	-	-	-	any	7	MyEntity.cs:2418 operates on this entity or its physical or logical group
-VRage.Game.Entity.MyEntity.GetObjectBuilder(System.Boolean)	local	-	-	-	any	1	MyEntity.cs:2294 implements VRage.ModAPI.IMyEntity.GetObjectBuilder(System.Boolean); acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
+VRage.Game.Entity.MyEntity.GetObjectBuilder(System.Boolean)	local	-	-	-	any	3	MyEntity.cs:2294 implements VRage.ModAPI.IMyEntity.GetObjectBuilder(System.Boolean); acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 VRage.Game.Entity.MyEntity.GetSubpart(System.String)	local	-	-	-	any	12	MyEntity.cs:1588 implements VRage.ModAPI.IMyEntity.GetSubpart(System.String); acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 VRage.Game.Entity.MyEntity.GetTopMostParent(System.Type)	local	-	-	-	any	11	MyEntity.cs:1405 implements VRage.ModAPI.IMyEntity.GetTopMostParent(System.Type); acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 VRage.Game.Entity.MyEntity.GetViewMatrix()	local	-	-	-	any	1	MyEntity.cs:1654 implements VRage.ModAPI.IMyEntity.GetViewMatrix(); acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
@@ -5481,7 +5508,7 @@ VRage.Game.Entity.MyEntity.Storage	local	-	-	-	any	4	MyEntity.cs:418 implements 
 VRage.Game.Entity.MyEntity.Subparts	local	-	-	-	any	46	MyEntity.cs:821 operates on this entity or its physical or logical group
 VRage.Game.Entity.MyEntity.SyncFlag	local	-	-	-	any	19	MyEntity.cs:716 operates on this entity or its physical or logical group
 VRage.Game.Entity.MyEntity.SyncObject	local	-	-	-	any	1	MyEntity.cs:406 implements VRage.ModAPI.IMyEntity.SyncObject; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
-VRage.Game.Entity.MyEntity.Teleport(VRageMath.MatrixD,System.Object,System.Boolean)	affinity	B3,B4	no	owner-of / to-owner	any	2	MyEntity.cs:1659 implements VRage.ModAPI.IMyEntity.Teleport(VRageMath.MatrixD,System.Object,System.Boolean); moves the entity to any position, also into a partition another node hosts; this node places it without seeing that node's entities, then hands it over, so references held here stop resolving and its logic components are recreated there
+VRage.Game.Entity.MyEntity.Teleport(VRageMath.MatrixD,System.Object,System.Boolean)	affinity	B3,B4	no	owner-of / to-owner	any	3	MyEntity.cs:1659 implements VRage.ModAPI.IMyEntity.Teleport(VRageMath.MatrixD,System.Object,System.Boolean); moves the entity to any position, also into a partition another node hosts; this node places it without seeing that node's entities, then hands it over, so references held here stop resolving and its logic components are recreated there
 VRage.Game.Entity.MyEntity.ToString()	local	-	-	-	any	5	MyEntity.cs:2410 operates on this entity or its physical or logical group
 VRage.Game.Entity.MyEntity.TopMostPruningProxyId	local	-	-	-	any	3	MyEntity.cs:258 operates on this entity or its physical or logical group
 VRage.Game.Entity.MyEntity.TryGetSubpart(System.String,VRage.Game.Entity.MyEntitySubpart@)	local	-	-	-	any	16	MyEntity.cs:1593 implements VRage.ModAPI.IMyEntity.TryGetSubpart(System.String,VRage.Game.Entity.MyEntitySubpart@); acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
@@ -5489,18 +5516,27 @@ VRage.Game.Entity.MyEntity.UpdateBeforeSimulation100()	local	-	-	-	any	3	MyEntit
 VRage.Game.Entity.MyEntity.UpdateNamedEmissiveParts(System.UInt32,System.String,VRageMath.Color,System.Single)	node-scoped	?	?	-	any	2	MyEntity.cs:2364 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Entity.MyEntity.WorldMatrix	local	-	-	-	any	96	MyEntity.cs:605 implements VRage.Game.ModAPI.Ingame.IMyEntity.WorldMatrix; acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 VRage.Game.Entity.MyEntitySubpart.#ctor()	local	-	-	-	any	5	MyEntitySubpart.cs:66 constructs an object in this process; what the mod then does with it has its own row
-VRage.Game.Entity.MyInventoryBase.AddItems(VRage.MyFixedPoint,VRage.ObjectBuilders.MyObjectBuilder_Base)	local	-	-	-	any	8	MyInventoryBase.cs:119 operates on the inventory instance of a locally held entity
-VRage.Game.Entity.MyInventoryBase.ComputeAmountThatFits(VRage.Game.MyDefinitionId,System.Single,System.Single)	local	-	-	-	any	1	MyInventoryBase.cs:95 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.Add(VRage.Game.ModAPI.Ingame.IMyInventoryItem,VRage.MyFixedPoint)	local	-	-	-	any	5	MyInventoryBase.cs:103 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.AddItems(VRage.MyFixedPoint,VRage.ObjectBuilders.MyObjectBuilder_Base)	local	-	-	-	any	20	MyInventoryBase.cs:119 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.ComputeAmountThatFits(VRage.Game.MyDefinitionId,System.Single,System.Single)	local	-	-	-	any	7	MyInventoryBase.cs:95 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.ConsumeItem(VRage.Game.MyDefinitionId,VRage.MyFixedPoint,System.Int64)	local	-	-	-	any	1	MyInventoryBase.cs:173 operates on the inventory instance of a locally held entity
 VRage.Game.Entity.MyInventoryBase.ContentsChanged	local	-	-	-	any	4	MyInventoryBase.cs:52 operates on the inventory instance of a locally held entity
-VRage.Game.Entity.MyInventoryBase.CurrentMass	local	-	-	-	any	1	MyInventoryBase.cs:33 operates on the inventory instance of a locally held entity
-VRage.Game.Entity.MyInventoryBase.CurrentVolume	local	-	-	-	any	4	MyInventoryBase.cs:39 operates on the inventory instance of a locally held entity
-VRage.Game.Entity.MyInventoryBase.GetItems()	local	-	-	-	any	5	MyInventoryBase.cs:111 operates on the inventory instance of a locally held entity
-VRage.Game.Entity.MyInventoryBase.GetItemsCount()	local	-	-	-	any	2	MyInventoryBase.cs:143 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.CountItems(System.Collections.Generic.Dictionary{VRage.Game.MyDefinitionId,VRage.MyFixedPoint})	local	-	-	-	any	1	MyInventoryBase.cs:107 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.CurrentMass	local	-	-	-	any	4	MyInventoryBase.cs:33 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.CurrentVolume	local	-	-	-	any	11	MyInventoryBase.cs:39 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.GetItemAmount(VRage.Game.MyDefinitionId,VRage.Game.MyItemFlags,System.Boolean)	local	-	-	-	any	18	MyInventoryBase.cs:97 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.GetItems()	local	-	-	-	any	18	MyInventoryBase.cs:111 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.GetItemsCount()	local	-	-	-	any	3	MyInventoryBase.cs:143 operates on the inventory instance of a locally held entity
 VRage.Game.Entity.MyInventoryBase.InventoryContentChanged	local	-	-	-	any	9	MyInventoryBase.cs:62 operates on the inventory instance of a locally held entity
-VRage.Game.Entity.MyInventoryBase.MaxVolume	local	-	-	-	any	1	MyInventoryBase.cs:41 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.ItemsCanBeAdded(VRage.MyFixedPoint,VRage.Game.ModAPI.Ingame.IMyInventoryItem)	local	-	-	-	any	3	MyInventoryBase.cs:99 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.ItemsCanBeRemoved(VRage.MyFixedPoint,VRage.Game.ModAPI.Ingame.IMyInventoryItem)	local	-	-	-	any	1	MyInventoryBase.cs:101 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.MaxMass	local	-	-	-	any	6	MyInventoryBase.cs:35 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.MaxVolume	local	-	-	-	any	9	MyInventoryBase.cs:41 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.OnContentsChanged()	local	-	-	-	any	1	MyInventoryBase.cs:131 operates on the inventory instance of a locally held entity
 VRage.Game.Entity.MyInventoryBase.RaiseContentsChanged()	local	-	-	-	any	1	MyInventoryBase.cs:175 operates on the inventory instance of a locally held entity
 VRage.Game.Entity.MyInventoryBase.RaiseInventoryContentChanged(VRage.Game.Entity.MyPhysicalInventoryItem,VRage.MyFixedPoint)	local	-	-	-	any	1	MyInventoryBase.cs:185 operates on the inventory instance of a locally held entity
-VRage.Game.Entity.MyInventoryBase.Remove(VRage.Game.ModAPI.Ingame.IMyInventoryItem,VRage.MyFixedPoint)	local	-	-	-	any	3	MyInventoryBase.cs:105 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.Remove(VRage.Game.ModAPI.Ingame.IMyInventoryItem,VRage.MyFixedPoint)	local	-	-	-	any	5	MyInventoryBase.cs:105 operates on the inventory instance of a locally held entity
+VRage.Game.Entity.MyInventoryBase.RemoveItemsOfType(VRage.MyFixedPoint,VRage.Game.MyDefinitionId,VRage.Game.MyItemFlags,System.Boolean)	local	-	-	-	any	7	MyInventoryBase.cs:129 operates on the inventory instance of a locally held entity
 VRage.Game.Entity.MyPhysicalInventoryItem.#ctor()	local	-	-	-	any	2	MyPhysicalInventoryItem.cs:14 constructs an object in this process; what the mod then does with it has its own row
 VRage.Game.Entity.MyPhysicalInventoryItem.#ctor(VRage.MyFixedPoint,VRage.Game.MyObjectBuilder_PhysicalObject,System.Single)	local	-	-	-	any	6	MyPhysicalInventoryItem.cs:206 constructs an object in this process; what the mod then does with it has its own row
 VRage.Game.Entity.MyPhysicalInventoryItem.Amount	local	-	-	-	any	20	MyPhysicalInventoryItem.cs:137 implements VRage.Game.ModAPI.Ingame.IMyInventoryItem.Amount; value, parser or helper; no world state
@@ -5524,6 +5560,9 @@ VRage.Game.Entity.UseObject.MyUseObjectBase.#ctor(VRage.ModAPI.IMyEntity,VRage.G
 VRage.Game.Entity.UseObject.MyUseObjectBase.ActivationMatrix	node-scoped	?	?	-	any	1	MyUseObjectBase.cs:15 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Entity.UseObject.MyUseObjectBase.Dummy	node-scoped	?	?	-	any	1	MyUseObjectBase.cs:11 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Entity.UseObject.MyUseObjectBase.Owner	node-scoped	?	?	-	any	1	MyUseObjectBase.cs:9 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+VRage.Game.Entity.UseObject.MyUseObjectBase.PrimaryAction	node-scoped	?	?	-	any	1	MyUseObjectBase.cs:27 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+VRage.Game.Entity.UseObject.MyUseObjectBase.SecondaryAction	node-scoped	?	?	-	any	1	MyUseObjectBase.cs:29 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
+VRage.Game.Entity.UseObject.MyUseObjectBase.Use(VRage.Game.Entity.UseObject.UseActionEnum,VRage.ModAPI.IMyEntity)	node-scoped	?	?	-	any	1	MyUseObjectBase.cs:43 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.Entity.UseObject.UseActionEnum.*	local	-	-	-	any	5	UseActionEnum.cs:5 type definition; the policy for an event or callback is on its registration or invocation
 VRage.Game.GUI.TextPanel.ContentType.*	local	-	-	-	any	6	ContentType.cs:5 type definition; the policy for an event or callback is on its registration or invocation
 VRage.Game.GUI.TextPanel.MySprite.#ctor()	local	-	-	-	any	9	MySprite.cs:11 constructs an object in this process; what the mod then does with it has its own row
@@ -5545,8 +5584,8 @@ VRage.Game.GUI.TextPanel.MySpriteDrawFrame.Dispose()	node-scoped	?	?	-	any	5	MyS
 VRage.Game.GUI.TextPanel.ShowTextOnScreenFlag.*	local	-	-	-	any	1	ShowTextOnScreenFlag.cs:5 type definition; the policy for an event or callback is on its registration or invocation
 VRage.Game.GUI.TextPanel.SpriteType.*	local	-	-	-	any	16	SpriteType.cs:3 type definition; the policy for an event or callback is on its registration or invocation
 VRage.Game.GUI.TextPanel.TextAlignment.*	local	-	-	-	any	18	TextAlignment.cs:3 type definition; the policy for an event or callback is on its registration or invocation
-VRage.Game.ModAPI.BeforeDamageApplied.*	local	-	-	-	any	0	value, parser or helper; no world state
-VRage.Game.ModAPI.CharacterMovementStateChangedDelegate.*	local	-	-	-	any	0	value, parser or helper; no world state
+VRage.Game.ModAPI.BeforeDamageApplied.*	local	-	-	-	any	40	value, parser or helper; no world state
+VRage.Game.ModAPI.CharacterMovementStateChangedDelegate.*	local	-	-	-	any	1	value, parser or helper; no world state
 VRage.Game.ModAPI.CharacterMovementStateDelegate.*	local	-	-	-	any	0	value, parser or helper; no world state
 VRage.Game.ModAPI.GridLinkTypeEnum.*	local	-	-	-	any	73	value, parser or helper; no world state
 VRage.Game.ModAPI.IHitInfo.Fraction	local	-	-	-	any	14	MyPhysics.cs:56 value, parser or helper; no world state
@@ -6612,7 +6651,7 @@ VRage.Game.ModAPI.IMyUtilities.SerializeToXML``1(``0)	local	-	-	-	any	138	MyAPIU
 VRage.Game.ModAPI.IMyUtilities.SetVariable``1(System.String,``0)	per-node	B7	no	request (WA)	any	56	MyAPIUtilities.cs:618 MyAPIUtilities.Variables lives in this node's checkpoint (ScriptManagerData); every node has its own and only the WA copy is saved
 VRage.Game.ModAPI.IMyUtilities.ShowMessage(System.String,System.String)	client	-	-	-	any	125	MyAPIUtilities.cs:101 client UI, input, camera, audio or HUD; nothing to do on a server
 VRage.Game.ModAPI.IMyUtilities.ShowMissionScreen(System.String,System.String,System.String,System.String,System.Action{VRage.Game.ModAPI.ResultEnum},System.String)	client	-	-	-	any	45	MyAPIUtilities.cs:453 client UI, input, camera, audio or HUD; nothing to do on a server
-VRage.Game.ModAPI.IMyUtilities.ShowNotification(System.String,System.Int32,System.String)	client	-	-	-	any	151	MyAPIUtilities.cs:87 client UI, input, camera, audio or HUD; nothing to do on a server
+VRage.Game.ModAPI.IMyUtilities.ShowNotification(System.String,System.Int32,System.String)	client	-	-	-	any	152	MyAPIUtilities.cs:87 client UI, input, camera, audio or HUD; nothing to do on a server
 VRage.Game.ModAPI.IMyUtilities.UnregisterMessageHandler(System.Int64,System.Action{System.Object})	local	-	-	-	any	153	MyAPIUtilities.cs:650 in-process mod bus (m_registeredListeners); every node runs every mod, so the sender and its listener share a process as on a single server
 VRage.Game.ModAPI.IMyUtilities.WriteBinaryFileInGlobalStorage(System.String)	per-node	B7	no	request (WA)	any	0	MyAPIUtilities.cs:561 writes <UserDataPath>/Storage on this machine, as on a single server; each node has its own folder, so a runtime write is not seen on the other nodes. Mostly logs and client settings: counted, but not a reason for class C (Docs/ModCompat.md)
 VRage.Game.ModAPI.IMyUtilities.WriteBinaryFileInLocalStorage(System.String,System.Type)	per-node	B7	no	request (WA)	any	12	MyAPIUtilities.cs:580 writes <UserDataPath>/Storage on this machine, as on a single server; each node has its own folder, so a runtime write is not seen on the other nodes. Mostly logs and client settings: counted, but not a reason for class C (Docs/ModCompat.md)
@@ -7078,7 +7117,7 @@ VRage.Game.ModAPI.Interfaces.IMyControllableEntity.Use()	local	-	-	-	any	2	MyCon
 VRage.Game.ModAPI.Interfaces.IMyControllableEntity.UseContinues()	local	-	-	-	any	0	MyControllableSphere.cs:265 acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 VRage.Game.ModAPI.Interfaces.IMyDecalHandler.AddDecal(VRageRender.MyDecalRenderInfo@,System.Collections.Generic.List{System.UInt32})	client	-	-	-	any	0	MyDecals.cs:130 client UI, input, camera, audio or HUD; nothing to do on a server
 VRage.Game.ModAPI.Interfaces.IMyDecalProxy.AddDecals(VRage.Game.ModAPI.MyHitInfo@,VRage.Utils.MyStringHash,VRageMath.Vector3,System.Object,VRage.Game.ModAPI.Interfaces.IMyDecalHandler,VRage.Utils.MyStringHash,VRage.Utils.MyStringHash,System.Boolean,VRageRender.MyDecalFlags,System.Int32,System.Collections.Generic.List{System.UInt32})	client	-	-	-	any	0	MySlimBlock.cs:2023 client UI, input, camera, audio or HUD; nothing to do on a server
-VRage.Game.ModAPI.Interfaces.IMyDestroyableObject.DoDamage(System.Single,VRage.Utils.MyStringHash,System.Boolean,System.Nullable{VRage.Game.ModAPI.MyHitInfo},System.Int64,System.Int64,System.Boolean,System.Nullable{VRage.Utils.MyStringHash})	local	-	-	-	any	75	MySlimBlock.cs:1886 acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
+VRage.Game.ModAPI.Interfaces.IMyDestroyableObject.DoDamage(System.Single,VRage.Utils.MyStringHash,System.Boolean,System.Nullable{VRage.Game.ModAPI.MyHitInfo},System.Int64,System.Int64,System.Boolean,System.Nullable{VRage.Utils.MyStringHash})	local	-	-	-	any	76	MySlimBlock.cs:1886 acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 VRage.Game.ModAPI.Interfaces.IMyDestroyableObject.Integrity	local	-	-	-	any	54	MySlimBlock.cs:1043 acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 VRage.Game.ModAPI.Interfaces.IMyDestroyableObject.OnDestroy()	local	-	-	-	any	0	MySlimBlock.cs:2863 acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
 VRage.Game.ModAPI.Interfaces.IMyDestroyableObject.UseDamageSystem	local	-	-	-	any	6	MySlimBlock.cs:963 acts on this entity or its grid group; an entity lives on one node and the mod code holding the reference runs there
@@ -7092,8 +7131,8 @@ VRage.Game.ModAPI.Interfaces.IMyEntityCapacitorComponent.TimeRemaining	local	-	-
 VRage.Game.ModAPI.Interfaces.MoveInformation.MoveIndicator	local	-	-	-	any	0	MoveInformation.cs:13 value, parser or helper; no world state
 VRage.Game.ModAPI.Interfaces.MoveInformation.RollIndicator	local	-	-	-	any	0	MoveInformation.cs:23 value, parser or helper; no world state
 VRage.Game.ModAPI.Interfaces.MoveInformation.RotationIndicator	local	-	-	-	any	0	MoveInformation.cs:18 value, parser or helper; no world state
-VRage.Game.ModAPI.MessageEnteredDel.*	local	-	-	-	any	10	value, parser or helper; no world state
-VRage.Game.ModAPI.MessageEnteredSenderDel.*	local	-	-	-	any	4	value, parser or helper; no world state
+VRage.Game.ModAPI.MessageEnteredDel.*	local	-	-	-	any	88	value, parser or helper; no world state
+VRage.Game.ModAPI.MessageEnteredSenderDel.*	local	-	-	-	any	16	value, parser or helper; no world state
 VRage.Game.ModAPI.ModCrashedException.#ctor(System.Exception,VRage.Game.ModAPI.IMyModContext)	local	-	-	-	any	23	ModCrashedException.cs:9 constructs an object in this process; what the mod then does with it has its own row
 VRage.Game.ModAPI.ModCrashedException.ModContext	local	-	-	-	any	0	ModCrashedException.cs:7 value, parser or helper; no world state
 VRage.Game.ModAPI.MyActivationCustomResults.*	local	-	-	-	any	0	value, parser or helper; no world state
@@ -7111,8 +7150,8 @@ VRage.Game.ModAPI.MyComponentStackInfo.Integrity	local	-	-	-	any	0	MyComponentSt
 VRage.Game.ModAPI.MyComponentStackInfo.MaxIntegrity	local	-	-	-	any	0	MyComponentStackInfo.cs:23 value, parser or helper; no world state
 VRage.Game.ModAPI.MyComponentStackInfo.MountedCount	local	-	-	-	any	1	MyComponentStackInfo.cs:8 value, parser or helper; no world state
 VRage.Game.ModAPI.MyComponentStackInfo.TotalCount	local	-	-	-	any	0	MyComponentStackInfo.cs:13 value, parser or helper; no world state
-VRage.Game.ModAPI.MyContractActivateDelegate.*	local	-	-	-	any	0	value, parser or helper; no world state
-VRage.Game.ModAPI.MyContractChangeDelegate.*	local	-	-	-	any	0	value, parser or helper; no world state
+VRage.Game.ModAPI.MyContractActivateDelegate.*	local	-	-	-	any	1	value, parser or helper; no world state
+VRage.Game.ModAPI.MyContractChangeDelegate.*	local	-	-	-	any	1	value, parser or helper; no world state
 VRage.Game.ModAPI.MyContractConditionDelegate.*	local	-	-	-	any	0	value, parser or helper; no world state
 VRage.Game.ModAPI.MyContractFailedDelegate.*	local	-	-	-	any	0	value, parser or helper; no world state
 VRage.Game.ModAPI.MyContractFinishedDelegate.*	local	-	-	-	any	0	value, parser or helper; no world state
@@ -7127,12 +7166,12 @@ VRage.Game.ModAPI.MyDamageInformation.IsDeformation	local	-	-	-	any	9	MyDamageIn
 VRage.Game.ModAPI.MyDamageInformation.Type	local	-	-	-	any	41	MyDamageInformation.cs:130 value, parser or helper; no world state
 VRage.Game.ModAPI.MyDamageSystemPriority.*	local	-	-	-	any	0	value, parser or helper; no world state
 VRage.Game.ModAPI.MyDeviceBase.CanSwitchAmmoMagazine()	local	-	-	-	any	0	MyDeviceBase.cs:41 value, parser or helper; no world state
-VRage.Game.ModAPI.MyDeviceBase.GetMuzzleLocalPosition()	local	-	-	-	any	0	MyDeviceBase.cs:29 value, parser or helper; no world state
-VRage.Game.ModAPI.MyDeviceBase.GetMuzzleWorldPosition()	local	-	-	-	any	0	MyDeviceBase.cs:35 value, parser or helper; no world state
+VRage.Game.ModAPI.MyDeviceBase.GetMuzzleLocalPosition()	local	-	-	-	any	3	MyDeviceBase.cs:29 value, parser or helper; no world state
+VRage.Game.ModAPI.MyDeviceBase.GetMuzzleWorldPosition()	local	-	-	-	any	1	MyDeviceBase.cs:35 value, parser or helper; no world state
 VRage.Game.ModAPI.MyDeviceBase.Init(VRage.Game.MyObjectBuilder_DeviceBase)	local	-	-	-	any	0	MyDeviceBase.cs:20 value, parser or helper; no world state
 VRage.Game.ModAPI.MyDeviceBase.InventoryItemId	local	-	-	-	any	0	MyDeviceBase.cs:14 value, parser or helper; no world state
 VRage.Game.ModAPI.MyDeviceBase.SwitchAmmoMagazineToNextAvailable()	local	-	-	-	any	0	MyDeviceBase.cs:53 value, parser or helper; no world state
-VRage.Game.ModAPI.MyDeviceBase.SwitchToNextAmmoMagazine()	local	-	-	-	any	0	MyDeviceBase.cs:47 value, parser or helper; no world state
+VRage.Game.ModAPI.MyDeviceBase.SwitchToNextAmmoMagazine()	local	-	-	-	any	1	MyDeviceBase.cs:47 value, parser or helper; no world state
 VRage.Game.ModAPI.MyFactionStateChange.*	local	-	-	-	any	3	value, parser or helper; no world state
 VRage.Game.ModAPI.MyGeneratedTextureFormat.*	local	-	-	-	any	0	value, parser or helper; no world state
 VRage.Game.ModAPI.MyGridGroupsDefaultEventHandler.IsClosed	local	-	-	-	any	0	MyGridGroupsDefaultEventHandler.cs:22 value, parser or helper; no world state
@@ -7223,7 +7262,7 @@ VRage.Game.MyDamageType.Bullet	local	-	-	-	any	11	MyDamageType.cs:13 identifier 
 VRage.Game.MyDamageType.Deformation	local	-	-	-	any	9	MyDamageType.cs:25 identifier or constant defined by the game
 VRage.Game.MyDamageType.Destruction	local	-	-	-	any	4	MyDamageType.cs:47 identifier or constant defined by the game
 VRage.Game.MyDamageType.Drill	local	-	-	-	any	9	MyDamageType.cs:21 identifier or constant defined by the game
-VRage.Game.MyDamageType.Environment	local	-	-	-	any	6	MyDamageType.cs:17 identifier or constant defined by the game
+VRage.Game.MyDamageType.Environment	local	-	-	-	any	7	MyDamageType.cs:17 identifier or constant defined by the game
 VRage.Game.MyDamageType.Explosion	local	-	-	-	any	7	MyDamageType.cs:9 identifier or constant defined by the game
 VRage.Game.MyDamageType.Fall	local	-	-	-	any	3	MyDamageType.cs:29 identifier or constant defined by the game
 VRage.Game.MyDamageType.Fire	local	-	-	-	any	4	MyDamageType.cs:33 identifier or constant defined by the game
@@ -7247,12 +7286,13 @@ VRage.Game.MyDefinitionBase.DescriptionString	per-node	B7	no	request (WA)	write	
 VRage.Game.MyDefinitionBase.DescriptionText	per-node	B7	no	request (WA)	write	10	MyDefinitionBase.cs:137 reads the local loaded definition; changing shared definition data at runtime affects this process
 VRage.Game.MyDefinitionBase.DisplayNameEnum	per-node	B7	no	request (WA)	write	9	MyDefinitionBase.cs:80 reads the local loaded definition; changing shared definition data at runtime affects this process
 VRage.Game.MyDefinitionBase.DisplayNameString	per-node	B7	no	request (WA)	write	10	MyDefinitionBase.cs:99 reads the local loaded definition; changing shared definition data at runtime affects this process
-VRage.Game.MyDefinitionBase.DisplayNameText	per-node	B7	no	request (WA)	write	39	MyDefinitionBase.cs:121 reads the local loaded definition; changing shared definition data at runtime affects this process
+VRage.Game.MyDefinitionBase.DisplayNameText	per-node	B7	no	request (WA)	write	43	MyDefinitionBase.cs:121 reads the local loaded definition; changing shared definition data at runtime affects this process
 VRage.Game.MyDefinitionBase.Enabled	per-node	B7	no	request (WA)	write	8	MyDefinitionBase.cs:66 reads the local loaded definition; changing shared definition data at runtime affects this process
-VRage.Game.MyDefinitionBase.GetObjectBuilder()	node-scoped	?	?	-	any	2	MyDefinitionBase.cs:222 UNCERTAIN: behavior of this definition service on a regular cluster node has not been established
+VRage.Game.MyDefinitionBase.GetObjectBuilder()	node-scoped	?	?	-	any	10	MyDefinitionBase.cs:222 UNCERTAIN: behavior of this definition service on a regular cluster node has not been established
 VRage.Game.MyDefinitionBase.Icons	per-node	B7	no	request (WA)	write	14	MyDefinitionBase.cs:61 reads the local loaded definition; changing shared definition data at runtime affects this process
 VRage.Game.MyDefinitionBase.Id	per-node	B7	no	request (WA)	write	160	MyDefinitionBase.cs:37 reads the local loaded definition; changing shared definition data at runtime affects this process
 VRage.Game.MyDefinitionBase.Init(VRage.Game.MyObjectBuilder_DefinitionBase,VRage.Game.MyModContext)	node-scoped	?	?	-	any	7	MyDefinitionBase.cs:153 UNCERTAIN: behavior of this definition service on a regular cluster node has not been established
+VRage.Game.MyDefinitionBase.Postprocess()	node-scoped	?	?	-	any	3	MyDefinitionBase.cs:218 UNCERTAIN: behavior of this definition service on a regular cluster node has not been established
 VRage.Game.MyDefinitionBase.Public	per-node	B7	no	request (WA)	write	17	MyDefinitionBase.cs:71 reads the local loaded definition; changing shared definition data at runtime affects this process
 VRage.Game.MyDefinitionBase.ToString()	node-scoped	?	?	-	any	6	MyDefinitionBase.cs:236 UNCERTAIN: behavior of this definition service on a regular cluster node has not been established
 VRage.Game.MyDefinitionErrors.Add(VRage.Game.MyModContext,System.String,VRage.Game.TErrorSeverity,System.Boolean)	node-scoped	?	?	-	any	5	MyDefinitionErrors.cs:134 UNCERTAIN: behavior of this definition service on a regular cluster node has not been established
@@ -7286,6 +7326,8 @@ VRage.Game.MyDefinitionManagerBase.GetAllDefinitions``1()	node-scoped	?	?	-	any	
 VRage.Game.MyDefinitionManagerBase.GetDefinition``1(System.String)	node-scoped	?	?	-	any	2	MyDefinitionManagerBase.cs:113 UNCERTAIN: behavior of this definition service on a regular cluster node has not been established
 VRage.Game.MyDefinitionManagerBase.GetDefinition``1(VRage.Game.MyDefinitionId)	node-scoped	?	?	-	any	2	MyDefinitionManagerBase.cs:123 UNCERTAIN: behavior of this definition service on a regular cluster node has not been established
 VRage.Game.MyDefinitionManagerBase.GetDefinition``1(VRage.Utils.MyStringHash)	node-scoped	?	?	-	any	1	MyDefinitionManagerBase.cs:118 UNCERTAIN: behavior of this definition service on a regular cluster node has not been established
+VRage.Game.MyDefinitionManagerBase.TryGetComponentDefinition(VRage.ObjectBuilders.MyObjectBuilderType,VRage.Utils.MyStringHash,VRage.Game.MyComponentDefinitionBase@)	node-scoped	?	?	-	any	1	MyDefinitionManagerBase.cs:149 UNCERTAIN: behavior of this definition service on a regular cluster node has not been established
+VRage.Game.MyDefinitionManagerBase.TryGetContainerDefinition(VRage.ObjectBuilders.MyObjectBuilderType,VRage.Utils.MyStringHash,VRage.Game.MyContainerDefinition@)	node-scoped	?	?	-	any	1	MyDefinitionManagerBase.cs:147 UNCERTAIN: behavior of this definition service on a regular cluster node has not been established
 VRage.Game.MyDefinitionSet.Definitions	per-node	B7	no	request (WA)	write	3	MyDefinitionSet.cs:13 reads the local loaded definition; changing shared definition data at runtime affects this process
 VRage.Game.MyDefinitionSet.RemoveDefinition(VRage.Game.MyDefinitionId@)	node-scoped	?	?	-	any	2	MyDefinitionSet.cs:42 UNCERTAIN: behavior of this definition service on a regular cluster node has not been established
 VRage.Game.MyEngineConstants.PHYSICS_STEP_SIZE_IN_SECONDS	local	-	-	-	any	18	MyEngineConstants.cs:11 static identifier or constant in the game assembly
@@ -7310,9 +7352,9 @@ VRage.Game.MyFontEnum.DarkBlue	local	-	-	-	any	6	MyFontEnum.cs:15 identifier or 
 VRage.Game.MyFontEnum.Debug	local	-	-	-	any	9	MyFontEnum.cs:5 identifier or constant defined by the game
 VRage.Game.MyFontEnum.Green	local	-	-	-	any	24	MyFontEnum.cs:9 identifier or constant defined by the game
 VRage.Game.MyFontEnum.Red	local	-	-	-	any	125	MyFontEnum.cs:7 identifier or constant defined by the game
-VRage.Game.MyFontEnum.White	local	-	-	-	any	33	MyFontEnum.cs:13 identifier or constant defined by the game
+VRage.Game.MyFontEnum.White	local	-	-	-	any	34	MyFontEnum.cs:13 identifier or constant defined by the game
 VRage.Game.MyFontEnum.op_Implicit(System.String)~VRage.Game.MyFontEnum	local	-	-	-	any	6	MyFontEnum.cs:51 operator or conversion on the supplied values
-VRage.Game.MyFontEnum.op_Implicit(VRage.Game.MyFontEnum)~System.String	local	-	-	-	any	6	MyFontEnum.cs:56 operator or conversion on the supplied values
+VRage.Game.MyFontEnum.op_Implicit(VRage.Game.MyFontEnum)~System.String	local	-	-	-	any	7	MyFontEnum.cs:56 operator or conversion on the supplied values
 VRage.Game.MyFuelConverterInfo.#ctor()	local	-	-	-	any	1	MyFuelConverterInfo.cs:8 constructs an object in this process; what the mod then does with it has its own row
 VRage.Game.MyFuelConverterInfo.Efficiency	node-scoped	?	?	-	any	3	MyFuelConverterInfo.cs:70 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.MyFuelConverterInfo.FuelId	node-scoped	?	?	-	any	4	MyFuelConverterInfo.cs:67 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
@@ -7932,7 +7974,7 @@ VRage.Game.MyPlanetSurfaceDetail.Scale	node-scoped	?	?	-	any	1	MyPlanetSurfaceDe
 VRage.Game.MyPlanetSurfaceDetail.Slope	node-scoped	?	?	-	any	1	MyPlanetSurfaceDetail.cs:121 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.MyPlanetSurfaceDetail.Transition	node-scoped	?	?	-	any	1	MyPlanetSurfaceDetail.cs:124 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.MyRelationsBetweenFactions.*	local	-	-	-	any	13	MyRelationsBetweenFactions.cs:5 type definition; the policy for an event or callback is on its registration or invocation
-VRage.Game.MyRelationsBetweenPlayerAndBlock.*	local	-	-	-	any	50	MyRelationsBetweenPlayerAndBlock.cs:6 type definition; the policy for an event or callback is on its registration or invocation
+VRage.Game.MyRelationsBetweenPlayerAndBlock.*	local	-	-	-	any	51	MyRelationsBetweenPlayerAndBlock.cs:6 type definition; the policy for an event or callback is on its registration or invocation
 VRage.Game.MyRelationsBetweenPlayerAndBlockExtensions.IsFriendly(VRage.Game.MyRelationsBetweenPlayerAndBlock)	node-scoped	?	?	-	any	12	MyRelationsBetweenPlayerAndBlockExtensions.cs:5 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.MySerializablePlanetEnvironmentalSoundRule.EnvironmentSound	node-scoped	?	?	-	any	1	MySerializablePlanetEnvironmentalSoundRule.cs:106 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
 VRage.Game.MySerializablePlanetEnvironmentalSoundRule.Height	node-scoped	?	?	-	any	1	MySerializablePlanetEnvironmentalSoundRule.cs:97 UNCERTAIN: the declaration is present in the corpus; its behavior across nodes has not been verified
@@ -8481,7 +8523,7 @@ VRage.ModAPI.MyAPIGatewayShortcuts.GetWorldBoundaries	client	-	-	-	any	0	MyAPIGa
 VRage.ModAPI.MyAPIGatewayShortcuts.GetWorldBoundariesCallback.*	local	-	-	-	any	0	value, parser or helper; no world state
 VRage.ModAPI.MyAPIGatewayShortcuts.RegisterEntityUpdate	client	-	-	-	any	0	MyAPIGatewayShortcuts.cs:22 client UI, input, camera, audio or HUD; nothing to do on a server
 VRage.ModAPI.MyAPIGatewayShortcuts.UnregisterEntityUpdate	client	-	-	-	any	0	MyAPIGatewayShortcuts.cs:28 client UI, input, camera, audio or HUD; nothing to do on a server
-VRage.ModAPI.MyEntityUpdateEnum.*	local	-	-	-	any	233	value, parser or helper; no world state
+VRage.ModAPI.MyEntityUpdateEnum.*	local	-	-	-	any	234	value, parser or helper; no world state
 VRage.ModAPI.MyKeyboardModifiers.*	local	-	-	-	any	1	value, parser or helper; no world state
 VRage.ModAPI.MyTerminalControlComboBoxItem.#ctor()	local	-	-	-	any	27	MyTerminalControlComboBoxItem.cs:8 constructs an object in this process; what the mod then does with it has its own row
 VRage.ModAPI.MyTerminalControlComboBoxItem.Key	local	-	-	-	any	28	MyTerminalControlComboBoxItem.cs:13 value, parser or helper; no world state

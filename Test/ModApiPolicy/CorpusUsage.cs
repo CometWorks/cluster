@@ -25,7 +25,7 @@ internal static class CorpusUsage
                 var trees = group
                     .Select(s =>
                         CSharpSyntaxTree.ParseText(
-                            ScriptReferences.UsingHeader + s.Text,
+                            WorkshopScripts.PrepareSource(s.Text),
                             options,
                             s.Path
                         )
@@ -122,6 +122,14 @@ internal static class CorpusUsage
                     symbols.Add(Target(op));
             }
         }
+        // The IL of a call through a derived type names the virtual member that the override overrides.
+        foreach (var symbol in symbols.ToList())
+            for (
+                var virtualMember = Overridden(symbol);
+                virtualMember != null;
+                virtualMember = Overridden(virtualMember)
+            )
+                symbols.Add(virtualMember);
         foreach (var symbol in symbols)
         {
             if (
@@ -160,6 +168,21 @@ internal static class CorpusUsage
             IUnaryOperation unary => unary.OperatorMethod,
             ICompoundAssignmentOperation compound => compound.OperatorMethod,
             IIncrementOrDecrementOperation step => step.OperatorMethod,
+            IDelegateCreationOperation create => (
+                create.Type as INamedTypeSymbol
+            )?.DelegateInvokeMethod,
+            _ => null,
+        };
+
+    private static ISymbol Overridden(ISymbol symbol) =>
+        symbol switch
+        {
+            IMethodSymbol { AssociatedSymbol: not null } accessor => Overridden(
+                accessor.AssociatedSymbol
+            ),
+            IMethodSymbol method => method.OverriddenMethod,
+            IPropertySymbol property => property.OverriddenProperty,
+            IEventSymbol e => e.OverriddenEvent,
             _ => null,
         };
 

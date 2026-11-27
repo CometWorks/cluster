@@ -313,7 +313,7 @@ internal static class Program
             var trees = files
                 .Select(file =>
                     CSharpSyntaxTree.ParseText(
-                        ScriptReferences.UsingHeader + file.Text,
+                        WorkshopScripts.PrepareSource(file.Text),
                         options,
                         file.Path
                     )

@@ -29,9 +29,11 @@ internal static class Facts
             foreach (var type in GameSurface.Types(assembly.GlobalNamespace))
             {
                 allTypes.Add(type);
-                if (type.DeclaredAccessibility != Accessibility.Public)
-                    continue;
-                bool surface = GameSurface.IsInterfaceSurface(type);
+                // A corpus key can name a member of a non-public base type: the IL of a call through a
+                // public derived type names the virtual member where it is declared.
+                bool surface =
+                    type.DeclaredAccessibility == Accessibility.Public
+                    && GameSurface.IsInterfaceSurface(type);
                 foreach (var member in type.GetMembers())
                 {
                     if (
