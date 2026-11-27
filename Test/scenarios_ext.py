@@ -434,7 +434,7 @@ def p3_cst_01(bench) -> None:
     through `--self-test cost-model`."""
     import statistics
 
-    from scenarios import CLIENT_ID, _force_handover
+    from scenarios import CLIENT_ID, force_handover
 
     # The buckets spawn and cross before any client joins: building a station-sized grid stalls
     # the game thread past the 5 s control-liveness window, which would kick an attached client.
@@ -458,7 +458,7 @@ def p3_cst_01(bench) -> None:
             source, partition = wait_until(lambda: single_place(entity), 120,
                                            f"a single owner for the {label} probe")
             target = "node-2" if source == "node-1" else "node-1"
-            _force_handover(bench, source, target, partition, client=client)
+            force_handover(bench, source, target, partition, client=client)
             wait_until(lambda: (single_place(entity) or (None,))[0] == target or None,
                        300, f"the {label} probe to arrive on {target}")
             bench.quiesce(timeout=120)
@@ -784,7 +784,7 @@ def _wait_arrival(bench, partition: int, target: str, timeout: float = 180) -> N
                timeout, f"partition {partition} to arrive on {target}")
 
 
-def _gate_residuals(bench, node: str, partition: int) -> int | None:
+def gate_residuals(bench, node: str, partition: int) -> int | None:
     """The §6.10 gate's own output: the LAST 'handover state verified' line the target node wrote
     for this partition. None means the gate never ran - which is itself a failure, asserted by the
     caller: 'no abort' must never pass for 'verified'."""
@@ -826,16 +826,16 @@ def _verified_round_trip(bench, grid: int, partition: int, home: str, client: in
     """Drive the partition across the boundary and back, asserting a §6.10-verified commit with
     zero residuals in BOTH directions - from the gate's own log line, not from the absence of an
     abort - and the fixture intact on arrival."""
-    from scenarios import _force_handover
+    from scenarios import force_handover
     away = _other_regular(bench, home)
     before = _rich_state(bench, home, grid)
     for source, target in ((home, away), (away, home)):
         bench.quiesce(timeout=120)
         if client is not None:
             bench._wait_at_rest(grid)
-        _force_handover(bench, source, target, partition, client=client)
+        force_handover(bench, source, target, partition, client=client)
         _wait_arrival(bench, partition, target)
-        residuals = _gate_residuals(bench, target, partition)
+        residuals = gate_residuals(bench, target, partition)
         bench.check(f"the §6.10 gate verified the {source}->{target} transfer with zero residuals",
                     residuals == 0, f"residuals={residuals}")
         state = _settled_state(bench, target, grid)
@@ -846,7 +846,7 @@ def _verified_round_trip(bench, grid: int, partition: int, home: str, client: in
 
 def p3_hnd_release_slices(bench) -> None:
     """SE-1908: closing a grid with many fat blocks spends slices only on live roots."""
-    from scenarios import _force_handover
+    from scenarios import force_handover
 
     bench.start_cluster()
     bench.cluster.post("/automatic/pause")
@@ -860,7 +860,7 @@ def p3_hnd_release_slices(bench) -> None:
         started = bench.cluster.node("node-1", "/rich-test-spawn?kind=rich&x=900000&y=0&z=0", "POST")["grids"][0]
         grid = started["grid"]
         partition = _wait_partition(bench, "node-1", grid)
-        _force_handover(bench, "node-1", "node-2", partition)
+        force_handover(bench, "node-1", "node-2", partition)
         _wait_arrival(bench, partition, "node-2")
         after = _settled_state(bench, "node-2", grid)
         bench.check(
@@ -888,7 +888,7 @@ def p3_hnd_release_slices(bench) -> None:
 
 def p3_hnd_release_ownership(bench) -> None:
     """A heartbeat that sees the commit while the source is releasing must leave its slices intact."""
-    from scenarios import _force_handover
+    from scenarios import force_handover
 
     bench.start_cluster()
     bench.cluster.post("/automatic/pause")
@@ -919,7 +919,7 @@ def p3_hnd_release_ownership(bench) -> None:
 
         source = wait_until(lambda: partition_on("node-1"), 60, "all fixture grids to share a source partition")
         partition = source["id"]
-        _force_handover(bench, "node-1", "node-2", partition)
+        force_handover(bench, "node-1", "node-2", partition)
         wait_until(lambda: partition_on("node-2"), 60, "all fixture grids to reach the destination")
         game_log = next((bench.run_root / "node-1-data").glob("SpaceEngineersDedicated_*.log"))
         close = re.compile(rf"partition={partition} phase=release_close .*? relN=(\d+)")
@@ -1042,7 +1042,7 @@ def p3_hnd_02(bench) -> None:
     """P3-HND-02 - the transient interaction-state matrix. Every cell freezes DURING the state,
     hands over, asserts a §6.10-verified commit and that the state is still live on the target -
     plus the positive half of the normalizer contract on the Locked cell."""
-    from scenarios import CLIENT_ID, _force_handover, _all_partitions, _node_of_entity
+    from scenarios import CLIENT_ID, force_handover, _all_partitions, _node_of_entity
     bench.start_cluster()
     bench.quiesce()
     bench.cluster.post("/automatic/pause")
@@ -1056,9 +1056,9 @@ def p3_hnd_02(bench) -> None:
 
         def cross(partition: int, source: str, target: str, grid: int | None = None,
                   client: int | None = None) -> None:
-            _force_handover(bench, source, target, partition, client=client)
+            force_handover(bench, source, target, partition, client=client)
             _wait_arrival(bench, partition, target)
-            residuals = _gate_residuals(bench, target, partition)
+            residuals = gate_residuals(bench, target, partition)
             bench.check(f"cell transfer {source}->{target}: verified with zero residuals",
                         residuals == 0, f"residuals={residuals}")
             if grid is not None:
@@ -1104,7 +1104,7 @@ def p3_hnd_02(bench) -> None:
         try:
             aborted = False
             try:
-                _force_handover(bench, "node-1", "node-2", partition)
+                force_handover(bench, "node-1", "node-2", partition)
             except ClusterError as error:
                 aborted = "residual" in str(error).lower() or "422" in str(error) or "409" in str(error) or True
             bench.check("gear cell: a mutated attachment field on the locked pair still aborts the gate",
@@ -1231,9 +1231,9 @@ def p3_hnd_02(bench) -> None:
         # still controllable on the far side.
         bench.apis[CLIENT_ID].key("Space", hold_frames=900)
         away = _other_regular(bench, home)
-        _force_handover(bench, home, away, partition, client=CLIENT_ID)
+        force_handover(bench, home, away, partition, client=CLIENT_ID)
         _wait_arrival(bench, partition, away)
-        residuals = _gate_residuals(bench, away, partition)
+        residuals = gate_residuals(bench, away, partition)
         bench.check("jetpack-burn cell: verified with zero residuals", residuals == 0, f"residuals={residuals}")
         bench.assert_move_probe(CLIENT_ID, "after-jetpack-burn-crossing")
         cells["character-jetpack-burn"] = "verified mid-burn, controls live after"
@@ -1250,9 +1250,9 @@ def p3_hnd_02(bench) -> None:
         wait_until(lambda: True if bench.cluster.node(
                        act_node, f"/rich-test-state?grid={entity}").get("relativeDampeningEntity") == near_grid
                    else None, 30, "the dampening reference to take hold on the source node")
-        _force_handover(bench, away, home, partition, client=CLIENT_ID)
+        force_handover(bench, away, home, partition, client=CLIENT_ID)
         _wait_arrival(bench, partition, home)
-        residuals = _gate_residuals(bench, home, partition)
+        residuals = gate_residuals(bench, home, partition)
         bench.check("relative-dampener cell: verified with zero residuals", residuals == 0,
                     f"residuals={residuals}")
         # The imported id parks in m_relativeDampeningEntityInit and resolves on the character's
@@ -1293,9 +1293,9 @@ def p3_hnd_02(bench) -> None:
                    60, "the character to take the seat")
         wait_until(client_controls(lambda controlled: controlled not in (0, entity)), 30,
                    "the client half to take the cockpit")
-        _force_handover(bench, home, away, partition, client=CLIENT_ID)
+        force_handover(bench, home, away, partition, client=CLIENT_ID)
         _wait_arrival(bench, partition, away)
-        residuals = _gate_residuals(bench, away, partition)
+        residuals = gate_residuals(bench, away, partition)
         bench.check("seated cell: verified with zero residuals", residuals == 0, f"residuals={residuals}")
         pilots = [c["pilot"] for c in _rich_state(bench, away, near_grid)["cockpits"]]
         bench.check("seated cell: the character is still in the seat on the target node",
@@ -1336,9 +1336,9 @@ def p3_hnd_02(bench) -> None:
         except ClusterError:
             pass
         if locked:
-            _force_handover(bench, away, home, partition, client=CLIENT_ID)
+            force_handover(bench, away, home, partition, client=CLIENT_ID)
             _wait_arrival(bench, partition, home)
-            residuals = _gate_residuals(bench, home, partition)
+            residuals = gate_residuals(bench, home, partition)
             bench.check("magboot cell: verified with zero residuals", residuals == 0,
                         f"residuals={residuals}")
             # The magnetization re-evaluates on the character's first live updates after the thaw -
@@ -1374,7 +1374,7 @@ def p3_hnd_03(bench) -> None:
     the source thaws and keeps serving, dumps are retained, the partition goes HandoverBlocked
     with its residual signature after the configured attempts, the balancer stops scheduling it,
     and an admin clear plus a clean hook returns it to normal."""
-    from scenarios import _force_handover, _all_partitions
+    from scenarios import force_handover, _all_partitions
     bench.start_cluster()
     bench.quiesce()
     bench.cluster.post("/automatic/pause")
@@ -1387,7 +1387,7 @@ def p3_hnd_03(bench) -> None:
         signatures = []
         for attempt in (1, 2):
             try:
-                _force_handover(bench, "node-1", "node-2", partition)
+                force_handover(bench, "node-1", "node-2", partition)
                 bench.check(f"abort attempt {attempt}: the corrupted import must not commit", False, "committed")
             except ClusterError as error:
                 bench.record(f"abort-{attempt}.txt", str(error))
@@ -1422,9 +1422,9 @@ def p3_hnd_03(bench) -> None:
         # Containment ends: clear the hook, admin-clear the block, and the same move commits.
         bench.cluster.node("node-2", "/cluster/debug/corrupt-import?field=", "POST")
         bench.cluster.post(f"/registry/handover-blocked/clear?partition={partition}")
-        _force_handover(bench, "node-1", "node-2", partition)
+        force_handover(bench, "node-1", "node-2", partition)
         _wait_arrival(bench, partition, "node-2")
-        residuals = _gate_residuals(bench, "node-2", partition)
+        residuals = gate_residuals(bench, "node-2", partition)
         bench.check("after the clear the same transfer commits with zero residuals",
                     residuals == 0, f"residuals={residuals}")
         blocked_final = bench.cluster.get("/registry/handover-blocked")
@@ -1775,7 +1775,7 @@ def t0266_hvk_03(bench) -> None:
     releases), half the grids teleported 60 km (cell unload/generate), then the offline economy
     switched on at zero grace so every fixture partition goes offline (entities closed, cells
     unloaded). HavokBodyAudit is the oracle; its stats line proves which paths ran."""
-    from scenarios import _all_partitions, _force_handover
+    from scenarios import _all_partitions, force_handover
     from scenarios_offline import _put_config
     from scenarios_core import _lines
     cycles = int(os.environ.get("T0266_CYCLES", "6"))
@@ -1836,7 +1836,7 @@ def t0266_hvk_03(bench) -> None:
             for partition in sorted(partitions):
                 for source, target in (("node-1", "node-2"), ("node-2", "node-1")):
                     try:
-                        _force_handover(bench, source, target, partition)
+                        force_handover(bench, source, target, partition)
                         _wait_arrival(bench, partition, target)
                         releases += 1
                         where[leaders[partition]] = target
@@ -1920,7 +1920,7 @@ def p3_hnd_dummy(bench) -> None:
     IsDestroyed only once its subparts exist, which an imported block reaches on its first live frame,
     after the gate has run. Each leg goes node-1 -> node-2 -> node-1 and asserts zero residuals from the
     gate's own log line and the dummy's state after the thaw."""
-    from scenarios import _force_handover
+    from scenarios import force_handover
     bench.start_cluster()
     bench.quiesce()
     bench.cluster.post("/automatic/pause")
@@ -1937,13 +1937,13 @@ def p3_hnd_dummy(bench) -> None:
             for source, target in (("node-1", "node-2"), ("node-2", "node-1")):
                 bench.quiesce(timeout=120)
                 try:
-                    _force_handover(bench, source, target, partition)
+                    force_handover(bench, source, target, partition)
                     _wait_arrival(bench, partition, target, timeout=120)
                     arrived = True
                 except ClusterError as error:
                     arrived = False
                     bench.record(f"{leg}-{source}-{target}-error.txt", str(error))
-                residuals = _gate_residuals(bench, target, partition)
+                residuals = gate_residuals(bench, target, partition)
                 lines = _residual_lines(bench, partition)
                 bench.record(f"{leg}-{source}-{target}-residuals.txt", "\n".join(lines))
                 bench.check(f"{leg} {source}->{target}: the §6.10 gate verified the transfer with zero residuals",
@@ -1976,7 +1976,7 @@ def p3_hnd_stator(bench) -> None:
     load re-derives the flag (MyMotorStator.Init), so the import may disagree with the frozen source;
     on octahedron-test that blocked four partitions until a rotation drain timed out. Each leg makes the
     flag stale on the source, hands the partition over and asserts zero residuals from the gate's log."""
-    from scenarios import _force_handover
+    from scenarios import force_handover
     bench.start_cluster()
     bench.quiesce()
     bench.cluster.post("/automatic/pause")
@@ -1990,13 +1990,13 @@ def p3_hnd_stator(bench) -> None:
             stale = bench.cluster.node(source, f"/rich-test-act?grid={grid}&action=stale-limits", "POST")
             bench.record(f"{source}-stale-limits", stale)
             try:
-                _force_handover(bench, source, target, partition)
+                force_handover(bench, source, target, partition)
                 _wait_arrival(bench, partition, target, timeout=120)
                 arrived = True
             except ClusterError as error:
                 arrived = False
                 bench.record(f"{source}-{target}-error.txt", str(error))
-            residuals = _gate_residuals(bench, target, partition)
+            residuals = gate_residuals(bench, target, partition)
             lines = _residual_lines(bench, partition)
             bench.record(f"{source}-{target}-residuals.txt", "\n".join(lines))
             bench.check(f"{source}->{target}: a stale LimitsActive {stale['limitsActive']} passes the §6.10 gate with zero residuals",

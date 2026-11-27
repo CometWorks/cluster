@@ -685,8 +685,8 @@ def _meteor_gone(bench, node: str, entity: int, deadline: float) -> float | None
 
 
 def p2_meteor_lifetime(bench) -> None:
-    from scenarios import _force_handover
-    from scenarios_ext import _gate_residuals, _wait_arrival
+    from scenarios import force_handover
+    from scenarios_ext import gate_residuals, _wait_arrival
 
     bench.start_cluster(nodes=["node-1", "node-2", "wa-1"])
     bench.cluster.post("/automatic/pause")   # only the scenario's own handovers move a partition
@@ -715,11 +715,11 @@ def p2_meteor_lifetime(bench) -> None:
         wait = spawned["HOP"] + age - time.time()
         if wait > 0:
             time.sleep(wait)
-        _force_handover(bench, holder, target, hop)
+        force_handover(bench, holder, target, hop)
         _wait_arrival(bench, hop, target, 60)
         loaded_at, holder = time.time(), target
         state = _meteor(bench, holder, ids["HOP"])
-        hops.append({"target": target, "ageAtLoad": round(loaded_at - spawned["HOP"], 1), "residuals": _gate_residuals(bench, target, hop),
+        hops.append({"target": target, "ageAtLoad": round(loaded_at - spawned["HOP"], 1), "residuals": gate_residuals(bench, target, hop),
                      "state": state})
         bench.record("hops", hops)
     bench.check("HOP: every handover passed the round-trip gate with no residual",

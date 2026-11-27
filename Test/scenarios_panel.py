@@ -14,10 +14,10 @@ from __future__ import annotations
 import json
 
 from cluster import ClusterError
-from scenarios import _all_partitions, _force_handover
+from scenarios import _all_partitions, force_handover
 from scenarios_blocks import _identity, partitions_of, spawn
 from scenarios_core import _lines
-from scenarios_ext import _gate_residuals, node_self_test
+from scenarios_ext import gate_residuals, node_self_test
 from scenarios_wa_ops import _poll, _require
 
 PANEL = "LargeCrate01_right"
@@ -56,7 +56,7 @@ def p3_hnd_panel(bench) -> None:
     print(f"  [INFO] grid={grid} block={block} partition={partition} panel={opened}")
 
     try:
-        _force_handover(bench, "node-1", "node-2", partition)
+        force_handover(bench, "node-1", "node-2", partition)
         bench.record("30-handover", {"answered": True})
     except ClusterError as error:  # an aborted handover answers with an error
         bench.record("30-handover", {"error": str(error)[:2000]})
@@ -67,8 +67,8 @@ def p3_hnd_panel(bench) -> None:
     for line in residuals:
         print(f"  [INFO] {line[-200:]}")
     bench.check("the handover gate reported no residual on node-2", not residuals, " | ".join(residuals)[:600])
-    bench.check("the gate verified the import with 0 residuals", _gate_residuals(bench, "node-2", partition) == 0,
-                str(_gate_residuals(bench, "node-2", partition)))
+    bench.check("the gate verified the import with 0 residuals", gate_residuals(bench, "node-2", partition) == 0,
+                str(gate_residuals(bench, "node-2", partition)))
     bench.check("the partition committed to node-2", bool(arrived), json.dumps(_all_partitions(bench).get(partition)))
 
     after = _panels(bench, "node-2", block) if arrived else {"found": False}
