@@ -63,7 +63,15 @@ if (args.Length == 2 && args[0] == "--plugin-sdk-contract")
 // Build/release.sh records the game version the plugins were built against (SE-1655).
 if (args.Length == 2 && args[0] == "--game-version")
 {
-    Console.WriteLine(GameVersion.Read(args[1]));
+    try
+    {
+        Console.WriteLine(GameVersion.Read(args[1]));
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine(error.Message);
+        Environment.ExitCode = 2;
+    }
     return;
 }
 
