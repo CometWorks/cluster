@@ -19,7 +19,8 @@ internal static class AsteroidTurnRoutes
             context =>
             {
                 string storage =
-                    context.Request.QueryString["storage"] ?? throw new ArgumentException("Missing storage");
+                    context.Request.QueryString["storage"]
+                    ?? throw new ArgumentException("Missing storage");
                 object result = TestRoutes.OnGameThread<object>(() =>
                 {
                     MyVoxelBase voxel = MySession.Static.VoxelMaps.TryGetVoxelMapByName(storage);
@@ -28,7 +29,10 @@ internal static class AsteroidTurnRoutes
                         found = voxel != null,
                         matrix = voxel == null ? null : Pose(voxel.WorldMatrix),
                         turns = AccessTools
-                            .Method(AccessTools.TypeByName("ClusterPlugin.AsteroidTurnService"), "Describe")
+                            .Method(
+                                AccessTools.TypeByName("ClusterPlugin.AsteroidTurnService"),
+                                "Describe"
+                            )
                             .Invoke(null, null),
                     };
                 });
@@ -41,7 +45,10 @@ internal static class AsteroidTurnRoutes
             "/asteroid-turn-test-entity",
             context =>
             {
-                long id = (long)TestRoutes.Double(context, "entity");
+                long id = long.Parse(
+                    TestRoutes.Query(context, "entity"),
+                    System.Globalization.CultureInfo.InvariantCulture
+                );
                 object result = TestRoutes.OnGameThread<object>(() =>
                     MyEntities.TryGetEntityById(id, out MyEntity entity) && !entity.MarkedForClose
                         ? new { found = true, matrix = Pose(entity.WorldMatrix) }
