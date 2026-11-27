@@ -1148,6 +1148,9 @@ public static class MyFactionCollectionPatch
         {
             m_applying = false;
         }
+        // SE-1997: every MyFaction is a new object now, and safe zones match their faction lists by reference.
+        SafeZoneFactions.Rebind();
+        BlockSafeZones.CheckAllSettings("factions");
     }
 
     private static long Founder(MyObjectBuilder_Faction faction) =>

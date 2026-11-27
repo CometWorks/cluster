@@ -42,6 +42,12 @@ internal static partial class BlockSafeZones
         public string Value;
         public bool PendingPower;
         public double PendingCreditMilliseconds;
+
+        /// <summary>SE-1997: the settings the players set (<see cref="Settings"/>), null until first seen.</summary>
+        public string Settings;
+
+        /// <summary>The differing live settings already logged on this node, so one drift is one log line.</summary>
+        public string LoggedDrift;
     }
 
     private static readonly ConditionalWeakTable<MySafeZoneBlock, State> States =
@@ -65,8 +71,16 @@ internal static partial class BlockSafeZones
     {
         if (!Active)
             return;
-        States.AddOrUpdate(block, new State { Value = BlockBuilderEntry.Read(builder, Key) });
+        States.AddOrUpdate(
+            block,
+            new State
+            {
+                Value = BlockBuilderEntry.Read(builder, Key),
+                Settings = BlockBuilderEntry.Read(builder, SettingsKey),
+            }
+        );
         BlockBuilderEntry.Forget(block, Key);
+        BlockBuilderEntry.Forget(block, SettingsKey);
     }
 
     /// <summary>MySafeZoneBlock.GetObjectBuilderCubeBlock postfix: write the entry into the builder.</summary>
@@ -101,7 +115,9 @@ internal static partial class BlockSafeZones
             {
                 try
                 {
-                    state.Value = Serialize((MyObjectBuilder_SafeZone)zone.GetObjectBuilder());
+                    var live = (MyObjectBuilder_SafeZone)zone.GetObjectBuilder();
+                    CheckSettings(block, zone, live, "save");
+                    state.Value = Serialize(live);
                 }
                 catch (Exception error)
                 {
@@ -117,6 +133,8 @@ internal static partial class BlockSafeZones
         }
         if (state.Value != null)
             BlockBuilderEntry.Write(builder, Key, state.Value);
+        if (state.Settings != null)
+            BlockBuilderEntry.Write(builder, SettingsKey, state.Settings);
     }
 
     /// <summary>MySafeZoneBlock.OnAddedToScene postfix: restore the zone on the next frame, once the add is done.</summary>
@@ -216,6 +234,7 @@ internal static partial class BlockSafeZones
                 );
             // Where vanilla puts a block's zone: on the block.
             zone.PositionAndOrientation = new MyPositionAndOrientation(block.WorldMatrix);
+            bool enabled = zone.Enabled;
             if (zone.Enabled)
             {
                 state.PendingPower = true;
@@ -228,6 +247,13 @@ internal static partial class BlockSafeZones
             }
             MyEntities.CreateFromObjectBuilderAndAdd(zone, fadeIn: false);
             block.OnSafeZoneChanged();
+            if (Zone(block, zoneId) is MySafeZone restored)
+                CheckSettings(
+                    block,
+                    restored,
+                    (MyObjectBuilder_SafeZone)restored.GetObjectBuilder(),
+                    "restore"
+                );
             if (state.PendingPower)
                 MySandboxGame.Static.Invoke(
                     () => Restore(block),
@@ -239,7 +265,7 @@ internal static partial class BlockSafeZones
                     + " zone="
                     + zoneId
                     + " enabled="
-                    + zone.Enabled
+                    + enabled
             );
         }
         catch (Exception error)

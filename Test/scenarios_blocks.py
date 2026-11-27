@@ -1117,9 +1117,34 @@ def p3_blk_11(bench) -> None:
         server.stop()
 
 
-def _block_zone_checks(bench, fixtures: Fixtures, block: int):
+DRIFT_LINE = r"safe zone settings drift"
+
+
+def _zone_settings(bench, node: str, block: int) -> dict:
+    return bench.cluster.node(node, f"/block-test-safezone-state?block={block}")
+
+
+def _zone_settings_checks(bench, leg: str, holder: str, block: int, reference: dict, unknown: int) -> None:
+    """SE-1997: the zone has the settings the player set, its faction rule matches, and the block carries them."""
+    state = _zone_settings(bench, holder, block)
+    bench.record(f"zone-settings-{leg}", state)
+    reference.setdefault("settings", state.get("settings"))
+    reference.setdefault("kept", state.get("kept"))
+    bench.check(f"{leg}: the zone has the settings the player set", state.get("settings") == reference["settings"],
+                f"{state.get('settings')} != {reference['settings']}")
+    bench.check(f"{leg}: the zone's whitelisted faction is the one the node holds now", state.get("factionsMatch") is True,
+                json.dumps(state))
+    bench.check(f"{leg}: the zone kept the faction id no node knows", unknown in (state.get("factions") or []),
+                json.dumps(state.get("factions")))
+    bench.check(f"{leg}: the block carries the settings the player set",
+                bool(state.get("kept")) and state.get("kept") == reference["kept"],
+                f"{state.get('kept')} != {reference['kept']}")
+
+
+def _block_zone_checks(bench, fixtures: Fixtures, block: int, settings: dict | None = None):
     """``after_leg`` for a safe zone block fixture: its zone exists once, on the block's node, with the
-    radius 25 it started with and unchanged settings, the block points at it and kept its 5 zone chips."""
+    radius 25 it started with and unchanged settings, the block points at it and kept its 5 zone chips.
+    With ``settings`` (the answer of ``/block-test-safezone-set``) also the SE-1997 settings checks."""
     reference = {}
 
     def zones() -> dict[str, list[dict]]:
@@ -1146,14 +1171,18 @@ def _block_zone_checks(bench, fixtures: Fixtures, block: int):
                     bool(facts.get("safeZone")) and facts.get("safeZoneHere") is True, json.dumps(facts))
         # 5 chips and an hour of upkeep paid: none may be spent or lost.
         bench.check(f"{leg}: the block kept its 5 zone chips", facts.get("zoneChips") == 5, json.dumps(facts))
+        if settings:
+            _zone_settings_checks(bench, leg, holder, block, reference, settings["unknown"])
 
+    after_leg.reference = reference
     return after_leg
 
 
 def p3_blk_05(bench) -> None:
     """Safe zone block: its MySafeZone entity exists once, on the block's node, with its settings and the
     block's zone chips, after a handover, an offline round trip and a node restart, and nothing is left
-    behind."""
+    behind. SE-1997: so do the settings a player set, also after a faction snapshot and after vanilla created
+    the zone again beside one it collides with, and a change no player made is logged as drift."""
     catalog = block_catalog()
     bench.start_cluster()
     bench.cluster.post("/automatic/pause")
@@ -1168,7 +1197,31 @@ def p3_blk_05(bench) -> None:
     node = _all_partitions(bench)[fixtures.partition["SafeZoneBlock"]]
     switched = bench.cluster.node(node, f"/block-test-safezone-on?block={block}", "POST")
     _require(bench, "the block created its safe zone", switched.get("zone"), json.dumps(switched))
-    _journey(bench, fixtures, "SafeZoneBlock", _block_zone_checks(bench, fixtures, block))
+    settings = bench.cluster.node(node, f"/block-test-safezone-set?block={block}", "POST")
+    _require(bench, "the zone took the player's settings", settings.get("faction"), json.dumps(settings))
+    after_leg = _block_zone_checks(bench, fixtures, block, settings)
+    _journey(bench, fixtures, "SafeZoneBlock", after_leg)
+
+    holder = _all_partitions(bench)[fixtures.partition["SafeZoneBlock"]]
+    reference, unknown = after_leg.reference, settings["unknown"]
+    # What a World Authority faction snapshot does: every MyFaction of the node is a new object.
+    bench.record("factions-replaced", bench.cluster.node(holder, "/faction-test-replace", "POST"))
+    _zone_settings_checks(bench, "faction snapshot", holder, block, reference, unknown)
+    # Vanilla's remove and create (power back, repaired, switched on) while another zone is in the way.
+    bench.record("zone-recreated", bench.cluster.node(holder, f"/block-test-safezone-recreate?block={block}", "POST"))
+    _zone_settings_checks(bench, "created again", holder, block, reference, unknown)
+
+    def drift() -> list[str]:
+        # A line is in the node's stdout log and in its game log: one entry per distinct message.
+        return sorted({re.search(DRIFT_LINE + ".*", line).group(0)
+                       for name in _regular_nodes(bench) for line in _lines(bench, name, DRIFT_LINE)})
+
+    bench.check("no settings drift was logged through the journey", not drift(), "; ".join(drift())[:600])
+    bench.cluster.node(holder, f"/block-test-safezone-tamper?block={block}", "POST")
+    logged = _poll(lambda: drift() or None, 30, 2) or []
+    bench.record("drift-lines", logged)
+    bench.check("a settings change no player made is logged as drift, once, naming the field",
+                len(logged) == 1 and f"block={block}" in logged[0] and "actions:" in logged[0], "; ".join(logged)[:600])
     bench.exercised(results=fixtures.results)
 
 
