@@ -22,6 +22,10 @@ Rows are never removed. The premade world keeps the old poses, so every node sta
 - A client that comes near later streams the rock in its new pose.
 - An offline base near a turned rock loads already turned.
 - Vanilla clients need nothing.
+- Impostors (the far view) pick up the turn for most asteroids:
+  - An asteroid the Workshop pack covers is drawn from the pack's frame. That frame is already the identity, so it shows wrong before the turn and right after it.
+  - A client without the pack gets the new pose from the server's `Moved` resend within about a second.
+  - **Gap:** some asteroids have no pack entry, either because they were mined or because the pack never had them. The server streams those, and a client with the Impostors mod keeps the streamed state, old pose included, in its disk cache, keyed by entity id and version. A turn changes neither, so that client goes on drawing the old pose until the asteroid is mined again or the cache entry ages out (30 days). Closing the gap needs a change in Impostors.
 
 ## Config
 
