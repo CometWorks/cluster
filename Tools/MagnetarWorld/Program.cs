@@ -61,7 +61,8 @@ internal static class Tool
             return 2;
         }
 
-        InitializeSerializers();
+        if (!InitializeSerializers())
+            return 4;
         int exitCode = 0;
         switch (args[0])
         {
@@ -70,6 +71,27 @@ internal static class Tool
             {
                 if (File.Exists(args[3]))
                     throw new IOException("Output already exists");
+                // The save first: parsing the edits registers their subtype strings, which would hide the
+                // save's unresolved hashes.
+                PartitionSaveFile.Parsed save = null;
+                MyObjectBuilder_EntityBase[] entities = null;
+                if (args[0] == "patch-mps-poses")
+                {
+                    save = PartitionSaveFile.ReadFile(args[1]);
+                    entities = PartitionSaveFile.DeserializeEntities(save.Body, save.EntityCount);
+                    // A subtype read back as empty would be written as empty: the block is gone on load.
+                    if (CompatPatches.UnresolvedHashes != 0)
+                    {
+                        Console.Error.WriteLine(
+                            "error: "
+                                + CompatPatches.Unresolved()
+                                + " in "
+                                + args[1]
+                                + " are not in the game content (mod content missing?), nothing written"
+                        );
+                        return 4;
+                    }
+                }
                 if (
                     !MyObjectBuilderSerializerKeen.DeserializeXML(
                         args[2],
@@ -124,11 +146,6 @@ internal static class Tool
                 }
                 else
                 {
-                    var save = PartitionSaveFile.ReadFile(args[1]);
-                    var entities = PartitionSaveFile.DeserializeEntities(
-                        save.Body,
-                        save.EntityCount
-                    );
                     Apply(entities);
                     var file = PartitionSaveFile.Write(
                         save.PartitionId,
@@ -229,6 +246,12 @@ internal static class Tool
                 CatalogScan(args[1], args.Skip(2).ToArray());
                 break;
         }
+        if (CompatPatches.UnresolvedHashes != 0)
+            Console.Error.WriteLine(
+                "warning: "
+                    + CompatPatches.Unresolved()
+                    + " read from binary saves are not in the game content; those subtypes came out empty"
+            );
         return exitCode;
 
         static void VerifyMps(string path)
@@ -1233,7 +1256,7 @@ internal static class Tool
             return container;
         }
 
-        static void InitializeSerializers()
+        static bool InitializeSerializers()
         {
             CompatPatches.Apply();
             MyLog.Default = new MyLog();
@@ -1295,32 +1318,31 @@ internal static class Tool
                         "SpaceEngineers",
                         "Content"
                     );
+            // Without it every block re-encoded loses its SubtypeName, so refuse to run (SE-1986: a
+            // warning on stderr nobody read cost a live world 36 partitions).
             string contentData = Path.Combine(contentRoot, "Data");
-            if (Directory.Exists(contentData))
-            {
-                foreach (
-                    string file in Directory.EnumerateFiles(
-                        contentData,
-                        "*.sbc",
-                        SearchOption.AllDirectories
-                    )
-                )
-                foreach (
-                    System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(
-                        File.ReadAllText(file),
-                        "<Subtype(?:Id|Name)>([^<]+)</Subtype(?:Id|Name)>"
-                    )
-                )
-                    MyStringHash.GetOrCompute(match.Groups[1].Value.Trim());
-            }
-            else
+            string[] definitions = Directory.Exists(contentData)
+                ? Directory.GetFiles(contentData, "*.sbc", SearchOption.AllDirectories)
+                : [];
+            if (definitions.Length == 0)
             {
                 Console.Error.WriteLine(
-                    "warning: no game content at "
+                    "error: no game content at "
                         + contentData
-                        + "; subtype hashes read from binary saves may not resolve and blocks would lose their SubtypeName"
+                        + "; set SPACE_ENGINEERS_ROOT to a folder with Content/Data (the DS or client root),"
+                        + " otherwise every subtype read from a binary save comes out empty"
                 );
+                return false;
             }
+            foreach (string file in definitions)
+            foreach (
+                System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(
+                    File.ReadAllText(file),
+                    "<Subtype(?:Id|Name)>([^<]+)</Subtype(?:Id|Name)>"
+                )
+            )
+                MyStringHash.GetOrCompute(match.Groups[1].Value.Trim());
+            return true;
         }
 
         static void ToSplit(string source, string output)

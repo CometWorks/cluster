@@ -1346,6 +1346,8 @@ class Cluster:
             "CLUSTER_REPLICATION_TABLE_HASH": self.config.replication_table_hash(),
             # The Gateway advertises the game version of this DS, read at every start (SE-1763).
             "SPACE_ENGINEERS_BIN64": str(self.config.ds64),
+            # World exports run MagnetarWorld, which refuses to run without the game content (SE-1986).
+            "SPACE_ENGINEERS_ROOT": str(self.config.ds64.parent),
             "CLUSTER_WORLD": str(self.config.split_world),
             "CLUSTER_SYNC_DISTANCE": str(self.config.sync_distance),
             **self._multi_host_gateway_env(),
