@@ -21,13 +21,16 @@ using VRageMath;
 // Entry point: Bootstrap.Main registers the game-assembly resolver, then calls Tool.Run.
 internal static class Tool
 {
+    // The subtype names found in the game content (SPACE_ENGINEERS_ROOT/Content/Data).
+    static readonly HashSet<string> Subtypes = new();
+
     public static int Run(string[] args)
     {
         const double Proximity = 4000;
 
         if (
             !(
-                (args.Length == 2 && args[0] is "verify-mps" or "verify-fidelity")
+                (args.Length == 2 && args[0] is "verify-mps" or "verify-fidelity" or "subtypes")
                 || (
                     args.Length == 3
                     && args[0]
@@ -56,7 +59,7 @@ internal static class Tool
         )
         {
             Console.Error.WriteLine(
-                "usage: MagnetarWorld patch-b5-poses B5 EDIT_XML NEW_B5 | patch-mps-poses MPS EDIT_XML NEW_MPS | b5-to-sector B5 NEW_XML | sector-to-b5 XML NEW_B5 | verify-mps FILE | verify-fidelity XML | mps-to-sector FILE OUTPUT_XML | sector-to-mps XML OUTPUT_MPS PARTITION GENERATION SEQUENCE | global-to-checkpoint FILE OUTPUT_XML | semantic-diff BEFORE_XML AFTER_XML ENTITY_IDS | to-fidelity VANILLA OUTPUT | to-handover VANILLA SPLIT | to-split VANILLA SPLIT | to-proximity VANILLA SPLIT | to-clientless VANILLA SPLIT | to-counters VANILLA SPLIT | materialize SPLIT SLOT OUTPUT | to-vanilla SPLIT VANILLA [DATA_ROOT...] | catalog-scan OUTPUT_JSON NODE=DATA_ROOT [NODE=DATA_ROOT...] [--prefer-newest]"
+                "usage: MagnetarWorld patch-b5-poses B5 EDIT_XML NEW_B5 | patch-mps-poses MPS EDIT_XML NEW_MPS | b5-to-sector B5 NEW_XML | sector-to-b5 XML NEW_B5 | verify-mps FILE | verify-fidelity XML | mps-to-sector FILE OUTPUT_XML | sector-to-mps XML OUTPUT_MPS PARTITION GENERATION SEQUENCE | global-to-checkpoint FILE OUTPUT_XML | semantic-diff BEFORE_XML AFTER_XML ENTITY_IDS | to-fidelity VANILLA OUTPUT | to-handover VANILLA SPLIT | to-split VANILLA SPLIT | to-proximity VANILLA SPLIT | to-clientless VANILLA SPLIT | to-counters VANILLA SPLIT | materialize SPLIT SLOT OUTPUT | to-vanilla SPLIT VANILLA [DATA_ROOT...] | catalog-scan OUTPUT_JSON NODE=DATA_ROOT [NODE=DATA_ROOT...] [--prefer-newest] | subtypes NEW_SBC"
             );
             return 2;
         }
@@ -244,6 +247,25 @@ internal static class Tool
                 break;
             case "catalog-scan":
                 CatalogScan(args[1], args.Skip(2).ToArray());
+                break;
+            case "subtypes":
+                // Every subtype name in the content, as one small definitions file: a content root holding
+                // only it loads in a fraction of the time a root with all the mods takes.
+                if (File.Exists(args[1]))
+                    throw new IOException("Output already exists");
+                File.WriteAllLines(
+                    Path.GetFullPath(args[1]),
+                    Subtypes
+                        .Order(StringComparer.Ordinal)
+                        .Select(x =>
+                            "<SubtypeId>"
+                            + System.Security.SecurityElement.Escape(x)
+                            + "</SubtypeId>"
+                        )
+                        .Prepend("<Definitions>")
+                        .Append("</Definitions>")
+                );
+                Console.WriteLine(Subtypes.Count + " subtypes");
                 break;
         }
         if (CompatPatches.UnresolvedHashes != 0)
@@ -1342,9 +1364,11 @@ internal static class Tool
                     "<Subtype(?:Id|Name)>([^<]+)</Subtype(?:Id|Name)>|\\bSubtype(?:Id|Name)?=\"([^\"]+)\""
                 )
             )
-                MyStringHash.GetOrCompute(
+                Subtypes.Add(
                     (match.Groups[1].Success ? match.Groups[1] : match.Groups[2]).Value.Trim()
                 );
+            foreach (string subtype in Subtypes)
+                MyStringHash.GetOrCompute(subtype);
             return true;
         }
 
