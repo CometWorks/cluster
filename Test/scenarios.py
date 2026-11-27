@@ -26,6 +26,8 @@ from scenarios_offline import _put_config  # noqa: E402
 
 CLIENT_ID = 1234567890
 CLIENT2_ID = 1234567891
+#: CharacterRegistryService settles a new body until it has read back for 3 s, 10 s at most.
+SETTLE_SECONDS = 11
 
 
 def _partition_of(section: dict, entity_id: int) -> int | None:
@@ -983,6 +985,82 @@ def p2_chr_03(bench) -> None:
 
 
 # ---------------------------------------------------------------------------
+# P2-CHR-HELMET - the helmet a player toggles right after a handover (SE-1976)
+# ---------------------------------------------------------------------------
+
+def p2_chr_helmet(bench) -> None:
+    """The live Octahedron death loop of SE-1976: the target node's settle put the registry's helmet back on
+    the server's copy only, so a toggle the player made just after a handover left the server and the client
+    inverted for the life of the body (closed on screen, open on the server, LowPressure in vacuum). The bench
+    world is creative, so it asserts the server's copy instead of waiting for the damage: after each press of
+    the helmet key it must read what the client was asked to show."""
+    bench.start_cluster()
+    bench.start_client(CLIENT_ID)
+    bench.wait_spawned(CLIENT_ID)
+    api = bench.apis[CLIENT_ID]
+    if not bench.ensure_gameplay_focus(CLIENT_ID):
+        bench.check("a screen held focus, so the helmet key could not be sent", False, bench.focus(CLIENT_ID))
+        return
+    entity = bench._server_character(CLIENT_ID)
+    regulars = [node.node_id for node in bench.cluster.config.nodes if node.role != "WA"]
+
+    def helmet(node: str) -> bool | None:
+        row = bench.cluster.node(node, f"/helmet-test-state?client={CLIENT_ID}")
+        return row["helmet"] if row.get("present") else None
+
+    bench.quiesce(timeout=120)
+    places = bench.entity_owner(bench.diag("entities"), entity)
+    bench.check("exactly one copy of the character before the handover", len(places) == 1, str(places))
+    if len(places) != 1:
+        return
+    source, partition = places[0]
+    target = next(node for node in regulars if node != source)
+    # Past the spawn's own settle window, so the only settle left to run is the target's.
+    wait_until(lambda: helmet(source) is not None, 30, "the server's helmet on the source")
+    time.sleep(SETTLE_SECONDS)
+    start = helmet(source)
+    bench.record("start", {"source": source, "target": target, "partition": partition, "helmet": start})
+
+    toggled = back = None
+    pressed = float("nan")
+    bench.cluster.post("/automatic/pause")
+    try:
+        bench._wait_at_rest(entity)
+        _force_handover(bench, source, target, partition, client=CLIENT_ID)
+        handed_over = time.time()
+        api.key("J")
+        pressed = time.time() - handed_over
+        wait_until(lambda: target if _node_of_entity(bench, entity) == target else None,
+                   120, f"the character to arrive on {target}")
+        # The target settles a new body until it has read back the record for 3 s, 10 s at most.
+        time.sleep(SETTLE_SECONDS)
+        toggled = helmet(target)
+        api.key("J")
+        # Wait for the press itself: the server's copy moves off what it read. In sync that is the start
+        # value again; inverted (the server already at the start value) it is the other one.
+        try:
+            back = wait_until(lambda: helmet(target) if helmet(target) != toggled else None, 10,
+                              "the second press to reach the server")
+        except ClusterError:
+            back = helmet(target)
+    except ClusterError as error:
+        back = None
+        bench.record("error", str(error))
+    finally:
+        try:
+            bench.cluster.post("/automatic/resume")
+        except ClusterError:
+            pass
+    bench.record("helmet", {"start": start, "afterFirstPress": toggled, "afterSecondPress": back,
+                            "pressedSecondsAfterHandover": round(pressed, 2)})
+    bench.check(f"the first press, {pressed:.1f} s after the handover, held on the server through the target's "
+                "settle", toggled == (not start), f"{start} -> {toggled}")
+    bench.check("the second press brings the server's helmet back with the client's", back == start,
+                f"{toggled} -> {back}")
+    bench.exercised(source=source, target=target, pressedSecondsAfterHandover=round(pressed, 2))
+
+
+# ---------------------------------------------------------------------------
 # P3-CLU-01 - three-node coverage: every ordered node pair completes a handover
 # ---------------------------------------------------------------------------
 
@@ -1555,6 +1633,7 @@ SCENARIOS = {
     "P2-CHR-01": (p2_chr_01, "Character Registry uniqueness under chaos", "4"),
     "P2-CHR-02": (p2_chr_02, "teleport & spawn-elsewhere direction", "3"),
     "P2-CHR-03": (p2_chr_03, "spawn defaults", "3"),
+    "P2-CHR-HELMET": (p2_chr_helmet, "a helmet toggled right after a handover stays in sync (SE-1976)", "3"),
     "P3-CLU-01": (p3_clu_01, "three-node coverage: every ordered pair completes a handover", "3"),
     "P3-CLU-02": (p3_clu_02, "bidirectional player handover: three A->B->A round trips", "3"),
     "P3-SUN-01": (p3_sun_01, "admin time-of-day: WA offset, one client step, rejection, restart", "4"),

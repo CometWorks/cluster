@@ -119,6 +119,7 @@ internal static class TestRoutes
         MirrorTransitRoutes.Register(); // SE-1476 a member taken off a client between its export and its release
         HeapHoldRoutes.Register(); // SE-1615 managed heap held past the World Authority's wa.heapLimitMb
         AdminSyncRoutes.Register(); // SE-1596 Alt-F10 trash settings and admin weather changes made on a node
+        HelmetTestRoutes.Register(); // SE-1976 the server's copy of a client's helmet
     }
 
     public static bool Dispatch(HttpListenerContext context, string path)
