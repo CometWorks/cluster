@@ -6550,7 +6550,7 @@ internal static partial class SelfTest
                 [new(1, owner.Generation)],
                 simulationFrame: 1
             );
-            now += TimeSpan.FromSeconds(15);
+            now += TimeSpan.FromSeconds(45); // SimulationStallDrain (SE-2013)
             Assert(
                 registry
                     .Heartbeat(
@@ -6561,7 +6561,7 @@ internal static partial class SelfTest
                     )
                     .State == NodeState.Closed
             );
-            now += TimeSpan.FromSeconds(45);
+            now += TimeSpan.FromSeconds(45); // SimulationStallKill is 90 s after the last frame
             Assert(registry.ExpireLeases() == 1 && registry.GetPartitionOwner(1).Node == null);
         }
         finally
