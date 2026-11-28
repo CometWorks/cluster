@@ -6,13 +6,17 @@ two nodes ``SE2010_HANDOVERS`` times. Reported live on 2026-11-28 at ~180 ms: co
 empty until a relog or an Essentials ``!fixship`` (which re-pastes the grid, so the client gets it anew).
 
 Each round spawns a fresh fixture grid next to the client and fills its cargo container, then hands the partition
-over ``SE2010_DELAYS`` seconds later (one per round, cycled): the grid and its inventory replicables have just been
-sent, and at this latency the client's acknowledgements are still on their way, so the source exports them as
-pending and the target re-sends them. After every handover the client must list each fixture's container as the
-node has it.
+over ``SE2010_DELAYS`` seconds later (one per round, cycled). At this latency the client's acknowledgements of the
+grid's blocks and inventories can still be on their way at the export, so the source exports them as pending and the
+target re-delivers them. The latency alone hit that window in none of six rounds, so the source holds the client's
+acknowledgements of the fixture's blocks and inventories until the handover (the test plugin's
+``/lag-cargo-test-hold-acks``; ``SE2010_HOLD_GRID=1`` holds the grid's own too). A pending inventory is not synced,
+so the client keeps what the grid's stream gave it, often fewer items or none. After every handover the client must
+list each fixture's container as the node has it; a build without the fix leaves it short or empty for good.
 
 Knobs: SE2010_RTT (180), SE2010_SIGMA (35), SE2010_HANDOVERS (6), SE2010_DELAYS ("0.3,0.6,1.0,1.5"),
-SE2010_DEVTOOLS (the se-dev-tools checkout the client compiles; ~/ws/se/se1/plugins/se-dev-tools).
+SE2010_HOLD_ACKS (1), SE2010_HOLD_GRID (0), SE2010_DEVTOOLS (the se-dev-tools checkout the client compiles;
+~/ws/se/se1/plugins/se-dev-tools).
 """
 
 from __future__ import annotations
