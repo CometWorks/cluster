@@ -233,7 +233,7 @@ public static class ClusterRuntime
 
     private static int m_exitWatchdogArmed;
 
-    /// <summary>Longer than any healthy gap between updates, and the Registry's own SimulationStallDrain.</summary>
+    /// <summary>Longer than any healthy gap between updates; logs the stuck game thread's stack.</summary>
     private const long GameThreadStuckMilliseconds = 15_000;
 
     private static long m_lastGameThreadUpdate;

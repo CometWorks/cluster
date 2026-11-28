@@ -52,6 +52,9 @@ internal sealed class VoxelJournalService
     private readonly FileStream m_operationLog;
     private readonly ConcurrentQueue<VoxelJournalCodec.Entry> m_inbound = new();
 
+    /// <summary>SE-2013: journal entries waiting to be applied; the heartbeat reports them as recovery loads.</summary>
+    internal int PendingApplies => m_inbound.Count;
+
     /// <summary>
     /// T-0364: storages whose entries this node skipped because it had not generated them. A stock procedural
     /// asteroid exists only on the nodes that generated it, so a replica skips its entries - and when the asteroid
