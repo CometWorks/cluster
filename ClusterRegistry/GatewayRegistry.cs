@@ -11,8 +11,10 @@ namespace ClusterRegistry;
 internal sealed partial class GatewayRegistry : IDisposable
 {
     internal static readonly TimeSpan HandoverFinalizationLease = TimeSpan.FromSeconds(20);
-    private static readonly TimeSpan SimulationStallDrain = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan SimulationStallKill = TimeSpan.FromSeconds(60);
+    // SE-2013: 45 s, was 15 s. A World Authority's startup frames reached 11 s on live and passed 15 s on a slower
+    // host (journal catch-up plus a heap dump), and the Closed WA took the whole cluster down with it.
+    private static readonly TimeSpan SimulationStallDrain = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan SimulationStallKill = TimeSpan.FromSeconds(90);
 
     // The stall budget while a node reports recovery loads in flight - loading a partition freezes
     // its game thread legitimately. Drain must stay well above the largest single-partition load;

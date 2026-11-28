@@ -4475,9 +4475,12 @@ internal sealed partial class PartitionPersistence
                         SimulationFrame = MySession.Static?.GameplayFrameCounter ?? -1,
                         SaveFailure = m_lastSaveFailure,
                         Quarantined = QuarantinedPartitionIds(),
+                        // SE-2013: a journal catch-up holds the game thread like a recovery load does, so the
+                        // registry gives it the same long stall budget.
                         RecoveryLoadsPending = m_recoveries.Count
                             + m_censusChecks.Count
-                            + Volatile.Read(ref m_recoveryLoadInFlight),
+                            + Volatile.Read(ref m_recoveryLoadInFlight)
+                            + (VoxelJournalService.Instance?.PendingApplies ?? 0),
                         // T-0059: registry Active is set at registration; placement must wait for Serving.
                         Serving = ClusterRuntime.IsServing,
                         DeploymentRevision = NodeProcessIdentity.Revision,
