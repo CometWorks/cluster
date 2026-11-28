@@ -168,7 +168,7 @@ internal static partial class SelfTest
                 now = now.AddSeconds(1);
                 Beat(++frame);
             }
-            Freeze(20);
+            Freeze(50); // past SimulationStallDrain (45 s, SE-2013), still within the minute
             Beat(frame);
             Check(
                 State(stalled) == NodeState.Closed,
