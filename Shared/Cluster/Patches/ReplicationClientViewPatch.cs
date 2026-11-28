@@ -838,6 +838,9 @@ public static class ReplicationClientViewPatch
             inventoryCarried = 0,
             inventorySkipped = 0;
         uint inventoryMaxId = 0;
+        // SE-2010: the held state of inventories the client had not acknowledged yet, for after their re-delivery.
+        Dictionary<IMyReplicable, List<InventoryHeld>> heldPending =
+            new Dictionary<IMyReplicable, List<InventoryHeld>>();
         int inventoryHeld = 0,
             inventoryHeldItems = 0,
             inventoryUnsent = 0,
@@ -898,6 +901,8 @@ public static class ReplicationClientViewPatch
                     inventoryHeldItems += exported.InventoryHeld.Sum(held => held.Items.Count);
                     inventoryUnsent += exported.InventoryHeld.Sum(held => held.Unsent.Count);
                 }
+                if (exported.IsPending)
+                    heldPending[replicable] = exported.InventoryHeld;
             }
             if (keepStream)
             {
@@ -1020,11 +1025,38 @@ public static class ReplicationClientViewPatch
                 );
             redeliver = plan.Redeliver;
         }
+        int heldRedelivered = 0,
+            heldRedeliveredMismatch = 0;
         foreach (IMyReplicable replicable in redeliver)
         {
             server.RemoveForClient(replicable, client, true);
             server.AddForClient(replicable, endpoint, client, true);
+            // SE-2010: an inventory the client had not acknowledged when it left the source. The re-delivery above
+            // starts this node's record of the client's items again from this node's inventory (CreateClientData),
+            // but the client keeps the items the grid's stream gave it, which can be fewer or none: a container
+            // filled after its grid was streamed to a client with ~180 ms round trip listed empty for good, as
+            // this node believed the client had everything and sent nothing. Put the source's record back. Its
+            // deltas are not: the client's re-created inventory starts again at message id 0, as does this node.
+            if (heldPending.TryGetValue(replicable, out List<InventoryHeld> held))
+            {
+                if (
+                    ImportInventoryHeld(
+                        GroupsOf(server, replicable),
+                        endpoint,
+                        held,
+                        server.AddToDirtyGroups,
+                        unsent: false
+                    ) < 0
+                )
+                    heldRedeliveredMismatch++;
+                else
+                    heldRedelivered += held.Count;
+            }
         }
+        if (heldRedelivered != 0 || heldRedeliveredMismatch != 0)
+            MyLog.Default?.WriteLine(
+                $"client_view_inventory_held_redelivered client={endpoint.Id.Value} inventories={heldRedelivered} mismatch={heldRedeliveredMismatch} (SE-2010)"
+            );
         if (inventorySkipped != 0)
             MyLog.Default?.WriteLine(
                 $"client_view_inventory_counters_skipped client={endpoint.Id.Value} groups={inventorySkipped} (handover.inventoryCounters=false)"
@@ -1404,13 +1436,15 @@ public static class ReplicationClientViewPatch
     }
 
     /// <summary>SE-1554: puts the source's record of what the client holds in place of the target's fresh one, queues
-    /// the source's unacknowledged deltas to be sent again, and marks the inventory changed for the client.</summary>
+    /// the source's unacknowledged deltas to be sent again (unless <paramref name="unsent"/> is false), and marks the
+    /// inventory changed for the client.</summary>
     /// <returns>The number of inventories set; -1 when a group index does not exist on the target (nothing is set).</returns>
     internal static int ImportInventoryHeld(
         IEnumerable<IMyStateGroup> groups,
         Endpoint endpoint,
         List<InventoryHeld> held,
-        Action<IMyStateGroup> markDirty
+        Action<IMyStateGroup> markDirty,
+        bool unsent = true
     )
     {
         List<MyEntityInventoryStateGroup> inventories = groups
@@ -1428,8 +1462,9 @@ public static class ReplicationClientViewPatch
             MyEntityInventoryStateGroup.InventoryClientData data = inventories[
                 each.Group
             ].m_clientInventoryUpdate[endpoint];
-            foreach (byte[] delta in each.Unsent)
-                data.FailedIncompletePackets.Add(InventoryDeltaWire.Read(delta));
+            if (unsent)
+                foreach (byte[] delta in each.Unsent)
+                    data.FailedIncompletePackets.Add(InventoryDeltaWire.Read(delta));
             if (each.ItemsSaid)
             {
                 data.ClientItems.Clear();

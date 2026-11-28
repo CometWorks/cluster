@@ -80,6 +80,7 @@ internal static class TestRoutes
         PropertySyncRoutes.Register(); // #1376 null emotion controller Syncs in state sync
         PlayerProfileTestRoutes.Register(); // SE-1870 live-sized player profile record, fake cameras
         StaleViewRoutes.Register(); // SE-1554 what a client holds of a grid after its view moved nodes
+        LagCargoRoutes.Register(); // SE-2010 a far client's acknowledgements still on their way at a handover
         VoxelCarryRoutes.Register(); // T-0368 asteroid carried across a handover
         StreamHoldRoutes.Register(); // T-0396 a grid held mid-stream to one client
         BroadcastChatRoutes.Register(); // SE-943 broadcast controller chat and the chat a node relays; SE-1261 chat events

@@ -1952,6 +1952,25 @@ internal static partial class ClusterSelfTest
                 && delta.RemovedItems.SequenceEqual(new[] { iron.ItemId }),
             "the target's next delta carries the difference to the client's items"
         );
+
+        // SE-2010: an inventory re-delivered by the target (the client had not acknowledged it) starts again at
+        // message id 0 on both sides, so it takes the source's record of the client's items without its deltas.
+        var redelivered = Group();
+        var redeliveredData = redelivered.m_clientInventoryUpdate[endpoint];
+        Assert(
+            ReplicationClientViewPatch.ImportInventoryHeld(
+                new VRage.Network.IMyStateGroup[] { Group(), redelivered },
+                endpoint,
+                exported,
+                marked.Add,
+                unsent: false
+            ) == 1
+                && redeliveredData.FailedIncompletePackets.Count == 0
+                && redeliveredData.Dirty
+                && redeliveredData.ClientItems.Count == 1
+                && redeliveredData.ClientItems[0].Item.ItemId == iron.ItemId,
+            "a re-delivered inventory takes the source's record of the client's items, not its deltas"
+        );
     }
 
     private static void StaleHomeCopy()
