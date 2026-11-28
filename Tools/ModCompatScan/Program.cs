@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Reflection.PortableExecutable;
 using System.Runtime.Loader;
 using System.Text.Json;
 using ClusterPlugin;
@@ -14,12 +13,6 @@ namespace ModCompatScan;
 
 internal static class Program
 {
-    // MyScriptManager.UpdateCompatibility prepends these to every mod script before compiling it.
-    private const string UsingHeader =
-        "using VRage;\r\nusing VRage.Game.Components;\r\nusing VRage.ObjectBuilders;\r\nusing VRage.ModAPI;\r\n"
-        + "using VRage.Game.ModAPI;\r\nusing Sandbox.Common.ObjectBuilders;\r\nusing VRage.Game;\r\nusing Sandbox.ModAPI;\r\n"
-        + "using VRage.Game.ModAPI.Interfaces;\r\nusing SpaceEngineers.Game.ModAPI;\r\n#line 1\r\n";
-
     private const string AuthorManifestName = "cluster-mod-compat.txt";
 
     private static int Main(string[] args)
@@ -76,12 +69,21 @@ internal static class Program
             string candidate = Path.Combine(dedicated64, name.Name + ".dll");
             return File.Exists(candidate) ? context.LoadFromAssemblyPath(candidate) : null;
         };
-        List<MetadataReference> references = References(dedicated64);
+        List<MetadataReference> references = ScriptReferences.References(dedicated64);
+        var parseOptions = ScriptReferences.ParseOptions(
+            CSharpCompilation.Create("GameVersion", references: references)
+        );
         int failures = 0;
         foreach (string mod in mods)
         {
             string id = Path.GetFileName(Path.GetFullPath(mod).TrimEnd('/')).Replace(".sbm", "");
-            List<Assembly> assemblies = Compile(id, mod, references, out List<string> errors);
+            List<Assembly> assemblies = Compile(
+                id,
+                mod,
+                references,
+                parseOptions,
+                out List<string> errors
+            );
             ModScanResult scan = ModCompatScanner.Scan(assemblies);
             string manifestPath = Path.Combine(mod, AuthorManifestName);
             string manifest = File.Exists(manifestPath)
@@ -253,49 +255,21 @@ internal static class Program
         return failed == 0 ? 0 : 1;
     }
 
-    /// <summary>The runtime's own assemblies first, then every managed DS64 assembly the runtime does not provide.</summary>
-    private static List<MetadataReference> References(string dedicated64)
-    {
-        var paths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (
-            string path in ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")).Split(
-                Path.PathSeparator
-            )
-        )
-            paths.TryAdd(Path.GetFileNameWithoutExtension(path), path);
-        foreach (string path in Directory.GetFiles(dedicated64, "*.dll"))
-        {
-            if (paths.ContainsKey(Path.GetFileNameWithoutExtension(path)))
-                continue;
-            using var stream = File.OpenRead(path);
-            using var reader = new PEReader(stream);
-            if (reader.HasMetadata)
-                paths[Path.GetFileNameWithoutExtension(path)] = path;
-        }
-        return paths
-            .Values.Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
-            .ToList();
-    }
-
-    /// <summary>One assembly per Data/Scripts subfolder, as MyScriptManager.LoadScripts groups them.</summary>
+    /// <summary>One assembly per group, as MyScriptManager.LoadScripts makes them: a group is the first path
+    /// component below Data/Scripts, so a file directly in that folder is a group of its own.</summary>
     private static List<Assembly> Compile(
         string id,
         string mod,
         List<MetadataReference> references,
+        CSharpParseOptions parseOptions,
         out List<string> errors
     )
     {
         errors = new List<string>();
         var assemblies = new List<Assembly>();
-        string scripts = Path.Combine(mod, "Data", "Scripts");
-        if (!Directory.Exists(scripts))
-            return assemblies;
-        var groups = Directory
-            .GetFiles(scripts, "*.cs", SearchOption.AllDirectories)
-            .Where(file => Path.GetDirectoryName(file) != scripts)
-            .GroupBy(file =>
-                Path.GetRelativePath(scripts, file).Split(Path.DirectorySeparatorChar)[0]
-            )
+        var groups = WorkshopScripts
+            .Scripts(mod)
+            .GroupBy(file => file.Path.Split('/')[0])
             .OrderBy(group => group.Key, StringComparer.Ordinal);
         foreach (var group in groups)
         {
@@ -303,6 +277,7 @@ internal static class Program
                 $"{id}_{group.Key}",
                 group.ToList(),
                 references,
+                parseOptions,
                 out List<string> groupErrors
             );
             if (image == null)
@@ -317,12 +292,13 @@ internal static class Program
         return assemblies;
     }
 
-    /// <summary>The game's parse options (C# 6, its conditional symbols on 1.210); a mod that only compiles with a
+    /// <summary>C# 6 with the dedicated server’s conditional symbols. A mod that only compiles with a
     /// newer language version, as some plugin loaders allow, is retried with the latest one.</summary>
     private static byte[] Emit(
         string name,
-        List<string> files,
+        List<(string Path, string Text)> files,
         List<MetadataReference> references,
+        CSharpParseOptions parseOptions,
         out List<string> errors
     )
     {
@@ -331,13 +307,16 @@ internal static class Program
             LanguageVersion version in new[] { LanguageVersion.CSharp6, LanguageVersion.Latest }
         )
         {
-            var options = new CSharpParseOptions(
-                version,
-                DocumentationMode.None
-            ).WithPreprocessorSymbols("BRANCH_STABLE", "STABLE", "VERSION_210", "BUILD_14");
+            var options = parseOptions
+                .WithLanguageVersion(version)
+                .WithDocumentationMode(DocumentationMode.None);
             var trees = files
                 .Select(file =>
-                    CSharpSyntaxTree.ParseText(UsingHeader + File.ReadAllText(file), options, file)
+                    CSharpSyntaxTree.ParseText(
+                        WorkshopScripts.PrepareSource(file.Text),
+                        options,
+                        file.Path
+                    )
                 )
                 .ToList();
             CSharpCompilation compilation = CSharpCompilation.Create(

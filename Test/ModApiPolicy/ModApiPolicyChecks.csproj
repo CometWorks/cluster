@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A current Roslyn: the generator facts parse the decompiled game code, which uses current C# syntax. See Docs/ModCompat.md. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <RunPostBuildEvent>Never</RunPostBuildEvent>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <Compile Include="../../Tools/ModCompatScan/ScriptReferences.cs" Link="ScriptReferences.cs" />
+    <Compile Include="../../Tools/ModCompatScan/WorkshopScripts.cs" Link="WorkshopScripts.cs" />
+    <None Update="CorpusUsage.tsv" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../Docs/ModApiPolicy.tsv" Link="ModApiPolicy.tsv" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
